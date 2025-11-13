@@ -172,21 +172,22 @@ public sealed partial class UnixPty
     {
         public const int NCCS = 32;
 
-        public uint IFlag;
-        public uint OFlag;
-        public uint CFlag;
-        public uint LFlag;
+        // Use pointer-sized fields for flags and speeds to match native tcflag_t/speed_t sizing on different platforms
+        public UIntPtr IFlag;
+        public UIntPtr OFlag;
+        public UIntPtr CFlag;
+        public UIntPtr LFlag;
 
-        public sbyte line;
+        public byte line;
 
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = NCCS)]
-        public sbyte[] CC;
+        public byte[] CC;
         
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 3)]
         public byte[] _padding;
         
-        public uint ISpeed;
-        public uint OSpeed;
+        public UIntPtr ISpeed;
+        public UIntPtr OSpeed;
 
         public Termios(
                 TermInputFlag inputFlag,
@@ -196,20 +197,20 @@ public sealed partial class UnixPty
                 TermSpeed speed,
                 IDictionary<TermSpecialControlCharacter, sbyte> controlCharacters)
         {
-            this.IFlag = (uint)inputFlag;
-            this.OFlag = (uint)outputFlag;
-            this.CFlag = (uint)controlFlag;
-            this.LFlag = (uint)localFlag;
-            this.CC = new sbyte[NCCS];
+            this.IFlag = (UIntPtr)(uint)inputFlag;
+            this.OFlag = (UIntPtr)(uint)outputFlag;
+            this.CFlag = (UIntPtr)(uint)controlFlag;
+            this.LFlag = (UIntPtr)(uint)localFlag;
+            this.CC = new byte[NCCS];
             this._padding = new byte[3];
             foreach (var kvp in controlCharacters)
             {
-                this.CC[(int)kvp.Key] = kvp.Value;
+                this.CC[(int)kvp.Key] = (byte)kvp.Value;
             }
 
             this.line = 0;
-            this.ISpeed = 0;
-            this.OSpeed = 0;
+            this.ISpeed = UIntPtr.Zero;
+            this.OSpeed = UIntPtr.Zero;
             cfsetispeed(ref this, (uint)speed);
             cfsetospeed(ref this, (uint)speed);
         }

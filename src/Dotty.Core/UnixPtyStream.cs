@@ -33,7 +33,7 @@ public sealed class UnixPtyStream : Stream
                 }
             }
         }
-        catch (Exception ex)
+        catch
         {
             // Ignore errors, proceed with blocking if set fails
         }

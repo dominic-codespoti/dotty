@@ -76,8 +76,6 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
 
         if (pid == 0)
         {
-            // Child process
-            // Change to working directory first
             if (chdir(workingDirectory) != 0)
             {
                 Environment.Exit(Marshal.GetLastWin32Error());
@@ -99,8 +97,6 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
             Environment.Exit(127);
         }
 
-        // Parent process
-        Console.WriteLine($"[PTY] Child process started with pid={pid}, master fd={controller}");
         return new UnixPty(controller, pid);
     }
 

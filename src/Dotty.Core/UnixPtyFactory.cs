@@ -1,3 +1,5 @@
+#pragma warning disable CA1416
+
 namespace Dotty.Core;
 
 public sealed class UnixPtyFactory : IPseudoTerminalFactory

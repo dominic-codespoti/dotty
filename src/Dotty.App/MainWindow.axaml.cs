@@ -15,7 +15,7 @@ namespace Dotty.App;
 public partial class MainWindow : Window
 {
     // We no longer call UnixPty.Start() from the GUI thread (POSIX: fork() unsafe in multithreaded process)
-    // Instead we spawn the `Dotty.PtyTests` helper in `--interactive` mode and proxy its stdio.
+    // Instead we spawn the `Dotty.Subprocess` helper in `--interactive` mode and proxy its stdio.
     private Process? _childProcess;
     private Stream? _childOutputStream;
     private Stream? _childErrorStream;
@@ -55,7 +55,7 @@ public partial class MainWindow : Window
             string projectPath = FindPtyTestsProjectPath();
 
             // Candidate built DLL path (development default)
-            string dllPath = Path.Combine(projectPath, "bin", "Debug", "net9.0", "Dotty.PtyTests.dll");
+            string dllPath = Path.Combine(projectPath, "bin", "Debug", "net9.0", "Dotty.Subprocess.dll");
 
             ProcessStartInfo psi;
             if (File.Exists(dllPath))
@@ -221,14 +221,14 @@ public partial class MainWindow : Window
 
     private string FindPtyTestsProjectPath()
     {
-        // Try walking up from the AppContext.BaseDirectory to locate either "src/Dotty.PtyTests" or "Dotty.PtyTests"
+    // Try walking up from the AppContext.BaseDirectory to locate either "src/Dotty.Subprocess" or "Dotty.Subprocess"
         try
         {
             var cur = new DirectoryInfo(AppContext.BaseDirectory ?? ".");
             for (int i = 0; i < 8 && cur != null; i++)
             {
-                string candidate1 = Path.Combine(cur.FullName, "src", "Dotty.PtyTests");
-                string candidate2 = Path.Combine(cur.FullName, "Dotty.PtyTests");
+        string candidate1 = Path.Combine(cur.FullName, "src", "Dotty.Subprocess");
+        string candidate2 = Path.Combine(cur.FullName, "Dotty.Subprocess");
 
                 if (Directory.Exists(candidate1)) return Path.GetFullPath(candidate1);
                 if (Directory.Exists(candidate2)) return Path.GetFullPath(candidate2);
@@ -238,8 +238,8 @@ public partial class MainWindow : Window
         }
         catch { }
 
-        // Fallback to previous relative calculation (may be wrong in some environments)
-        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory ?? ".", "..", "..", "..", "..", "src", "Dotty.PtyTests"));
+    // Fallback to previous relative calculation (may be wrong in some environments)
+    return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory ?? ".", "..", "..", "..", "..", "src", "Dotty.Subprocess"));
     }
 
     

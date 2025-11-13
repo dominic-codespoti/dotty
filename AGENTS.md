@@ -36,7 +36,7 @@ This document explains the Dotty Terminal codebase, architecture, design decisio
          ↓                      ↑
 ┌─────────────────────────────────────────────────┐
 │ Subprocess (Single-threaded)                    │
-│ (src/Dotty.PtyTests/Program.cs)                │
+│ (src/Dotty.Subprocess/Program.cs)                │
 │                                                 │
 │ - Spawns /bin/bash directly                    │
 │ - Bash inherits redirected stdio from GUI      │
@@ -76,9 +76,9 @@ dotnet-term/
 │   │   ├── MainWindow.axaml.cs     # ⭐ Key GUI logic
 │   │   └── Dotty.App.csproj
 │   │
-│   └── Dotty.PtyTests/             # Console/Subprocess
+│   └── Dotty.Subprocess/             # Console/Subprocess
 │       ├── Program.cs              # ⭐ Key subprocess logic
-│       └── Dotty.PtyTests.csproj
+│       └── Dotty.Subprocess.csproj
 │
 ├── Dotty.sln                       # Solution file
 ├── FIXES_APPLIED.md                # Technical writeup of fixes
@@ -191,9 +191,9 @@ lock (_writeLock) {
 
 ---
 
-### 3. **Dotty.PtyTests - Console/Subprocess**
+### 3. **Dotty.Subprocess - Console/Subprocess**
 
-**Location**: `src/Dotty.PtyTests/Program.cs`
+**Location**: `src/Dotty.Subprocess/Program.cs`
 
 **Purpose**: Dual-purpose application:
 1. Console tests (normal mode)
@@ -342,7 +342,7 @@ With flag: Subprocess spawns bash → stays until user exits
 
 **GUI Call**:
 ```csharp
-Arguments = "run --project src/Dotty.PtyTests/ -- --interactive"
+Arguments = "run --project src/Dotty.Subprocess/ -- --interactive"
 ```
 
 **Subprocess Handler**:
@@ -416,7 +416,7 @@ int read = reader.Read(buffer, 0, buffer.Length);  // Blocks GUI!
 // ✅ CORRECT - Separate process, stdio pipes
 Process.Start(new ProcessStartInfo {
     FileName = "dotnet",
-    Arguments = "run --project src/Dotty.PtyTests/ -- --interactive",
+    Arguments = "run --project src/Dotty.Subprocess/ -- --interactive",
     RedirectStandardInput = true,
     RedirectStandardOutput = true,
 });
@@ -445,7 +445,7 @@ _ptyProcess.StandardInput.WriteLine(line);  // Race condition!
 
 **Must Read** (Core Logic):
 1. `src/Dotty.App/MainWindow.axaml.cs` - GUI implementation
-2. `src/Dotty.PtyTests/Program.cs` - Subprocess implementation
+2. `src/Dotty.Subprocess/Program.cs` - Subprocess implementation
 3. `FIXES_APPLIED.md` - Why each fix was necessary
 
 **Should Read** (Architecture):
@@ -463,10 +463,10 @@ _ptyProcess.StandardInput.WriteLine(line);  // Race condition!
 ### How to Test
 ```bash
 # Console tests (normal mode)
-dotnet run --project src/Dotty.PtyTests/
+dotnet run --project src/Dotty.Subprocess/
 
 # Interactive shell (direct)
-dotnet run --project src/Dotty.PtyTests/ -- --interactive
+dotnet run --project src/Dotty.Subprocess/ -- --interactive
 
 # GUI app
 dotnet run --project src/Dotty.App/

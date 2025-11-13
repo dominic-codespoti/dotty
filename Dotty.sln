@@ -9,7 +9,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dotty.Core", "src\Dotty.Cor
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dotty.App", "src\Dotty.App\Dotty.App.csproj", "{C0B96CE1-6BD0-4517-AE8A-14B60DE960CC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dotty.PtyTests", "src\Dotty.PtyTests\Dotty.PtyTests.csproj", "{4DAE8EA6-A282-4DCF-B243-768C481E3048}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dotty.Subprocess", "src\Dotty.Subprocess\Dotty.Subprocess.csproj", "{4DAE8EA6-A282-4DCF-B243-768C481E3048}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

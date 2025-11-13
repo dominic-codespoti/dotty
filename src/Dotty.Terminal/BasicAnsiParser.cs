@@ -1,5 +1,3 @@
-using System;
-using System.Buffers;
 using System.Text;
 
 namespace Dotty.Terminal
@@ -11,8 +9,6 @@ namespace Dotty.Terminal
     /// - CSI H   (cursor home)
     /// - CSI ... m (SGR) - forwarded to handler as raw params
     /// - BEL (0x07) -> OnBell
-    /// This is intentionally tiny and written for clarity; it uses spans and keeps a small leftover buffer
-    /// to deal with split sequences.
     /// </summary>
     public sealed class BasicAnsiParser : ITerminalParser
     {
@@ -20,7 +16,7 @@ namespace Dotty.Terminal
         private readonly byte[] _leftover = new byte[32];
         private int _leftoverLen = 0;
 
-        public ITerminalHandler Handler { get; set; }
+        public ITerminalHandler? Handler { get; set; }
 
         public void Feed(ReadOnlySpan<byte> bytes)
         {

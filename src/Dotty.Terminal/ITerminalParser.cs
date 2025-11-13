@@ -17,6 +17,6 @@ namespace Dotty.Terminal
         /// <summary>
         /// Attach a handler that receives parsed terminal events.
         /// </summary>
-        ITerminalHandler Handler { get; set; }
+        ITerminalHandler? Handler { get; set; }
     }
 }

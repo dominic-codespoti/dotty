@@ -10,8 +10,8 @@ namespace Dotty.Terminal
     /// </summary>
     public class TerminalBuffer
     {
-        readonly List<string> _scrollback = new List<string>();
-        readonly StringBuilder _currentLine = new StringBuilder();
+        private readonly List<string> _scrollback = new();
+        private readonly StringBuilder _currentLine = new();
         public int Columns { get; }
         public int Rows { get; }
 
@@ -36,7 +36,6 @@ namespace Dotty.Terminal
 
         public void AppendText(ReadOnlySpan<char> text)
         {
-            // Basic behavior: split on newlines and append lines to scrollback.
             int start = 0;
             for (int i = 0; i < text.Length; i++)
             {
@@ -59,7 +58,6 @@ namespace Dotty.Terminal
 
         public string GetCurrentDisplay()
         {
-            // Return last N lines plus current line
             var sb = new StringBuilder();
             int start = Math.Max(0, _scrollback.Count - Rows + 1);
             for (int i = start; i < _scrollback.Count; i++)

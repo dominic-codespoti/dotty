@@ -9,6 +9,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Dotty.Core;
+using Dotty.Terminal;
 
 namespace Dotty.App;
 
@@ -22,6 +23,9 @@ public partial class MainWindow : Window
     private StreamWriter? _childInputWriter;
     private CancellationTokenSource? _readCancellation;
     private readonly object _writeLock = new();
+    // Terminal integration
+    private BasicAnsiParser? _parser;
+    private TerminalAdapter? _terminalAdapter;
     
 
     public MainWindow()
@@ -100,6 +104,20 @@ public partial class MainWindow : Window
             _childErrorStream = _childProcess.StandardError.BaseStream;
             _childInputWriter = _childProcess.StandardInput;
 
+            // Create parser and adapter for terminal-style rendering
+            _parser = new BasicAnsiParser();
+            _terminalAdapter = new TerminalAdapter(rows: 24, columns: 80);
+            _parser.Handler = _terminalAdapter;
+            // Subscribe to render requests and update the existing OutputBox
+            _terminalAdapter.RenderRequested += (display) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    OutputBox.Text = display;
+                    OutputBox.CaretIndex = OutputBox.Text.Length;
+                });
+            };
+
             
 
             // Start reading subprocess output on dedicated background threads
@@ -131,15 +149,8 @@ public partial class MainWindow : Window
 
                     if (bytesRead > 0)
                     {
-                        string output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                        string processed = ProcessAnsiCodes(output);
-
-                        // Update UI on GUI thread
-                        Dispatcher.UIThread.Post(() =>
-                        {
-                            OutputBox.Text += processed;
-                            OutputBox.CaretIndex = OutputBox.Text.Length;
-                        });
+                        // Feed raw bytes into the parser; the adapter will request renders on the UI thread
+                        _parser?.Feed(buffer.AsSpan(0, bytesRead));
                     }
                     else
                     {
@@ -177,18 +188,11 @@ public partial class MainWindow : Window
                 {
                     int bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
 
-                    if (bytesRead > 0)
-                    {
-                        string output = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                        // Prefix stderr lines so it's clear
-                        string processed = ProcessAnsiCodes(output);
-
-                        Dispatcher.UIThread.Post(() =>
+                        if (bytesRead > 0)
                         {
-                            OutputBox.Text += processed;
-                            OutputBox.CaretIndex = OutputBox.Text.Length;
-                        });
-                    }
+                            // For simplicity treat stderr as normal input to parser; it may contain ANSI too
+                            _parser?.Feed(buffer.AsSpan(0, bytesRead));
+                        }
                     else
                     {
                         break;

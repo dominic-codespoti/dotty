@@ -14,7 +14,7 @@ public sealed partial class UnixPty
     internal const int O_NONBLOCK = 0x800;
 
     private const string LibSystem = "libc.so.6";
-    private static readonly int SizeOfIntPtr = Marshal.SizeOf(typeof(IntPtr));
+    private static readonly int SizeOfIntPtr = Marshal.SizeOf<IntPtr>();
 
     public enum TermSpeed : uint
     {

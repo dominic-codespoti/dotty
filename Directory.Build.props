@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    Enable Native AOT publishing by default for executable projects.
+    This sets PublishAot and SelfContained for projects whose OutputType is not 'Library'.
+    You can override these per-project or per-publish via command-line properties.
+  -->
+  <PropertyGroup Condition="'$(OutputType)' != 'Library'">
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <!-- Enable analyzers that help find AOT/trimming issues -->
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
+</Project>

@@ -1,32 +1,12 @@
 <Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        x:Class="Dotty.App.MainWindow"
-        Width="1000" Height="700"
-        Title="Terminal (Phase 0)">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="clr-namespace:Dotty.App.Controls;assembly=Dotty.App"
+    x:Class="Dotty.App.MainWindow"
+    Width="1000" Height="700"
+    Title="Terminal (Phase 0)">
   <DockPanel>
-    <TextBox Name="OutputBox"
-             DockPanel.Dock="Top"
-             FontFamily="Consolas, Menlo, monospace"
-             FontSize="13"
-             AcceptsReturn="True"
-             AcceptsTab="True"
-             IsReadOnly="True"
-             TextWrapping="NoWrap"
-             Background="#1E1E1E"
-             Foreground="#D4D4D4"
-             BorderThickness="0" />
-    
-    <TextBox Name="InputBox"
-             DockPanel.Dock="Bottom"
-             FontFamily="Consolas, Menlo, monospace"
-             FontSize="13"
-             AcceptsReturn="False"
-             AcceptsTab="False"
-             Background="#2D2D30"
-             Foreground="#D4D4D4"
-             BorderThickness="1"
-             BorderBrush="#3E3E42"
-             Padding="5" />
+  <controls:TerminalInput Name="InputControl" DockPanel.Dock="Bottom" />
+
+  <controls:TerminalOutput Name="OutputBox" />
   </DockPanel>
 </Window>
-

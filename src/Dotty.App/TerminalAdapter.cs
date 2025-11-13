@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using Avalonia.Threading;
 using Dotty.Terminal;
 
 namespace Dotty.App
@@ -20,11 +22,22 @@ namespace Dotty.App
         /// Raised when the display should be re-rendered. Argument is the full text to display for now.
         /// </summary>
         public event Action<string>? RenderRequested;
+    public event Action<string>? PromptDetected;
 
         public void OnPrint(ReadOnlySpan<char> text)
         {
             _buffer.AppendText(text);
             RequestRender();
+
+            // Heuristic: if the printed chunk ends with a common prompt terminator, treat it as the shell prompt
+            var s = text.ToString();
+            if (!string.IsNullOrEmpty(s))
+            {
+                if (s.EndsWith("$ ") || s.EndsWith("# ") || s.EndsWith("> ") || s.EndsWith("% "))
+                {
+                    PromptDetected?.Invoke(s);
+                }
+            }
         }
 
         public void OnClearScreen()
@@ -51,7 +64,14 @@ namespace Dotty.App
 
         private void RequestRender()
         {
-            RenderRequested?.Invoke(_buffer.GetCurrentDisplay());
+            // Do not include prompt or cursor in the main display; the UI input area shows the prompt and the caret.
+            RenderRequested?.Invoke(_buffer.GetCurrentDisplay(showCursor: false, promptPrefix: null));
+        }
+
+        // Allow external callers to request a render (for example after user input)
+        public void RequestRenderExtern()
+        {
+            RequestRender();
         }
     }
 }

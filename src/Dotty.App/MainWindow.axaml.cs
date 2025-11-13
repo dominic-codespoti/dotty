@@ -32,11 +32,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        InputBox.AddHandler(
-            KeyDownEvent,
-            InputBox_OnKeyDown,
-            RoutingStrategies.Bubble,
-            handledEventsToo: true);
+        // Wire the new TerminalInput Submitted event
+        InputControl.Submitted += InputControl_Submitted;
 
         Opened += OnOpened;
         Closed += OnClosed;
@@ -117,6 +114,15 @@ public partial class MainWindow : Window
                     OutputBox.CaretIndex = OutputBox.Text.Length;
                 });
             };
+            // Subscribe to prompt detection to update input placeholder
+            _terminalAdapter.PromptDetected += (prompt) =>
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    try { InputControl.Prompt = prompt; } catch { }
+                });
+            };
+            // No static prompt; shell prompt will appear in the terminal output
 
             
 
@@ -124,7 +130,7 @@ public partial class MainWindow : Window
             _readCancellation = new CancellationTokenSource();
             StartBackgroundReaders(_readCancellation.Token);
 
-            InputBox.Focus();
+            InputControl.FocusInput();
         }
         catch (Exception ex)
         {
@@ -314,17 +320,14 @@ public partial class MainWindow : Window
         return result.ToString();
     }
 
-    private void InputBox_OnKeyDown(object? sender, KeyEventArgs e)
+    private void InputControl_Submitted(object? sender, string? text)
     {
         if (_childInputWriter == null) return;
 
-        if (e.Key != Key.Enter && e.Key != Key.Return)
-            return;
+        var line = text ?? string.Empty;
 
-        e.Handled = true;
-
-        var line = InputBox.Text ?? string.Empty;
-        InputBox.Text = string.Empty;
+        // Clear the input control immediately
+        InputControl.Clear();
 
         if (string.IsNullOrEmpty(line))
             return;
@@ -333,10 +336,12 @@ public partial class MainWindow : Window
         {
             lock (_writeLock)
             {
-                // Use the text writer for proper newline handling/encoding
                 _childInputWriter.WriteLine(line);
                 _childInputWriter.Flush();
             }
+
+            // Request a render of the main display after input
+            _terminalAdapter?.RequestRenderExtern();
         }
         catch
         {

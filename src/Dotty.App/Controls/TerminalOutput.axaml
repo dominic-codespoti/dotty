@@ -1,0 +1,59 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Dotty.App.Controls.TerminalOutput">
+
+  <!-- Local styles for this control only -->
+  <UserControl.Styles>
+
+    <!-- Base style: remove normal TextBox border -->
+    <Style Selector="TextBox">
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="FocusAdorner" Value="{x:Null}" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Foreground" Value="#D4D4D4" />
+      <!-- Optional: kill transitions so nothing fades -->
+      <Setter Property="Transitions">
+        <Transitions />
+      </Setter>
+    </Style>
+
+    <!-- Hit the inner border in the Fluent TextBox template -->
+    <!-- Normal state -->
+    <Style Selector="TextBox /template/ Border#PART_BorderElement">
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- Focus state -->
+    <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+
+    <!-- Pointer-over state -->
+    <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="Opacity" Value="1" />
+    </Style>
+
+  </UserControl.Styles>
+
+  <Border Background="#1E1E1E" Padding="0">
+    <TextBox x:Name="PART_TextBox"
+             IsReadOnly="True"
+             AcceptsReturn="True"
+             AcceptsTab="True"
+             TextWrapping="NoWrap"
+             Background="Transparent"
+             Foreground="#D4D4D4"
+             FontFamily="Consolas, Menlo, monospace"
+             FontSize="13" />
+  </Border>
+</UserControl>

@@ -56,7 +56,11 @@ namespace Dotty.Terminal
             }
         }
 
-        public string GetCurrentDisplay()
+        /// <summary>
+        /// Return the textual display of the buffer. Optionally show a cursor glyph at the end of the current line
+        /// and a prompt prefix.
+        /// </summary>
+        public string GetCurrentDisplay(bool showCursor = false, string? promptPrefix = null)
         {
             var sb = new StringBuilder();
             int start = Math.Max(0, _scrollback.Count - Rows + 1);
@@ -64,7 +68,19 @@ namespace Dotty.Terminal
             {
                 sb.AppendLine(_scrollback[i]);
             }
+
+            if (!string.IsNullOrEmpty(promptPrefix))
+            {
+                sb.Append(promptPrefix);
+            }
+
             sb.Append(_currentLine.ToString());
+
+            if (showCursor)
+            {
+                sb.Append('█'); // block cursor
+            }
+
             return sb.ToString();
         }
     }

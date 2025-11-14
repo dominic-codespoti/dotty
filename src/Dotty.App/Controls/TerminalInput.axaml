@@ -45,15 +45,23 @@
 
   </UserControl.Styles>
 
-  <Border Background="#1E1E1E" Padding="6">
+  <Border Background="{DynamicResource TerminalBackground}" Padding="6">
+    <!-- Use a Grid so the prompt (cwd) sits inline left of the input box. The prompt is styled and has a tooltip for the full path. -->
     <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Center">
-      <TextBlock x:Name="PromptBlock" Text="" />
+      <TextBlock x:Name="PromptBlock"
+                 VerticalAlignment="Center"
+                 Margin="0,0,8,0"
+                 Foreground="{DynamicResource TerminalForeground}"
+                 FontFamily="{DynamicResource TerminalFontFamily}"
+                 FontSize="{DynamicResource TerminalFontSize}"
+                 TextTrimming="CharacterEllipsis" />
+
       <TextBox x:Name="PART_InputBox"
                Grid.Column="1"
                Background="Transparent"
-               Foreground="#D4D4D4"
-               FontFamily="Consolas, Menlo, monospace"
-               FontSize="13"
+               Foreground="{DynamicResource TerminalForeground}"
+               FontFamily="{DynamicResource TerminalFontFamily}"
+               FontSize="{DynamicResource TerminalFontSize}"
                AcceptsReturn="False"
                AcceptsTab="False"
                Watermark="" />

@@ -1,8 +1,18 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Dotty.App.App"
-             RequestedThemeVariant="Default">
+             RequestedThemeVariant="Default"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime">
              <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+
+    <!-- Default resources for terminal appearance. These will be overridden at runtime from the user's settings file by App startup code. -->
+    <Application.Resources>
+        <SolidColorBrush x:Key="TerminalBackground" Color="#1E1E1E" />
+        <SolidColorBrush x:Key="TerminalForeground" Color="#D4D4D4" />
+    <!-- Default to JetBrains Mono Nerd Font if available on the system; falls back to monospace families if not. -->
+    <FontFamily x:Key="TerminalFontFamily">JetBrains Mono Nerd Font, Consolas, Menlo, monospace</FontFamily>
+        <x:Double x:Key="TerminalFontSize">13</x:Double>
+    </Application.Resources>
 
     <Application.Styles>
         <FluentTheme />

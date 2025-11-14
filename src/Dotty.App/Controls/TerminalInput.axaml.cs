@@ -58,6 +58,47 @@ namespace Dotty.App.Controls
             set { if (_promptBlock != null) _promptBlock.Text = value ?? string.Empty; }
         }
 
+        /// <summary>
+        /// Sets the working directory displayed in the inline prompt.
+        /// The displayed path will be shortened (home -> ~) and the full path is set as a tooltip.
+        /// </summary>
+        public string? WorkingDirectory
+        {
+            get => _promptBlock?.Text;
+            set
+            {
+                if (_promptBlock == null)
+                    return;
+
+                if (string.IsNullOrEmpty(value))
+                {
+                    _promptBlock.Text = string.Empty;
+                    Avalonia.Controls.ToolTip.SetTip(_promptBlock, null);
+                    return;
+                }
+
+                try
+                {
+                    var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                    var display = value.StartsWith(home) ? "~" + value.Substring(home.Length) : value;
+                    // If path is too long, show only last two segments
+                    var parts = display.Split(new[] {'/', '\\'}, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length > 3)
+                    {
+                        display = ".../" + string.Join('/', parts[^3..]);
+                    }
+
+                    _promptBlock.Text = display;
+                    Avalonia.Controls.ToolTip.SetTip(_promptBlock, value); // full path on hover
+                }
+                catch
+                {
+                    _promptBlock.Text = value;
+                    Avalonia.Controls.ToolTip.SetTip(_promptBlock, value);
+                }
+            }
+        }
+
         public void FocusInput()
         {
             _inputBox?.Focus();

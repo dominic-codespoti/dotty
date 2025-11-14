@@ -23,6 +23,8 @@ public partial class MainWindow : Window
     private StreamWriter? _childInputWriter;
     private CancellationTokenSource? _readCancellation;
     private readonly object _writeLock = new();
+    // Track a best-effort current working directory for the inline prompt.
+    private string _currentWorkingDirectory = Environment.CurrentDirectory;
     // Terminal integration
     private BasicAnsiParser? _parser;
     private TerminalAdapter? _terminalAdapter;
@@ -131,6 +133,8 @@ public partial class MainWindow : Window
             StartBackgroundReaders(_readCancellation.Token);
 
             InputControl.FocusInput();
+            // Set initial working directory for prompt
+            try { InputControl.WorkingDirectory = _currentWorkingDirectory; } catch { }
         }
         catch (Exception ex)
         {
@@ -331,6 +335,33 @@ public partial class MainWindow : Window
 
         if (string.IsNullOrEmpty(line))
             return;
+
+        // Heuristic: if user ran a cd command, update our best-effort cwd for the prompt.
+        try
+        {
+            var t = line.Trim();
+            if (t == "cd")
+            {
+                _currentWorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                InputControl.WorkingDirectory = _currentWorkingDirectory;
+            }
+            else if (t.StartsWith("cd "))
+            {
+                var arg = t.Substring(3).Trim();
+                string newPath;
+                if (arg == "~")
+                    newPath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                else if (Path.IsPathRooted(arg))
+                    newPath = arg;
+                else
+                    newPath = Path.GetFullPath(Path.Combine(_currentWorkingDirectory, arg));
+
+                // update (best-effort) and show in prompt
+                _currentWorkingDirectory = newPath;
+                InputControl.WorkingDirectory = _currentWorkingDirectory;
+            }
+        }
+        catch { /* ignore path parsing errors */ }
 
         try
         {

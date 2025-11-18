@@ -10,7 +10,8 @@
         <SolidColorBrush x:Key="TerminalBackground" Color="#1E1E1E" />
         <SolidColorBrush x:Key="TerminalForeground" Color="#D4D4D4" />
     <!-- Default to JetBrains Mono Nerd Font if available on the system; falls back to monospace families if not. -->
-    <FontFamily x:Key="TerminalFontFamily">JetBrains Mono Nerd Font, Consolas, Menlo, monospace</FontFamily>
+    <!-- Prefer a widely-available monospaced font first to avoid proportional fallback which breaks column alignment -->
+    <FontFamily x:Key="TerminalFontFamily">DejaVu Sans Mono, JetBrains Mono Nerd Font, Consolas, Menlo, monospace</FontFamily>
         <x:Double x:Key="TerminalFontSize">13</x:Double>
     </Application.Resources>
 

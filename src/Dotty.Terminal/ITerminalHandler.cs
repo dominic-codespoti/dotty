@@ -22,5 +22,22 @@ namespace Dotty.Terminal
 
         // Bell
         void OnBell();
+
+        // Operating System Command (OSC) payload (text inside ESC ] ... BEL or ESC \)
+        // Implementations may choose to parse application-specific payloads.
+        void OnOperatingSystemCommand(ReadOnlySpan<char> payload);
+
+        // Cursor and screen control
+        void OnMoveCursor(int row, int col); // 1-based
+        void OnCursorUp(int n);
+        void OnCursorDown(int n);
+        void OnCursorForward(int n);
+        void OnCursorBack(int n);
+        void OnEraseLine(int mode); // 0=from cursor to end,1=from start to cursor,2=entire line
+        void OnCarriageReturn();
+        void OnLineFeed();
+
+        // Alternate screen buffer (DECSCNM / ?1049)
+        void OnSetAlternateScreen(bool enabled);
     }
 }

@@ -1,0 +1,9 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Dotty.App.Controls.TerminalPromptRenderer_Old">
+
+  <Border Background="Transparent">
+    <StackPanel x:Name="PART_PromptPanel" Orientation="Horizontal" VerticalAlignment="Center" Spacing="0" />
+  </Border>
+
+</UserControl>

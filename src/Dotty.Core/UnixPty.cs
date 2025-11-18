@@ -27,7 +27,25 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
         _disposed = false;
     }
 
-    public static UnixPty Start(string shell, string workingDirectory, int cols, int rows, string? command)
+    // Return the slave device name (e.g. /dev/pts/N) if available for diagnostics
+    public string? SlaveName()
+    {
+        try
+        {
+            var p = UnixPtyNativePtsName(_masterFd);
+            if (p == IntPtr.Zero) return null;
+            return Marshal.PtrToStringAnsi(p);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Wrapper around native ptsname (kept decoupled for easier testing)
+    private static IntPtr UnixPtyNativePtsName(int fd) => ptsname(fd);
+
+    public static UnixPty Start(string shell, string workingDirectory, int cols, int rows, string? command, IReadOnlyDictionary<string, string?>? environment = null)
     {
         var ws = new WinSize
         {
@@ -76,19 +94,28 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
 
         if (pid == 0)
         {
+            if (environment != null)
+            {
+                foreach (var kv in environment)
+                {
+                    Environment.SetEnvironmentVariable(kv.Key, kv.Value);
+                }
+            }
+
             if (chdir(workingDirectory) != 0)
             {
                 Environment.Exit(Marshal.GetLastWin32Error());
             }
 
+            var shellName = Path.GetFileName(shell);
             string[] args;
             if (string.IsNullOrEmpty(command))
             {
-                args = new[] { "bash", "-i" };
+                args = new[] { shellName, "-i" };
             }
             else
             {
-                args = new[] { "bash", "-c", command };
+                args = new[] { shellName, "-c", command };
             }
 
             _ = execv(shell, args);
@@ -100,6 +127,26 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
         return new UnixPty(controller, pid);
     }
 
+    public int WaitForExit()
+    {
+        int status = 0;
+        while (true)
+        {
+            var result = waitpid(_childPid, ref status, 0);
+            if (result == -1)
+            {
+                var err = Marshal.GetLastWin32Error();
+                throw new InvalidOperationException($"waitpid failed with error {err}");
+            }
+
+            if (result == _childPid)
+            {
+                break;
+            }
+        }
+
+        return (status >> 8) & 0xff;
+    }
 
     public void Resize(int cols, int rows)
     {

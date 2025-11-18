@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Dotty.App.Controls"
              x:Class="Dotty.App.Controls.TerminalInput">
 
   <!-- Local styles for this control only -->
@@ -46,23 +47,17 @@
   </UserControl.Styles>
 
   <Border Background="{DynamicResource TerminalBackground}" Padding="6">
-    <!-- Use a Grid so the prompt (cwd) sits inline left of the input box. The prompt is styled and has a tooltip for the full path. -->
-    <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Center">
-      <TextBlock x:Name="PromptBlock"
-                 VerticalAlignment="Center"
-                 Margin="0,0,8,0"
-                 Foreground="{DynamicResource TerminalForeground}"
-                 FontFamily="{DynamicResource TerminalFontFamily}"
-                 FontSize="{DynamicResource TerminalFontSize}"
-                 TextTrimming="CharacterEllipsis" />
-
+    <Grid ColumnDefinitions="Auto,*" VerticalAlignment="Center" ColumnSpacing="8">
+  <controls:TerminalPromptRenderer x:Name="PART_PromptRenderer"
+                 Grid.Column="0"
+                 VerticalAlignment="Center" />
       <TextBox x:Name="PART_InputBox"
                Grid.Column="1"
                Background="Transparent"
                Foreground="{DynamicResource TerminalForeground}"
                FontFamily="{DynamicResource TerminalFontFamily}"
                FontSize="{DynamicResource TerminalFontSize}"
-               AcceptsReturn="False"
+               AcceptsReturn="True"
                AcceptsTab="False"
                Watermark="" />
     </Grid>

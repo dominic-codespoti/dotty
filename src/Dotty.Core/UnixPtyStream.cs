@@ -14,29 +14,16 @@ public sealed class UnixPtyStream : Stream
     public UnixPtyStream(int fd)
     {
         _fd = fd;
-        SetNonBlocking();
+        // Use blocking mode for PTY master stream so Stream.Read/CopyToAsync will block
+        // until data is available. Non-blocking mode would require polling and can
+        // result in busy-wait loops in the helper process.
+        // Historically we attempted to set O_NONBLOCK here; prefer blocking semantics.
+        // SetNonBlocking();
     }
 
     private void SetNonBlocking()
     {
-        try
-        {
-            int flags = fcntl(_fd, F_GETFL, 0);
-            if (flags >= 0)
-            {
-                flags |= O_NONBLOCK;
-                int result = fcntl(_fd, F_SETFL, flags);
-                if (result < 0)
-                {
-                    int err = Marshal.GetLastWin32Error();
-                    // Ignore - proceed with blocking mode
-                }
-            }
-        }
-        catch
-        {
-            // Ignore errors, proceed with blocking if set fails
-        }
+        // Intentionally left blank: prefer blocking reads on the PTY master fd.
     }
 
     public override bool CanRead => true;

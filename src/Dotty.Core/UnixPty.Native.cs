@@ -150,6 +150,10 @@ public sealed partial class UnixPty
             [MarshalAs(UnmanagedType.LPStr)] string file,
             [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPStr)] string[] args);
 
+    // char *ptsname(int fd);
+    [DllImport(LibSystem, SetLastError = true)]
+    internal static extern IntPtr ptsname(int fd);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct WinSize
     {

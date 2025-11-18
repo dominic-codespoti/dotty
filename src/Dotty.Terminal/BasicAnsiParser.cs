@@ -83,8 +83,44 @@ namespace Dotty.Terminal
                     }
                     else
                     {
-                        // Not CSI - handle few single byte sequences like ESC c
-                        if (next == (byte)'c')
+                        // Not CSI - handle OSC (] ... BEL) and a few single byte sequences like ESC c
+                        if (next == (byte)']') // OSC - Operating System Command
+                        {
+                            i++; // move into payload
+                            int payloadStart = i;
+                            bool finished = false;
+                            while (i < inputSpan.Length)
+                            {
+                                byte cb = inputSpan[i];
+                                if (cb == 0x07) // BEL terminator
+                                {
+                                    // payload is from payloadStart to i-1
+                                    var payload = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
+                                    Handler?.OnOperatingSystemCommand(payload.AsSpan());
+                                    i++;
+                                    finished = true;
+                                    break;
+                                }
+                                // also support ST sequence: ESC '\\' (0x1b 0x5c) as terminator
+                                if (cb == ESC && i + 1 < inputSpan.Length && inputSpan[i + 1] == (byte)'\\')
+                                {
+                                    var payload = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
+                                    Handler?.OnOperatingSystemCommand(payload.AsSpan());
+                                    i += 2;
+                                    finished = true;
+                                    break;
+                                }
+                                i++;
+                            }
+
+                            if (!finished)
+                            {
+                                // incomplete OSC sequence, save leftover
+                                SaveLeftover(inputSpan.Slice(seqStart));
+                                return;
+                            }
+                        }
+                        else if (next == (byte)'c')
                         {
                             Handler?.OnClearScreen();
                             i++;

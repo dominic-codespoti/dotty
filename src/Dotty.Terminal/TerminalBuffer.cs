@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 
 namespace Dotty.Terminal
@@ -12,10 +12,24 @@ namespace Dotty.Terminal
     {
         public struct Cell
         {
-            public char Ch;
+            public string? Grapheme;
             public string? Foreground;
             public string? Background;
             public bool Bold;
+            public byte Width; // 0,1,2
+            public bool IsContinuation;
+
+            public void Reset()
+            {
+                Grapheme = null;
+                Foreground = null;
+                Background = null;
+                Bold = false;
+                Width = 0;
+                IsContinuation = false;
+            }
+
+            public bool IsEmpty => string.IsNullOrEmpty(Grapheme) && !IsContinuation;
         }
 
         private Cell[,] _main;
@@ -28,6 +42,9 @@ namespace Dotty.Terminal
 
         public int CursorRow { get; private set; }
         public int CursorCol { get; private set; }
+        public bool CursorVisible { get; private set; } = true;
+
+        private bool _clearLineOnNextWrite;
 
         public TerminalBuffer(int rows = 24, int columns = 80)
         {
@@ -35,17 +52,10 @@ namespace Dotty.Terminal
             Columns = columns;
             _main = new Cell[Rows, Columns];
             _alt = new Cell[Rows, Columns];
-            _usingAlt = false;
-            CursorRow = 0;
-            CursorCol = 0;
             ClearScreen();
         }
 
         private Cell[,] ActiveBuffer => _usingAlt ? _alt : _main;
-    // When a carriage return happens, many programs expect the following output
-    // to overwrite the existing line. We use this flag to erase the remainder
-    // of the current line on the next printable write.
-    private bool _clearLineOnNextWrite = false;
 
         public void ClearScreen()
         {
@@ -53,25 +63,23 @@ namespace Dotty.Terminal
             ClearBuffer(_alt);
             CursorRow = 0;
             CursorCol = 0;
+            _clearLineOnNextWrite = false;
         }
 
         public void ClearScrollback()
         {
-            // No-op for now; scrollback not implemented in grid mode.
             ClearScreen();
         }
 
         private static void ClearBuffer(Cell[,] buf)
         {
-            int r = buf.GetLength(0);
-            int c = buf.GetLength(1);
-            for (int i = 0; i < r; i++)
-            for (int j = 0; j < c; j++)
+            int rows = buf.GetLength(0);
+            int cols = buf.GetLength(1);
+            for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
             {
-                buf[i, j].Ch = ' ';
-                buf[i, j].Foreground = null;
-                buf[i, j].Background = null;
-                buf[i, j].Bold = false;
+                ref var cell = ref buf[r, c];
+                cell.Reset();
             }
         }
 
@@ -110,100 +118,343 @@ namespace Dotty.Terminal
             var buf = ActiveBuffer;
             if (mode == 2)
             {
-                for (int j = 0; j < Columns; j++) buf[CursorRow, j].Ch = ' ';
+                for (int j = 0; j < Columns; j++) ClearCell(buf, CursorRow, j);
             }
             else if (mode == 0)
             {
-                for (int j = CursorCol; j < Columns; j++) buf[CursorRow, j].Ch = ' ';
+                for (int j = CursorCol; j < Columns; j++) ClearCell(buf, CursorRow, j);
             }
             else if (mode == 1)
             {
-                for (int j = 0; j <= CursorCol; j++) buf[CursorRow, j].Ch = ' ';
+                for (int j = 0; j <= CursorCol; j++) ClearCell(buf, CursorRow, j);
             }
         }
 
-        public void WriteText(ReadOnlySpan<char> text, string? foreground)
+        // Erase display according to CSI n J modes
+        // mode 0: erase from cursor to end of screen
+        // mode 1: erase from start of screen to cursor
+        // mode 2: erase entire screen
+        public void EraseDisplay(int mode)
         {
             var buf = ActiveBuffer;
-            foreach (var ch in text)
+            if (mode == 2)
             {
-                // Skip most C0 control characters except CR/LF/TAB which we handle
-                if (ch != '\r' && ch != '\n' && ch != '\t' && (ch < ' ' || ch == '\u007f'))
-                {
-                    // Ignore other control characters
-                    continue;
-                }
+                ClearBuffer(buf);
+                CursorRow = 0;
+                CursorCol = 0;
+                return;
+            }
 
-                if (ch == '\r')
+            if (mode == 0)
+            {
+                for (int j = CursorCol; j < Columns; j++) ClearCell(buf, CursorRow, j);
+                for (int r = CursorRow + 1; r < Rows; r++)
+                    for (int c = 0; c < Columns; c++) ClearCell(buf, r, c);
+                return;
+            }
+
+            if (mode == 1)
+            {
+                for (int r = 0; r < CursorRow; r++)
+                    for (int c = 0; c < Columns; c++) ClearCell(buf, r, c);
+                for (int j = 0; j <= CursorCol; j++) ClearCell(buf, CursorRow, j);
+                return;
+            }
+        }
+
+        public void WriteText(ReadOnlySpan<char> text, string? foreground, string? background = null, bool bold = false)
+        {
+            if (text.IsEmpty)
+            {
+                return;
+            }
+
+            var enumerator = StringInfo.GetTextElementEnumerator(text.ToString());
+            while (enumerator.MoveNext())
+            {
+                var element = enumerator.GetTextElement();
+                
+                // Handle CRLF specifically as it is a single grapheme cluster
+                if (element == "\r\n")
                 {
                     CarriageReturn();
-                    continue;
-                }
-
-                if (ch == '\n')
-                {
                     LineFeed();
                     continue;
                 }
 
-                // If a CR was seen just before this printable, clear the remainder
-                // of the line so we don't leave trailing characters from previous
-                // longer outputs (prevents staircase artifacts).
+                if (element.Length == 1 && TryHandleControlChar(element[0], foreground, background, bold))
+                {
+                    continue;
+                }
+
                 if (_clearLineOnNextWrite)
                 {
-                    // erase from cursor to end of line
-                    var b = ActiveBuffer;
-                    for (int j = CursorCol; j < Columns; j++) b[CursorRow, j].Ch = ' ';
+                    ClearLineFromCursor();
                     _clearLineOnNextWrite = false;
                 }
 
-                // Handle tab by expanding to the next tab stop (8 columns)
-                if (ch == '\t')
+                WriteGrapheme(element, foreground, background, bold);
+            }
+        }
+
+        private bool TryHandleControlChar(char ch, string? foreground, string? background, bool bold)
+        {
+            switch (ch)
+            {
+                case '\r':
+                    CarriageReturn();
+                    return true;
+                case '\n':
+                    LineFeed();
+                    return true;
+                case '\t':
+                    WriteTab(foreground, background, bold);
+                    return true;
+                case '\b':
+                case '\u007f':
+                    ErasePreviousGlyph();
+                    return true;
+                default:
+                    return char.IsControl(ch);
+            }
+        }
+
+        private void WriteTab(string? foreground, string? background, bool bold)
+        {
+            int tabStop = 8;
+            int spaces = tabStop - (CursorCol % tabStop);
+            for (int i = 0; i < spaces; i++)
+            {
+                WriteGrapheme(" ", foreground, background, bold);
+            }
+        }
+
+        private void ClearLineFromCursor()
+        {
+            var buf = ActiveBuffer;
+            for (int j = CursorCol; j < Columns; j++)
+            {
+                ClearCell(buf, CursorRow, j);
+            }
+        }
+
+        private void WriteGrapheme(string grapheme, string? foreground, string? background, bool bold)
+        {
+            if (string.IsNullOrEmpty(grapheme))
+            {
+                return;
+            }
+
+            int width = UnicodeWidth.GetWidth(grapheme);
+            if (width == 0)
+            {
+                if (AttachCombiningMark(grapheme))
                 {
-                    int tabStop = 8;
-                    int spaces = tabStop - (CursorCol % tabStop);
-                    for (int s = 0; s < spaces; s++)
+                    return;
+                }
+
+                width = 1;
+            }
+
+            EnsureSpace(width);
+
+            var buf = ActiveBuffer;
+            ref var cell = ref buf[CursorRow, CursorCol];
+            cell.Grapheme = grapheme;
+            cell.Foreground = foreground;
+            cell.Background = background;
+            cell.Bold = bold;
+            cell.Width = (byte)Math.Clamp(width, 1, 2);
+            cell.IsContinuation = false;
+
+            for (int i = 1; i < width; i++)
+            {
+                ref var cont = ref buf[CursorRow, CursorCol + i];
+                cont.Reset();
+                cont.IsContinuation = true;
+                cont.Background = background;
+                cont.Foreground = foreground;
+                cont.Bold = bold;
+            }
+
+            AdvanceCursor(width);
+        }
+
+        private void EnsureSpace(int width)
+        {
+            if (width <= 0) width = 1;
+            if (CursorCol > Columns - width)
+            {
+                CursorCol = 0;
+                CursorRow++;
+                if (CursorRow >= Rows)
+                {
+                    ScrollUp(1);
+                    CursorRow = Rows - 1;
+                }
+            }
+        }
+
+        private void AdvanceCursor(int width)
+        {
+            CursorCol += width;
+            while (CursorCol >= Columns)
+            {
+                CursorCol -= Columns;
+                CursorRow++;
+                if (CursorRow >= Rows)
+                {
+                    ScrollUp(1);
+                    CursorRow = Rows - 1;
+                }
+            }
+        }
+
+        private bool AttachCombiningMark(string mark)
+        {
+            var (row, col) = GetPreviousBaseCell();
+            if (row < 0)
+            {
+                return false;
+            }
+
+            var buf = ActiveBuffer;
+            ref var cell = ref buf[row, col];
+            if (string.IsNullOrEmpty(cell.Grapheme))
+            {
+                return false;
+            }
+
+            cell.Grapheme += mark;
+            return true;
+        }
+
+        private (int row, int col) GetPreviousBaseCell()
+        {
+            int row = CursorRow;
+            int col = CursorCol;
+
+            if (row == 0 && col == 0)
+            {
+                return (-1, -1);
+            }
+
+            if (col == 0)
+            {
+                row--;
+                col = Columns - 1;
+            }
+            else
+            {
+                col--;
+            }
+
+            var buf = ActiveBuffer;
+            while (row >= 0)
+            {
+                ref var cell = ref buf[row, col];
+                if (!cell.IsContinuation)
+                {
+                    if (!cell.IsEmpty)
                     {
-                        buf[CursorRow, CursorCol].Ch = ' ';
-                        buf[CursorRow, CursorCol].Foreground = foreground;
-                        CursorCol++;
-                        if (CursorCol >= Columns)
-                        {
-                            CursorCol = 0;
-                            CursorRow++;
-                            if (CursorRow >= Rows)
-                            {
-                                ScrollUp(1);
-                                CursorRow = Rows - 1;
-                            }
-                        }
+                        return (row, col);
                     }
+
+                    return (-1, -1);
+                }
+
+                if (col == 0)
+                {
+                    row--;
+                    col = Columns - 1;
                 }
                 else
                 {
-                    buf[CursorRow, CursorCol].Ch = ch;
-                    buf[CursorRow, CursorCol].Foreground = foreground;
-                    CursorCol++;
-                    if (CursorCol >= Columns)
+                    col--;
+                }
+            }
+
+            return (-1, -1);
+        }
+
+        private void ErasePreviousGlyph()
+        {
+            if (CursorRow == 0 && CursorCol == 0)
+            {
+                return;
+            }
+
+            MoveCursorBackward();
+
+            var buf = ActiveBuffer;
+            while (CursorRow >= 0)
+            {
+                ref var cell = ref buf[CursorRow, CursorCol];
+                if (cell.IsContinuation)
+                {
+                    cell.Reset();
+                    MoveCursorBackward();
+                    continue;
+                }
+
+                if (!cell.IsEmpty)
+                {
+                    int width = Math.Max(1, (int)cell.Width);
+                    cell.Reset();
+                    for (int i = 1; i < width && CursorCol + i < Columns; i++)
                     {
-                        CursorCol = 0;
-                        CursorRow++;
-                        if (CursorRow >= Rows)
+                        ref var cont = ref buf[CursorRow, CursorCol + i];
+                        if (!cont.IsContinuation)
                         {
-                            ScrollUp(1);
-                            CursorRow = Rows - 1;
+                            break;
                         }
+                        cont.Reset();
                     }
                 }
-                if (CursorCol >= Columns)
+                break;
+            }
+        }
+
+        private void MoveCursorBackward()
+        {
+            if (CursorCol > 0)
+            {
+                CursorCol--;
+            }
+            else if (CursorRow > 0)
+            {
+                CursorRow--;
+                CursorCol = Columns - 1;
+            }
+            else
+            {
+                CursorCol = 0;
+                CursorRow = 0;
+            }
+        }
+
+        private void ClearCell(Cell[,] buf, int row, int col)
+        {
+            if (row < 0 || row >= Rows || col < 0 || col >= Columns)
+            {
+                return;
+            }
+
+            ref var cell = ref buf[row, col];
+            int width = Math.Max(1, (int)cell.Width);
+            bool isContinuation = cell.IsContinuation;
+            cell.Reset();
+
+            if (!isContinuation)
+            {
+                for (int i = 1; i < width && col + i < Columns; i++)
                 {
-                    CursorCol = 0;
-                    CursorRow++;
-                    if (CursorRow >= Rows)
+                    ref var cont = ref buf[row, col + i];
+                    if (!cont.IsContinuation)
                     {
-                        ScrollUp(1);
-                        CursorRow = Rows - 1;
+                        break;
                     }
+                    cont.Reset();
                 }
             }
         }
@@ -217,7 +468,10 @@ namespace Dotty.Terminal
 
             for (int i = Rows - lines; i < Rows; i++)
             for (int j = 0; j < Columns; j++)
-                buf[i, j].Ch = ' ';
+            {
+                ref var cell = ref buf[i, j];
+                cell.Reset();
+            }
         }
 
         public string GetCurrentDisplay(bool showCursor = false, string? promptPrefix = null)
@@ -228,14 +482,48 @@ namespace Dotty.Terminal
             {
                 for (int j = 0; j < Columns; j++)
                 {
-                    var ch = buf[i, j].Ch;
-                    if (ch == '\0') ch = ' ';
-                    sb.Append(ch);
+                    var cell = buf[i, j];
+                    if (cell.IsContinuation)
+                    {
+                        sb.Append(' ');
+                    }
+                    else if (string.IsNullOrEmpty(cell.Grapheme))
+                    {
+                        sb.Append(' ');
+                    }
+                    else
+                    {
+                        sb.Append(cell.Grapheme);
+                    }
                 }
                 sb.AppendLine();
             }
 
             return sb.ToString();
+        }
+
+        // Return the character at the given buffer coordinates.
+        public char GetCharAt(int row, int col)
+        {
+            if (row < 0 || row >= Rows || col < 0 || col >= Columns) return '\0';
+            var cell = ActiveBuffer[row, col];
+            if (cell.IsContinuation || string.IsNullOrEmpty(cell.Grapheme))
+            {
+                return ' ';
+            }
+
+            return cell.Grapheme![0];
+        }
+
+        // Return a copy of the cell at the given coordinates. Safe for out-of-range queries.
+        public Cell GetCell(int row, int col)
+        {
+            if (row < 0 || row >= Rows || col < 0 || col >= Columns)
+            {
+                return new Cell { Grapheme = " ", Width = 1, Bold = false };
+            }
+            var c = ActiveBuffer[row, col];
+            return c;
         }
 
         public string GetCurrentLine()
@@ -244,9 +532,15 @@ namespace Dotty.Terminal
             var sb = new StringBuilder();
             for (int j = 0; j < Columns; j++)
             {
-                var ch = buf[CursorRow, j].Ch;
-                if (ch == '\0') ch = ' ';
-                sb.Append(ch);
+                var cell = buf[CursorRow, j];
+                if (cell.IsContinuation || string.IsNullOrEmpty(cell.Grapheme))
+                {
+                    sb.Append(' ');
+                }
+                else
+                {
+                    sb.Append(cell.Grapheme);
+                }
             }
             return sb.ToString().TrimEnd();
         }
@@ -277,10 +571,18 @@ namespace Dotty.Terminal
             }
         }
 
+        public void SetCursorVisible(bool visible)
+        {
+            CursorVisible = visible;
+        }
+
+    // Expose whether the alternate screen is active
+    public bool UsingAlternate => _usingAlt;
+
         // Convenience: append printable text (no color info)
         public void AppendText(ReadOnlySpan<char> text)
         {
-            WriteText(text, null);
+            WriteText(text, null, null, false);
         }
 
         // If the current line ends with the provided promptText, remove it from the buffer
@@ -296,7 +598,7 @@ namespace Dotty.Terminal
             var buf = ActiveBuffer;
             for (int j = start; j < Columns; j++)
             {
-                buf[CursorRow, j].Ch = ' ';
+                ClearCell(buf, CursorRow, j);
             }
 
             CursorCol = Math.Clamp(start, 0, Columns - 1);

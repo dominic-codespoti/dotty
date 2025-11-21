@@ -1,10 +1,5 @@
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using Dotty.Core;
 using System.Runtime.Versioning;
 using System.Net.Sockets;
@@ -34,7 +29,7 @@ class Program
     static int RunInteractiveShell()
     {
         string shell = GetPreferredShell();
-        string? helperPath = Environment.GetEnvironmentVariable("DOTTY_SHELL_INTEGRATION_SCRIPT");
+        
 
         // Prepare environment to pass into the child PTY process.
         var env = new Dictionary<string, string?>(StringComparer.Ordinal);
@@ -55,37 +50,12 @@ class Program
         }
 
         string? command = null;
-        string? rcPathToRemove = null;
-        string? zdotdirToRemove = null;
+        // string? rcPathToRemove = null;
+        // string? zdotdirToRemove = null;
 
         try
         {
-            if (!string.IsNullOrEmpty(helperPath))
-            {
-                if (shell.EndsWith("/zsh", StringComparison.Ordinal) || shell.EndsWith("zsh", StringComparison.Ordinal))
-                {
-                    // For zsh, create a temporary ZDOTDIR and write .zshrc that sources user's .zshrc then helper
-                    var tmpDir = Path.Combine(Path.GetTempPath(), "dotty-zdotdir-" + Guid.NewGuid().ToString("N"));
-                    Directory.CreateDirectory(tmpDir);
-                    var zshRc = Path.Combine(tmpDir, ".zshrc");
-                    File.WriteAllText(zshRc, BuildZshRcContent(helperPath));
-                    env["ZDOTDIR"] = tmpDir;
-                    zdotdirToRemove = tmpDir;
-                }
-                else if (shell.EndsWith("/bash", StringComparison.Ordinal) || shell.EndsWith("bash", StringComparison.Ordinal))
-                {
-                    // For bash, create a temporary rcfile which sources the user's rc then our helper
-                    var rcPath = BuildTempRcForShell(shell, helperPath);
-                    rcPathToRemove = rcPath;
-                    // Use a shell command that sources our rcfile and then execs the real shell interactively
-                    command = $". {QuoteForShell(rcPath)}; exec {QuoteForShell(shell)} -i";
-                }
-                else
-                {
-                    // Generic fallback: source the helper and exec the shell interactive
-                    command = $". {QuoteForShell(helperPath)} && exec {QuoteForShell(shell)} -i";
-                }
-            }
+            // No shell integration helper: do not inject any rcfiles; shell will render its own prompt.
 
             // Start the shell inside a real PTY so full-screen TUI apps work correctly
             if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
@@ -94,7 +64,62 @@ class Program
                 const int initialRows = 24;
                 using var pty = UnixPty.Start(shell, Directory.GetCurrentDirectory(), initialCols, initialRows, command, env);
 
-                Console.Error.WriteLine($"Dotty.Subprocess: Started shell {shell} (helper={(helperPath ?? "(none)")}) in PTY");
+                try
+                {
+                    var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG");
+                    if (!string.IsNullOrEmpty(dbg) && dbg != "0")
+                    {
+                        Console.Error.WriteLine($"Dotty.Subprocess: Started shell {shell} in PTY");
+                    }
+                }
+                catch { }
+
+                // Emit diagnostics about child's open file descriptors so we can determine
+                // whether the child's stdio (fd 0/1/2) are actually attached to the PTY slave.
+                try
+                {
+                    var childPid = pty.ChildPid;
+                    for (int fd = 0; fd <= 2; fd++)
+                    {
+                        try
+                        {
+                            var psi = new ProcessStartInfo("readlink", $"-f /proc/{childPid}/fd/{fd}")
+                            {
+                                RedirectStandardOutput = true,
+                                UseShellExecute = false,
+                                CreateNoWindow = true,
+                            };
+                            using var p = Process.Start(psi);
+                                if (p != null)
+                                {
+                                    var outText = p.StandardOutput.ReadToEnd().Trim();
+                                    p.WaitForExit(1000);
+                                    try
+                                    {
+                                        var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG");
+                                        if (!string.IsNullOrEmpty(dbg) && dbg != "0")
+                                        {
+                                            Console.Error.WriteLine($"Dotty.Subprocess: child fd{fd} -> {outText}");
+                                        }
+                                    }
+                                    catch { }
+                                }
+                        }
+                        catch (Exception ex)
+                        {
+                            try
+                            {
+                                var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG");
+                                if (!string.IsNullOrEmpty(dbg) && dbg != "0")
+                                {
+                                    Console.Error.WriteLine($"Dotty.Subprocess: child fd{fd} -> (error: {ex.Message})");
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
 
                 // If caller provided a control socket path, bind and accept a connection to receive control messages (e.g., resize).
                 string? controlSocket = Environment.GetEnvironmentVariable("DOTTY_CONTROL_SOCKET");
@@ -162,29 +187,44 @@ class Program
                         // when DOTTY_DEBUG_TTY=1 is set in the environment. This is an
                         // opt-in diagnostic that helps confirm whether the child shell
                         // has a proper controlling terminal.
-                        try
-                        {
-                            var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_TTY");
-                            if (!string.IsNullOrEmpty(dbg) && dbg != "0")
-                            {
                                 try
                                 {
-                                    var slave = pty.SlaveName();
-                                    Console.Error.WriteLine($"Dotty.Subprocess: PTY slave={slave}");
+                                    try
+                                    {
+                                        // Emit slave device diagnostics only when DOTTY_DEBUG is enabled.
+                                        var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG");
+                                        if (!string.IsNullOrEmpty(dbg) && dbg != "0")
+                                        {
+                                            var slave = pty.SlaveName();
+                                            Console.Error.WriteLine($"Dotty.Subprocess: PTY slave={slave}");
+                                            try
+                                            {
+                                                var isAtty = pty.IsSlaveAtty();
+                                                Console.Error.WriteLine($"Dotty.Subprocess: SlaveIsAtty={isAtty}");
+                                            }
+                                            catch { }
+                                        }
+                                    }
+                                    catch { }
                                 }
                                 catch { }
 
                                 try
                                 {
-                                    var probe = System.Text.Encoding.UTF8.GetBytes("tty\n");
-                                    // Write probe directly to master; it will execute in the shell and print the tty path
-                                    master.Write(probe, 0, probe.Length);
-                                    master.Flush();
+                                    var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_TTY");
+                                    if (!string.IsNullOrEmpty(dbg) && dbg != "0")
+                                    {
+                                        try
+                                        {
+                                            var probe = System.Text.Encoding.UTF8.GetBytes("tty\n");
+                                            // Write probe directly to master; it will execute in the shell and print the tty path
+                                            master.Write(probe, 0, probe.Length);
+                                            master.Flush();
+                                        }
+                                        catch { }
+                                    }
                                 }
                                 catch { }
-                            }
-                        }
-                        catch { }
                     var stdIn = Console.OpenStandardInput();
                     var stdOut = Console.OpenStandardOutput();
 
@@ -242,9 +282,7 @@ class Program
         }
         finally
         {
-            // Clean up any temporary files/dirs we created for helper integration
-            try { if (rcPathToRemove != null && File.Exists(rcPathToRemove)) File.Delete(rcPathToRemove); } catch { }
-            try { if (zdotdirToRemove != null && Directory.Exists(zdotdirToRemove)) Directory.Delete(zdotdirToRemove, true); } catch { }
+            // No temporary files/dirs to clean up since integration is removed
         }
     }
 
@@ -299,60 +337,5 @@ class Program
         return "'" + value.Replace("'", "'\"'\"'") + "'";
     }
 
-    private static string BuildTempRcForShell(string shell, string helperPath)
-    {
-        var rcPath = Path.Combine(Path.GetTempPath(), $"dotty-rc-{Guid.NewGuid():N}.sh");
-        var sb = new StringBuilder();
-        sb.AppendLine("# dotty temporary rcfile - sources original rc and then our helper");
-        sb.AppendLine("# Source user's ~/.bashrc if available");
-        sb.AppendLine("if [ -f \"$HOME/.bashrc\" ]; then");
-        sb.AppendLine("  source \"$HOME/.bashrc\"");
-        sb.AppendLine("fi");
-        sb.AppendLine();
-        // Source our helper after user's rc so starship and others are already set up
-        sb.AppendLine($"source {QuoteForShell(helperPath)}");
-        sb.AppendLine();
-        // Wrap PROMPT_COMMAND so that dotty markers surround starship's prompt
-    sb.AppendLine("# Ensure dotty markers wrap the user's prompt generation");
-    sb.AppendLine("# We wrap the user's PS1 so that start/end markers are emitted around the visible prompt text\n# and not only via PROMPT_COMMAND which runs before PS1 is printed.");
-    sb.AppendLine("if [ -n \"$PROMPT_COMMAND\" ]; then");
-    sb.AppendLine("  DOTTY_OLD_PROMPT_COMMAND=\"$PROMPT_COMMAND\"");
-    sb.AppendLine("  PROMPT_COMMAND=\"dotty_emit_prompt_precmd; $DOTTY_OLD_PROMPT_COMMAND\"");
-    sb.AppendLine("else");
-    sb.AppendLine("  PROMPT_COMMAND=\"dotty_emit_prompt_precmd\"");
-    sb.AppendLine("fi");
-    sb.AppendLine("# Wrap PS1 so the end marker is printed after the user's prompt (i.e. after starship's output)");
-    sb.AppendLine("if [ -n \"$PS1\" ]; then");
-    sb.AppendLine("  DOTTY_OLD_PS1=\"$PS1\"");
-    sb.AppendLine("  PS1=\"$(dotty_emit_prompt_start)\"\"$DOTTY_OLD_PS1\"\"$(dotty_emit_prompt_end)\"");
-    sb.AppendLine("fi");
-    sb.AppendLine("export -f dotty_emit_prompt_precmd dotty_emit_prompt_start dotty_emit_prompt_end dotty_emit_prompt_flush");
-        File.WriteAllText(rcPath, sb.ToString());
-        return rcPath;
-    }
-
-    private static string BuildZshRcContent(string helperPath)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("# dotty temporary zshrc - sources user's .zshrc then our helper");
-        sb.AppendLine("if [ -f \"$HOME/.zshrc\" ]; then");
-        sb.AppendLine("  source \"$HOME/.zshrc\"");
-        sb.AppendLine("fi");
-        sb.AppendLine();
-        sb.AppendLine($"source {QuoteForShell(helperPath)}");
-        sb.AppendLine();
-    sb.AppendLine("# Add our dotty precmd to run before prompt rendering and wrap PROMPT so end is executed after the prompt prints\n# This avoids printing the end marker before the prompt (precmd runs before prompt printing).");
-    sb.AppendLine("if [ -z \"${precmd_functions:-}\" ]; then");
-    sb.AppendLine("  precmd_functions=(dotty_emit_prompt_precmd)");
-    sb.AppendLine("else");
-    sb.AppendLine("  precmd_functions=(dotty_emit_prompt_precmd \"${precmd_functions[@]}\")");
-    sb.AppendLine("fi");
-    sb.AppendLine("# Wrap PROMPT so the end marker is printed after user prompt text (zsh prints PROMPT after precmd)");
-    sb.AppendLine("if [ -n \"$PROMPT\" ]; then");
-    sb.AppendLine("  DOTTY_OLD_PROMPT=\"$PROMPT\"");
-    sb.AppendLine("  PROMPT=\"$(dotty_emit_prompt_start)\"\"$DOTTY_OLD_PROMPT\"\"$(dotty_emit_prompt_end)\"");
-    sb.AppendLine("fi");
-    sb.AppendLine("typeset -fx dotty_emit_prompt_precmd dotty_emit_prompt_start dotty_emit_prompt_end dotty_emit_prompt_flush");
-        return sb.ToString();
-    }
+    // Shell integration helpers removed (OSC marker injection not used).
 }

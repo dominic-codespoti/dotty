@@ -1,9 +1,7 @@
 using System;
-using System.Threading;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
-using Avalonia.Threading;
 using Dotty.Terminal;
 
 namespace Dotty.App
@@ -14,13 +12,12 @@ namespace Dotty.App
     /// </summary>
     public class TerminalAdapter : ITerminalHandler
     {
-        private readonly TerminalBuffer _buffer;
-        private string? _currentForeground; // hex like #RRGGBB
-        private readonly List<PromptSegment> _recentSegments = new();
-        private bool _semanticPromptSupported;
-        private bool _collectingSemanticPrompt;
-        private readonly StringBuilder _semanticPromptBuilder = new();
-        private readonly List<PromptSegment> _semanticPromptSegments = new();
+    private readonly TerminalBuffer _buffer;
+    private string? _currentForeground; // hex like #RRGGBB
+    private string? _currentBackground;
+    private bool _currentBold = false;
+    private bool _currentReverse = false;
+    // Prompt semantic collection removed: we let the shell render the prompt natively.
 
         public TerminalAdapter(int rows = 24, int columns = 80)
         {
@@ -31,12 +28,11 @@ namespace Dotty.App
         /// Raised when the display should be re-rendered. Argument is the full text to display for now.
         /// </summary>
         public event Action<string>? RenderRequested;
-    public event Action<string>? PromptDetected;
-    public event Action<List<PromptSegment>>? PromptSegmentsDetected;
-    // Diagnostic: raw OSC payloads received (for debugging emitter content)
-    public event Action<string>? RawOscReceived;
-    public event Action<string>? CwdDetected;
-    public event Action<int>? StatusUpdated;
+    // OSC / shell-integration diagnostics removed — we no longer collect or
+    // process OSC markers in the adapter.
+
+    // Expose underlying buffer for renderers to pull a snapshot
+    public TerminalBuffer Buffer => _buffer;
 
         public void OnPrint(ReadOnlySpan<char> text)
         {
@@ -53,126 +49,23 @@ namespace Dotty.App
             var s = text.ToString();
             var plainText = StripAnsi(s);
 
-            // Record segment with the current tracked foreground color (use sanitized text)
-            var seg = new PromptSegment { Text = plainText, Foreground = _currentForeground };
-            _recentSegments.Add(seg);
-            if (_recentSegments.Count > 256) _recentSegments.RemoveRange(0, _recentSegments.Count - 256);
-
-            if (_collectingSemanticPrompt && !string.IsNullOrEmpty(plainText))
+            // Write printable text into the buffer with the current graphics attributes
+            // (foreground/background/bold) as tracked by OnSetGraphicsRendition.
+            // If reverse-video is active, swap foreground/background.
+            if (_currentReverse)
             {
-                _semanticPromptBuilder.Append(plainText);
-                _semanticPromptSegments.Add(new PromptSegment
-                {
-                    Text = plainText,
-                    Foreground = _currentForeground
-                });
+                _buffer.WriteText(text, _currentBackground, _currentForeground, _currentBold);
             }
-
-            _buffer.AppendText(text);
+            else
+            {
+                _buffer.WriteText(text, _currentForeground, _currentBackground, _currentBold);
+            }
             RequestRender();
-
-            if (!_semanticPromptSupported && !string.IsNullOrEmpty(plainText))
-            {
-                if (plainText.EndsWith("$ ") || plainText.EndsWith("# ") || plainText.EndsWith("> ") || plainText.EndsWith("% "))
-                {
-                    var promptText = _buffer.GetCurrentLine()
-                        .Replace("\r", string.Empty)
-                        .Replace("\n", string.Empty);
-
-                    if (!string.IsNullOrEmpty(promptText))
-                    {
-                        PromptDetected?.Invoke(promptText);
-
-                        var segments = new List<PromptSegment>();
-                        int needed = promptText.Length;
-                        for (int i = _recentSegments.Count - 1; i >= 0 && needed > 0; i--)
-                        {
-                            var ps = _recentSegments[i];
-                            var segmentText = TrimAfterLastNewline(ps.Text);
-                            if (string.IsNullOrEmpty(segmentText))
-                                continue;
-
-                            segments.Insert(0, new PromptSegment
-                            {
-                                Text = segmentText,
-                                Foreground = ps.Foreground,
-                                Background = ps.Background,
-                                Bold = ps.Bold,
-                                Italic = ps.Italic,
-                                Underline = ps.Underline
-                            });
-
-                            needed -= segmentText.Length;
-                        }
-                        if (segments.Count > 0)
-                        {
-                            PromptSegmentsDetected?.Invoke(segments);
-                        }
-
-                        _buffer.RemoveTrailingPromptIfMatches(promptText);
-                        RequestRender();
-                    }
-                }
-            }
         }
 
         public void OnOperatingSystemCommand(ReadOnlySpan<char> payload)
         {
-            // Expect payload in the form "1338;<base64-json>" as produced by the helper rcfile
-            var s = payload.ToString();
-            RawOscReceived?.Invoke(s);
-            if (HandleSemanticPromptOsc(s))
-            {
-                return;
-            }
-            if (s.StartsWith("1338;"))
-            {
-                var b64 = s.Substring(5);
-                try
-                {
-                    var bytes = Convert.FromBase64String(b64);
-                    var json = System.Text.Encoding.UTF8.GetString(bytes);
-
-                    System.Text.Json.JsonDocument? doc = null;
-                    try
-                    {
-                        doc = System.Text.Json.JsonDocument.Parse(json);
-                    }
-                    catch
-                    {
-                        // Some shells may emit raw ESC bytes inside the JSON string (invalid JSON).
-                        // Try to sanitize by escaping literal ESC (0x1B) so the parser can succeed.
-                        try
-                        {
-                            var sanitized = json.Replace("\u001b", "\\u001b");
-                            sanitized = sanitized.Replace("\x1b", "\\u001b");
-                            sanitized = sanitized.Replace(((char)27).ToString(), "\\u001b");
-                            doc = System.Text.Json.JsonDocument.Parse(sanitized);
-                        }
-                        catch
-                        {
-                            // give up
-                            doc = null;
-                        }
-                    }
-
-                    if (doc != null)
-                    {
-                        if (doc.RootElement.TryGetProperty("cwd", out var cwd))
-                        {
-                            CwdDetected?.Invoke(cwd.GetString() ?? string.Empty);
-                        }
-                        if (doc.RootElement.TryGetProperty("status", out var status))
-                        {
-                            try { StatusUpdated?.Invoke(status.GetInt32()); } catch { }
-                        }
-                    }
-                }
-                catch
-                {
-                    // Ignore malformed markers
-                }
-            }
+            // OSC handling removed — ignore OS command (OSC) payloads.
         }
 
         private static string StripAnsi(string input)
@@ -187,32 +80,24 @@ namespace Dotty.App
             return input;
         }
 
-        private static string TrimAfterLastNewline(string? text)
-        {
-            if (string.IsNullOrEmpty(text))
-                return string.Empty;
-
-            int lastIndex = text.LastIndexOfAny(new[] { '\r', '\n' });
-            if (lastIndex >= 0)
-            {
-                if (lastIndex + 1 >= text.Length)
-                    return string.Empty;
-
-                return text.Substring(lastIndex + 1);
-            }
-
-            return text;
-        }
+        // (TrimAfterLastNewline removed with prompt plumbing cleanup)
 
         public void OnClearScreen()
         {
-            _buffer.ClearScreen();
+            // Legacy full-screen clear -> translate to erase-display mode 2
+            _buffer.EraseDisplay(2);
             RequestRender();
         }
 
         public void OnClearScrollback()
         {
             _buffer.ClearScrollback();
+            RequestRender();
+        }
+
+        public void OnEraseDisplay(int mode)
+        {
+            _buffer.EraseDisplay(mode);
             RequestRender();
         }
 
@@ -227,9 +112,24 @@ namespace Dotty.App
             {
                 if (int.TryParse(parts[i], out var code))
                 {
-                    if (code == 39)
+                    if (code == 0)
+                    {
+                        // Reset all attributes
+                        _currentForeground = null;
+                        _currentBackground = null;
+                        _currentBold = false;
+                        _currentReverse = false;
+                        i++;
+                    }
+                    else if (code == 39)
                     {
                         _currentForeground = null; // reset to default
+                        i++;
+                    }
+                    else if (code == 49)
+                    {
+                        // reset background
+                        _currentBackground = null;
                         i++;
                     }
                     else if (code == 38 && i + 1 < parts.Length && parts[i + 1] == "2")
@@ -245,9 +145,63 @@ namespace Dotty.App
                             i++;
                         }
                     }
+                    else if (code == 38 && i + 1 < parts.Length && parts[i + 1] == "5")
+                    {
+                        // 256-color foreground: 38;5;idx
+                        if (i + 2 < parts.Length && int.TryParse(parts[i + 2], out var idx))
+                        {
+                            _currentForeground = Sgr256ToHex(idx);
+                            i += 3;
+                        }
+                        else
+                        {
+                            i++;
+                        }
+                    }
                     else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
                     {
                         _currentForeground = SgrCodeToHex(code);
+                        i++;
+                    }
+                    else if (code == 48 && i + 1 < parts.Length && parts[i + 1] == "5")
+                    {
+                        // 256-color background: 48;5;idx
+                        if (i + 2 < parts.Length && int.TryParse(parts[i + 2], out var idx))
+                        {
+                            _currentBackground = Sgr256ToHex(idx);
+                            i += 3;
+                        }
+                        else
+                        {
+                            i++;
+                        }
+                    }
+                    else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
+                    {
+                        // background colors
+                        _currentBackground = SgrCodeToHexBackground(code);
+                        i++;
+                    }
+                    else if (code == 7)
+                    {
+                        // reverse video
+                        _currentReverse = true;
+                        i++;
+                    }
+                    else if (code == 27)
+                    {
+                        // disable reverse video
+                        _currentReverse = false;
+                        i++;
+                    }
+                    else if (code == 1)
+                    {
+                        _currentBold = true;
+                        i++;
+                    }
+                    else if (code == 22)
+                    {
+                        _currentBold = false;
                         i++;
                     }
                     else
@@ -318,6 +272,12 @@ namespace Dotty.App
             RequestRender();
         }
 
+        public void OnSetCursorVisibility(bool visible)
+        {
+            _buffer.SetCursorVisible(visible);
+            RequestRender();
+        }
+
         private static string? SgrCodeToHex(int code)
         {
             return code switch
@@ -356,97 +316,49 @@ namespace Dotty.App
             return null;
         }
 
+        private static string? Sgr256ToHex(int idx)
+        {
+            if (idx < 0 || idx > 255) return null;
+            if (idx <= 15)
+            {
+                // Map 0-7 -> 30-37, 8-15 -> 90-97
+                int code = (idx < 8) ? (30 + idx) : (90 + (idx - 8));
+                return SgrCodeToHex(code);
+            }
+            if (idx >= 16 && idx <= 231)
+            {
+                int c = idx - 16;
+                int r = c / 36;
+                int g = (c / 6) % 6;
+                int b = c % 6;
+                int R = r == 0 ? 0 : 55 + r * 40;
+                int G = g == 0 ? 0 : 55 + g * 40;
+                int B = b == 0 ? 0 : 55 + b * 40;
+                return $"#{R:X2}{G:X2}{B:X2}";
+            }
+            // grayscale 232-255
+            if (idx >= 232 && idx <= 255)
+            {
+                int gray = 8 + (idx - 232) * 10;
+                if (gray < 0) gray = 0;
+                if (gray > 255) gray = 255;
+                return $"#{gray:X2}{gray:X2}{gray:X2}";
+            }
+            return null;
+        }
+
         public void OnBell()
         {
             // No-op currently; could raise a sound or visual bell.
         }
 
-        private bool HandleSemanticPromptOsc(string payload)
-        {
-            const string prefix = "133;";
-            if (string.IsNullOrEmpty(payload) || !payload.StartsWith(prefix) || payload.StartsWith("1338;"))
-            {
-                return false;
-            }
-
-            _semanticPromptSupported = true;
-            var rest = payload.Substring(prefix.Length);
-            if (string.IsNullOrEmpty(rest))
-            {
-                return true;
-            }
-
-            var parts = rest.Split(';', StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length == 0)
-            {
-                return true;
-            }
-
-            switch (parts[0])
-            {
-                case "A":
-                case "P":
-                    StartSemanticPromptCollection();
-                    break;
-                case "B":
-                case "I":
-                case "N":
-                    FlushSemanticPromptCollection();
-                    break;
-                default:
-                    break;
-            }
-
-            return true;
-        }
-
-        private void StartSemanticPromptCollection()
-        {
-            if (_collectingSemanticPrompt)
-            {
-                FlushSemanticPromptCollection();
-            }
-
-            _semanticPromptSupported = true;
-            _collectingSemanticPrompt = true;
-            _semanticPromptBuilder.Clear();
-            _semanticPromptSegments.Clear();
-        }
-
-        private void FlushSemanticPromptCollection()
-        {
-            if (!_collectingSemanticPrompt)
-            {
-                _semanticPromptBuilder.Clear();
-                _semanticPromptSegments.Clear();
-                return;
-            }
-
-            _collectingSemanticPrompt = false;
-            var promptText = _semanticPromptBuilder.ToString();
-            if (string.IsNullOrEmpty(promptText))
-            {
-                _semanticPromptBuilder.Clear();
-                _semanticPromptSegments.Clear();
-                return;
-            }
-
-            PromptDetected?.Invoke(promptText);
-            if (_semanticPromptSegments.Count > 0)
-            {
-                PromptSegmentsDetected?.Invoke(new List<PromptSegment>(_semanticPromptSegments));
-            }
-
-            _buffer.RemoveTrailingPromptIfMatches(promptText);
-            RequestRender();
-
-            _semanticPromptBuilder.Clear();
-            _semanticPromptSegments.Clear();
-        }
+        // Semantic prompt handling removed — we keep raw OSC diagnostics but
+        // do not collect or strip prompt text from the buffer.
 
         private void RequestRender()
         {
-            // Do not include prompt or cursor in the main display; the UI input area shows the prompt and the caret.
+            // Render a snapshot of the buffer; the renderer will decide how to
+            // display the cursor. We no longer strip or hide the shell prompt.
             RenderRequested?.Invoke(_buffer.GetCurrentDisplay(showCursor: false, promptPrefix: null));
         }
 
@@ -457,16 +369,5 @@ namespace Dotty.App
         }
     }
 
-    /// <summary>
-    /// A small model representing a piece of prompt text and an optional foreground color (hex string).
-    /// </summary>
-    public class PromptSegment
-    {
-        public string? Text { get; set; }
-        public string? Foreground { get; set; }
-            public string? Background { get; set; }
-            public bool Bold { get; set; }
-            public bool Italic { get; set; }
-            public bool Underline { get; set; }
-    }
+    // PromptSegment removed — semantic prompt plumbing cleaned up.
 }

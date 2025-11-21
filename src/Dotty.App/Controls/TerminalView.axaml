@@ -1,0 +1,12 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Dotty.App.Controls;assembly=Dotty.App"
+             x:Class="Dotty.App.Controls.TerminalView">
+  <Border Background="{DynamicResource TerminalBackground}" Focusable="True">
+    <controls:TerminalGrid Name="PART_Grid"
+                           FontFamily="{DynamicResource TerminalFontFamily}"
+                           FontSize="{DynamicResource TerminalFontSize}"
+                           RenderOptions.BitmapInterpolationMode="HighQuality"
+                           RenderOptions.EdgeMode="Antialias" />
+  </Border>
+</UserControl>

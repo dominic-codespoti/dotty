@@ -1,7 +1,3 @@
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 
@@ -19,6 +15,9 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
     private UnixPtyStream? _stream;
     private bool _disposed;
 
+    // Expose the child pid for diagnostics (helps the helper inspect /proc/<pid>/fd)
+    public int ChildPid => _childPid;
+
     private UnixPty(int masterFd, int childPid)
     {
         _masterFd = masterFd;
@@ -35,6 +34,32 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
             var p = UnixPtyNativePtsName(_masterFd);
             if (p == IntPtr.Zero) return null;
             return Marshal.PtrToStringAnsi(p);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Quick diagnostic: attempt to open the slave device and call isatty on it.
+    // Returns null on error, true if slave is a tty, false otherwise.
+    public bool? IsSlaveAtty()
+    {
+        try
+        {
+            var slave = SlaveName();
+            if (string.IsNullOrEmpty(slave)) return null;
+            int fd = UnixPty.open(slave, 0);
+            if (fd < 0) return null;
+            try
+            {
+                int r = UnixPty.isatty(fd);
+                return r == 1;
+            }
+            finally
+            {
+                try { UnixPty.close(fd); } catch { }
+            }
         }
         catch
         {
@@ -91,6 +116,22 @@ public sealed partial class UnixPty : IPseudoTerminal, IDisposable
             var err = Marshal.GetLastWin32Error();
             throw new InvalidOperationException($"forkpty failed with error {err}");
         }
+
+        try
+        {
+            var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_PTY");
+            if (!string.IsNullOrEmpty(dbg) && dbg != "0")
+            {
+                try
+                {
+                    var pts = UnixPtyNativePtsName(controller);
+                    var ptsName = pts == IntPtr.Zero ? "(null)" : Marshal.PtrToStringAnsi(pts);
+                    Console.Error.WriteLine($"UnixPty: forkpty returned pid={pid} master={controller} pts={ptsName}");
+                }
+                catch { }
+            }
+        }
+        catch { }
 
         if (pid == 0)
         {

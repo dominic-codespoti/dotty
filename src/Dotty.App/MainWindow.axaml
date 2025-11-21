@@ -5,8 +5,6 @@
     Width="1000" Height="700"
     Title="Terminal (Phase 0)">
   <DockPanel>
-  <controls:TerminalInput Name="InputControl" DockPanel.Dock="Bottom" />
-
-  <controls:TerminalOutput Name="OutputBox" />
+  <controls:TerminalView Name="TerminalView" />
   </DockPanel>
 </Window>

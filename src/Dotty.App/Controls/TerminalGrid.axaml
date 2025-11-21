@@ -1,0 +1,14 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:Dotty.App.Controls"
+             x:Class="Dotty.App.Controls.TerminalGrid">
+
+  <Border Background="{DynamicResource TerminalBackground}" Padding="0">
+    <ScrollViewer Name="PART_Scroll" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Auto">
+      <controls:TerminalCanvas Name="PART_Canvas"
+                               FontFamily="{Binding FontFamily, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                               FontSize="{Binding FontSize, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+    </ScrollViewer>
+  </Border>
+
+</UserControl>

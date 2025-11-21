@@ -1,5 +1,3 @@
-using System;
-
 namespace Dotty.Terminal
 {
     /// <summary>
@@ -11,11 +9,14 @@ namespace Dotty.Terminal
         // Called for printable text. The implementation should be fast and avoid allocations.
         void OnPrint(ReadOnlySpan<char> text);
 
-        // Called when the parser detects a clear-screen (CSI 2 J + cursor home or equivalent).
-        void OnClearScreen();
+    // Called when the parser detects an erase-display (CSI n J):
+    // mode 0 = erase from cursor to end of screen
+    // mode 1 = erase from start of screen to cursor
+    // mode 2 = erase entire screen
+    void OnEraseDisplay(int mode);
 
-        // Called when the parser detects a clear-scrollback (CSI 3 J).
-        void OnClearScrollback();
+    // Called when the parser detects a clear-scrollback (CSI 3 J).
+    void OnClearScrollback();
 
         // Called for SGR (color/attribute) sequences. Argument is the raw parameter string, like "31;1".
         void OnSetGraphicsRendition(ReadOnlySpan<char> parameters);
@@ -39,5 +40,8 @@ namespace Dotty.Terminal
 
         // Alternate screen buffer (DECSCNM / ?1049)
         void OnSetAlternateScreen(bool enabled);
+
+    // Show or hide the cursor (DEC ?25)
+    void OnSetCursorVisibility(bool visible);
     }
 }

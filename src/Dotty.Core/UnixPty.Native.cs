@@ -154,6 +154,14 @@ public sealed partial class UnixPty
     [DllImport(LibSystem, SetLastError = true)]
     internal static extern IntPtr ptsname(int fd);
 
+    // int isatty(int fd);
+    [DllImport(LibSystem, SetLastError = true)]
+    internal static extern int isatty(int fd);
+
+    // int open(const char *pathname, int flags);
+    [DllImport(LibSystem, SetLastError = true)]
+    internal static extern int open([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+
     [StructLayout(LayoutKind.Sequential)]
     public struct WinSize
     {

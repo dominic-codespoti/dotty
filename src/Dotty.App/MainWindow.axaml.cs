@@ -6,10 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using Avalonia.Controls;
-using Avalonia.Input;
-using Avalonia.Interactivity;
 using Avalonia.Threading;
-using Dotty.Core;
 using Dotty.Terminal;
 
 namespace Dotty.App;
@@ -34,14 +31,13 @@ public partial class MainWindow : Window
     // Terminal integration
     private BasicAnsiParser? _parser;
     private TerminalAdapter? _terminalAdapter;
-    private string? _shellIntegrationScriptPath;
 
     public MainWindow()
     {
         InitializeComponent();
 
-        // Wire the new TerminalInput Submitted event
-        InputControl.Submitted += InputControl_Submitted;
+    // Wire the TerminalView Submitted event
+    TerminalView.Submitted += InputControl_Submitted;
 
         Opened += OnOpened;
         Closed += OnClosed;
@@ -58,28 +54,33 @@ public partial class MainWindow : Window
             }
             if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             {
-                OutputBox.Text = "Unix PTY only for now.\n";
+                TerminalView.SetPlainText("Unix PTY only for now.\n");
                 return;
             }
 
-            OutputBox.Text = "";
-            _shellIntegrationScriptPath = WriteShellIntegrationScript();
+            TerminalView.SetPlainText("");
 
-            // Spawn the helper subprocess which will itself spawn /bin/bash and inherit the redirected stdio.
-            // Prefer launching the built DLL directly (dotnet <dll> --interactive) to avoid dotnet-run wrapper buffering.
+            // Spawn the helper subprocess which will itself spawn the user's shell and inherit the redirected stdio.
+            // Prefer a small native helper binary (DOTTY_PTY_HELPER or repo-built) to perform PTY allocation safely.
             string projectPath = FindPtyTestsProjectPath();
 
-            // Candidate built DLL path (development default)
-            string dllPath = Path.Combine(projectPath, "bin", "Debug", "net9.0", "Dotty.Subprocess.dll");
+            // Look for an explicit native helper override, then a repo-built helper.
+            string? helperExe = Environment.GetEnvironmentVariable("DOTTY_PTY_HELPER");
+            if (string.IsNullOrEmpty(helperExe))
+            {
+                var candidate = Path.Combine(projectPath, "..", "Dotty.NativePty", "bin", "pty-helper");
+                if (File.Exists(candidate)) helperExe = Path.GetFullPath(candidate);
+            }
 
             ProcessStartInfo psi;
-            if (File.Exists(dllPath))
+            if (!string.IsNullOrEmpty(helperExe) && File.Exists(helperExe))
             {
-                // Run the built DLL: dotnet <dll> --interactive
+                // Launch the native helper and tell it which shell to exec.
+                var helperShell = Environment.GetEnvironmentVariable("SHELL") ?? "/bin/sh";
                 psi = new ProcessStartInfo
                 {
-                    FileName = "dotnet",
-                    Arguments = $"\"{dllPath}\" --interactive",
+                    FileName = helperExe,
+                    Arguments = $"\"{helperShell}\"",
                     UseShellExecute = false,
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
@@ -89,26 +90,40 @@ public partial class MainWindow : Window
             }
             else
             {
-                // Fallback to dotnet run (slower, but works when no built DLL exists)
-                psi = new ProcessStartInfo
+                // Fallback to the managed helper (Dotty.Subprocess) using dotnet
+                string dllPath = Path.Combine(projectPath, "bin", "Debug", "net9.0", "Dotty.Subprocess.dll");
+                if (File.Exists(dllPath))
                 {
-                    FileName = "dotnet",
-                    Arguments = $"run --project \"{projectPath}\" -- --interactive",
-                    UseShellExecute = false,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true,
-                };
+                    psi = new ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"\"{dllPath}\" --interactive",
+                        UseShellExecute = false,
+                        RedirectStandardInput = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                    };
+                }
+                else
+                {
+                    psi = new ProcessStartInfo
+                    {
+                        FileName = "dotnet",
+                        Arguments = $"run --project \"{projectPath}\" -- --interactive",
+                        UseShellExecute = false,
+                        RedirectStandardInput = true,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true,
+                    };
+                }
             }
 
             psi.Environment["TERM_PROGRAM"] = "wezterm";
             psi.Environment["WEZTERM"] = "1";
             psi.Environment["COLORTERM"] = "wezterm";
-            if (!string.IsNullOrEmpty(_shellIntegrationScriptPath))
-            {
-                psi.Environment["DOTTY_SHELL_INTEGRATION_SCRIPT"] = _shellIntegrationScriptPath;
-            }
+            // No shell integration script: let the shell draw its own prompt natively.
             // Create a temporary unix-domain socket path for resize/control messages and pass to helper
             try
             {
@@ -129,7 +144,7 @@ public partial class MainWindow : Window
 
             if (_childProcess == null)
             {
-                OutputBox.Text = "Failed to start helper subprocess.\n";
+                TerminalView.SetPlainText("Failed to start helper subprocess.\n");
                 return;
             }
 
@@ -148,52 +163,32 @@ public partial class MainWindow : Window
             _parser = new BasicAnsiParser();
             _terminalAdapter = new TerminalAdapter(rows: 24, columns: 80);
             _parser.Handler = _terminalAdapter;
-            // Subscribe to render requests and update the existing OutputBox
+            // Subscribe to render requests and update the TerminalView
             _terminalAdapter.RenderRequested += (display) =>
             {
+                // Render from the adapter's buffer snapshot
                 Dispatcher.UIThread.Post(() =>
                 {
-                    OutputBox.Text = display;
-                    OutputBox.CaretIndex = OutputBox.Text.Length;
-                });
-            };
-            // Subscribe to prompt detection to update input placeholder
-            _terminalAdapter.PromptDetected += (prompt) =>
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    try { InputControl.Prompt = prompt; } catch { }
-                });
-            };
-            _terminalAdapter.PromptSegmentsDetected += (segments) =>
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    try { InputControl.SetPromptSegments(segments); } catch { }
-                });
-            };
-            // Log raw OSC payloads for debugging
-            _terminalAdapter.RawOscReceived += (payload) =>
-            {
-                try
-                {
-                    Console.WriteLine($"RAW_OSC: {payload}");
-                }
-                catch { }
-            };
-            // Log prompt segments for debugging
-            _terminalAdapter.PromptSegmentsDetected += (segments) =>
-            {
-                try
-                {
-                    Console.WriteLine("PROMPT_SEGMENTS:");
-                    foreach (var seg in segments)
+                    try
                     {
-                        Console.WriteLine($"  Seg: '{seg.Text}' fg:{seg.Foreground}");
+                        TerminalView.SetBuffer(_terminalAdapter.Buffer);
                     }
-                }
-                catch { }
+                    catch
+                    {
+                    }
+                });
             };
+            // NOTE: We previously used prompt-detection to extract and render
+            // the shell prompt semantically (TerminalView.Prompt / SetPromptSegments).
+            // To let the shell draw the prompt natively (match typical terminal behavior)
+            // we no longer apply prompt segments to the UI here. The adapter will
+            // still emit OSC markers (for diagnostics) but we don't strip or
+            // re-render prompt bytes from the main output stream.
+            // OSC/shell-integration disabled: no raw OSC subscription.
+            // If you want to keep semantic prompt detection for other features
+            // (e.g., inline path display or diagnostics) you can subscribe here
+            // and use the data non-destructively. For now we leave it unused so
+            // the shell's prompt appears exactly as the shell emits it.
             // No static prompt; shell prompt will appear in the terminal output
 
             
@@ -201,15 +196,15 @@ public partial class MainWindow : Window
             // Start reading subprocess output on dedicated background threads
             _readCancellation = new CancellationTokenSource();
             StartBackgroundReaders(_readCancellation.Token);
-            try { Console.Error.WriteLine("[ONOPENED] started background readers"); } catch { }
 
-            // Hook raw text input events from input control and forward bytes to child stdin
-            InputControl.RawTextInput += (s) =>
+            // Hook raw input events from the TerminalView and forward bytes to child stdin
+            TerminalView.RawInput += (bytes) =>
             {
-                if (s == null || _childInputStream == null) return;
+                if (bytes == null || _childInputStream == null) return;
                 try
                 {
-                    var bytes = Encoding.UTF8.GetBytes(s);
+                    try { /* suppressed optional GUI stdin hex debug */ } catch { }
+
                     lock (_writeLock)
                     {
                         _childInputStream.Write(bytes, 0, bytes.Length);
@@ -221,13 +216,13 @@ public partial class MainWindow : Window
 
             // Send initial window size once the control socket is connected (handled by ConnectToControlSocketAsync)
 
-            InputControl.FocusInput();
+            TerminalView.FocusInput();
             // Set initial working directory for prompt
-            try { InputControl.WorkingDirectory = _currentWorkingDirectory; } catch { }
+            try { TerminalView.WorkingDirectory = _currentWorkingDirectory; } catch { }
         }
         catch (Exception ex)
         {
-            OutputBox.Text = $"Error: {ex.Message}\n";
+            try { TerminalView.SetPlainText($"Error: {ex.Message}\n"); } catch { }
         }
     }
 
@@ -239,7 +234,6 @@ public partial class MainWindow : Window
         {
             var reader = _childOutputStream;
             var readerId = Guid.NewGuid().ToString("N");
-            try { Console.Error.WriteLine($"[READOUT_START] id={readerId} thread={System.Threading.Thread.CurrentThread.ManagedThreadId}"); } catch { }
             byte[] buffer = new byte[4096];
 
             while (!cancellationToken.IsCancellationRequested)
@@ -253,37 +247,10 @@ public partial class MainWindow : Window
                         // Optional raw I/O diagnostics: when DOTTY_DEBUG_IO=1, write a compact
                         // hex preview of each chunk to stderr so we can tell whether identical
                         // byte chunks are being observed more than once.
-                        try
-                        {
-                            var ioDbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_IO");
-                            if (!string.IsNullOrEmpty(ioDbg) && ioDbg != "0")
-                            {
-                                int preview = Math.Min(bytesRead, 48);
-                                var hb = new System.Text.StringBuilder(preview * 2);
-                                for (int k = 0; k < preview; k++) hb.Append(buffer[k].ToString("x2"));
-                                Console.Error.WriteLine($"[STDOUT_CHUNK] reader={readerId} len={bytesRead} preview={hb}");
-                            }
-                        }
-                        catch { }
+                        try { /* suppressed optional stdout chunk debug */ } catch { }
 
                         // Optional debugging: when DOTTY_DEBUG_RAW=1, show a short marker in the UI
-                        try
-                        {
-                            var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_RAW");
-                            if (!string.IsNullOrEmpty(dbg) && dbg != "0")
-                            {
-                                var snippet = System.Text.Encoding.UTF8.GetString(buffer, 0, Math.Min(bytesRead, 256));
-                                Dispatcher.UIThread.Post(() =>
-                                {
-                                    try
-                                    {
-                                        OutputBox.Text += "[STDOUT_RAW] " + snippet + "\n";
-                                    }
-                                    catch { }
-                                });
-                            }
-                        }
-                        catch { }
+                        try { /* suppressed optional raw output UI dump */ } catch { }
 
                         // Feed raw bytes into the parser; the adapter will request renders on the UI thread
                         _parser?.Feed(buffer.AsSpan(0, bytesRead));
@@ -330,14 +297,7 @@ public partial class MainWindow : Window
                             // environments the same terminal output can appear on both stdout
                             // and stderr which causes duplicate/doubled rendering. Keep stderr
                             // for diagnostics only.
-                            try
-                            {
-                                var s = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                                // Log helper debug messages to the console for developers
-                                if (!string.IsNullOrWhiteSpace(s))
-                                    Console.Error.WriteLine(s.TrimEnd());
-                            }
-                            catch { }
+                            try { /* suppressed stderr diagnostics */ } catch { }
                         }
                     else
                     {
@@ -369,120 +329,9 @@ public partial class MainWindow : Window
         Task.Factory.StartNew(() => ReadChildErrorAsync(cancellationToken), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
     }
 
-    private string? WriteShellIntegrationScript()
-    {
-        try
-        {
-            var path = Path.Combine(Path.GetTempPath(), $"dotty-shell-integration-{Guid.NewGuid():N}.sh");
-            File.WriteAllText(path, BuildShellIntegrationScript());
-            return path;
-        }
-        catch
-        {
-            return null;
-        }
-    }
 
-    private void CleanupShellIntegrationScript()
-    {
-        if (_shellIntegrationScriptPath == null)
-        {
-            return;
-        }
 
-        try
-        {
-            if (File.Exists(_shellIntegrationScriptPath))
-            {
-                File.Delete(_shellIntegrationScriptPath);
-            }
-        }
-        catch
-        {
-        }
-        finally
-        {
-            _shellIntegrationScriptPath = null;
-        }
-    }
-
-    private static string BuildShellIntegrationScript()
-    {
-        var esc = ((char)27).ToString();
-        var bel = ((char)7).ToString();
-        var sb = new StringBuilder();
-        sb.AppendLine("#!/usr/bin/env sh");
-        sb.AppendLine("dotty_emit_prompt_start() {");
-        sb.AppendLine($"  printf '{esc}]133;A{bel}'");
-        sb.AppendLine($"  printf '{esc}]133;P{bel}'");
-        sb.AppendLine("}");
-        sb.AppendLine("dotty_emit_prompt_end() {");
-        sb.AppendLine($"  printf '{esc}]133;B{bel}'");
-        sb.AppendLine("}");
-        sb.AppendLine("dotty_emit_prompt_flush() {");
-        sb.AppendLine($"  printf '{esc}]133;N{bel}'");
-        sb.AppendLine("}");
-    sb.AppendLine("dotty_emit_prompt_precmd() {");
-    sb.AppendLine("  dotty_emit_prompt_flush");
-    sb.AppendLine("  dotty_emit_prompt_start");
-    sb.AppendLine("}");
-    sb.AppendLine("dotty_wrap_prompt() {");
-    sb.AppendLine("  if [ -n \"$DOTTY_PROMPT_WRAPPED\" ]; then");
-    sb.AppendLine("    return");
-    sb.AppendLine("  fi");
-    sb.AppendLine("  DOTTY_PROMPT_WRAPPED=1");
-    sb.AppendLine("  # For bash we will append our end marker to PROMPT_COMMAND to ensure it's");
-    sb.AppendLine("  # executed after other PROMPT_COMMANDs (like starship_precmd) have run.");
-    sb.AppendLine("  if [ -n \"$ZSH_VERSION\" ]; then");
-    sb.AppendLine("    # For zsh we'll add two precmd hooks: one before shell precmds and one after.");
-    sb.AppendLine("    # Prepend the start marker so it runs before user precmds; append the end marker to run after.");
-    sb.AppendLine("    if [ -n \"$precmd_functions\" ]; then");
-    sb.AppendLine("      precmd_functions=(dotty_emit_prompt_precmd ${precmd_functions[@]})");
-    sb.AppendLine("    else");
-    sb.AppendLine("      precmd_functions=(dotty_emit_prompt_precmd)");
-    sb.AppendLine("    fi");
-    sb.AppendLine("    # Wrap PROMPT so the end marker is printed after the prompt text");
-    sb.AppendLine("    if [ -n \"$PROMPT\" ]; then");
-    sb.AppendLine("      DOTTY_OLD_PROMPT=\"$PROMPT\"");
-    sb.AppendLine("      PROMPT=\"$(dotty_emit_prompt_start)\"\"$DOTTY_OLD_PROMPT\"\"$(dotty_emit_prompt_end)\"");
-    sb.AppendLine("    fi");
-    sb.AppendLine("  else");
-    sb.AppendLine("    # For bash we run start before existing PROMPT_COMMAND, and append end after.");
-    sb.AppendLine("    # `PROMPT_COMMAND` is a single string; we prepend the start call and append the end call.");
-    sb.AppendLine("    DOTTY_OLD_PROMPT_COMMAND=\"${PROMPT_COMMAND:-}\"");
-    sb.AppendLine("    PROMPT_COMMAND=\"dotty_emit_prompt_flush; dotty_emit_prompt_start; ${DOTTY_OLD_PROMPT_COMMAND:+$DOTTY_OLD_PROMPT_COMMAND; }\"");
-    sb.AppendLine("    # Wrap PS1 so the end marker is printed after PS1 is emitted (bash prints PS1 after PROMPT_COMMAND)");
-    sb.AppendLine("    if [ -n \"$PS1\" ]; then");
-    sb.AppendLine("      DOTTY_OLD_PS1=\"$PS1\"");
-    sb.AppendLine("      PS1=\"$(dotty_emit_prompt_start)\"\"$DOTTY_OLD_PS1\"\"$(dotty_emit_prompt_end)\"");
-    sb.AppendLine("    fi");
-    sb.AppendLine("    export PROMPT_COMMAND");
-    sb.AppendLine("  fi");
-    sb.AppendLine("}");
-        sb.AppendLine("dotty_setup_hooks() {");
-        sb.AppendLine("  if [ -n \"$ZSH_VERSION\" ]; then");
-        sb.AppendLine("    autoload -Uz add-zsh-hook >/dev/null 2>&1 || true");
-        sb.AppendLine("    if command -v add-zsh-hook >/dev/null 2>&1; then");
-        sb.AppendLine("      add-zsh-hook precmd dotty_emit_prompt_precmd >/dev/null 2>&1");
-        sb.AppendLine("    else");
-        sb.AppendLine("      precmd_functions+=(dotty_emit_prompt_precmd)");
-        sb.AppendLine("    fi");
-        sb.AppendLine("    typeset -fx dotty_emit_prompt_precmd dotty_emit_prompt_start dotty_emit_prompt_end dotty_emit_prompt_flush");
-        sb.AppendLine("  else");
-        sb.AppendLine("    DOTTY_PROMPT_COMMAND=\"dotty_emit_prompt_precmd\"");
-        sb.AppendLine("    if [ -n \"$PROMPT_COMMAND\" ]; then");
-        sb.AppendLine("      PROMPT_COMMAND=\"$DOTTY_PROMPT_COMMAND; $PROMPT_COMMAND\"");
-        sb.AppendLine("    else");
-        sb.AppendLine("      PROMPT_COMMAND=\"$DOTTY_PROMPT_COMMAND\"");
-        sb.AppendLine("    fi");
-        sb.AppendLine("    export -f dotty_emit_prompt_precmd dotty_emit_prompt_start dotty_emit_prompt_end dotty_emit_prompt_flush");
-        sb.AppendLine("  fi");
-        sb.AppendLine("}");
-        sb.AppendLine("dotty_setup_hooks");
-        sb.AppendLine("dotty_wrap_prompt");
-        sb.AppendLine("dotty_emit_prompt_start");
-        return sb.ToString();
-    }
+    
 
     private string FindPtyTestsProjectPath()
     {
@@ -581,8 +430,8 @@ public partial class MainWindow : Window
 
         var line = text ?? string.Empty;
 
-        // Clear the input control immediately
-        InputControl.Clear();
+    // Clear only the input buffer (don't clear the displayed terminal)
+    TerminalView.ClearInput();
 
         if (string.IsNullOrEmpty(line))
             return;
@@ -594,7 +443,7 @@ public partial class MainWindow : Window
             if (t == "cd")
             {
                 _currentWorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                InputControl.WorkingDirectory = _currentWorkingDirectory;
+                TerminalView.WorkingDirectory = _currentWorkingDirectory;
             }
             else if (t.StartsWith("cd "))
             {
@@ -609,32 +458,20 @@ public partial class MainWindow : Window
 
                 // update (best-effort) and show in prompt
                 _currentWorkingDirectory = newPath;
-                InputControl.WorkingDirectory = _currentWorkingDirectory;
+                TerminalView.WorkingDirectory = _currentWorkingDirectory;
             }
         }
         catch { /* ignore path parsing errors */ }
 
         try
         {
-            // Send LF (newline) as the command terminator instead of CR. Using CR
-            // has led to carriage-return characters being embedded in stdin and
-            // producing tokens like $'\rpwd' in some shells. LF is the conventional
-            // line terminator for Unix shells.
-            var payload = line + "\n";
-            var bytes = Encoding.UTF8.GetBytes(payload);
-            lock (_writeLock)
-            {
-                _childInputStream.Write(bytes, 0, bytes.Length);
-                _childInputStream.Flush();
-            }
-
-            // Request a render of the main display after input
+            // NOTE: TerminalView already sends per-key bytes to the PTY (RawInput),
+            // so do NOT resend the whole line here — that caused duplicated input
+            // (each keystroke was sent, then Submit re-sent the full line).
+            // We keep this hook to update our cwd heuristic and request a render.
             _terminalAdapter?.RequestRenderExtern();
         }
-        catch
-        {
-            // Ignore write errors
-        }
+        catch { }
     }
 
     private async Task ConnectToControlSocketAsync(string path)
@@ -687,12 +524,12 @@ public partial class MainWindow : Window
     {
         try
         {
-            var w = OutputBox.Bounds.Width;
+            var w = TerminalView.Bounds.Width;
             // Estimate character width from the configured font size. This is an approximation
             // but much better than a magic constant; it reduces mismatch between shell wrap
             // width and our rendered width which causes staircase artifacts.
             double fontSize = 13.0;
-            try { fontSize = OutputBox.FontSize; } catch { }
+            try { fontSize = TerminalView.FontSize; } catch { }
             // Average character width roughly ~0.55-0.65 * fontSize depending on font.
             double avgCharWidth = Math.Max(4.0, fontSize * 0.6);
             int cols = Math.Max(20, (int)Math.Floor(w / avgCharWidth));
@@ -705,9 +542,9 @@ public partial class MainWindow : Window
     {
         try
         {
-            var h = OutputBox.Bounds.Height;
+            var h = TerminalView.Bounds.Height;
             double fontSize = 13.0;
-            try { fontSize = OutputBox.FontSize; } catch { }
+            try { fontSize = TerminalView.FontSize; } catch { }
             // Line height approximated as 1.2 * fontSize
             double lineHeight = Math.Max(8.0, fontSize * 1.2);
             int rows = Math.Max(5, (int)Math.Floor(h / lineHeight));
@@ -754,7 +591,7 @@ public partial class MainWindow : Window
         }
         catch { }
 
-        CleanupShellIntegrationScript();
+        
         try { _controlSocketStream?.Dispose(); } catch { }
         _readCancellation?.Dispose();
     }

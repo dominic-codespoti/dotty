@@ -122,7 +122,8 @@ namespace Dotty.Terminal
                         }
                         else if (next == (byte)'c')
                         {
-                            Handler?.OnClearScreen();
+                            // RIS (Reset) - treat as full clear
+                            Handler?.OnEraseDisplay(2);
                             i++;
                         }
                         else
@@ -158,25 +159,103 @@ namespace Dotty.Terminal
         {
             // decode param bytes to chars
             string @params = Encoding.UTF8.GetString(paramBytes);
-            switch (final)
+            // Split numeric parameters (e.g., "12;34")
+            string[] parts = @params.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            int GetParam(int idx, int def)
+            {
+                if (idx < parts.Length && int.TryParse(parts[idx], out var v)) return v;
+                return def;
+            }
+
+                switch (final)
             {
                 case 'J':
-                    // erase display - common params: 2
-                    if (@params == "2" || string.IsNullOrEmpty(@params))
+                    // erase display - common params: 2 (entire screen)
+                    try
                     {
-                        Handler?.OnClearScreen();
+                        var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_PARSER");
+                        if (!string.IsNullOrEmpty(dbg) && dbg != "0")
+                        {
+                            Console.Error.WriteLine($"[PARSER] CSI J params='{@params}'");
+                        }
                     }
-                    else if (@params == "3")
-                    {
-                        Handler?.OnClearScrollback();
-                    }
+                    catch { }
+                        // Interpret parameter per ANSI: default is 0 (erase from cursor to end of screen)
+                        int mode = 0;
+                        if (!string.IsNullOrEmpty(@params) && int.TryParse(@params, out var m)) mode = m;
+                        if (mode == 3)
+                        {
+                            Handler?.OnClearScrollback();
+                        }
+                        else if (mode == 2)
+                        {
+                            // full clear
+                            Handler?.OnEraseDisplay(2);
+                        }
+                        else
+                        {
+                            // mode 0 (erase to end) and mode 1 are currently ignored to avoid
+                            // surprising clears triggered by prompt updates; implement more
+                            // precise erase semantics later.
+                        }
+                        break;
+                case 'K':
+                    // Erase in line: 0=to end,1=to start,2=entire line
+                    int modeK = 0;
+                    if (!string.IsNullOrEmpty(@params) && int.TryParse(@params, out var mk)) modeK = mk;
+                    Handler?.OnEraseLine(modeK);
                     break;
                 case 'H':
-                    // cursor home - we'll treat like clear in minimal model
-                    Handler?.OnClearScreen();
+                case 'f':
+                    // Cursor position: [row;col]
+                    int row = GetParam(0, 1);
+                    int col = GetParam(1, 1);
+                    Handler?.OnMoveCursor(row, col);
+                    break;
+                case 'A':
+                    // CUU - cursor up by n
+                    Handler?.OnCursorUp(GetParam(0, 1));
+                    break;
+                case 'B':
+                    // CUD - cursor down by n
+                    Handler?.OnCursorDown(GetParam(0, 1));
+                    break;
+                case 'C':
+                    // CUF - cursor forward
+                    Handler?.OnCursorForward(GetParam(0, 1));
+                    break;
+                case 'D':
+                    // CUB - cursor back
+                    Handler?.OnCursorBack(GetParam(0, 1));
                     break;
                 case 'm':
                     Handler?.OnSetGraphicsRendition(@params.AsSpan());
+                    break;
+                case 'h':
+                case 'l':
+                    // Mode set/reset. Support DEC-private ?1049 (alternate screen) and ?25 (cursor visibility) minimally.
+                    // paramBytes may contain a leading '?' when it's a DEC private mode. Handle both forms.
+                    try
+                    {
+                        var p = @params;
+                        bool isPrivate = false;
+                        if (p.StartsWith("?")) { isPrivate = true; p = p.Substring(1); }
+                        if (isPrivate && int.TryParse(p, out var code))
+                        {
+                            if (code == 1049)
+                            {
+                                bool enable = final == 'h';
+                                Handler?.OnSetAlternateScreen(enable);
+                            }
+                            else if (code == 25)
+                            {
+                                // DEC Private Mode 25: cursor visibility
+                                bool enable = final == 'h';
+                                Handler?.OnSetCursorVisibility(enable);
+                            }
+                        }
+                    }
+                    catch { }
                     break;
                 default:
                     // ignore other sequences for now

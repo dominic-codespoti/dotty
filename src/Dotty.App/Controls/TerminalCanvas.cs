@@ -8,8 +8,7 @@ using Avalonia.Media.TextFormatting;
 using Avalonia.Rendering;
 using Avalonia.Styling;
 using Avalonia.Utilities;
-using Dotty.App.Services;
-using Dotty.Terminal;
+using Dotty.Terminal.Adapter;
 
 namespace Dotty.App.Controls;
 
@@ -501,7 +500,7 @@ public class TerminalCanvas : Control
         return props;
     }
 
-    private void AppendSignature(in TerminalBuffer.Cell cell)
+    private void AppendSignature(in Cell cell)
     {
         _signatureBuilder.Append(cell.Grapheme ?? " ");
         _signatureBuilder.Append('|');
@@ -557,7 +556,7 @@ public class TerminalCanvas : Control
         return _normalTypeface;
     }
 
-    private void ResolveCellBrushes(in TerminalBuffer.Cell cell, IBrush defaultFg, IBrush defaultBg, out IBrush foreground, out IBrush background)
+    private void ResolveCellBrushes(in Cell cell, IBrush defaultFg, IBrush defaultBg, out IBrush foreground, out IBrush background)
     {
         foreground = ResolveColorBrush(cell.Foreground, defaultFg);
         background = ResolveColorBrush(cell.Background, defaultBg);

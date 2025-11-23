@@ -3,7 +3,7 @@ using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
-using Dotty.Terminal;
+using Dotty.Terminal.Adapter;
 
 namespace Dotty.App.Controls
 {

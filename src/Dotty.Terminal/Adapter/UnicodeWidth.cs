@@ -1,8 +1,7 @@
-using System;
 using System.Globalization;
 using System.Text;
 
-namespace Dotty.Terminal;
+namespace Dotty.Terminal.Adapter;
 
 /// <summary>
 /// Minimal Unicode width helper roughly following wcwidth semantics.

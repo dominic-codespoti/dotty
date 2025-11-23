@@ -4,7 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Dotty.Terminal;
+using Dotty.Terminal.Adapter;
 
 namespace Dotty.App.Controls
 {

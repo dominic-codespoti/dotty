@@ -1,6 +1,7 @@
 using System.Text;
+using Dotty.Terminal.Adapter;
 
-namespace Dotty.Terminal
+namespace Dotty.Terminal.Parser
 {
     /// <summary>
     /// Minimal stateful ANSI/VT parser. Handles printable text and a very small set of control sequences:

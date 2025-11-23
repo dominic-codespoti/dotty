@@ -1,4 +1,6 @@
-namespace Dotty.Terminal
+using Dotty.Terminal.Adapter;
+
+namespace Dotty.Terminal.Parser
 {
     /// <summary>
     /// Minimal streaming ANSI/VT parser API.

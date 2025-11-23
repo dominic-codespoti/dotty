@@ -19,22 +19,13 @@
     <PackageReference Include="Avalonia.Desktop" Version="11.3.8" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.8" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.3.8" />
-    <!--Condition below is needed to remove Avalonia.Diagnostics package from build output in Release configuration.-->
     <PackageReference Include="Avalonia.Diagnostics" Version="11.3.8">
-      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
-      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
+    <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
+    <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
     </PackageReference>
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Dotty.Core\Dotty.Core.csproj" />
     <ProjectReference Include="..\Dotty.Terminal\Dotty.Terminal.csproj" />
-  </ItemGroup>
-  
-  <!-- Exclude legacy/placeholder settings source files from build while defaults are hard-coded -->
-  <ItemGroup>
-    <Compile Remove="Services/SettingsService.cs" />
-    <Compile Remove="Services/UserSettings.cs" />
-    <Compile Remove="Services/SettingsJsonContext.cs" />
   </ItemGroup>
 </Project>

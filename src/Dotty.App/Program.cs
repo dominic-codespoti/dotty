@@ -10,9 +10,21 @@ static class Program
     }
 
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
-            .UseX11()
+    {
+        var builder = AppBuilder.Configure<App>()
             .UseSkia()
             .WithInterFont()
             .LogToTrace();
+
+        try
+        {
+            builder = builder.UsePlatformDetect();
+        }
+        catch
+        {
+            try { builder = builder.UseX11(); } catch { }
+        }
+
+        return builder;
+    }
 }

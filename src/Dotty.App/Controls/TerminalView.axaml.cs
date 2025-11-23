@@ -11,6 +11,7 @@ namespace Dotty.App.Controls
     public partial class TerminalView : UserControl
     {
         private TerminalGrid? _grid;
+    private TerminalCanvas? _canvas;
         private string _lineBuffer = string.Empty;
         private bool _suppressText = false;
 
@@ -26,6 +27,7 @@ namespace Dotty.App.Controls
         private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)
         {
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
+            _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
             // Focusable border is the root; subscribe to input events
             this.AddHandler(KeyDownEvent, TerminalView_KeyDown, RoutingStrategies.Tunnel);
             this.AddHandler(TextInputEvent, TerminalView_TextInput, RoutingStrategies.Tunnel);
@@ -104,6 +106,34 @@ namespace Dotty.App.Controls
         public void FocusInput()
         {
             try { this.Focus(); } catch { }
+        }
+
+        public bool TryGetTerminalMetrics(out double cellWidth, out double cellHeight, out Thickness padding)
+        {
+            padding = _grid?.CanvasPadding ?? new Thickness(0);
+
+            double fontSize = FontSize;
+            if (double.IsNaN(fontSize) || fontSize <= 0)
+            {
+                fontSize = 13.0;
+            }
+
+            cellWidth = Math.Max(4.0, fontSize * 0.6);
+            cellHeight = Math.Max(8.0, fontSize * 1.2);
+
+            if (_canvas == null)
+            {
+                _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
+            }
+
+            if (_canvas == null)
+            {
+                return false;
+            }
+
+            cellWidth = Math.Max(1.0, _canvas.CellWidth);
+            cellHeight = Math.Max(1.0, _canvas.CellHeight);
+            return true;
         }
 
         public void Clear()

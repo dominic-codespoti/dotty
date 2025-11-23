@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Dotty.Terminal;
@@ -59,6 +60,16 @@ public partial class MainWindow : Window
             }
 
             TerminalView.SetPlainText("");
+
+            try
+            {
+                TerminalView.PropertyChanged += TerminalViewOnPropertyChanged;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    try { _ = SendResizeMessageAsync(CalculateCols(), CalculateRows()); } catch { }
+                }, DispatcherPriority.Render);
+            }
+            catch { }
 
             // Spawn the helper subprocess which will itself spawn the user's shell and inherit the redirected stdio.
             // Prefer a small native helper binary (DOTTY_PTY_HELPER or repo-built) to perform PTY allocation safely.
@@ -123,6 +134,12 @@ public partial class MainWindow : Window
             psi.Environment["TERM_PROGRAM"] = "wezterm";
             psi.Environment["WEZTERM"] = "1";
             psi.Environment["COLORTERM"] = "wezterm";
+
+            // Match wezterm's behavior of hiding zsh's PROMPT_EOL_MARK unless the user opts out.
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_KEEP_PROMPT_EOL_MARK")))
+            {
+                psi.Environment["PROMPT_EOL_MARK"] = string.Empty;
+            }
             // No shell integration script: let the shell draw its own prompt natively.
             // Create a temporary unix-domain socket path for resize/control messages and pass to helper
             try
@@ -520,42 +537,68 @@ public partial class MainWindow : Window
         catch { }
     }
 
+    private void TerminalViewOnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property == Visual.BoundsProperty)
+        {
+            try { _ = SendResizeMessageAsync(CalculateCols(), CalculateRows()); } catch { }
+        }
+    }
+
     private int CalculateCols()
     {
         try
         {
-            var w = TerminalView.Bounds.Width;
-            // Estimate character width from the configured font size. This is an approximation
-            // but much better than a magic constant; it reduces mismatch between shell wrap
-            // width and our rendered width which causes staircase artifacts.
-            double fontSize = 13.0;
-            try { fontSize = TerminalView.FontSize; } catch { }
-            // Average character width roughly ~0.55-0.65 * fontSize depending on font.
-            double avgCharWidth = Math.Max(4.0, fontSize * 0.6);
-            int cols = Math.Max(20, (int)Math.Floor(w / avgCharWidth));
+            var width = TerminalView.Bounds.Width;
+            if (double.IsNaN(width) || width <= 0)
+            {
+                return _terminalAdapter?.Buffer.Columns ?? 80;
+            }
+
+            TerminalView.TryGetTerminalMetrics(out var cellWidth, out _, out var padding);
+            cellWidth = Math.Max(1.0, cellWidth);
+            width -= padding.Left + padding.Right;
+            if (width <= 0)
+            {
+                width = cellWidth;
+            }
+
+            int cols = (int)Math.Floor(width / cellWidth);
+            cols = Math.Clamp(cols, 2, 400);
             return cols;
         }
-        catch { return 80; }
+        catch { return _terminalAdapter?.Buffer.Columns ?? 80; }
     }
 
     private int CalculateRows()
     {
         try
         {
-            var h = TerminalView.Bounds.Height;
-            double fontSize = 13.0;
-            try { fontSize = TerminalView.FontSize; } catch { }
-            // Line height approximated as 1.2 * fontSize
-            double lineHeight = Math.Max(8.0, fontSize * 1.2);
-            int rows = Math.Max(5, (int)Math.Floor(h / lineHeight));
+            var height = TerminalView.Bounds.Height;
+            if (double.IsNaN(height) || height <= 0)
+            {
+                return _terminalAdapter?.Buffer.Rows ?? 24;
+            }
+
+            TerminalView.TryGetTerminalMetrics(out _, out var cellHeight, out var padding);
+            cellHeight = Math.Max(1.0, cellHeight);
+            height -= padding.Top + padding.Bottom;
+            if (height <= 0)
+            {
+                height = cellHeight;
+            }
+
+            int rows = (int)Math.Floor(height / cellHeight);
+            rows = Math.Clamp(rows, 2, 400);
             return rows;
         }
-        catch { return 24; }
+        catch { return _terminalAdapter?.Buffer.Rows ?? 24; }
     }
 
     private async Task SendResizeMessageAsync(int cols, int rows)
     {
         if (_controlSocketStream == null) return;
+        try { _terminalAdapter?.ResizeBuffer(rows, cols); } catch { }
             try
             {
                 var msg = $"{{\"type\":\"resize\",\"cols\":{cols},\"rows\":{rows}}}\n";

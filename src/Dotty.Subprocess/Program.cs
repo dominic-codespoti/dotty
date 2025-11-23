@@ -36,11 +36,17 @@ class Program
 
         // Forward a small set of important environment variables from our environment
         // so the child has the same locale, path and shell context.
-        string[] forwardKeys = new[] { "LANG", "LC_ALL", "LC_CTYPE", "USER", "HOME", "PATH", "SHELL", "LOGNAME", "USERNAME" };
+        string[] forwardKeys = new[] { "LANG", "LC_ALL", "LC_CTYPE", "USER", "HOME", "PATH", "SHELL", "LOGNAME", "USERNAME", "PROMPT_EOL_MARK" };
         foreach (var k in forwardKeys)
         {
             var v = Environment.GetEnvironmentVariable(k);
             if (!string.IsNullOrEmpty(v)) env[k] = v;
+        }
+
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PROMPT_EOL_MARK")) &&
+            string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_KEEP_PROMPT_EOL_MARK")))
+        {
+            env["PROMPT_EOL_MARK"] = string.Empty;
         }
 
         // Ensure TERM is set to something sensible if caller didn't provide it

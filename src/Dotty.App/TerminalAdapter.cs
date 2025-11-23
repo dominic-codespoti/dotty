@@ -13,10 +13,7 @@ namespace Dotty.App
     public class TerminalAdapter : ITerminalHandler
     {
     private readonly TerminalBuffer _buffer;
-    private string? _currentForeground; // hex like #RRGGBB
-    private string? _currentBackground;
-    private bool _currentBold = false;
-    private bool _currentReverse = false;
+    private TerminalBuffer.CellAttributes _currentAttributes = TerminalBuffer.CellAttributes.Default;
     // Prompt semantic collection removed: we let the shell render the prompt natively.
 
         public TerminalAdapter(int rows = 24, int columns = 80)
@@ -33,6 +30,16 @@ namespace Dotty.App
 
     // Expose underlying buffer for renderers to pull a snapshot
     public TerminalBuffer Buffer => _buffer;
+
+        public void ResizeBuffer(int rows, int columns)
+        {
+            try
+            {
+                _buffer.Resize(rows, columns);
+                RequestRender();
+            }
+            catch { }
+        }
 
         public void OnPrint(ReadOnlySpan<char> text)
         {
@@ -52,14 +59,7 @@ namespace Dotty.App
             // Write printable text into the buffer with the current graphics attributes
             // (foreground/background/bold) as tracked by OnSetGraphicsRendition.
             // If reverse-video is active, swap foreground/background.
-            if (_currentReverse)
-            {
-                _buffer.WriteText(text, _currentBackground, _currentForeground, _currentBold);
-            }
-            else
-            {
-                _buffer.WriteText(text, _currentForeground, _currentBackground, _currentBold);
-            }
+            _buffer.WriteText(text, _currentAttributes);
             RequestRender();
         }
 
@@ -105,115 +105,168 @@ namespace Dotty.App
         {
             // Minimal SGR handling: track current foreground color so we can color prompt segments.
             var s = parameters.ToString();
-            if (string.IsNullOrEmpty(s)) return;
+            if (string.IsNullOrEmpty(s))
+            {
+                ResetAttributes();
+                return;
+            }
+
             var parts = s.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0)
+            {
+                ResetAttributes();
+                return;
+            }
+
             int i = 0;
             while (i < parts.Length)
             {
-                if (int.TryParse(parts[i], out var code))
-                {
-                    if (code == 0)
-                    {
-                        // Reset all attributes
-                        _currentForeground = null;
-                        _currentBackground = null;
-                        _currentBold = false;
-                        _currentReverse = false;
-                        i++;
-                    }
-                    else if (code == 39)
-                    {
-                        _currentForeground = null; // reset to default
-                        i++;
-                    }
-                    else if (code == 49)
-                    {
-                        // reset background
-                        _currentBackground = null;
-                        i++;
-                    }
-                    else if (code == 38 && i + 1 < parts.Length && parts[i + 1] == "2")
-                    {
-                        // truecolor: 38;2;r;g;b
-                        if (i + 4 < parts.Length && byte.TryParse(parts[i + 2], out var r) && byte.TryParse(parts[i + 3], out var g) && byte.TryParse(parts[i + 4], out var b))
-                        {
-                            _currentForeground = $"#{r:X2}{g:X2}{b:X2}";
-                            i += 5;
-                        }
-                        else
-                        {
-                            i++;
-                        }
-                    }
-                    else if (code == 38 && i + 1 < parts.Length && parts[i + 1] == "5")
-                    {
-                        // 256-color foreground: 38;5;idx
-                        if (i + 2 < parts.Length && int.TryParse(parts[i + 2], out var idx))
-                        {
-                            _currentForeground = Sgr256ToHex(idx);
-                            i += 3;
-                        }
-                        else
-                        {
-                            i++;
-                        }
-                    }
-                    else if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
-                    {
-                        _currentForeground = SgrCodeToHex(code);
-                        i++;
-                    }
-                    else if (code == 48 && i + 1 < parts.Length && parts[i + 1] == "5")
-                    {
-                        // 256-color background: 48;5;idx
-                        if (i + 2 < parts.Length && int.TryParse(parts[i + 2], out var idx))
-                        {
-                            _currentBackground = Sgr256ToHex(idx);
-                            i += 3;
-                        }
-                        else
-                        {
-                            i++;
-                        }
-                    }
-                    else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
-                    {
-                        // background colors
-                        _currentBackground = SgrCodeToHexBackground(code);
-                        i++;
-                    }
-                    else if (code == 7)
-                    {
-                        // reverse video
-                        _currentReverse = true;
-                        i++;
-                    }
-                    else if (code == 27)
-                    {
-                        // disable reverse video
-                        _currentReverse = false;
-                        i++;
-                    }
-                    else if (code == 1)
-                    {
-                        _currentBold = true;
-                        i++;
-                    }
-                    else if (code == 22)
-                    {
-                        _currentBold = false;
-                        i++;
-                    }
-                    else
-                    {
-                        i++;
-                    }
-                }
-                else
+                if (!int.TryParse(parts[i], out var code))
                 {
                     i++;
+                    continue;
+                }
+
+                switch (code)
+                {
+                    case 0:
+                        ResetAttributes();
+                        i++;
+                        break;
+                    case 1:
+                        _currentAttributes.Bold = true;
+                        i++;
+                        break;
+                    case 2:
+                        _currentAttributes.Faint = true;
+                        i++;
+                        break;
+                    case 3:
+                        _currentAttributes.Italic = true;
+                        i++;
+                        break;
+                    case 4:
+                        _currentAttributes.Underline = true;
+                        i++;
+                        break;
+                    case 7:
+                        _currentAttributes.Inverse = true;
+                        i++;
+                        break;
+                    case 22:
+                        _currentAttributes.Bold = false;
+                        _currentAttributes.Faint = false;
+                        i++;
+                        break;
+                    case 23:
+                        _currentAttributes.Italic = false;
+                        i++;
+                        break;
+                    case 24:
+                        _currentAttributes.Underline = false;
+                        i++;
+                        break;
+                    case 27:
+                        _currentAttributes.Inverse = false;
+                        i++;
+                        break;
+                    case 39:
+                        _currentAttributes.Foreground = null;
+                        i++;
+                        break;
+                    case 49:
+                        _currentAttributes.Background = null;
+                        i++;
+                        break;
+                    case 59:
+                        _currentAttributes.UnderlineColor = null;
+                        i++;
+                        break;
+                    case 38:
+                        if (!TryParseExtendedColor(parts, ref i, out var fg))
+                        {
+                            i++;
+                        }
+                        else
+                        {
+                            _currentAttributes.Foreground = fg;
+                        }
+                        break;
+                    case 48:
+                        if (!TryParseExtendedColor(parts, ref i, out var bg))
+                        {
+                            i++;
+                        }
+                        else
+                        {
+                            _currentAttributes.Background = bg;
+                        }
+                        break;
+                    case 58:
+                        if (!TryParseExtendedColor(parts, ref i, out var ul))
+                        {
+                            i++;
+                        }
+                        else
+                        {
+                            _currentAttributes.UnderlineColor = ul;
+                        }
+                        break;
+                    default:
+                        if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
+                        {
+                            _currentAttributes.Foreground = SgrCodeToHex(code);
+                        }
+                        else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
+                        {
+                            _currentAttributes.Background = SgrCodeToHexBackground(code);
+                        }
+                        i++;
+                        break;
                 }
             }
+        }
+
+        private void ResetAttributes()
+        {
+            _currentAttributes = TerminalBuffer.CellAttributes.Default;
+        }
+
+        private static bool TryParseExtendedColor(string[] parts, ref int index, out string? hex)
+        {
+            hex = null;
+            if (index + 1 >= parts.Length)
+            {
+                return false;
+            }
+
+            var mode = parts[index + 1];
+            if (mode == "2")
+            {
+                if (index + 4 < parts.Length &&
+                    byte.TryParse(parts[index + 2], out var r) &&
+                    byte.TryParse(parts[index + 3], out var g) &&
+                    byte.TryParse(parts[index + 4], out var b))
+                {
+                    hex = $"#{r:X2}{g:X2}{b:X2}";
+                    index += 5;
+                    return true;
+                }
+                return false;
+            }
+
+            if (mode == "5")
+            {
+                if (index + 2 < parts.Length && int.TryParse(parts[index + 2], out var idx))
+                {
+                    hex = Sgr256ToHex(idx);
+                    index += 3;
+                    return true;
+                }
+                return false;
+            }
+
+            return false;
         }
 
         // Cursor and screen control -> forward to buffer and request render

@@ -2,17 +2,20 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Dotty.App.App"
              RequestedThemeVariant="Default"
-             xmlns:sys="clr-namespace:System;assembly=System.Runtime">
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             xmlns:controls="clr-namespace:Dotty.App.Controls">
              <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
     <!-- Default resources for terminal appearance. These will be overridden at runtime from the user's settings file by App startup code. -->
     <Application.Resources>
         <SolidColorBrush x:Key="TerminalBackground" Color="#1E1E1E" />
         <SolidColorBrush x:Key="TerminalForeground" Color="#D4D4D4" />
-    <!-- Default to JetBrains Mono Nerd Font if available on the system; falls back to monospace families if not. -->
-    <!-- Prefer a widely-available monospaced font first to avoid proportional fallback which breaks column alignment -->
-    <FontFamily x:Key="TerminalFontFamily">DejaVu Sans Mono, JetBrains Mono Nerd Font, Consolas, Menlo, monospace</FontFamily>
+    <!-- Default preference; runtime will resolve this to the first installed font from the configured stack. -->
+    <FontFamily x:Key="TerminalFontFamily">JetBrainsMono Nerd Font</FontFamily>
         <x:Double x:Key="TerminalFontSize">13</x:Double>
+        <Thickness x:Key="TerminalContentPadding">16,12,16,16</Thickness>
+        <controls:TerminalCursorShape x:Key="TerminalCursorShape">Block</controls:TerminalCursorShape>
+        <sys:TimeSpan x:Key="TerminalCursorBlinkInterval">00:00:00.600</sys:TimeSpan>
     </Application.Resources>
 
     <Application.Styles>

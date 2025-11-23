@@ -8,6 +8,7 @@ using Avalonia.Media.TextFormatting;
 using Avalonia.Rendering;
 using Avalonia.Styling;
 using Avalonia.Utilities;
+using Dotty.App.Services;
 using Dotty.Terminal;
 
 namespace Dotty.App.Controls;
@@ -19,7 +20,7 @@ namespace Dotty.App.Controls;
 public class TerminalCanvas : Control
 {
     public static readonly StyledProperty<FontFamily> FontFamilyProperty =
-        AvaloniaProperty.Register<TerminalCanvas, FontFamily>(nameof(FontFamily), new FontFamily("JetBrainsMono Nerd Font, JetBrains Mono, Cascadia Code, DejaVu Sans Mono, Monospace"));
+        AvaloniaProperty.Register<TerminalCanvas, FontFamily>(nameof(FontFamily), new FontFamily("monospace"));
 
     public static readonly StyledProperty<double> FontSizeProperty =
         AvaloniaProperty.Register<TerminalCanvas, double>(nameof(FontSize), 14);
@@ -29,6 +30,12 @@ public class TerminalCanvas : Control
 
     public static readonly StyledProperty<bool> ShowCursorProperty =
         AvaloniaProperty.Register<TerminalCanvas, bool>(nameof(ShowCursor), true);
+
+    public static readonly StyledProperty<Thickness> ContentPaddingProperty =
+        AvaloniaProperty.Register<TerminalCanvas, Thickness>(nameof(ContentPadding), new Thickness(0));
+
+    public static readonly StyledProperty<TerminalCursorShape> CursorShapeProperty =
+        AvaloniaProperty.Register<TerminalCanvas, TerminalCursorShape>(nameof(CursorShape), TerminalCursorShape.Block);
 
     public TerminalBuffer? Buffer
     {
@@ -54,9 +61,41 @@ public class TerminalCanvas : Control
         set => SetValue(ShowCursorProperty, value);
     }
 
-    private readonly FontFamily _fallbackFont = new("JetBrainsMono Nerd Font, JetBrains Mono, Cascadia Code, DejaVu Sans Mono, Monospace");
+    public Thickness ContentPadding
+    {
+        get => GetValue(ContentPaddingProperty);
+        set => SetValue(ContentPaddingProperty, value);
+    }
+
+    public TerminalCursorShape CursorShape
+    {
+        get => GetValue(CursorShapeProperty);
+        set => SetValue(CursorShapeProperty, value);
+    }
+
+    public double CellWidth
+    {
+        get
+        {
+            EnsureMetrics();
+            return _cellWidth;
+        }
+    }
+
+    public double CellHeight
+    {
+        get
+        {
+            EnsureMetrics();
+            return _cellHeight;
+        }
+    }
+
+    private readonly FontFamily _fallbackFont;
+    private static string? _lastReportedFontSignature;
     private readonly Dictionary<string, IBrush> _colorBrushCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<RunStyleKey, TextRunProperties> _textRunPropertiesCache = new();
+    private readonly Dictionary<IBrush, IBrush> _faintBrushCache = new(ReferenceEqualityComparer.Instance);
     private readonly StringBuilder _rowTextBuilder = new();
     private readonly StringBuilder _signatureBuilder = new();
     private readonly List<ValueSpan<TextRunProperties>> _styleSpanScratch = new();
@@ -64,6 +103,8 @@ public class TerminalCanvas : Control
     private int[] _columnToTextIndexScratch = Array.Empty<int>();
     private Typeface _normalTypeface;
     private Typeface _boldTypeface;
+    private Typeface _italicTypeface;
+    private Typeface _boldItalicTypeface;
     private double _cellWidth = 8;
     private double _cellHeight = 16;
     private bool _metricsDirty = true;
@@ -71,16 +112,19 @@ public class TerminalCanvas : Control
 
     static TerminalCanvas()
     {
-        AffectsRender<TerminalCanvas>(BufferProperty, ShowCursorProperty, FontFamilyProperty, FontSizeProperty);
-        AffectsMeasure<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty);
+        AffectsRender<TerminalCanvas>(BufferProperty, ShowCursorProperty, FontFamilyProperty, FontSizeProperty, ContentPaddingProperty, CursorShapeProperty);
+        AffectsMeasure<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty, ContentPaddingProperty);
     }
 
     public TerminalCanvas()
     {
         UseLayoutRounding = true;
+        _fallbackFont = new FontFamily("monospace");
         
         _normalTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Normal, FontWeight.Normal);
         _boldTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Normal, FontWeight.Bold);
+        _italicTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Italic, FontWeight.Normal);
+        _boldItalicTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Italic, FontWeight.Bold);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -103,12 +147,17 @@ public class TerminalCanvas : Control
     {
         EnsureMetrics();
         var buffer = Buffer;
-        if (buffer == null)
+    var padding = ContentPadding;
+        double width = padding.Left + padding.Right;
+        double height = padding.Top + padding.Bottom;
+
+        if (buffer != null)
         {
-            return new Size(0, 0);
+            width += buffer.Columns * _cellWidth;
+            height += buffer.Rows * _cellHeight;
         }
 
-        return new Size(buffer.Columns * _cellWidth, buffer.Rows * _cellHeight);
+        return new Size(width, height);
     }
 
     public override void Render(DrawingContext context)
@@ -127,17 +176,27 @@ public class TerminalCanvas : Control
         var defaultBg = ResolveResourceBrush(resources, "TerminalBackground", Brushes.Black);
         var defaultFg = ResolveResourceBrush(resources, "TerminalForeground", Brushes.White);
 
+        var padding = ContentPadding;
+        var bounds = Bounds;
+        context.FillRectangle(defaultBg, new Rect(new Point(0, 0), bounds.Size));
+
         bool drawCursor = ShowCursor && buffer.CursorVisible;
         int cursorRow = buffer.CursorRow;
         int cursorCol = buffer.CursorCol;
+
+        double contentHeight = buffer.Rows * _cellHeight;
+        double availableHeight = bounds.Height;
+        double originX = padding.Left;
+        double extraVertical = Math.Max(0, availableHeight - (padding.Top + padding.Bottom + contentHeight));
+        double originY = padding.Top + extraVertical;
 
         EnsureRowCacheCapacity(buffer.Rows);
 
         for (int row = 0; row < buffer.Rows; row++)
         {
-            var y = row * _cellHeight;
+            var rowY = originY + row * _cellHeight;
             bool rowHasCursor = drawCursor && row == cursorRow;
-            var rowCache = EnsureRowLayout(buffer, row, defaultFg);
+            var rowCache = EnsureRowLayout(buffer, row, defaultFg, defaultBg);
 
             // 1. Draw Backgrounds (Per cell)
             for (int col = 0; col < buffer.Columns; col++)
@@ -148,17 +207,17 @@ public class TerminalCanvas : Control
                     continue;
                 }
 
-                var bgBrush = ResolveColorBrush(cell.Background, defaultBg) ?? defaultBg;
+                ResolveCellBrushes(cell, defaultFg, defaultBg, out _, out var bgBrush);
                 int widthUnits = Math.Max(1, cell.Width == 0 ? 1 : (int)cell.Width);
-                var rect = CreateSnappedRect(col * _cellWidth, y, widthUnits * _cellWidth, _cellHeight);
+                var rect = CreateSnappedRect(originX + col * _cellWidth, rowY, widthUnits * _cellWidth, _cellHeight);
                 context.FillRectangle(bgBrush, rect);
             }
 
             if (rowCache.Layout is { } layout)
             {
                 var layoutHeight = layout.Height;
-                var textY = Math.Round(y + Math.Max(0, (_cellHeight - layoutHeight) / 2));
-                layout.Draw(context, new Point(0, textY));
+                var textY = Math.Round(rowY + Math.Max(0, (_cellHeight - layoutHeight) / 2));
+                layout.Draw(context, new Point(originX, textY));
 
                 for (int col = 0; col < buffer.Columns; col++)
                 {
@@ -174,14 +233,29 @@ public class TerminalCanvas : Control
                         continue;
                     }
 
-                    var fgBrush = ResolveColorBrush(cell.Foreground, defaultFg) ?? defaultFg;
-                    DrawPowerlineGlyph(context, glyph, col * _cellWidth, y, fgBrush);
+                    ResolveCellBrushes(cell, defaultFg, defaultBg, out var fgBrush, out _);
+                    DrawPowerlineGlyph(context, glyph, originX + col * _cellWidth, rowY, fgBrush);
+                }
+
+                // Underlines (drawn after text to avoid affecting layout)
+                for (int col = 0; col < buffer.Columns; col++)
+                {
+                    var cell = buffer.GetCell(row, col);
+                    if (cell.IsContinuation || !cell.Underline)
+                    {
+                        continue;
+                    }
+
+                    ResolveCellBrushes(cell, defaultFg, defaultBg, out var fgBrush, out _);
+                    var underlineBrush = ResolveColorBrush(cell.UnderlineColor, fgBrush);
+                    int widthUnits = Math.Max(1, cell.Width == 0 ? 1 : (int)cell.Width);
+                    DrawUnderline(context, originX + col * _cellWidth, rowY, widthUnits * _cellWidth, underlineBrush);
                 }
             }
 
             if (rowHasCursor && drawCursor)
             {
-                DrawCursorRect(context, buffer, rowCache, cursorRow, cursorCol, y, defaultFg);
+                DrawCursorRect(context, buffer, rowCache, cursorRow, cursorCol, originX, rowY, defaultFg, defaultBg);
             }
         }
     }
@@ -196,6 +270,10 @@ public class TerminalCanvas : Control
         var family = FontFamily ?? _fallbackFont;
         _normalTypeface = new Typeface(family, FontStyle.Normal, FontWeight.Normal);
         _boldTypeface = new Typeface(family, FontStyle.Normal, FontWeight.Bold);
+    _italicTypeface = new Typeface(family, FontStyle.Italic, FontWeight.Normal);
+    _boldItalicTypeface = new Typeface(family, FontStyle.Italic, FontWeight.Bold);
+
+        ReportFontUsage(family);
 
         // Measure a string of Ws to get a better average width and avoid rounding errors
         // that occur when measuring a single character.
@@ -216,7 +294,7 @@ public class TerminalCanvas : Control
         _metricsDirty = false;
     }
 
-    private RowLayoutCache EnsureRowLayout(TerminalBuffer buffer, int row, IBrush defaultFg)
+    private RowLayoutCache EnsureRowLayout(TerminalBuffer buffer, int row, IBrush defaultFg, IBrush defaultBg)
     {
         var cache = _rowCaches[row];
         EnsureColumnIndexScratch(buffer.Columns + 1);
@@ -246,8 +324,8 @@ public class TerminalCanvas : Control
                 glyph = " ";
             }
 
-            var fgBrush = ResolveColorBrush(cell.Foreground, defaultFg) ?? defaultFg;
-            var runProps = GetTextRunProperties(cell.Bold, fgBrush);
+            ResolveCellBrushes(cell, defaultFg, defaultBg, out var fgBrush, out _);
+            var runProps = GetTextRunProperties(cell.Bold, cell.Italic, fgBrush);
 
             if (!ReferenceEquals(currentProps, runProps))
             {
@@ -285,7 +363,7 @@ public class TerminalCanvas : Control
         var rowText = _rowTextBuilder.Length == 0 ? " " : _rowTextBuilder.ToString();
         if (_styleSpanScratch.Count == 0)
         {
-            var defaultProps = GetTextRunProperties(false, defaultFg);
+            var defaultProps = GetTextRunProperties(false, false, defaultFg);
             _styleSpanScratch.Add(new ValueSpan<TextRunProperties>(0, rowText.Length, defaultProps));
         }
 
@@ -311,7 +389,7 @@ public class TerminalCanvas : Control
         return cache;
     }
 
-    private void DrawCursorRect(DrawingContext context, TerminalBuffer buffer, RowLayoutCache rowCache, int cursorRow, int cursorCol, double y, IBrush defaultFg)
+    private void DrawCursorRect(DrawingContext context, TerminalBuffer buffer, RowLayoutCache rowCache, int cursorRow, int cursorCol, double originX, double rowY, IBrush defaultFg, IBrush defaultBg)
     {
         var layout = rowCache.Layout;
         if (layout is null || rowCache.ColumnToTextIndex.Length == 0)
@@ -331,14 +409,39 @@ public class TerminalCanvas : Control
             break;
         }
 
-        double cursorX = caretRect.Width > 0 ? caretRect.X : cursorCol * _cellWidth;
-        double cursorWidth = caretRect.Width > 0 ? caretRect.Width : _cellWidth;
+    double cursorX = (caretRect.Width > 0 ? caretRect.X : cursorCol * _cellWidth) + originX;
+    double cursorWidth = caretRect.Width > 0 ? caretRect.Width : _cellWidth;
 
         var cell = buffer.GetCell(cursorRow, cursorCol);
-        var cursorBrush = ResolveColorBrush(cell.Foreground, defaultFg);
+        ResolveCellBrushes(cell, defaultFg, defaultBg, out var cursorBrush, out _);
 
-    var rect = new Rect(Math.Round(cursorX), Math.Round(y), Math.Round(cursorWidth), Math.Round(_cellHeight));
-    context.FillRectangle(cursorBrush, rect);
+        switch (CursorShape)
+        {
+            case TerminalCursorShape.Block:
+                var rect = CreateSnappedRect(cursorX, rowY, cursorWidth, _cellHeight);
+                context.FillRectangle(cursorBrush, rect);
+                break;
+            case TerminalCursorShape.Beam:
+                double beamWidth = Math.Max(1.0, _renderScaling);
+                var beamRect = CreateSnappedRect(cursorX, rowY, beamWidth, _cellHeight);
+                context.FillRectangle(cursorBrush, beamRect);
+                break;
+            case TerminalCursorShape.Underline:
+                DrawUnderline(context, cursorX, rowY, cursorWidth, cursorBrush);
+                break;
+            default:
+                var fallbackRect = CreateSnappedRect(cursorX, rowY, cursorWidth, _cellHeight);
+                context.FillRectangle(cursorBrush, fallbackRect);
+                break;
+        }
+    }
+
+    private void DrawUnderline(DrawingContext context, double x, double rowY, double width, IBrush brush)
+    {
+        double thickness = Math.Max(1.0, _renderScaling);
+        double y = rowY + _cellHeight - thickness * 1.2;
+        var rect = CreateSnappedRect(x, y, width, thickness);
+        context.FillRectangle(brush, rect);
     }
 
     private void EnsureRowCacheCapacity(int rows)
@@ -372,6 +475,8 @@ public class TerminalCanvas : Control
         }
 
         _rowCaches = Array.Empty<RowLayoutCache>();
+        _textRunPropertiesCache.Clear();
+        _faintBrushCache.Clear();
     }
 
     private void EnsureColumnIndexScratch(int size)
@@ -382,15 +487,15 @@ public class TerminalCanvas : Control
         }
     }
 
-    private TextRunProperties GetTextRunProperties(bool bold, IBrush foreground)
+    private TextRunProperties GetTextRunProperties(bool bold, bool italic, IBrush foreground)
     {
-    var key = new RunStyleKey(foreground, bold);
+    var key = new RunStyleKey(foreground, bold, italic);
         if (_textRunPropertiesCache.TryGetValue(key, out var props))
         {
             return props;
         }
 
-        var typeface = bold ? _boldTypeface : _normalTypeface;
+        var typeface = SelectTypeface(bold, italic);
         props = new GenericTextRunProperties(typeface, FontSize, foregroundBrush: foreground);
         _textRunPropertiesCache[key] = props;
         return props;
@@ -405,6 +510,12 @@ public class TerminalCanvas : Control
         _signatureBuilder.Append(cell.Background ?? "_");
         _signatureBuilder.Append('|');
         _signatureBuilder.Append(cell.Bold ? '1' : '0');
+        _signatureBuilder.Append(cell.Italic ? '1' : '0');
+        _signatureBuilder.Append(cell.Underline ? '1' : '0');
+        _signatureBuilder.Append(cell.Faint ? '1' : '0');
+        _signatureBuilder.Append(cell.Inverse ? '1' : '0');
+        _signatureBuilder.Append('|');
+        _signatureBuilder.Append(cell.UnderlineColor ?? "_");
         _signatureBuilder.Append('|');
         _signatureBuilder.Append(cell.Width);
         _signatureBuilder.Append(cell.IsContinuation ? 'C' : 'B');
@@ -436,7 +547,52 @@ public class TerminalCanvas : Control
         }
     }
 
-    private readonly record struct RunStyleKey(IBrush Brush, bool Bold);
+    private readonly record struct RunStyleKey(IBrush Foreground, bool Bold, bool Italic);
+
+    private Typeface SelectTypeface(bool bold, bool italic)
+    {
+        if (bold && italic) return _boldItalicTypeface;
+        if (bold) return _boldTypeface;
+        if (italic) return _italicTypeface;
+        return _normalTypeface;
+    }
+
+    private void ResolveCellBrushes(in TerminalBuffer.Cell cell, IBrush defaultFg, IBrush defaultBg, out IBrush foreground, out IBrush background)
+    {
+        foreground = ResolveColorBrush(cell.Foreground, defaultFg);
+        background = ResolveColorBrush(cell.Background, defaultBg);
+
+        if (cell.Inverse)
+        {
+            (foreground, background) = (background, foreground);
+        }
+
+        if (cell.Faint)
+        {
+            foreground = GetFaintBrush(foreground);
+        }
+    }
+
+    private IBrush GetFaintBrush(IBrush baseBrush)
+    {
+        if (_faintBrushCache.TryGetValue(baseBrush, out var faint))
+        {
+            return faint;
+        }
+
+        if (baseBrush is ISolidColorBrush solid)
+        {
+            var opacity = Math.Clamp(solid.Opacity * 0.6, 0.0, 1.0);
+            faint = new SolidColorBrush(solid.Color, opacity);
+        }
+        else
+        {
+            faint = baseBrush;
+        }
+
+        _faintBrushCache[baseBrush] = faint;
+        return faint;
+    }
 
     private IBrush ResolveResourceBrush(IResourceDictionary? resources, string key, IBrush fallback)
     {
@@ -474,6 +630,27 @@ public class TerminalCanvas : Control
     {
         var typeface = bold ? _boldTypeface : _normalTypeface;
         return new TextLayout(text, typeface, FontSize, brush, TextAlignment.Left, TextWrapping.NoWrap, TextTrimming.None);
+    }
+
+    private void ReportFontUsage(FontFamily? family)
+    {
+        var signature = $"{family?.ToString() ?? "(unknown)"}|{FontSize:0.##}";
+        if (signature == _lastReportedFontSignature)
+        {
+            return;
+        }
+
+        _lastReportedFontSignature = signature;
+
+        try
+        {
+            var source = family?.ToString() ?? "(unknown)";
+            Console.WriteLine($"[Dotty] Terminal font in use: {source} @ {FontSize:0.##}pt");
+        }
+        catch
+        {
+            // ignore logging errors
+        }
     }
 
 
@@ -673,4 +850,11 @@ public class TerminalCanvas : Control
         double min = 1.0 / scale;
         return new Rect(left, top, Math.Max(right - left, min), Math.Max(bottom - top, min));
     }
+}
+
+public enum TerminalCursorShape
+{
+    Block,
+    Beam,
+    Underline
 }

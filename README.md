@@ -146,6 +146,10 @@ dotnet run --project src/Dotty.App/Dotty.App.csproj
 
 ## Troubleshooting
 
+### Extra `%` lines before the prompt
+- By default Dotty suppresses zsh's `PROMPT_EOL_MARK` (it sets it to empty, similar to wezterm) so you don't get an extra `%` rendered on its own line when a command doesn't finish with a newline.
+- Set the environment variable `DOTTY_KEEP_PROMPT_EOL_MARK=1` **before launching Dotty** if you prefer to keep the default marker.
+
 ### PTY Not Working
 - Ensure running on Linux/macOS
 - Check file descriptor limits

@@ -16,6 +16,11 @@ namespace Dotty.Terminal
             public string? Foreground;
             public string? Background;
             public bool Bold;
+            public bool Italic;
+            public bool Underline;
+            public bool Faint;
+            public bool Inverse;
+            public string? UnderlineColor;
             public byte Width; // 0,1,2
             public bool IsContinuation;
 
@@ -25,6 +30,11 @@ namespace Dotty.Terminal
                 Foreground = null;
                 Background = null;
                 Bold = false;
+                Italic = false;
+                Underline = false;
+                Faint = false;
+                Inverse = false;
+                UnderlineColor = null;
                 Width = 0;
                 IsContinuation = false;
             }
@@ -37,8 +47,8 @@ namespace Dotty.Terminal
         private Cell[,]? _savedMain;
         private bool _usingAlt;
 
-        public int Columns { get; }
-        public int Rows { get; }
+        public int Columns { get; private set; }
+        public int Rows { get; private set; }
 
         public int CursorRow { get; private set; }
         public int CursorCol { get; private set; }
@@ -162,7 +172,32 @@ namespace Dotty.Terminal
             }
         }
 
+        public struct CellAttributes
+        {
+            public string? Foreground { get; set; }
+            public string? Background { get; set; }
+            public string? UnderlineColor { get; set; }
+            public bool Bold { get; set; }
+            public bool Italic { get; set; }
+            public bool Underline { get; set; }
+            public bool Faint { get; set; }
+            public bool Inverse { get; set; }
+
+            public static readonly CellAttributes Default = new();
+        }
+
         public void WriteText(ReadOnlySpan<char> text, string? foreground, string? background = null, bool bold = false)
+        {
+            var attributes = new CellAttributes
+            {
+                Foreground = foreground,
+                Background = background,
+                Bold = bold,
+            };
+            WriteText(text, attributes);
+        }
+
+        public void WriteText(ReadOnlySpan<char> text, in CellAttributes attributes)
         {
             if (text.IsEmpty)
             {
@@ -182,7 +217,7 @@ namespace Dotty.Terminal
                     continue;
                 }
 
-                if (element.Length == 1 && TryHandleControlChar(element[0], foreground, background, bold))
+                if (element.Length == 1 && TryHandleControlChar(element[0], in attributes))
                 {
                     continue;
                 }
@@ -193,11 +228,11 @@ namespace Dotty.Terminal
                     _clearLineOnNextWrite = false;
                 }
 
-                WriteGrapheme(element, foreground, background, bold);
+                WriteGrapheme(element, in attributes);
             }
         }
 
-        private bool TryHandleControlChar(char ch, string? foreground, string? background, bool bold)
+        private bool TryHandleControlChar(char ch, in CellAttributes attributes)
         {
             switch (ch)
             {
@@ -208,7 +243,7 @@ namespace Dotty.Terminal
                     LineFeed();
                     return true;
                 case '\t':
-                    WriteTab(foreground, background, bold);
+                    WriteTab(in attributes);
                     return true;
                 case '\b':
                 case '\u007f':
@@ -219,13 +254,13 @@ namespace Dotty.Terminal
             }
         }
 
-        private void WriteTab(string? foreground, string? background, bool bold)
+        private void WriteTab(in CellAttributes attributes)
         {
             int tabStop = 8;
             int spaces = tabStop - (CursorCol % tabStop);
             for (int i = 0; i < spaces; i++)
             {
-                WriteGrapheme(" ", foreground, background, bold);
+                WriteGrapheme(" ", in attributes);
             }
         }
 
@@ -238,7 +273,7 @@ namespace Dotty.Terminal
             }
         }
 
-        private void WriteGrapheme(string grapheme, string? foreground, string? background, bool bold)
+        private void WriteGrapheme(string grapheme, in CellAttributes attributes)
         {
             if (string.IsNullOrEmpty(grapheme))
             {
@@ -261,9 +296,7 @@ namespace Dotty.Terminal
             var buf = ActiveBuffer;
             ref var cell = ref buf[CursorRow, CursorCol];
             cell.Grapheme = grapheme;
-            cell.Foreground = foreground;
-            cell.Background = background;
-            cell.Bold = bold;
+            ApplyAttributes(ref cell, in attributes);
             cell.Width = (byte)Math.Clamp(width, 1, 2);
             cell.IsContinuation = false;
 
@@ -272,12 +305,22 @@ namespace Dotty.Terminal
                 ref var cont = ref buf[CursorRow, CursorCol + i];
                 cont.Reset();
                 cont.IsContinuation = true;
-                cont.Background = background;
-                cont.Foreground = foreground;
-                cont.Bold = bold;
+                ApplyAttributes(ref cont, in attributes);
             }
 
             AdvanceCursor(width);
+        }
+
+        private static void ApplyAttributes(ref Cell cell, in CellAttributes attributes)
+        {
+            cell.Foreground = attributes.Foreground;
+            cell.Background = attributes.Background;
+            cell.Bold = attributes.Bold;
+            cell.Italic = attributes.Italic;
+            cell.Underline = attributes.Underline;
+            cell.Faint = attributes.Faint;
+            cell.Inverse = attributes.Inverse;
+            cell.UnderlineColor = attributes.UnderlineColor;
         }
 
         private void EnsureSpace(int width)
@@ -604,5 +647,44 @@ namespace Dotty.Terminal
             CursorCol = Math.Clamp(start, 0, Columns - 1);
         }
 
+        public void Resize(int rows, int columns)
+        {
+            rows = Math.Max(1, rows);
+            columns = Math.Max(1, columns);
+            if (rows == Rows && columns == Columns)
+            {
+                return;
+            }
+
+            var newMain = new Cell[rows, columns];
+            var newAlt = new Cell[rows, columns];
+            CopyBuffer(_main, newMain);
+            CopyBuffer(_alt, newAlt);
+
+            _main = newMain;
+            _alt = newAlt;
+            if (_savedMain != null)
+            {
+                var saved = new Cell[rows, columns];
+                CopyBuffer(_savedMain, saved);
+                _savedMain = saved;
+            }
+
+            Rows = rows;
+            Columns = columns;
+            CursorRow = Math.Clamp(CursorRow, 0, Rows - 1);
+            CursorCol = Math.Clamp(CursorCol, 0, Columns - 1);
+        }
+
+        private static void CopyBuffer(Cell[,] source, Cell[,] destination)
+        {
+            int rows = Math.Min(source.GetLength(0), destination.GetLength(0));
+            int cols = Math.Min(source.GetLength(1), destination.GetLength(1));
+            for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+            {
+                destination[r, c] = source[r, c];
+            }
+        }
     }
 }

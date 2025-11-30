@@ -4,14 +4,15 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Dotty.App.Controls;
 using Dotty.Terminal.Adapter;
 
-namespace Dotty.App.Controls
+namespace Dotty.App.Views
 {
     public partial class TerminalView : UserControl
     {
         private TerminalGrid? _grid;
-    private TerminalCanvas? _canvas;
+        private TerminalCanvas? _canvas;
         private string _lineBuffer = string.Empty;
         private bool _suppressText = false;
 
@@ -146,7 +147,6 @@ namespace Dotty.App.Controls
         {
             try { _lineBuffer = string.Empty; } catch { }
         }
-
 
         public string? WorkingDirectory { get; set; }
     }

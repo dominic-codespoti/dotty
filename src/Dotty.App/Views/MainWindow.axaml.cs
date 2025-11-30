@@ -453,7 +453,6 @@ public partial class MainWindow : Window
         }
         catch { }
 
-
         try { _controlSocketStream?.Dispose(); } catch { }
         _readCancellation?.Dispose();
     }

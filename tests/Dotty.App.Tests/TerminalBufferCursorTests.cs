@@ -1,4 +1,4 @@
-using Dotty.Terminal;
+using Dotty.Terminal.Adapter;
 using Xunit;
 
 namespace Dotty.App.Tests;

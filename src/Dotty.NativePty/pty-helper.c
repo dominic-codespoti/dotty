@@ -201,11 +201,20 @@ int main(int argc, char **argv) {
         // Exec shell or provided command
         if (argc > 1) {
             // exec argv[1] with remaining args
+            // Suppress zsh PROMPT_EOL_MARK by default so shells that set it don't emit an extra '%' on its own line.
+            // Users can opt-in to keep the marker by setting DOTTY_KEEP_PROMPT_EOL_MARK=1 in the environment before launching Dotty.
+            if (!getenv("DOTTY_KEEP_PROMPT_EOL_MARK")) {
+                setenv("PROMPT_EOL_MARK", "", 1);
+            }
             execvp(argv[1], &argv[1]);
             fprintf(stderr, "pty-helper: execvp '%s' failed: %s\n", argv[1], strerror(errno));
             _exit(127);
         } else {
             // Exec login shell interactive
+            // Suppress zsh PROMPT_EOL_MARK by default (see above)
+            if (!getenv("DOTTY_KEEP_PROMPT_EOL_MARK")) {
+                setenv("PROMPT_EOL_MARK", "", 1);
+            }
             char *sh = (char*)shell;
             char *args[] = {sh, "-i", NULL};
             execvp(sh, args);

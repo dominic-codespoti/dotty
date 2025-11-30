@@ -55,20 +55,20 @@ namespace Dotty.App.Controls
             if (buffer == null) return;
             _lastBuffer = buffer;
 
-                Dispatcher.UIThread.Post(() =>
+            Dispatcher.UIThread.Post(() =>
+        {
+            try
             {
-                try
-                {
-                    var canvas = Canvas;
-                    if (canvas == null) return;
-                    canvas.Buffer = buffer;
-                    canvas.CursorShape = CursorShape;
-                    canvas.ShowCursor = _blinkOn;
-                    canvas.InvalidateVisual();
-                    try { Scroll?.ScrollToEnd(); } catch { }
-                }
-                catch { }
-            });
+                var canvas = Canvas;
+                if (canvas == null) return;
+                canvas.Buffer = buffer;
+                canvas.CursorShape = CursorShape;
+                canvas.ShowCursor = _blinkOn;
+                canvas.InvalidateVisual();
+                try { Scroll?.ScrollToEnd(); } catch { }
+            }
+            catch { }
+        });
         }
 
         private void StartBlinkLoop()

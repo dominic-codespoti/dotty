@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.TextFormatting;
 using Avalonia.Rendering;
@@ -108,6 +110,12 @@ public class TerminalCanvas : Control
     private double _cellHeight = 16;
     private bool _metricsDirty = true;
     private double _renderScaling = 1.0;
+    // Selection state (mouse drag)
+    private bool _selecting = false;
+    private int _selStartRow = 0;
+    private int _selStartCol = 0;
+    private int _selEndRow = 0;
+    private int _selEndCol = 0;
 
     static TerminalCanvas()
     {
@@ -119,11 +127,108 @@ public class TerminalCanvas : Control
     {
         UseLayoutRounding = true;
         _fallbackFont = new FontFamily("monospace");
-        
+
         _normalTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Normal, FontWeight.Normal);
         _boldTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Normal, FontWeight.Bold);
         _italicTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Italic, FontWeight.Normal);
         _boldItalicTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Italic, FontWeight.Bold);
+        // Enable pointer events for selection
+        this.AddHandler(PointerPressedEvent, PointerPressedHandler, RoutingStrategies.Tunnel);
+        this.AddHandler(PointerMovedEvent, PointerMovedHandler, RoutingStrategies.Tunnel);
+        this.AddHandler(PointerReleasedEvent, PointerReleasedHandler, RoutingStrategies.Tunnel);
+    }
+
+    private void PointerPressedHandler(object? sender, PointerPressedEventArgs e)
+    {
+        try
+        {
+            var pos = e.GetPosition(this);
+            if (PositionToBufferCell(pos, out var row, out var col))
+            {
+                _selecting = true;
+                _selStartRow = _selEndRow = row;
+                _selStartCol = _selEndCol = col;
+                InvalidateVisual();
+            }
+        }
+        catch { }
+    }
+
+    private void PointerMovedHandler(object? sender, PointerEventArgs e)
+    {
+        if (!_selecting) return;
+        try
+        {
+            var pos = e.GetPosition(this);
+            if (PositionToBufferCell(pos, out var row, out var col))
+            {
+                if (row != _selEndRow || col != _selEndCol)
+                {
+                    _selEndRow = row;
+                    _selEndCol = col;
+                    InvalidateVisual();
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void PointerReleasedHandler(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_selecting) return;
+        try
+        {
+            var pos = e.GetPosition(this);
+            if (PositionToBufferCell(pos, out var row, out var col))
+            {
+                _selEndRow = row;
+                _selEndCol = col;
+            }
+
+            _selecting = false;
+            InvalidateVisual();
+
+            // Copy text to clipboard
+            var text = GetSelectedText();
+            if (!string.IsNullOrEmpty(text))
+            {
+                try
+                {
+                    // Try wl-copy (Wayland), then xclip (X11) as a fallback. Write to their stdin.
+                    bool written = false;
+                    try
+                    {
+                        var psi = new System.Diagnostics.ProcessStartInfo("wl-copy") { RedirectStandardInput = true, UseShellExecute = false };
+                        using var p = System.Diagnostics.Process.Start(psi);
+                        if (p != null)
+                        {
+                            p.StandardInput.Write(text);
+                            p.StandardInput.Close();
+                            written = true;
+                        }
+                    }
+                    catch { }
+
+                    if (!written)
+                    {
+                        try
+                        {
+                            var psi2 = new System.Diagnostics.ProcessStartInfo("xclip", "-selection clipboard") { RedirectStandardInput = true, UseShellExecute = false };
+                            using var p2 = System.Diagnostics.Process.Start(psi2);
+                            if (p2 != null)
+                            {
+                                p2.StandardInput.Write(text);
+                                p2.StandardInput.Close();
+                                written = true;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -146,7 +251,7 @@ public class TerminalCanvas : Control
     {
         EnsureMetrics();
         var buffer = Buffer;
-    var padding = ContentPadding;
+        var padding = ContentPadding;
         double width = padding.Left + padding.Right;
         double height = padding.Top + padding.Bottom;
 
@@ -209,14 +314,69 @@ public class TerminalCanvas : Control
                 ResolveCellBrushes(cell, defaultFg, defaultBg, out _, out var bgBrush);
                 int widthUnits = Math.Max(1, cell.Width == 0 ? 1 : (int)cell.Width);
                 var rect = CreateSnappedRect(originX + col * _cellWidth, rowY, widthUnits * _cellWidth, _cellHeight);
-                context.FillRectangle(bgBrush, rect);
+                // If this cell is part of the selection, draw selection background instead
+                if (IsCellSelected(row, col))
+                {
+                    var selBg = ResolveResourceBrush(resources, "TerminalSelectionBackground", Brushes.DodgerBlue);
+                    context.FillRectangle(selBg, rect);
+                }
+                else
+                {
+                    context.FillRectangle(bgBrush, rect);
+                }
             }
 
-            if (rowCache.Layout is { } layout)
+                if (rowCache.Layout is { } layout)
             {
                 var layoutHeight = layout.Height;
                 var textY = Math.Round(rowY + Math.Max(0, (_cellHeight - layoutHeight) / 2));
-                layout.Draw(context, new Point(originX, textY));
+                    layout.Draw(context, new Point(originX, textY));
+
+                    // Draw selected text overlay for this row so the selected text uses the selection foreground
+                    try
+                    {
+                        var selFg = ResolveResourceBrush(resources, "TerminalSelectionForeground", Brushes.White);
+                        int colIdx = 0;
+                        while (colIdx < buffer.Columns)
+                        {
+                            if (!IsCellSelected(row, colIdx))
+                            {
+                                colIdx++;
+                                continue;
+                            }
+
+                            int startCol = colIdx;
+                            while (colIdx < buffer.Columns && IsCellSelected(row, colIdx)) colIdx++;
+                            int endCol = colIdx - 1;
+
+                            int startIndex = rowCache.ColumnToTextIndex[startCol];
+                            int endIndex = rowCache.ColumnToTextIndex[Math.Min(endCol + 1, rowCache.ColumnToTextIndex.Length - 1)];
+                            int len = Math.Max(0, endIndex - startIndex);
+                            if (len <= 0) continue;
+
+                            if (!string.IsNullOrEmpty(rowCache.Text) && startIndex + len <= rowCache.Text.Length)
+                            {
+                                var substr = rowCache.Text.Substring(startIndex, len);
+                                var hitRects = layout.HitTestTextRange(startIndex, len);
+                                Rect firstRect = default;
+                                bool got = false;
+                                foreach (var hr in hitRects)
+                                {
+                                    firstRect = hr;
+                                    got = true;
+                                    break;
+                                }
+
+                                if (got)
+                                {
+                                    var x = firstRect.X;
+                                    var selLayout = new TextLayout(substr, _normalTypeface, FontSize, selFg, TextAlignment.Left, TextWrapping.NoWrap);
+                                    selLayout.Draw(context, new Point(originX + x, textY));
+                                }
+                            }
+                        }
+                    }
+                    catch { }
 
                 for (int col = 0; col < buffer.Columns; col++)
                 {
@@ -269,8 +429,8 @@ public class TerminalCanvas : Control
         var family = FontFamily ?? _fallbackFont;
         _normalTypeface = new Typeface(family, FontStyle.Normal, FontWeight.Normal);
         _boldTypeface = new Typeface(family, FontStyle.Normal, FontWeight.Bold);
-    _italicTypeface = new Typeface(family, FontStyle.Italic, FontWeight.Normal);
-    _boldItalicTypeface = new Typeface(family, FontStyle.Italic, FontWeight.Bold);
+        _italicTypeface = new Typeface(family, FontStyle.Italic, FontWeight.Normal);
+        _boldItalicTypeface = new Typeface(family, FontStyle.Italic, FontWeight.Bold);
 
         ReportFontUsage(family);
 
@@ -287,9 +447,9 @@ public class TerminalCanvas : Control
 
         _cellWidth = Math.Max(4, avgCharWidth);
         _cellHeight = Math.Max(FontSize, layout.Height);
-        
+
         UpdatePowerlineGeometries();
-        
+
         _metricsDirty = false;
     }
 
@@ -381,6 +541,7 @@ public class TerminalCanvas : Control
             textStyleOverrides: styleOverrides);
 
         cache.Signature = signature;
+        cache.Text = rowText;
         cache.TextLength = rowText.Length;
         cache.EnsureColumnCapacity(buffer.Columns + 1);
         Array.Copy(_columnToTextIndexScratch, cache.ColumnToTextIndex, buffer.Columns + 1);
@@ -408,8 +569,8 @@ public class TerminalCanvas : Control
             break;
         }
 
-    double cursorX = (caretRect.Width > 0 ? caretRect.X : cursorCol * _cellWidth) + originX;
-    double cursorWidth = caretRect.Width > 0 ? caretRect.Width : _cellWidth;
+        double cursorX = (caretRect.Width > 0 ? caretRect.X : cursorCol * _cellWidth) + originX;
+        double cursorWidth = caretRect.Width > 0 ? caretRect.Width : _cellWidth;
 
         var cell = buffer.GetCell(cursorRow, cursorCol);
         ResolveCellBrushes(cell, defaultFg, defaultBg, out var cursorBrush, out _);
@@ -488,7 +649,7 @@ public class TerminalCanvas : Control
 
     private TextRunProperties GetTextRunProperties(bool bold, bool italic, IBrush foreground)
     {
-    var key = new RunStyleKey(foreground, bold, italic);
+        var key = new RunStyleKey(foreground, bold, italic);
         if (_textRunPropertiesCache.TryGetValue(key, out var props))
         {
             return props;
@@ -525,6 +686,7 @@ public class TerminalCanvas : Control
     {
         public string Signature = string.Empty;
         public TextLayout? Layout;
+        public string Text = string.Empty;
         public int[] ColumnToTextIndex = Array.Empty<int>();
         public int TextLength;
 
@@ -543,6 +705,7 @@ public class TerminalCanvas : Control
             ColumnToTextIndex = Array.Empty<int>();
             Signature = string.Empty;
             TextLength = 0;
+            Text = string.Empty;
         }
     }
 
@@ -792,6 +955,112 @@ public class TerminalCanvas : Control
                 DrawFallbackRect(context, x, y, brush);
                 break;
         }
+    }
+
+    private bool PositionToBufferCell(Point pos, out int row, out int col)
+    {
+        row = 0; col = 0;
+        var buffer = Buffer;
+        if (buffer == null) return false;
+        EnsureMetrics();
+        var padding = ContentPadding;
+        double contentHeight = buffer.Rows * _cellHeight;
+        double availableHeight = Bounds.Height;
+        double originX = padding.Left;
+        double extraVertical = Math.Max(0, availableHeight - (padding.Top + padding.Bottom + contentHeight));
+        double originY = padding.Top + extraVertical;
+
+        double relX = pos.X - originX;
+        double relY = pos.Y - originY;
+
+        if (relX < 0 || relY < 0 || relX >= buffer.Columns * _cellWidth || relY >= buffer.Rows * _cellHeight)
+        {
+            return false;
+        }
+
+        col = Math.Clamp((int)Math.Floor(relX / _cellWidth), 0, buffer.Columns - 1);
+        row = Math.Clamp((int)Math.Floor(relY / _cellHeight), 0, buffer.Rows - 1);
+        return true;
+    }
+
+    private void GetCanonicalSelection(out int startRow, out int startCol, out int endRow, out int endCol)
+    {
+        int r1 = _selStartRow, c1 = _selStartCol, r2 = _selEndRow, c2 = _selEndCol;
+        if (r1 > r2 || (r1 == r2 && c1 > c2))
+        {
+            startRow = r2; startCol = c2; endRow = r1; endCol = c1;
+        }
+        else
+        {
+            startRow = r1; startCol = c1; endRow = r2; endCol = c2;
+        }
+    }
+
+    private bool IsCellSelected(int row, int col)
+    {
+        GetCanonicalSelection(out var sr, out var sc, out var er, out var ec);
+        if (row < sr || row > er) return false;
+        if (sr == er)
+        {
+            return col >= sc && col <= ec;
+        }
+        if (row == sr) return col >= sc;
+        if (row == er) return col <= ec;
+        return true;
+    }
+
+    private string GetSelectedText()
+    {
+        var buffer = Buffer;
+        if (buffer == null) return string.Empty;
+        GetCanonicalSelection(out var sr, out var sc, out var er, out var ec);
+        var sb = new StringBuilder();
+        for (int r = sr; r <= er; r++)
+        {
+            int rowStart = (r == sr) ? sc : 0;
+            int rowEnd = (r == er) ? ec : buffer.Columns - 1;
+            var rowBuilder = new StringBuilder();
+
+            int c = rowStart;
+            while (c <= rowEnd)
+            {
+                var cell = buffer.GetCell(r, c);
+                if (cell.IsContinuation)
+                {
+                    // Find base cell to the left
+                    int baseCol = c;
+                    while (baseCol > 0 && buffer.GetCell(r, baseCol).IsContinuation) baseCol--;
+                    var baseCell = buffer.GetCell(r, baseCol);
+
+                    // If the base cell is outside the selected range (to the left), include its grapheme
+                    // so selecting a continuation column still yields the full glyph.
+                    if (baseCol < rowStart)
+                    {
+                        var glyph = string.IsNullOrEmpty(baseCell.Grapheme) ? " " : baseCell.Grapheme;
+                        rowBuilder.Append(glyph);
+                    }
+
+                    // Advance past the full glyph width
+                    int advance = Math.Max(1, (int)baseCell.Width);
+                    c = baseCol + advance;
+                    if (c <= rowStart) c = rowStart + 1; // safety
+                }
+                else
+                {
+                    var glyph = string.IsNullOrEmpty(cell.Grapheme) ? " " : cell.Grapheme;
+                    rowBuilder.Append(glyph);
+                    int advance = Math.Max(1, (int)cell.Width);
+                    c += advance;
+                }
+            }
+
+            // Trim trailing spaces on the right to avoid copying grid padding
+            var line = rowBuilder.ToString().TrimEnd();
+            sb.Append(line);
+            if (r < er) sb.Append('\n');
+        }
+
+        return sb.ToString();
     }
 
     private void DrawFilledGeometry(DrawingContext context, StreamGeometry? geometry, double x, double y, IBrush brush)

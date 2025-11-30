@@ -1,183 +1,79 @@
-# Dotty - .NET Terminal Emulator
+# Dotty (dotnet-term)
 
-A terminal emulator written in .NET using Avalonia UI, with support for pseudo-terminal (PTY) functionality on Linux/macOS.
+A small terminal emulator and related libraries for .NET, using Avalonia for the UI and a tiny native pty helper for POSIX platforms.
 
-## Project Structure
+## Overview
 
-```
-dotnet-term/
-├── src/
-│   ├── Dotty.App/              ← Avalonia GUI application
-│   └── Dotty.Core/             ← PTY implementation library
-├── tests/
-│   ├── Dotty.Tests/            ← xUnit test suite
-│   └── README.md               ← Testing documentation
-├── PTY_STATUS.md               ← PTY implementation status
-├── TESTING.md                  ← Testing guide
-└── TEST_SUITE_SUMMARY.md       ← Test results summary
-```
+- Dotty is composed of a UI application (`Dotty.App`), a terminal core library (`Dotty.Terminal`) and a small native helper to allocate pseudo-terminals (`Dotty.NativePty`).
+- The UI is built with Avalonia and provides a canvas-based terminal view. The terminal core handles parsing and rendering terminal sequences.
+
+## Repository layout
+
+- `src/Dotty.App/` — Avalonia application; main UI and entrypoint.
+- `src/Dotty.Terminal/` — Terminal logic, parsers, buffer, adapter interfaces.
+- `src/Dotty.NativePty/` — Native pty helper (C) plus a `Makefile` to build `pty-helper`.
+- `tests/` — Unit tests (e.g. `tests/Dotty.App.Tests`).
+- `scripts/` — Utility scripts for development and running the app (e.g., `scripts/run.sh`).
+
+## Requirements
+
+- .NET SDK (recommended: .NET 10; the project also contains outputs for `net9.0`).
+- `make`, `gcc`/`clang` and typical Linux dev tools to build `Dotty.NativePty` (only required for running the native helper).
+- Tested on Linux; the native pty helper is POSIX-specific.
 
 ## Building
 
-```bash
-# Build all projects
-dotnet build
-
-# Run the GUI application
-dotnet run --project src/Dotty.App/Dotty.App.csproj
-
-# Build for release
-dotnet build -c Release
-```
-
-## Testing
+1. Build the native pty helper (needed for proper pty support on Linux):
 
 ```bash
-# Run all tests
-dotnet test
-
-# Run tests with verbosity
-dotnet test -v normal
-
-# Run specific test project
-dotnet test tests/Dotty.Tests/Dotty.Tests.csproj
+cd src/Dotty.NativePty
+make
+# result: src/Dotty.NativePty/bin/pty-helper
 ```
 
-## Test Status
-
-- **Total Tests**: 4
-  - ✅ **2 Passing**: Basic framework tests
-  - ⚠️ **2 Skipped**: PTY functional tests (isolated xUnit issue)
-
-See [TESTING.md](TESTING.md) for details.
-
-## Key Features
-
-- ✅ PTY spawning and management
-- ✅ Shell command execution
-- ✅ Terminal I/O streaming
-- ✅ Window resizing support
-- ⚠️ GUI application (functional but with known xUnit test issues)
-
-## Architecture
-
-### Dotty.Core
-- Unix PTY implementation
-- P/Invoke bindings for fork/exec
-- Stream-based I/O
-- Termios configuration
-
-### Dotty.App
-- Avalonia UI framework
-- TextBox-based terminal display
-- Real-time output rendering
-- Command input handling
-
-## Platform Support
-
-- ✅ Linux
-- ✅ macOS
-- ❌ Windows (Unix PTY only)
-
-## Dependencies
-
-- .NET 9.0
-- Avalonia 11.x (for GUI)
-- xUnit 2.9.2 (for testing)
-
-## Recent Changes
-
-### Bug Fixes
-1. **Fixed Avalonia GUI Crash** - Implemented lazy initialization for UnixPtyStream
-2. **Fixed Null Reference** - Added null-check in DisposeAsync
-3. **Fixed Memory Corruption** - Corrected Termios struct padding
-
-### New Features
-1. Created comprehensive test suite with xUnit
-2. Added detailed documentation (TESTING.md, PTY_STATUS.md)
-3. Implemented proper error handling in PTY operations
-
-## Known Issues
-
-### Test Framework Compatibility
-- PTY functional tests crash in xUnit context
-- Manual/CLI testing works correctly
-- Issue appears to be framework-specific
-
-See [PTY_STATUS.md](PTY_STATUS.md) for detailed analysis.
-
-## Documentation
-
-- [TESTING.md](TESTING.md) - How to run and understand tests
-- [PTY_STATUS.md](PTY_STATUS.md) - Implementation status and fixes
-- [TEST_SUITE_SUMMARY.md](TEST_SUITE_SUMMARY.md) - Test results and coverage
-- [tests/README.md](tests/README.md) - Test suite details
-
-## Development
-
-### Prerequisites
-- .NET SDK 9.0+
-- Linux or macOS for PTY support
-- Git for version control
-
-### Quick Start
+2. Build the .NET solution:
 
 ```bash
-# Clone repository
-git clone <repo>
-cd dotnet-term
-
-# Build
-dotnet build
-
-# Run tests
-dotnet test
-
-# Run GUI
-dotnet run --project src/Dotty.App/Dotty.App.csproj
+cd /home/dom/projects/dotnet-term
+dotnet build Dotty.sln --configuration Debug
 ```
 
-### Contributing
+You can also build `Release`:
 
-1. Check [TESTING.md](TESTING.md) for test procedures
-2. Review [PTY_STATUS.md](PTY_STATUS.md) for architecture
-3. Run tests before submitting changes
-4. Update documentation as needed
+```bash
+dotnet build Dotty.sln --configuration Release
+```
+
+## Running
+
+- Run from source (choose target framework if needed):
+
+```bash
+dotnet run --project src/Dotty.App
+```
+
+- Or execute the built binary (example path for Debug/net10.0 on Linux):
+
+```bash
+./src/Dotty.App/bin/Debug/net10.0/linux-x64/Dotty.App
+```
+
+- Ensure the native helper is present and executable if you're running features that require a PTY:
+
+```bash
+ls -l src/Dotty.NativePty/bin/pty-helper
+# if needed: chmod +x src/Dotty.NativePty/bin/pty-helper
+```
+
+## Tests
+
+Run unit tests with:
+
+```bash
+dotnet test tests/Dotty.App.Tests
+```
 
 ## Troubleshooting
 
-### Extra `%` lines before the prompt
-- By default Dotty suppresses zsh's `PROMPT_EOL_MARK` (it sets it to empty, similar to wezterm) so you don't get an extra `%` rendered on its own line when a command doesn't finish with a newline.
-- Set the environment variable `DOTTY_KEEP_PROMPT_EOL_MARK=1` **before launching Dotty** if you prefer to keep the default marker.
-
-### PTY Not Working
-- Ensure running on Linux/macOS
-- Check file descriptor limits
-- Verify shell is installed at /bin/sh or /bin/bash
-
-### Test Failures
-- See [TESTING.md](TESTING.md) troubleshooting section
-- Check [PTY_STATUS.md](PTY_STATUS.md) for known issues
-- Run manual tests for comparison
-
-### Build Issues
-- Ensure .NET 9.0 SDK is installed
-- Run `dotnet clean` before rebuilding
-- Check platform-specific requirements
-
-## License
-
-[Add appropriate license information]
-
-## Contributors
-
-- PTY Implementation Team
-- GUI/Avalonia Integration
-- Test Suite Development
-
----
-
-For more information, see the documentation files:
-- Getting Started: [TESTING.md](TESTING.md)
-- Technical Details: [PTY_STATUS.md](PTY_STATUS.md)
-- Test Coverage: [TEST_SUITE_SUMMARY.md](TEST_SUITE_SUMMARY.md)
+- If the app fails to allocate a PTY, confirm `pty-helper` was built and is executable.
+- If you see runtime/compatibility issues, ensure your installed .NET SDK version matches one of the targeted frameworks (the repo contains outputs for `net9.0` and `net10.0`).

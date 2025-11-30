@@ -1,5 +1,6 @@
 using System;
 using System.Text.RegularExpressions;
+using Dotty.Abstractions.Adapter;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -19,6 +20,8 @@ public class TerminalAdapter : ITerminalHandler
 
     public event Action<string>? RenderRequested;
     public TerminalBuffer Buffer => _buffer;
+    // Explicit interface implementation for the abstraction's Buffer (object)
+    object? ITerminalHandler.Buffer => _buffer;
 
     public void ResizeBuffer(int rows, int columns)
     {

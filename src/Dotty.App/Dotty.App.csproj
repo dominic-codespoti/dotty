@@ -27,5 +27,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dotty.Terminal\Dotty.Terminal.csproj" />
+    <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
   </ItemGroup>
 </Project>

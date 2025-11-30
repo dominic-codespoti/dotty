@@ -1,12 +1,17 @@
-namespace Dotty.Terminal.Adapter
+using System;
+
+namespace Dotty.Abstractions.Adapter
 {
     /// <summary>
     /// Receiver interface called by the parser when terminal actions occur.
-    /// Keep methods minimal and high-performance (use spans where appropriate).
+    /// Kept small and span-friendly.
+    /// Note: `Buffer` is typed as `object` here to avoid coupling the abstractions
+    /// project to a concrete buffer implementation. Consumers may cast to the
+    /// concrete `TerminalBuffer` when available.
     /// </summary>
     public interface ITerminalHandler
     {
-        TerminalBuffer Buffer { get; }
+        object? Buffer { get; }
         event Action<string>? RenderRequested;
         void RequestRenderExtern();
         void ResizeBuffer(int rows, int cols);
@@ -17,12 +22,12 @@ namespace Dotty.Terminal.Adapter
         void OnSetGraphicsRendition(ReadOnlySpan<char> parameters);
         void OnBell();
         void OnOperatingSystemCommand(ReadOnlySpan<char> payload);
-        void OnMoveCursor(int row, int col); // 1-based
+        void OnMoveCursor(int row, int col);
         void OnCursorUp(int n);
         void OnCursorDown(int n);
         void OnCursorForward(int n);
         void OnCursorBack(int n);
-        void OnEraseLine(int mode); // 0=from cursor to end,1=from start to cursor,2=entire line
+        void OnEraseLine(int mode);
         void OnCarriageReturn();
         void OnLineFeed();
         void OnSetAlternateScreen(bool enabled);

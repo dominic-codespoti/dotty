@@ -9,6 +9,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Dotty.Abstractions.Adapter;
+using Dotty.Abstractions.Parser;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
 
@@ -121,7 +123,10 @@ public partial class MainWindow : Window
             {
                 Dispatcher.UIThread.Post(() =>
                 {
-                    try { TerminalView.SetBuffer(_terminalAdapter.Buffer); } catch { }
+                    try {
+                        var tb = _terminalAdapter.Buffer as TerminalBuffer;
+                        if (tb != null) TerminalView.SetBuffer(tb);
+                    } catch { }
                 });
             };
 
@@ -371,7 +376,8 @@ public partial class MainWindow : Window
             var width = TerminalView.Bounds.Width;
             if (double.IsNaN(width) || width <= 0)
             {
-                return _terminalAdapter?.Buffer.Columns ?? 80;
+                var tb = _terminalAdapter?.Buffer as TerminalBuffer;
+                return tb?.Columns ?? 80;
             }
 
             TerminalView.TryGetTerminalMetrics(out var cellWidth, out _, out var padding);
@@ -386,7 +392,7 @@ public partial class MainWindow : Window
             cols = Math.Clamp(cols, 2, 400);
             return cols;
         }
-        catch { return _terminalAdapter?.Buffer.Columns ?? 80; }
+        catch { var tb = _terminalAdapter?.Buffer as TerminalBuffer; return tb?.Columns ?? 80; }
     }
 
     private int CalculateRows()
@@ -396,7 +402,8 @@ public partial class MainWindow : Window
             var height = TerminalView.Bounds.Height;
             if (double.IsNaN(height) || height <= 0)
             {
-                return _terminalAdapter?.Buffer.Rows ?? 24;
+                var tb = _terminalAdapter?.Buffer as TerminalBuffer;
+                return tb?.Rows ?? 24;
             }
 
             TerminalView.TryGetTerminalMetrics(out _, out var cellHeight, out var padding);
@@ -411,7 +418,7 @@ public partial class MainWindow : Window
             rows = Math.Clamp(rows, 2, 400);
             return rows;
         }
-        catch { return _terminalAdapter?.Buffer.Rows ?? 24; }
+        catch { var tb = _terminalAdapter?.Buffer as TerminalBuffer; return tb?.Rows ?? 24; }
     }
 
     private async Task SendResizeMessageAsync(int cols, int rows)

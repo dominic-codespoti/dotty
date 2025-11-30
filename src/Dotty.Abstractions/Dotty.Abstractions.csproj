@@ -5,8 +5,4 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
-  </ItemGroup>
 </Project>

@@ -1,5 +1,6 @@
 using System.Text;
-using Dotty.Terminal.Adapter;
+using Dotty.Abstractions.Adapter;
+using Dotty.Abstractions.Parser;
 
 namespace Dotty.Terminal.Parser
 {

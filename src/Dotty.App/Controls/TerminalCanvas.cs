@@ -115,7 +115,7 @@ public class TerminalCanvas : Control
     private readonly SelectionPainter _selectionPainter = new();
     private readonly SelectionModel _selection = new();
     private readonly BrushResolver _brushResolver = new();
-    private static bool _mapInspectionDone = false;
+    // (map inspection logs removed; no need for a map-inspection flag)
 
     static TerminalCanvas()
     {
@@ -347,48 +347,12 @@ public class TerminalCanvas : Control
                         continue;
                     }
 
-#if DEBUG
-                    // Diagnostic: log suspicious single-letter graphemes seen in UI (helps detect buffer vs rendering issues)
-                    if (cell.Grapheme.Length == 1)
-                    {
-                        var ch = cell.Grapheme[0];
-                        try
-                        {
-                            if (ch == 'B')
-                            {
-                                Console.WriteLine($"[Dotty][Debug] Found 'B' at r{row}c{col} (U+{(int)ch:X4})");
-                            }
-
-                            // Common drawing / symbol ranges that could be missing in a font
-                            if ((int)ch >= 0x2500 && (int)ch <= 0x25FF || ((int)ch >= 0xE000 && (int)ch <= 0xF8FF))
-                            {
-                                Console.WriteLine($"[Dotty][Debug] Symbol char at r{row}c{col}: U+{(int)ch:X4} ('{ch}')");
-                            }
-                        }
-                        catch { }
-                    }
-#endif
+                    // (debug-only probes removed)
 
 // Use the grapheme's full codepoint (handles surrogate pairs) for debug checks
                     var glyph = cell.Grapheme[0];
                     int debugCode = char.IsSurrogate(cell.Grapheme, 0) ? char.ConvertToUtf32(cell.Grapheme, 0) : (int)glyph;
-#if DEBUG
-                    // Check whether the resolved typeface can render this glyph
-                    try
-                    {
-                        var tf = SelectTypeface(cell.Bold, cell.Italic);
-                        if (!Services.FontHelpers.IsLikelySymbol(debugCode) && debugCode >= 0x20 && debugCode <= 0x7E)
-                        {
-                            // Common ASCII printable range — skip noisy logging
-                        }
-                        else if (!GlyphAvailableInTypeface(tf, debugCode))
-                        {
-                            // Use the full grapheme string for display (handles surrogate pairs)
-                            Console.WriteLine($"[Dotty][Debug] Typeface lacks glyph U+{debugCode:X4} ('{cell.Grapheme}') at r{row}c{col} for typeface {tf}");
-                        }
-                    }
-                    catch { }
-#endif
+                    // (debug-only glyph-available probes removed)
                     if (!_powerline.IsPowerlineGlyph(glyph))
                     {
                         continue;
@@ -524,7 +488,6 @@ public class TerminalCanvas : Control
             // primary can render it; explicitly return the primary typeface so callers
             // (e.g., TextLayoutCache) can distinguish between "primary supports"
             // and "no explicit fallback found" and avoid spurious buffer-dump output.
-            try { Console.WriteLine($"[Dotty][Debug] Primary typeface supports U+{codepoint:X4} (explicitly using primary)"); } catch { }
             return primary;
         }
 
@@ -536,17 +499,15 @@ public class TerminalCanvas : Control
             {
                 var fam = new FontFamily(candidate);
                 var tf = new Typeface(fam, primary.Style, primary.Weight);
-                if (GlyphAvailableInTypeface(tf, codepoint))
-                {
-                    try { Console.WriteLine($"[Dotty][Debug] Fallback {candidate} supports U+{codepoint:X4}"); } catch { }
-                    return tf;
-                }
-                else
-                {
-                    try { Console.WriteLine($"[Dotty][Debug] Fallback {candidate} does NOT support U+{codepoint:X4}"); } catch { }
-                }
+                    if (GlyphAvailableInTypeface(tf, codepoint))
+                    {
+                        return tf;
+                    }
             }
-            catch (Exception ex) { try { Console.WriteLine($"[Dotty][Debug] Error checking candidate {candidate}: {ex.Message}"); } catch { } }
+            catch (Exception)
+            {
+                // ignore errors checking a candidate family
+            }
         }
 
         // As a last resort for likely symbol characters, try a small set of known symbol
@@ -562,7 +523,6 @@ public class TerminalCanvas : Control
                     var tf = new Typeface(fam, primary.Style, primary.Weight);
                     if (GlyphAvailableInTypeface(tf, codepoint))
                     {
-                        try { Console.WriteLine($"[Dotty][Debug] Using fallback family {famName} for U+{codepoint:X4}"); } catch { }
                         return tf;
                     }
                 }
@@ -584,7 +544,6 @@ public class TerminalCanvas : Control
                     var tf = new Typeface(fam, primary.Style, primary.Weight);
                     if (GlyphAvailableInTypeface(tf, codepoint))
                     {
-                        try { Console.WriteLine($"[Dotty][Debug] Using installed system family {name} for U+{codepoint:X4}"); } catch { }
                         return tf;
                     }
                 }
@@ -592,7 +551,7 @@ public class TerminalCanvas : Control
             }
 
             // No explicit fallback family matched. We will rely on the OS/text-engine fallback
-            try { Console.WriteLine($"[Dotty][Debug] No explicit fallback found for U+{codepoint:X4}; relying on system/text-engine fallback"); } catch { }
+            // No explicit fallback found; rely on system/text-engine fallback
         }
 
         return null;
@@ -616,22 +575,7 @@ public class TerminalCanvas : Control
                 var map = prop.GetValue(gf) as System.Collections.IDictionary;
                 if (map != null)
                 {
-                    // Helpful diagnostic: inspect key types the first time we encounter a map to make detection robust
-                    if (!_mapInspectionDone)
-                    {
-                        _mapInspectionDone = true;
-                        try
-                        {
-                            Console.WriteLine($"[Dotty][Debug] Glyph map type: {map.GetType().FullName}, count={map.Count}");
-                            int shown = 0;
-                            foreach (System.Collections.DictionaryEntry kv in map)
-                            {
-                                Console.WriteLine($"[Dotty][Debug] Map key sample: {kv.Key} ({kv.Key?.GetType().FullName})");
-                                if (++shown >= 5) break;
-                            }
-                        }
-                        catch { }
-                    }
+                    // (map inspection logs removed)
 
                     // Keys may be ints rather than char; check multiple key types
                     if (codepoint <= 0xFFFF)
@@ -668,17 +612,7 @@ public class TerminalCanvas : Control
                         var args = new object[] { cp, outValue };
                         var ok = (bool)meth.Invoke(font, args);
                         var glyphId = args[1];
-                        // Only emit noisy HarfBuzz TryGet logs for likely symbol/codepoint
-                        // candidates to avoid spamming output for ordinary text (spaces,
-                        // ASCII, etc.).
-                        try
-                        {
-                            if (Services.FontHelpers.IsLikelySymbol((int)cp))
-                            {
-                                Console.WriteLine($"[Dotty][Debug] {name}({cp}) => success={ok}, glyph={glyphId}");
-                            }
-                        }
-                        catch { }
+                        // (HarfBuzz TryGet logs removed to avoid noisy output)
                         if (ok && !glyphId.Equals(0)) return true;
                     }
                 }

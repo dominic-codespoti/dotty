@@ -195,21 +195,7 @@ internal sealed class TextLayoutCache
         _styleSpanScratch.Clear();
         _rowTextBuilder.Clear();
 
-    #if DEBUG
-            try
-            {
-                var fams = new System.Collections.Generic.List<string>();
-                foreach (var s in styleOverrides)
-                {
-                    if (s.Value is GenericTextRunProperties gtrp)
-                    {
-                        fams.Add(gtrp.Typeface.FontFamily?.ToString() ?? "(unknown)");
-                    }
-                }
-                Console.WriteLine($"[Dotty][Debug] Row {row} style families: {string.Join(", ", fams)}");
-            }
-            catch { }
-    #endif
+    // (debug-only row-style family listing removed)
 
         cache.Layout?.Dispose();
         cache.Layout = new TextLayout(

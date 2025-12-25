@@ -1,11 +1,11 @@
+#if false
 using System.Globalization;
 using System.Text;
 
 namespace Dotty.Terminal.Adapter;
 
 /// <summary>
-/// Very small screen model for now: stores visible lines and a simple scrollback.
-/// Designed to be called from parser callbacks; it is not thread-safe by itself.
+/// Legacy copy of TerminalBuffer (disabled).
 /// </summary>
 public class TerminalBuffer
 {
@@ -137,11 +137,17 @@ public class TerminalBuffer
     {
         var attributes = new CellAttributes
         {
-            Foreground = foreground,
-            Background = background,
+            Foreground = ToColor(foreground),
+            Background = ToColor(background),
             Bold = bold,
         };
         WriteText(text, attributes);
+    }
+
+    private static SgrColor? ToColor(string? hex)
+    {
+        if (string.IsNullOrEmpty(hex)) return null;
+        return new SgrColor(hex);
     }
 
     public void WriteText(ReadOnlySpan<char> text, in CellAttributes attributes)
@@ -579,14 +585,14 @@ public class TerminalBuffer
 public struct Cell
 {
     public string? Grapheme;
-    public string? Foreground;
-    public string? Background;
+    public SgrColor? Foreground;
+    public SgrColor? Background;
     public bool Bold;
     public bool Italic;
     public bool Underline;
     public bool Faint;
     public bool Inverse;
-    public string? UnderlineColor;
+    public SgrColor? UnderlineColor;
     public byte Width;
     public bool IsContinuation;
 
@@ -610,9 +616,9 @@ public struct Cell
 
 public struct CellAttributes
 {
-    public string? Foreground { get; set; }
-    public string? Background { get; set; }
-    public string? UnderlineColor { get; set; }
+    public SgrColor? Foreground { get; set; }
+    public SgrColor? Background { get; set; }
+    public SgrColor? UnderlineColor { get; set; }
     public bool Bold { get; set; }
     public bool Italic { get; set; }
     public bool Underline { get; set; }
@@ -621,3 +627,4 @@ public struct CellAttributes
 
     public static readonly CellAttributes Default = new();
 }
+#endif

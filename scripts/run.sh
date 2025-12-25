@@ -1,1 +1,0 @@
-dotnet run --project src/Dotty.App/Dotty.App.csproj

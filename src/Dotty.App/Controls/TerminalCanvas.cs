@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -10,6 +10,9 @@ using Avalonia.Media.TextFormatting;
 using Avalonia.Rendering;
 using Avalonia.Styling;
 using Avalonia.Utilities;
+using Dotty.App.Controls.Rendering;
+using Dotty.App.Services;
+using Dotty.App.Controls.Selection;
 using Dotty.Terminal.Adapter;
 
 namespace Dotty.App.Controls;
@@ -94,14 +97,7 @@ public class TerminalCanvas : Control
 
     private readonly FontFamily _fallbackFont;
     private static string? _lastReportedFontSignature;
-    private readonly Dictionary<string, IBrush> _colorBrushCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<RunStyleKey, TextRunProperties> _textRunPropertiesCache = new();
-    private readonly Dictionary<IBrush, IBrush> _faintBrushCache = new(ReferenceEqualityComparer.Instance);
-    private readonly StringBuilder _rowTextBuilder = new();
-    private readonly StringBuilder _signatureBuilder = new();
-    private readonly List<ValueSpan<TextRunProperties>> _styleSpanScratch = new();
-    private RowLayoutCache[] _rowCaches = Array.Empty<RowLayoutCache>();
-    private int[] _columnToTextIndexScratch = Array.Empty<int>();
     private Typeface _normalTypeface;
     private Typeface _boldTypeface;
     private Typeface _italicTypeface;
@@ -110,12 +106,16 @@ public class TerminalCanvas : Control
     private double _cellHeight = 16;
     private bool _metricsDirty = true;
     private double _renderScaling = 1.0;
-    // Selection state (mouse drag)
-    private bool _selecting = false;
-    private int _selStartRow = 0;
-    private int _selStartCol = 0;
-    private int _selEndRow = 0;
-    private int _selEndCol = 0;
+
+    private readonly TextLayoutCache _layoutCache = new();
+    private readonly PowerlineGlyphRenderer _powerline = new();
+    private readonly BackgroundPainter _backgroundPainter = new();
+    private readonly UnderlinePainter _underlinePainter = new();
+    private readonly CursorPainter _cursorPainter = new();
+    private readonly SelectionPainter _selectionPainter = new();
+    private readonly SelectionModel _selection = new();
+    private readonly BrushResolver _brushResolver = new();
+    private static bool _mapInspectionDone = false;
 
     static TerminalCanvas()
     {
@@ -132,10 +132,10 @@ public class TerminalCanvas : Control
         _boldTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Normal, FontWeight.Bold);
         _italicTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Italic, FontWeight.Normal);
         _boldItalicTypeface = new Typeface(FontFamily ?? _fallbackFont, FontStyle.Italic, FontWeight.Bold);
-        // Enable pointer events for selection
-        this.AddHandler(PointerPressedEvent, PointerPressedHandler, RoutingStrategies.Tunnel);
-        this.AddHandler(PointerMovedEvent, PointerMovedHandler, RoutingStrategies.Tunnel);
-        this.AddHandler(PointerReleasedEvent, PointerReleasedHandler, RoutingStrategies.Tunnel);
+
+        AddHandler(PointerPressedEvent, PointerPressedHandler, RoutingStrategies.Tunnel);
+        AddHandler(PointerMovedEvent, PointerMovedHandler, RoutingStrategies.Tunnel);
+        AddHandler(PointerReleasedEvent, PointerReleasedHandler, RoutingStrategies.Tunnel);
     }
 
     private void PointerPressedHandler(object? sender, PointerPressedEventArgs e)
@@ -145,96 +145,84 @@ public class TerminalCanvas : Control
             var pos = e.GetPosition(this);
             if (PositionToBufferCell(pos, out var row, out var col))
             {
-                _selecting = true;
-                _selStartRow = _selEndRow = row;
-                _selStartCol = _selEndCol = col;
-                InvalidateVisual();
-            }
-        }
-        catch { }
-    }
-
-    private void PointerMovedHandler(object? sender, PointerEventArgs e)
-    {
-        if (!_selecting) return;
-        try
-        {
-            var pos = e.GetPosition(this);
-            if (PositionToBufferCell(pos, out var row, out var col))
-            {
-                if (row != _selEndRow || col != _selEndCol)
+                if (_selection.Begin(row, col))
                 {
-                    _selEndRow = row;
-                    _selEndCol = col;
                     InvalidateVisual();
                 }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogError(ex, "PointerPressed");
+        }
     }
 
-    private void PointerReleasedHandler(object? sender, PointerReleasedEventArgs e)
+    private void PointerMovedHandler(object? sender, PointerEventArgs e)
     {
-        if (!_selecting) return;
+        if (!_selection.IsSelecting)
+        {
+            return;
+        }
+
         try
         {
             var pos = e.GetPosition(this);
             if (PositionToBufferCell(pos, out var row, out var col))
             {
-                _selEndRow = row;
-                _selEndCol = col;
-            }
-
-            _selecting = false;
-            InvalidateVisual();
-
-            // Copy text to clipboard
-            var text = GetSelectedText();
-            if (!string.IsNullOrEmpty(text))
-            {
-                try
+                if (_selection.Update(row, col))
                 {
-                    // Try wl-copy (Wayland), then xclip (X11) as a fallback. Write to their stdin.
-                    bool written = false;
-                    try
-                    {
-                        var psi = new System.Diagnostics.ProcessStartInfo("wl-copy") { RedirectStandardInput = true, UseShellExecute = false };
-                        using var p = System.Diagnostics.Process.Start(psi);
-                        if (p != null)
-                        {
-                            p.StandardInput.Write(text);
-                            p.StandardInput.Close();
-                            written = true;
-                        }
-                    }
-                    catch { }
-
-                    if (!written)
-                    {
-                        try
-                        {
-                            var psi2 = new System.Diagnostics.ProcessStartInfo("xclip", "-selection clipboard") { RedirectStandardInput = true, UseShellExecute = false };
-                            using var p2 = System.Diagnostics.Process.Start(psi2);
-                            if (p2 != null)
-                            {
-                                p2.StandardInput.Write(text);
-                                p2.StandardInput.Close();
-                                written = true;
-                            }
-                        }
-                        catch { }
-                    }
+                    InvalidateVisual();
                 }
-                catch { }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LogError(ex, "PointerMoved");
+        }
+    }
+
+    private void PointerReleasedHandler(object? sender, PointerReleasedEventArgs e)
+    {
+        if (!_selection.IsSelecting)
+        {
+            return;
+        }
+
+        try
+        {
+            var pos = e.GetPosition(this);
+            if (PositionToBufferCell(pos, out var row, out var col))
+            {
+                _selection.End(row, col);
+            }
+            else
+            {
+                _selection.EndWithoutPosition();
+            }
+
+            InvalidateVisual();
+
+            var buffer = Buffer;
+            if (buffer != null)
+            {
+                var text = _selection.GetSelectedText(buffer);
+                if (!string.IsNullOrEmpty(text))
+                {
+                    _ = CopyToClipboardAsync(text);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogError(ex, "PointerReleased");
+        }
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnDetachedFromVisualTree(e);
-        ClearRowCaches();
+        ClearCaches();
+        _selection.Clear();
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -243,7 +231,7 @@ public class TerminalCanvas : Control
         if (change.Property == FontFamilyProperty || change.Property == FontSizeProperty)
         {
             _metricsDirty = true;
-            ClearRowCaches();
+            ClearCaches();
         }
     }
 
@@ -279,6 +267,10 @@ public class TerminalCanvas : Control
         var resources = Application.Current?.Resources;
         var defaultBg = ResolveResourceBrush(resources, "TerminalBackground", Brushes.Black);
         var defaultFg = ResolveResourceBrush(resources, "TerminalForeground", Brushes.White);
+        var selectionBg = ResolveResourceBrush(resources, "TerminalSelectionBackground", Brushes.DodgerBlue);
+        var selectionFg = ResolveResourceBrush(resources, "TerminalSelectionForeground", Brushes.White);
+
+        _brushResolver.UpdateDefaults(defaultFg, defaultBg);
 
         var padding = ContentPadding;
         var bounds = Bounds;
@@ -294,89 +286,58 @@ public class TerminalCanvas : Control
         double extraVertical = Math.Max(0, availableHeight - (padding.Top + padding.Bottom + contentHeight));
         double originY = padding.Top + extraVertical;
 
-        EnsureRowCacheCapacity(buffer.Rows);
+        Func<double, double, double, double, Rect> snapRect = CreateSnappedRect;
+
+        Func<Cell, IBrush> resolveBackground = cell => _brushResolver.Background(cell);
+        Func<Cell, IBrush> resolveForeground = cell => _brushResolver.Foreground(cell);
+        Func<Cell, IBrush> resolveUnderline = cell => _brushResolver.Underline(cell);
+        Func<Cell, (IBrush fg, IBrush bg)> resolveCursorBrushes = cell => _brushResolver.Cursor(cell);
+
+        _layoutCache.EnsureRowCapacity(buffer.Rows);
 
         for (int row = 0; row < buffer.Rows; row++)
         {
             var rowY = originY + row * _cellHeight;
             bool rowHasCursor = drawCursor && row == cursorRow;
-            var rowCache = EnsureRowLayout(buffer, row, defaultFg, defaultBg);
+            var rowCache = BuildRowLayout(buffer, row, defaultFg, defaultBg);
 
-            // 1. Draw Backgrounds (Per cell)
-            for (int col = 0; col < buffer.Columns; col++)
-            {
-                var cell = buffer.GetCell(row, col);
-                if (cell.IsContinuation)
-                {
-                    continue;
-                }
+            _backgroundPainter.PaintRowBackgrounds(
+                context,
+                buffer,
+                row,
+                originX,
+                rowY,
+                _cellWidth,
+                _cellHeight,
+                _selection,
+                selectionBg,
+                resolveBackground,
+                snapRect);
 
-                ResolveCellBrushes(cell, defaultFg, defaultBg, out _, out var bgBrush);
-                int widthUnits = Math.Max(1, cell.Width == 0 ? 1 : (int)cell.Width);
-                var rect = CreateSnappedRect(originX + col * _cellWidth, rowY, widthUnits * _cellWidth, _cellHeight);
-                // If this cell is part of the selection, draw selection background instead
-                if (IsCellSelected(row, col))
-                {
-                    var selBg = ResolveResourceBrush(resources, "TerminalSelectionBackground", Brushes.DodgerBlue);
-                    context.FillRectangle(selBg, rect);
-                }
-                else
-                {
-                    context.FillRectangle(bgBrush, rect);
-                }
-            }
-
-                if (rowCache.Layout is { } layout)
+            if (rowCache.Layout is { } layout)
             {
                 var layoutHeight = layout.Height;
                 var textY = Math.Round(rowY + Math.Max(0, (_cellHeight - layoutHeight) / 2));
-                    layout.Draw(context, new Point(originX, textY));
+                layout.Draw(context, new Point(originX, textY));
 
-                    // Draw selected text overlay for this row so the selected text uses the selection foreground
-                    try
-                    {
-                        var selFg = ResolveResourceBrush(resources, "TerminalSelectionForeground", Brushes.White);
-                        int colIdx = 0;
-                        while (colIdx < buffer.Columns)
-                        {
-                            if (!IsCellSelected(row, colIdx))
-                            {
-                                colIdx++;
-                                continue;
-                            }
-
-                            int startCol = colIdx;
-                            while (colIdx < buffer.Columns && IsCellSelected(row, colIdx)) colIdx++;
-                            int endCol = colIdx - 1;
-
-                            int startIndex = rowCache.ColumnToTextIndex[startCol];
-                            int endIndex = rowCache.ColumnToTextIndex[Math.Min(endCol + 1, rowCache.ColumnToTextIndex.Length - 1)];
-                            int len = Math.Max(0, endIndex - startIndex);
-                            if (len <= 0) continue;
-
-                            if (!string.IsNullOrEmpty(rowCache.Text) && startIndex + len <= rowCache.Text.Length)
-                            {
-                                var substr = rowCache.Text.Substring(startIndex, len);
-                                var hitRects = layout.HitTestTextRange(startIndex, len);
-                                Rect firstRect = default;
-                                bool got = false;
-                                foreach (var hr in hitRects)
-                                {
-                                    firstRect = hr;
-                                    got = true;
-                                    break;
-                                }
-
-                                if (got)
-                                {
-                                    var x = firstRect.X;
-                                    var selLayout = new TextLayout(substr, _normalTypeface, FontSize, selFg, TextAlignment.Left, TextWrapping.NoWrap);
-                                    selLayout.Draw(context, new Point(originX + x, textY));
-                                }
-                            }
-                        }
-                    }
-                    catch { }
+                try
+                {
+                    _selectionPainter.DrawSelectedTextOverlay(
+                        context,
+                        buffer,
+                        _selection,
+                        rowCache,
+                        row,
+                        originX,
+                        textY,
+                        (bold, italic) => GetTextRunProperties(bold, italic, selectionFg),
+                        FindSupportingTypeface,
+                        FontSize,
+                        selectionFg);
+                }
+                catch
+                {
+                }
 
                 for (int col = 0; col < buffer.Columns; col++)
                 {
@@ -386,37 +347,112 @@ public class TerminalCanvas : Control
                         continue;
                     }
 
+#if DEBUG
+                    // Diagnostic: log suspicious single-letter graphemes seen in UI (helps detect buffer vs rendering issues)
+                    if (cell.Grapheme.Length == 1)
+                    {
+                        var ch = cell.Grapheme[0];
+                        try
+                        {
+                            if (ch == 'B')
+                            {
+                                Console.WriteLine($"[Dotty][Debug] Found 'B' at r{row}c{col} (U+{(int)ch:X4})");
+                            }
+
+                            // Common drawing / symbol ranges that could be missing in a font
+                            if ((int)ch >= 0x2500 && (int)ch <= 0x25FF || ((int)ch >= 0xE000 && (int)ch <= 0xF8FF))
+                            {
+                                Console.WriteLine($"[Dotty][Debug] Symbol char at r{row}c{col}: U+{(int)ch:X4} ('{ch}')");
+                            }
+                        }
+                        catch { }
+                    }
+#endif
+
+// Use the grapheme's full codepoint (handles surrogate pairs) for debug checks
                     var glyph = cell.Grapheme[0];
-                    if (!IsPowerlineGlyph(glyph))
+                    int debugCode = char.IsSurrogate(cell.Grapheme, 0) ? char.ConvertToUtf32(cell.Grapheme, 0) : (int)glyph;
+#if DEBUG
+                    // Check whether the resolved typeface can render this glyph
+                    try
+                    {
+                        var tf = SelectTypeface(cell.Bold, cell.Italic);
+                        if (!Services.FontHelpers.IsLikelySymbol(debugCode) && debugCode >= 0x20 && debugCode <= 0x7E)
+                        {
+                            // Common ASCII printable range — skip noisy logging
+                        }
+                        else if (!GlyphAvailableInTypeface(tf, debugCode))
+                        {
+                            // Use the full grapheme string for display (handles surrogate pairs)
+                            Console.WriteLine($"[Dotty][Debug] Typeface lacks glyph U+{debugCode:X4} ('{cell.Grapheme}') at r{row}c{col} for typeface {tf}");
+                        }
+                    }
+                    catch { }
+#endif
+                    if (!_powerline.IsPowerlineGlyph(glyph))
                     {
                         continue;
                     }
 
-                    ResolveCellBrushes(cell, defaultFg, defaultBg, out var fgBrush, out _);
-                    DrawPowerlineGlyph(context, glyph, originX + col * _cellWidth, rowY, fgBrush);
+                    var fgBrush = resolveForeground(cell);
+                    _powerline.Draw(context, glyph, originX + col * _cellWidth, rowY, fgBrush, _cellWidth, _cellHeight, _renderScaling);
                 }
 
-                // Underlines (drawn after text to avoid affecting layout)
-                for (int col = 0; col < buffer.Columns; col++)
-                {
-                    var cell = buffer.GetCell(row, col);
-                    if (cell.IsContinuation || !cell.Underline)
-                    {
-                        continue;
-                    }
-
-                    ResolveCellBrushes(cell, defaultFg, defaultBg, out var fgBrush, out _);
-                    var underlineBrush = ResolveColorBrush(cell.UnderlineColor, fgBrush);
-                    int widthUnits = Math.Max(1, cell.Width == 0 ? 1 : (int)cell.Width);
-                    DrawUnderline(context, originX + col * _cellWidth, rowY, widthUnits * _cellWidth, underlineBrush);
-                }
+                _underlinePainter.DrawUnderlines(
+                    context,
+                    buffer,
+                    row,
+                    originX,
+                    rowY,
+                    _cellWidth,
+                    _cellHeight,
+                    _renderScaling,
+                    resolveForeground,
+                    resolveUnderline,
+                    snapRect);
             }
 
             if (rowHasCursor && drawCursor)
             {
-                DrawCursorRect(context, buffer, rowCache, cursorRow, cursorCol, originX, rowY, defaultFg, defaultBg);
+                _cursorPainter.DrawCursor(
+                    context,
+                    buffer,
+                    rowCache,
+                    cursorRow,
+                    cursorCol,
+                    originX,
+                    rowY,
+                    _cellWidth,
+                    _cellHeight,
+                    _renderScaling,
+                    CursorShape,
+                    resolveCursorBrushes,
+                    snapRect);
             }
         }
+    }
+
+    protected override void OnLostFocus(RoutedEventArgs e)
+    {
+        base.OnLostFocus(e);
+        if (_selection.HasSelection)
+        {
+            _selection.Clear();
+            InvalidateVisual();
+        }
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape && _selection.HasSelection)
+        {
+            _selection.Clear();
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
+        base.OnKeyDown(e);
     }
 
     private void EnsureMetrics()
@@ -448,203 +484,218 @@ public class TerminalCanvas : Control
         _cellWidth = Math.Max(4, avgCharWidth);
         _cellHeight = Math.Max(FontSize, layout.Height);
 
-        UpdatePowerlineGeometries();
+        _powerline.UpdateGeometries(_cellWidth, _cellHeight);
 
         _metricsDirty = false;
     }
 
-    private RowLayoutCache EnsureRowLayout(TerminalBuffer buffer, int row, IBrush defaultFg, IBrush defaultBg)
+    private RowLayoutCache BuildRowLayout(TerminalBuffer buffer, int row, IBrush defaultFg, IBrush defaultBg)
     {
-        var cache = _rowCaches[row];
-        EnsureColumnIndexScratch(buffer.Columns + 1);
-
-        _rowTextBuilder.Clear();
-        _signatureBuilder.Clear();
-        _styleSpanScratch.Clear();
-
-        int textIndex = 0;
-        TextRunProperties? currentProps = null;
-        int currentSpanStart = 0;
-
-        for (int col = 0; col < buffer.Columns; col++)
-        {
-            var cell = buffer.GetCell(row, col);
-            _columnToTextIndexScratch[col] = textIndex;
-            AppendSignature(cell);
-
-            if (cell.IsContinuation)
-            {
-                continue;
-            }
-
-            var glyph = cell.Grapheme;
-            if (string.IsNullOrEmpty(glyph))
-            {
-                glyph = " ";
-            }
-
-            ResolveCellBrushes(cell, defaultFg, defaultBg, out var fgBrush, out _);
-            var runProps = GetTextRunProperties(cell.Bold, cell.Italic, fgBrush);
-
-            if (!ReferenceEquals(currentProps, runProps))
-            {
-                if (currentProps is { } prev && textIndex > currentSpanStart)
-                {
-                    _styleSpanScratch.Add(new ValueSpan<TextRunProperties>(currentSpanStart, textIndex - currentSpanStart, prev));
-                }
-
-                currentProps = runProps;
-                currentSpanStart = textIndex;
-            }
-
-            _rowTextBuilder.Append(glyph);
-            textIndex += glyph.Length;
-        }
-
-        if (currentProps is { } last && textIndex > currentSpanStart)
-        {
-            _styleSpanScratch.Add(new ValueSpan<TextRunProperties>(currentSpanStart, textIndex - currentSpanStart, last));
-        }
-
-        _columnToTextIndexScratch[buffer.Columns] = textIndex;
-
-        var signature = _signatureBuilder.ToString();
-        _signatureBuilder.Clear();
-
-        bool canReuse = cache.Signature == signature && cache.Layout != null && cache.ColumnToTextIndex.Length == buffer.Columns + 1;
-        if (canReuse)
-        {
-            _rowTextBuilder.Clear();
-            _styleSpanScratch.Clear();
-            return cache;
-        }
-
-        var rowText = _rowTextBuilder.Length == 0 ? " " : _rowTextBuilder.ToString();
-        if (_styleSpanScratch.Count == 0)
-        {
-            var defaultProps = GetTextRunProperties(false, false, defaultFg);
-            _styleSpanScratch.Add(new ValueSpan<TextRunProperties>(0, rowText.Length, defaultProps));
-        }
-
-        var styleOverrides = _styleSpanScratch.ToArray();
-        _styleSpanScratch.Clear();
-        _rowTextBuilder.Clear();
-
-        cache.Layout?.Dispose();
-        cache.Layout = new TextLayout(
-            rowText,
-            _normalTypeface,
-            FontSize,
+        return _layoutCache.BuildRowLayout(
+            buffer,
+            row,
             defaultFg,
-            TextAlignment.Left,
-            TextWrapping.NoWrap,
-            textStyleOverrides: styleOverrides);
-
-        cache.Signature = signature;
-        cache.Text = rowText;
-        cache.TextLength = rowText.Length;
-        cache.EnsureColumnCapacity(buffer.Columns + 1);
-        Array.Copy(_columnToTextIndexScratch, cache.ColumnToTextIndex, buffer.Columns + 1);
-
-        return cache;
+            cell => _brushResolver.Foreground(cell),
+            GetTextRunProperties,
+            FindSupportingTypeface,
+            _normalTypeface,
+            FontSize);
     }
 
-    private void DrawCursorRect(DrawingContext context, TerminalBuffer buffer, RowLayoutCache rowCache, int cursorRow, int cursorCol, double originX, double rowY, IBrush defaultFg, IBrush defaultBg)
+    private Typeface? FindSupportingTypeface(string grapheme, bool bold, bool italic)
     {
-        var layout = rowCache.Layout;
-        if (layout is null || rowCache.ColumnToTextIndex.Length == 0)
+        if (string.IsNullOrEmpty(grapheme)) return null;
+        // Use full Unicode codepoint (handles surrogate pairs / emoji etc.)
+        int codepoint = char.IsSurrogate(grapheme, 0) ? char.ConvertToUtf32(grapheme, 0) : (int)grapheme[0];
+
+        var primary = SelectTypeface(bold, italic);
+
+        // Only attempt per-grapheme fallback for characters that are likely to be
+        // symbol/glyph characters (box drawing, PUA icons, emoji, bullets). Avoid
+        // trying to 'fix' spaces, ASCII letters, etc. Do not probe fonts for
+        // common ASCII to avoid expensive HarfBuzz queries on every cell.
+        if (!Services.FontHelpers.IsLikelySymbol(codepoint))
         {
-            return;
+            return null;
         }
 
-        var indices = rowCache.ColumnToTextIndex;
-        int start = cursorCol < indices.Length ? indices[cursorCol] : rowCache.TextLength;
-        int end = cursorCol + 1 < indices.Length ? indices[cursorCol + 1] : rowCache.TextLength;
-        int length = Math.Max(1, Math.Max(0, end - start));
-
-        Rect caretRect = default;
-        foreach (var hit in layout.HitTestTextRange(start, length))
+        if (GlyphAvailableInTypeface(primary, codepoint))
         {
-            caretRect = hit;
-            break;
+            // primary can render it; explicitly return the primary typeface so callers
+            // (e.g., TextLayoutCache) can distinguish between "primary supports"
+            // and "no explicit fallback found" and avoid spurious buffer-dump output.
+            try { Console.WriteLine($"[Dotty][Debug] Primary typeface supports U+{codepoint:X4} (explicitly using primary)"); } catch { }
+            return primary;
         }
 
-        double cursorX = (caretRect.Width > 0 ? caretRect.X : cursorCol * _cellWidth) + originX;
-        double cursorWidth = caretRect.Width > 0 ? caretRect.Width : _cellWidth;
-
-        var cell = buffer.GetCell(cursorRow, cursorCol);
-        ResolveCellBrushes(cell, defaultFg, defaultBg, out var cursorBrush, out _);
-
-        switch (CursorShape)
+        // Try configured font stack candidates
+        var candidates = Defaults.DefaultFontStack.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var candidate in candidates)
         {
-            case TerminalCursorShape.Block:
-                var rect = CreateSnappedRect(cursorX, rowY, cursorWidth, _cellHeight);
-                context.FillRectangle(cursorBrush, rect);
-                break;
-            case TerminalCursorShape.Beam:
-                double beamWidth = Math.Max(1.0, _renderScaling);
-                var beamRect = CreateSnappedRect(cursorX, rowY, beamWidth, _cellHeight);
-                context.FillRectangle(cursorBrush, beamRect);
-                break;
-            case TerminalCursorShape.Underline:
-                DrawUnderline(context, cursorX, rowY, cursorWidth, cursorBrush);
-                break;
-            default:
-                var fallbackRect = CreateSnappedRect(cursorX, rowY, cursorWidth, _cellHeight);
-                context.FillRectangle(cursorBrush, fallbackRect);
-                break;
-        }
-    }
-
-    private void DrawUnderline(DrawingContext context, double x, double rowY, double width, IBrush brush)
-    {
-        double thickness = Math.Max(1.0, _renderScaling);
-        double y = rowY + _cellHeight - thickness * 1.2;
-        var rect = CreateSnappedRect(x, y, width, thickness);
-        context.FillRectangle(brush, rect);
-    }
-
-    private void EnsureRowCacheCapacity(int rows)
-    {
-        if (_rowCaches.Length == rows)
-        {
-            return;
-        }
-
-        if (_rowCaches.Length > rows)
-        {
-            for (int i = rows; i < _rowCaches.Length; i++)
+            try
             {
-                _rowCaches[i]?.Dispose();
+                var fam = new FontFamily(candidate);
+                var tf = new Typeface(fam, primary.Style, primary.Weight);
+                if (GlyphAvailableInTypeface(tf, codepoint))
+                {
+                    try { Console.WriteLine($"[Dotty][Debug] Fallback {candidate} supports U+{codepoint:X4}"); } catch { }
+                    return tf;
+                }
+                else
+                {
+                    try { Console.WriteLine($"[Dotty][Debug] Fallback {candidate} does NOT support U+{codepoint:X4}"); } catch { }
+                }
+            }
+            catch (Exception ex) { try { Console.WriteLine($"[Dotty][Debug] Error checking candidate {candidate}: {ex.Message}"); } catch { } }
+        }
+
+        // As a last resort for likely symbol characters, try a small set of known symbol
+        // families but only select them if they actually contain the glyph.
+        if (Services.FontHelpers.IsLikelySymbol(codepoint))
+        {
+            var fallbackFamilies = new[] { "Symbols Nerd Font Mono", "Symbols Nerd Font", Defaults.DefaultFontFamily };
+            foreach (var famName in fallbackFamilies)
+            {
+                try
+                {
+                    var fam = new FontFamily(famName);
+                    var tf = new Typeface(fam, primary.Style, primary.Weight);
+                    if (GlyphAvailableInTypeface(tf, codepoint))
+                    {
+                        try { Console.WriteLine($"[Dotty][Debug] Using fallback family {famName} for U+{codepoint:X4}"); } catch { }
+                        return tf;
+                    }
+                }
+                catch { }
+            }
+
+            // Search system fonts for likely candidates (names containing NERD or SYMBOL)
+            foreach (var fam in FontManager.Current.SystemFonts)
+            {
+                try
+                {
+                    var name = fam.Name ?? string.Empty;
+                    var norm = name.ToUpperInvariant();
+                    if (!norm.Contains("NERD") && !norm.Contains("SYMBOL") && !norm.Contains("FONTAWESOME") && !norm.Contains("POWERLINE"))
+                    {
+                        continue;
+                    }
+
+                    var tf = new Typeface(fam, primary.Style, primary.Weight);
+                    if (GlyphAvailableInTypeface(tf, codepoint))
+                    {
+                        try { Console.WriteLine($"[Dotty][Debug] Using installed system family {name} for U+{codepoint:X4}"); } catch { }
+                        return tf;
+                    }
+                }
+                catch { }
+            }
+
+            // No explicit fallback family matched. We will rely on the OS/text-engine fallback
+            try { Console.WriteLine($"[Dotty][Debug] No explicit fallback found for U+{codepoint:X4}; relying on system/text-engine fallback"); } catch { }
+        }
+
+        return null;
+    }
+
+    private static bool GlyphAvailableInTypeface(Typeface? tf, char ch)
+    {
+        return GlyphAvailableInTypeface(tf, (int)ch);
+    }
+
+    private static bool GlyphAvailableInTypeface(Typeface? tf, int codepoint)
+    {
+        if (tf == null) return false;
+        if (!FontManager.Current.TryGetGlyphTypeface((Typeface)tf, out var gf)) return false;
+
+        try
+        {
+            var prop = gf.GetType().GetProperty("CharacterToGlyphMap") ?? gf.GetType().GetProperty("CharacterMap");
+            if (prop != null)
+            {
+                var map = prop.GetValue(gf) as System.Collections.IDictionary;
+                if (map != null)
+                {
+                    // Helpful diagnostic: inspect key types the first time we encounter a map to make detection robust
+                    if (!_mapInspectionDone)
+                    {
+                        _mapInspectionDone = true;
+                        try
+                        {
+                            Console.WriteLine($"[Dotty][Debug] Glyph map type: {map.GetType().FullName}, count={map.Count}");
+                            int shown = 0;
+                            foreach (System.Collections.DictionaryEntry kv in map)
+                            {
+                                Console.WriteLine($"[Dotty][Debug] Map key sample: {kv.Key} ({kv.Key?.GetType().FullName})");
+                                if (++shown >= 5) break;
+                            }
+                        }
+                        catch { }
+                    }
+
+                    // Keys may be ints rather than char; check multiple key types
+                    if (codepoint <= 0xFFFF)
+                    {
+                        var ch = (char)codepoint;
+                        if (map.Contains(ch)) return true;
+                    }
+
+                    if (map.Contains(codepoint)) return true;
+                    if (map.Contains((uint)codepoint)) return true;
+                    if (map.Contains((long)codepoint)) return true;
+                }
             }
         }
+        catch { }
 
-        int oldLength = _rowCaches.Length;
-        Array.Resize(ref _rowCaches, rows);
-        for (int i = oldLength; i < rows; i++)
+        // If no CharacterMap or it didn't contain the codepoint, try HarfBuzz Font TryGet... methods
+        try
         {
-            _rowCaches[i] = new RowLayoutCache();
+            var fontProp = gf.GetType().GetProperty("Font");
+            var font = fontProp?.GetValue(gf);
+            if (font != null)
+            {
+                var cp = (uint)codepoint;
+                var tryNames = new[] { "TryGetNominalGlyph", "TryGetGlyph", "TryGetVariationGlyph" };
+                foreach (var name in tryNames)
+                {
+                    var meth = font.GetType().GetMethod(name, new[] { typeof(uint), typeof(uint).MakeByRefType() })
+                              ?? font.GetType().GetMethod(name, new[] { typeof(int), typeof(int).MakeByRefType() });
+                    if (meth != null)
+                    {
+                        var outParamType = meth.GetParameters()[1].ParameterType.GetElementType();
+                        var outValue = outParamType == typeof(uint) ? (object)0u : 0;
+                        var args = new object[] { cp, outValue };
+                        var ok = (bool)meth.Invoke(font, args);
+                        var glyphId = args[1];
+                        // Only emit noisy HarfBuzz TryGet logs for likely symbol/codepoint
+                        // candidates to avoid spamming output for ordinary text (spaces,
+                        // ASCII, etc.).
+                        try
+                        {
+                            if (Services.FontHelpers.IsLikelySymbol((int)cp))
+                            {
+                                Console.WriteLine($"[Dotty][Debug] {name}({cp}) => success={ok}, glyph={glyphId}");
+                            }
+                        }
+                        catch { }
+                        if (ok && !glyphId.Equals(0)) return true;
+                    }
+                }
+            }
         }
+        catch { }
+
+        return false;
     }
 
-    private void ClearRowCaches()
-    {
-        for (int i = 0; i < _rowCaches.Length; i++)
-        {
-            _rowCaches[i]?.Dispose();
-        }
+    // Symbol heuristics were moved to `FontHelpers` to make them testable.
 
-        _rowCaches = Array.Empty<RowLayoutCache>();
+    private void ClearCaches()
+    {
+        _layoutCache.Clear();
         _textRunPropertiesCache.Clear();
-        _faintBrushCache.Clear();
-    }
-
-    private void EnsureColumnIndexScratch(int size)
-    {
-        if (_columnToTextIndexScratch.Length < size)
-        {
-            Array.Resize(ref _columnToTextIndexScratch, size);
-        }
+        _brushResolver.ClearCaches();
     }
 
     private TextRunProperties GetTextRunProperties(bool bold, bool italic, IBrush foreground)
@@ -661,54 +712,6 @@ public class TerminalCanvas : Control
         return props;
     }
 
-    private void AppendSignature(in Cell cell)
-    {
-        _signatureBuilder.Append(cell.Grapheme ?? " ");
-        _signatureBuilder.Append('|');
-        _signatureBuilder.Append(cell.Foreground ?? "_");
-        _signatureBuilder.Append('|');
-        _signatureBuilder.Append(cell.Background ?? "_");
-        _signatureBuilder.Append('|');
-        _signatureBuilder.Append(cell.Bold ? '1' : '0');
-        _signatureBuilder.Append(cell.Italic ? '1' : '0');
-        _signatureBuilder.Append(cell.Underline ? '1' : '0');
-        _signatureBuilder.Append(cell.Faint ? '1' : '0');
-        _signatureBuilder.Append(cell.Inverse ? '1' : '0');
-        _signatureBuilder.Append('|');
-        _signatureBuilder.Append(cell.UnderlineColor ?? "_");
-        _signatureBuilder.Append('|');
-        _signatureBuilder.Append(cell.Width);
-        _signatureBuilder.Append(cell.IsContinuation ? 'C' : 'B');
-        _signatureBuilder.Append(';');
-    }
-
-    private sealed class RowLayoutCache : IDisposable
-    {
-        public string Signature = string.Empty;
-        public TextLayout? Layout;
-        public string Text = string.Empty;
-        public int[] ColumnToTextIndex = Array.Empty<int>();
-        public int TextLength;
-
-        public void EnsureColumnCapacity(int size)
-        {
-            if (ColumnToTextIndex.Length != size)
-            {
-                Array.Resize(ref ColumnToTextIndex, size);
-            }
-        }
-
-        public void Dispose()
-        {
-            Layout?.Dispose();
-            Layout = null;
-            ColumnToTextIndex = Array.Empty<int>();
-            Signature = string.Empty;
-            TextLength = 0;
-            Text = string.Empty;
-        }
-    }
-
     private readonly record struct RunStyleKey(IBrush Foreground, bool Bold, bool Italic);
 
     private Typeface SelectTypeface(bool bold, bool italic)
@@ -719,69 +722,10 @@ public class TerminalCanvas : Control
         return _normalTypeface;
     }
 
-    private void ResolveCellBrushes(in Cell cell, IBrush defaultFg, IBrush defaultBg, out IBrush foreground, out IBrush background)
-    {
-        foreground = ResolveColorBrush(cell.Foreground, defaultFg);
-        background = ResolveColorBrush(cell.Background, defaultBg);
-
-        if (cell.Inverse)
-        {
-            (foreground, background) = (background, foreground);
-        }
-
-        if (cell.Faint)
-        {
-            foreground = GetFaintBrush(foreground);
-        }
-    }
-
-    private IBrush GetFaintBrush(IBrush baseBrush)
-    {
-        if (_faintBrushCache.TryGetValue(baseBrush, out var faint))
-        {
-            return faint;
-        }
-
-        if (baseBrush is ISolidColorBrush solid)
-        {
-            var opacity = Math.Clamp(solid.Opacity * 0.6, 0.0, 1.0);
-            faint = new SolidColorBrush(solid.Color, opacity);
-        }
-        else
-        {
-            faint = baseBrush;
-        }
-
-        _faintBrushCache[baseBrush] = faint;
-        return faint;
-    }
-
     private IBrush ResolveResourceBrush(IResourceDictionary? resources, string key, IBrush fallback)
     {
         if (resources != null && resources.TryGetResource(key, ThemeVariant.Default, out var value) && value is IBrush brush)
         {
-            return brush;
-        }
-
-        return fallback;
-    }
-
-    private IBrush ResolveColorBrush(string? hex, IBrush fallback)
-    {
-        if (string.IsNullOrEmpty(hex))
-        {
-            return fallback;
-        }
-
-        if (_colorBrushCache.TryGetValue(hex, out var cached))
-        {
-            return cached;
-        }
-
-        if (Color.TryParse(hex, out var color))
-        {
-            var brush = new SolidColorBrush(color);
-            _colorBrushCache[hex] = brush;
             return brush;
         }
 
@@ -815,148 +759,6 @@ public class TerminalCanvas : Control
         }
     }
 
-
-    private StreamGeometry? _geoRightArrow;
-    private StreamGeometry? _geoLeftArrow;
-    private StreamGeometry? _geoRightSemicircle;
-    private StreamGeometry? _geoLeftSemicircle;
-
-    private static readonly RenderOptions s_aliasRenderOptions = new() { EdgeMode = EdgeMode.Aliased };
-
-    private enum PowerlineGlyphVariant
-    {
-        FilledRightArrow,
-        ThinRightArrow,
-        FilledLeftArrow,
-        ThinLeftArrow,
-        FilledRightArc,
-        ThinRightArc,
-        FilledLeftArc,
-        ThinLeftArc
-    }
-
-    private static readonly Dictionary<char, PowerlineGlyphVariant> s_powerlineGlyphVariants = new()
-    {
-        ['\uE0B0'] = PowerlineGlyphVariant.FilledRightArrow,
-        ['\uE0B1'] = PowerlineGlyphVariant.ThinRightArrow,
-        ['\uE0B2'] = PowerlineGlyphVariant.FilledLeftArrow,
-        ['\uE0B3'] = PowerlineGlyphVariant.ThinLeftArrow,
-        ['\uE0B4'] = PowerlineGlyphVariant.FilledRightArc,
-        ['\uE0B5'] = PowerlineGlyphVariant.ThinRightArc,
-        ['\uE0B6'] = PowerlineGlyphVariant.FilledLeftArc,
-        ['\uE0B7'] = PowerlineGlyphVariant.ThinLeftArc,
-        ['\uE0B8'] = PowerlineGlyphVariant.FilledRightArrow,
-        ['\uE0B9'] = PowerlineGlyphVariant.ThinRightArrow,
-        ['\uE0BA'] = PowerlineGlyphVariant.FilledLeftArrow,
-        ['\uE0BB'] = PowerlineGlyphVariant.ThinLeftArrow,
-        ['\uE0BC'] = PowerlineGlyphVariant.FilledRightArrow,
-        ['\uE0BD'] = PowerlineGlyphVariant.ThinRightArrow,
-        ['\uE0BE'] = PowerlineGlyphVariant.FilledLeftArrow,
-        ['\uE0BF'] = PowerlineGlyphVariant.ThinLeftArrow,
-        ['\uE0C0'] = PowerlineGlyphVariant.FilledRightArc,
-        ['\uE0C1'] = PowerlineGlyphVariant.ThinRightArc,
-        ['\uE0C2'] = PowerlineGlyphVariant.FilledLeftArc,
-        ['\uE0C3'] = PowerlineGlyphVariant.ThinLeftArc,
-        ['\uE0C4'] = PowerlineGlyphVariant.FilledRightArrow,
-        ['\uE0C5'] = PowerlineGlyphVariant.ThinRightArrow,
-        ['\uE0C6'] = PowerlineGlyphVariant.FilledRightArrow,
-        ['\uE0CE'] = PowerlineGlyphVariant.FilledRightArrow,
-        ['\uE0CF'] = PowerlineGlyphVariant.ThinRightArrow,
-    };
-
-    private void UpdatePowerlineGeometries()
-    {
-        double w = _cellWidth;
-        double h = _cellHeight;
-
-        // E0B0: Right Arrow (Filled)
-        _geoRightArrow = new StreamGeometry();
-        using (var ctx = _geoRightArrow.Open())
-        {
-            ctx.BeginFigure(new Point(0, 0), true);
-            ctx.LineTo(new Point(0, h));
-            ctx.LineTo(new Point(w, h / 2));
-            ctx.EndFigure(true);
-        }
-
-        // E0B2: Left Arrow (Filled)
-        _geoLeftArrow = new StreamGeometry();
-        using (var ctx = _geoLeftArrow.Open())
-        {
-            ctx.BeginFigure(new Point(w, 0), true);
-            ctx.LineTo(new Point(w, h));
-            ctx.LineTo(new Point(0, h / 2));
-            ctx.EndFigure(true);
-        }
-
-        // E0B4: Right Semicircle (Filled) - curves right
-        _geoRightSemicircle = new StreamGeometry();
-        using (var ctx = _geoRightSemicircle.Open())
-        {
-            ctx.BeginFigure(new Point(0, 0), true);
-            ctx.LineTo(new Point(w, 0));
-            ctx.ArcTo(new Point(w, h), new Size(w, h), 0, false, SweepDirection.Clockwise);
-            ctx.LineTo(new Point(0, h));
-            ctx.EndFigure(true);
-        }
-
-        // E0B6: Left Semicircle (Filled) - curves left
-        _geoLeftSemicircle = new StreamGeometry();
-        using (var ctx = _geoLeftSemicircle.Open())
-        {
-            ctx.BeginFigure(new Point(0, 0), true);
-            ctx.ArcTo(new Point(0, h), new Size(w, h), 0, false, SweepDirection.CounterClockwise);
-            ctx.LineTo(new Point(w, h));
-            ctx.LineTo(new Point(w, 0));
-            ctx.EndFigure(true);
-        }
-    }
-
-    private static bool IsPowerlineGlyph(char c)
-    {
-        return s_powerlineGlyphVariants.ContainsKey(c);
-    }
-
-    private void DrawPowerlineGlyph(DrawingContext context, char glyph, double x, double y, IBrush brush)
-    {
-        if (!s_powerlineGlyphVariants.TryGetValue(glyph, out var variant))
-        {
-            DrawFallbackRect(context, x, y, brush);
-            return;
-        }
-
-        switch (variant)
-        {
-            case PowerlineGlyphVariant.FilledRightArrow:
-                DrawFilledGeometry(context, _geoRightArrow, x, y, brush);
-                break;
-            case PowerlineGlyphVariant.FilledLeftArrow:
-                DrawFilledGeometry(context, _geoLeftArrow, x, y, brush);
-                break;
-            case PowerlineGlyphVariant.FilledRightArc:
-                DrawFilledGeometry(context, _geoRightSemicircle, x, y, brush);
-                break;
-            case PowerlineGlyphVariant.FilledLeftArc:
-                DrawFilledGeometry(context, _geoLeftSemicircle, x, y, brush);
-                break;
-            case PowerlineGlyphVariant.ThinRightArrow:
-                DrawOutlineGeometry(context, _geoRightArrow, x, y, brush);
-                break;
-            case PowerlineGlyphVariant.ThinLeftArrow:
-                DrawOutlineGeometry(context, _geoLeftArrow, x, y, brush);
-                break;
-            case PowerlineGlyphVariant.ThinRightArc:
-                DrawOutlineGeometry(context, _geoRightSemicircle, x, y, brush);
-                break;
-            case PowerlineGlyphVariant.ThinLeftArc:
-                DrawOutlineGeometry(context, _geoLeftSemicircle, x, y, brush);
-                break;
-            default:
-                DrawFallbackRect(context, x, y, brush);
-                break;
-        }
-    }
-
     private bool PositionToBufferCell(Point pos, out int row, out int col)
     {
         row = 0; col = 0;
@@ -983,123 +785,33 @@ public class TerminalCanvas : Control
         return true;
     }
 
-    private void GetCanonicalSelection(out int startRow, out int startCol, out int endRow, out int endCol)
+    private async Task CopyToClipboardAsync(string text)
     {
-        int r1 = _selStartRow, c1 = _selStartCol, r2 = _selEndRow, c2 = _selEndCol;
-        if (r1 > r2 || (r1 == r2 && c1 > c2))
+        try
         {
-            startRow = r2; startCol = c2; endRow = r1; endCol = c1;
-        }
-        else
-        {
-            startRow = r1; startCol = c1; endRow = r2; endCol = c2;
-        }
-    }
-
-    private bool IsCellSelected(int row, int col)
-    {
-        GetCanonicalSelection(out var sr, out var sc, out var er, out var ec);
-        if (row < sr || row > er) return false;
-        if (sr == er)
-        {
-            return col >= sc && col <= ec;
-        }
-        if (row == sr) return col >= sc;
-        if (row == er) return col <= ec;
-        return true;
-    }
-
-    private string GetSelectedText()
-    {
-        var buffer = Buffer;
-        if (buffer == null) return string.Empty;
-        GetCanonicalSelection(out var sr, out var sc, out var er, out var ec);
-        var sb = new StringBuilder();
-        for (int r = sr; r <= er; r++)
-        {
-            int rowStart = (r == sr) ? sc : 0;
-            int rowEnd = (r == er) ? ec : buffer.Columns - 1;
-            var rowBuilder = new StringBuilder();
-
-            int c = rowStart;
-            while (c <= rowEnd)
+            var top = TopLevel.GetTopLevel(this);
+            var clipboard = top?.Clipboard;
+            if (clipboard != null)
             {
-                var cell = buffer.GetCell(r, c);
-                if (cell.IsContinuation)
-                {
-                    // Find base cell to the left
-                    int baseCol = c;
-                    while (baseCol > 0 && buffer.GetCell(r, baseCol).IsContinuation) baseCol--;
-                    var baseCell = buffer.GetCell(r, baseCol);
-
-                    // If the base cell is outside the selected range (to the left), include its grapheme
-                    // so selecting a continuation column still yields the full glyph.
-                    if (baseCol < rowStart)
-                    {
-                        var glyph = string.IsNullOrEmpty(baseCell.Grapheme) ? " " : baseCell.Grapheme;
-                        rowBuilder.Append(glyph);
-                    }
-
-                    // Advance past the full glyph width
-                    int advance = Math.Max(1, (int)baseCell.Width);
-                    c = baseCol + advance;
-                    if (c <= rowStart) c = rowStart + 1; // safety
-                }
-                else
-                {
-                    var glyph = string.IsNullOrEmpty(cell.Grapheme) ? " " : cell.Grapheme;
-                    rowBuilder.Append(glyph);
-                    int advance = Math.Max(1, (int)cell.Width);
-                    c += advance;
-                }
+                await clipboard.SetTextAsync(text);
             }
-
-            // Trim trailing spaces on the right to avoid copying grid padding
-            var line = rowBuilder.ToString().TrimEnd();
-            sb.Append(line);
-            if (r < er) sb.Append('\n');
         }
-
-        return sb.ToString();
+        catch (Exception ex)
+        {
+            LogError(ex, "ClipboardCopy");
+        }
     }
 
-    private void DrawFilledGeometry(DrawingContext context, StreamGeometry? geometry, double x, double y, IBrush brush)
+    private static void LogError(Exception ex, string context)
     {
-        if (geometry is null)
+        try
         {
-            DrawFallbackRect(context, x, y, brush);
-            return;
+            Console.WriteLine($"[Dotty] TerminalCanvas {context} error: {ex.Message}");
         }
-
-        using var alias = context.PushRenderOptions(s_aliasRenderOptions);
-        using var state = context.PushTransform(Matrix.CreateTranslation(Snap(x), Snap(y)));
-        context.DrawGeometry(brush, null, geometry);
-    }
-
-    private void DrawOutlineGeometry(DrawingContext context, StreamGeometry? geometry, double x, double y, IBrush brush)
-    {
-        if (geometry is null)
+        catch
         {
-            DrawFallbackRect(context, x, y, brush);
-            return;
+            // avoid throwing from logging
         }
-
-        var thickness = Math.Max(1, _cellWidth * 0.18);
-        var pen = new Pen(brush, thickness)
-        {
-            LineJoin = PenLineJoin.Round,
-            LineCap = PenLineCap.Round
-        };
-
-        using var alias = context.PushRenderOptions(s_aliasRenderOptions);
-        using var state = context.PushTransform(Matrix.CreateTranslation(Snap(x), Snap(y)));
-        context.DrawGeometry(null, pen, geometry);
-    }
-
-    private void DrawFallbackRect(DrawingContext context, double x, double y, IBrush brush)
-    {
-        var rect = CreateSnappedRect(x, y, _cellWidth, _cellHeight);
-        context.FillRectangle(brush, rect);
     }
 
     private double Snap(double value)
@@ -1118,6 +830,7 @@ public class TerminalCanvas : Control
         double min = 1.0 / scale;
         return new Rect(left, top, Math.Max(right - left, min), Math.Max(bottom - top, min));
     }
+
 }
 
 public enum TerminalCursorShape

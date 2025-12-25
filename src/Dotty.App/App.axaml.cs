@@ -21,6 +21,15 @@ public partial class App : Application
         try
         {
             ApplyDefaultsToResources();
+            GlyphDiagnostics.Run();
+            // Support a probe mode to scan installed fonts for glyph coverage when
+            // DOTTY_PROBE_FONTS=1 is set. This is useful for local diagnostics and
+            // does not start the main window.
+            if (Environment.GetEnvironmentVariable("DOTTY_PROBE_FONTS") == "1")
+            {
+                Tools.FontProbe.Run();
+                Environment.Exit(0);
+            }
         }
         catch (Exception ex)
         {

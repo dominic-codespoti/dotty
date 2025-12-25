@@ -34,7 +34,17 @@ namespace Dotty.App.Services
                 }
             }
 
-            return FontManager.Current.DefaultFontFamily;
+            // If none of the individual candidates resolved, return a composite FontFamily
+            // containing the entire stack. Platforms that support composite family names
+            // will perform per-glyph fallback across the listed families.
+            try
+            {
+                return new FontFamily(stack);
+            }
+            catch
+            {
+                return FontManager.Current.DefaultFontFamily;
+            }
         }
 
         private static FontFamily? TryCreateFontFamily(string candidate)

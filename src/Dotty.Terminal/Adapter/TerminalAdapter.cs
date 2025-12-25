@@ -1,5 +1,4 @@
 using System;
-using System.Text.RegularExpressions;
 using Dotty.Abstractions.Adapter;
 
 namespace Dotty.Terminal.Adapter;
@@ -20,7 +19,6 @@ public class TerminalAdapter : ITerminalHandler
 
     public event Action<string>? RenderRequested;
     public TerminalBuffer Buffer => _buffer;
-    // Explicit interface implementation for the abstraction's Buffer (object)
     object? ITerminalHandler.Buffer => _buffer;
 
     public void ResizeBuffer(int rows, int columns)
@@ -40,13 +38,15 @@ public class TerminalAdapter : ITerminalHandler
             var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_ADAPTER");
             if (!string.IsNullOrEmpty(dbg) && dbg != "0")
             {
-                try { Console.Error.WriteLine("[ADAPTER_PRINT] '" + text.ToString().Replace("\n", "\\n") + "'"); } catch { }
+                try
+                {
+                    var printable = AnsiUtilities.StripAnsi(text.ToString()).Replace("\n", "\\n");
+                    Console.Error.WriteLine("[ADAPTER_PRINT] '" + printable + "'");
+                }
+                catch { }
             }
         }
         catch { }
-
-        var s = text.ToString();
-        var plainText = StripAnsi(s);
 
         _buffer.WriteText(text, _currentAttributes);
         RequestRender();
@@ -54,18 +54,6 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnOperatingSystemCommand(ReadOnlySpan<char> payload)
     {
-    }
-
-    private static string StripAnsi(string input)
-    {
-        if (string.IsNullOrEmpty(input)) return input;
-        // Remove OSC sequences ESC ] ... BEL
-        input = Regex.Replace(input, "\u001b\\].*?\u0007", string.Empty, RegexOptions.Singleline);
-        // Remove CSI sequences ESC [ ... letter
-        input = Regex.Replace(input, "\u001b\\[[0-9;?]*[ -/]*[@-~]", string.Empty);
-        // Remove any remaining simple ESC sequences
-        input = Regex.Replace(input, "\u001b.", string.Empty);
-        return input;
     }
 
     public void OnClearScreen()
@@ -88,169 +76,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnSetGraphicsRendition(ReadOnlySpan<char> parameters)
     {
-        var s = parameters.ToString();
-        if (string.IsNullOrEmpty(s))
-        {
-            ResetAttributes();
-            return;
-        }
-
-        var parts = s.Split(';', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0)
-        {
-            ResetAttributes();
-            return;
-        }
-
-        int i = 0;
-        while (i < parts.Length)
-        {
-            if (!int.TryParse(parts[i], out var code))
-            {
-                i++;
-                continue;
-            }
-
-            switch (code)
-            {
-                case 0:
-                    ResetAttributes();
-                    i++;
-                    break;
-                case 1:
-                    _currentAttributes.Bold = true;
-                    i++;
-                    break;
-                case 2:
-                    _currentAttributes.Faint = true;
-                    i++;
-                    break;
-                case 3:
-                    _currentAttributes.Italic = true;
-                    i++;
-                    break;
-                case 4:
-                    _currentAttributes.Underline = true;
-                    i++;
-                    break;
-                case 7:
-                    _currentAttributes.Inverse = true;
-                    i++;
-                    break;
-                case 22:
-                    _currentAttributes.Bold = false;
-                    _currentAttributes.Faint = false;
-                    i++;
-                    break;
-                case 23:
-                    _currentAttributes.Italic = false;
-                    i++;
-                    break;
-                case 24:
-                    _currentAttributes.Underline = false;
-                    i++;
-                    break;
-                case 27:
-                    _currentAttributes.Inverse = false;
-                    i++;
-                    break;
-                case 39:
-                    _currentAttributes.Foreground = null;
-                    i++;
-                    break;
-                case 49:
-                    _currentAttributes.Background = null;
-                    i++;
-                    break;
-                case 59:
-                    _currentAttributes.UnderlineColor = null;
-                    i++;
-                    break;
-                case 38:
-                    if (!TryParseExtendedColor(parts, ref i, out var fg))
-                    {
-                        i++;
-                    }
-                    else
-                    {
-                        _currentAttributes.Foreground = fg;
-                    }
-                    break;
-                case 48:
-                    if (!TryParseExtendedColor(parts, ref i, out var bg))
-                    {
-                        i++;
-                    }
-                    else
-                    {
-                        _currentAttributes.Background = bg;
-                    }
-                    break;
-                case 58:
-                    if (!TryParseExtendedColor(parts, ref i, out var ul))
-                    {
-                        i++;
-                    }
-                    else
-                    {
-                        _currentAttributes.UnderlineColor = ul;
-                    }
-                    break;
-                default:
-                    if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
-                    {
-                        _currentAttributes.Foreground = SgrCodeToHex(code);
-                    }
-                    else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
-                    {
-                        _currentAttributes.Background = SgrCodeToHexBackground(code);
-                    }
-                    i++;
-                    break;
-            }
-        }
-    }
-
-    private void ResetAttributes()
-    {
-        _currentAttributes = CellAttributes.Default;
-    }
-
-    private static bool TryParseExtendedColor(string[] parts, ref int index, out string? hex)
-    {
-        hex = null;
-        if (index + 1 >= parts.Length)
-        {
-            return false;
-        }
-
-        var mode = parts[index + 1];
-        if (mode == "2")
-        {
-            if (index + 4 < parts.Length &&
-                byte.TryParse(parts[index + 2], out var r) &&
-                byte.TryParse(parts[index + 3], out var g) &&
-                byte.TryParse(parts[index + 4], out var b))
-            {
-                hex = $"#{r:X2}{g:X2}{b:X2}";
-                index += 5;
-                return true;
-            }
-            return false;
-        }
-
-        if (mode == "5")
-        {
-            if (index + 2 < parts.Length && int.TryParse(parts[index + 2], out var idx))
-            {
-                hex = Sgr256ToHex(idx);
-                index += 3;
-                return true;
-            }
-            return false;
-        }
-
-        return false;
+        _currentAttributes = SgrParser.Apply(parameters, _currentAttributes);
     }
 
     public void OnMoveCursor(int row, int col)
@@ -311,75 +137,6 @@ public class TerminalAdapter : ITerminalHandler
     {
         _buffer.SetCursorVisible(visible);
         RequestRender();
-    }
-
-    private static string? SgrCodeToHex(int code)
-    {
-        return code switch
-        {
-            30 => "#000000",
-            31 => "#AA0000",
-            32 => "#00AA00",
-            33 => "#AA5500",
-            34 => "#0000AA",
-            35 => "#AA00AA",
-            36 => "#00AAAA",
-            37 => "#AAAAAA",
-            90 => "#555555",
-            91 => "#FF5555",
-            92 => "#55FF55",
-            93 => "#FFFF55",
-            94 => "#5555FF",
-            95 => "#FF55FF",
-            96 => "#55FFFF",
-            97 => "#FFFFFF",
-            _ => null,
-        };
-    }
-
-    private static string? SgrCodeToHexBackground(int code)
-    {
-        // background codes are foreground + 10 (e.g., 40 -> 30, 100 -> 90)
-        if (code >= 40 && code <= 47)
-        {
-            return SgrCodeToHex(code - 10);
-        }
-        if (code >= 100 && code <= 107)
-        {
-            return SgrCodeToHex(code - 10);
-        }
-        return null;
-    }
-
-    private static string? Sgr256ToHex(int idx)
-    {
-        if (idx < 0 || idx > 255) return null;
-        if (idx <= 15)
-        {
-            // Map 0-7 -> 30-37, 8-15 -> 90-97
-            int code = (idx < 8) ? (30 + idx) : (90 + (idx - 8));
-            return SgrCodeToHex(code);
-        }
-        if (idx >= 16 && idx <= 231)
-        {
-            int c = idx - 16;
-            int r = c / 36;
-            int g = (c / 6) % 6;
-            int b = c % 6;
-            int R = r == 0 ? 0 : 55 + r * 40;
-            int G = g == 0 ? 0 : 55 + g * 40;
-            int B = b == 0 ? 0 : 55 + b * 40;
-            return $"#{R:X2}{G:X2}{B:X2}";
-        }
-        // grayscale 232-255
-        if (idx >= 232 && idx <= 255)
-        {
-            int gray = 8 + (idx - 232) * 10;
-            if (gray < 0) gray = 0;
-            if (gray > 255) gray = 255;
-            return $"#{gray:X2}{gray:X2}{gray:X2}";
-        }
-        return null;
     }
 
     public void OnBell()

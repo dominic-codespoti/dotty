@@ -21,11 +21,7 @@ public partial class App : Application
             try
             {
                 ApplyDefaultsToResources();
-                // Run glyph diagnostics only when explicitly requested via env var
-                if (Environment.GetEnvironmentVariable("DOTTY_GLYPH_DIAG") == "1")
-                {
-                    GlyphDiagnostics.Run();
-                }
+                // Removed: `GlyphDiagnostics`. Use `DOTTY_PROBE_FONTS=1` to run the font probe instead.
             // Support a probe mode to scan installed fonts for glyph coverage when
             // DOTTY_PROBE_FONTS=1 is set. This is useful for local diagnostics and
             // does not start the main window.

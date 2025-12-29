@@ -47,8 +47,10 @@ public class TerminalCanvas : Control
         set => SetValue(BufferProperty, value);
     }
 
+#pragma warning disable IL2075
     public FontFamily FontFamily
     {
+#pragma warning restore IL2075
         get => GetValue(FontFamilyProperty);
         set => SetValue(FontFamilyProperty, value);
     }
@@ -603,18 +605,36 @@ public class TerminalCanvas : Control
                 var tryNames = new[] { "TryGetNominalGlyph", "TryGetGlyph", "TryGetVariationGlyph" };
                 foreach (var name in tryNames)
                 {
+                    // Suppress ILLinker trimming warning for runtime method lookup
+#pragma warning disable IL2075
                     var meth = font.GetType().GetMethod(name, new[] { typeof(uint), typeof(uint).MakeByRefType() })
                               ?? font.GetType().GetMethod(name, new[] { typeof(int), typeof(int).MakeByRefType() });
-                    if (meth != null)
-                    {
-                        var outParamType = meth.GetParameters()[1].ParameterType.GetElementType();
-                        var outValue = outParamType == typeof(uint) ? (object)0u : 0;
-                        var args = new object[] { cp, outValue };
-                        var ok = (bool)meth.Invoke(font, args);
-                        var glyphId = args[1];
-                        // (HarfBuzz TryGet logs removed to avoid noisy output)
-                        if (ok && !glyphId.Equals(0)) return true;
-                    }
+#pragma warning restore IL2075
+                        if (meth != null)
+                        {
+                            var outParamType = meth.GetParameters()[1].ParameterType.GetElementType();
+                            object outValue = outParamType == typeof(uint) ? (object)0u : (object)0;
+                            var args = new object[] { cp, outValue };
+                            var okObj = meth.Invoke(font, args);
+                            var ok = okObj is bool b && b;
+                            // (HarfBuzz TryGet logs removed to avoid noisy output)
+                            if (ok)
+                            {
+                                var glyphObj = args[1];
+                                if (glyphObj is uint gUint)
+                                {
+                                    if (gUint != 0) return true;
+                                }
+                                else if (glyphObj is int gInt)
+                                {
+                                    if (gInt != 0) return true;
+                                }
+                                else if (glyphObj != null && !glyphObj.Equals(0))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
                 }
             }
         }

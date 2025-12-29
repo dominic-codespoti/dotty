@@ -198,7 +198,21 @@ public partial class MainWindow : Window
 
                     if (bytesRead > 0)
                     {
-                        _parser?.Feed(buffer.AsSpan(0, bytesRead));
+                            // Feed parser
+                            _parser?.Feed(buffer.AsSpan(0, bytesRead));
+                            // If running a test, optionally dump raw PTY bytes for inspection
+                            try
+                            {
+                                var rawPath = Environment.GetEnvironmentVariable("DOTTY_TEST_OUTPUT");
+                                if (!string.IsNullOrEmpty(rawPath))
+                                {
+                                    var rawFile = rawPath + ".raw";
+                                    try { Directory.CreateDirectory(Path.GetDirectoryName(rawFile) ?? "."); } catch { }
+                                    var hex = BitConverter.ToString(buffer, 0, bytesRead);
+                                    File.AppendAllText(rawFile, DateTime.UtcNow.ToString("o") + " " + hex + Environment.NewLine);
+                                }
+                            }
+                            catch { }
                     }
                     else
                     {

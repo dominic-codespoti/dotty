@@ -133,6 +133,25 @@ public partial class MainWindow : Window
             _readCancellation = new CancellationTokenSource();
             StartBackgroundReaders(_readCancellation.Token);
 
+            // If DOTTY_TEST_SCRIPT is set, run the scripted interactions against the child PTY
+            var testScript = Environment.GetEnvironmentVariable("DOTTY_TEST_SCRIPT");
+            // If env var not set, prefer a root-level scripts/ directory
+            if (string.IsNullOrEmpty(testScript))
+            {
+                var defaultRoot = Path.Combine(Environment.CurrentDirectory, "scripts", "nvim-glyph-test.txt");
+                if (File.Exists(defaultRoot)) testScript = defaultRoot;
+            }
+
+            if (!string.IsNullOrEmpty(testScript) && File.Exists(testScript))
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await RunTestScriptAsync(testScript); } catch { }
+                    // After the test completes, close the window
+                    try { this.Close(); } catch { }
+                });
+            }
+
             TerminalView.RawInput += (bytes) =>
             {
                 if (bytes == null || _childInputStream == null) return;
@@ -240,6 +259,86 @@ public partial class MainWindow : Window
         {
             // ignore
         }
+    }
+
+    private static string UnescapeString(string s)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < s.Length; i++)
+        {
+            char c = s[i];
+            if (c == '\\' && i + 1 < s.Length)
+            {
+                i++;
+                char n = s[i];
+                if (n == 'n') sb.Append('\n');
+                else if (n == 'r') sb.Append('\r');
+                else if (n == 't') sb.Append('\t');
+                else if (n == '\\') sb.Append('\\');
+                else if (n == 'u' && i + 4 < s.Length)
+                {
+                    var hex = s.Substring(i + 1, 4);
+                    if (int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var v))
+                    {
+                        sb.Append(char.ConvertFromUtf32(v));
+                        i += 4;
+                    }
+                    else sb.Append('u');
+                }
+                else sb.Append(n);
+            }
+            else sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private async Task RunTestScriptAsync(string path)
+    {
+        // Wait for the child input stream to be ready
+        int waited = 0;
+        while (_childInputStream == null && waited < 5000)
+        {
+            await Task.Delay(50);
+            waited += 50;
+        }
+        if (_childInputStream == null) return;
+
+        try
+        {
+            var lines = File.ReadAllLines(path);
+            foreach (var raw in lines)
+            {
+                var line = raw.Trim();
+                if (string.IsNullOrEmpty(line) || line.StartsWith("#")) continue;
+
+                if (line.StartsWith("sleep:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var arg = line.Substring(6).Trim();
+                    if (int.TryParse(arg, out var ms)) await Task.Delay(ms);
+                    continue;
+                }
+
+                if (line.StartsWith("send:", StringComparison.OrdinalIgnoreCase))
+                {
+                    var payload = line.Substring(5);
+                    var text = UnescapeString(payload);
+                    var bytes = System.Text.Encoding.UTF8.GetBytes(text);
+                    try
+                    {
+                        lock (_writeLock)
+                        {
+                            _childInputStream.Write(bytes, 0, bytes.Length);
+                            _childInputStream.Flush();
+                        }
+                    }
+                    catch { }
+                    // give the child some time to process
+                    await Task.Delay(200);
+                    continue;
+                }
+            }
+        }
+        catch { }
     }
 
     private void StartBackgroundReaders(CancellationToken cancellationToken)

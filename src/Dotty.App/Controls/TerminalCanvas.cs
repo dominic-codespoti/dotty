@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -487,9 +488,13 @@ public class TerminalCanvas : Control
 
         if (GlyphAvailableInTypeface(primary, codepoint))
         {
-            // primary can render it; explicitly return the primary typeface so callers
-            // (e.g., TextLayoutCache) can distinguish between "primary supports"
-            // and "no explicit fallback found" and avoid spurious buffer-dump output.
+            // primary supports it
+            if (Environment.GetEnvironmentVariable("DOTTY_DEBUG_GLYPHS") == "1")
+            {
+                var msg = $"[Dotty][GlyphDbg] primary supports U+{codepoint:X4} -> using primary";
+                try { Console.WriteLine(msg); } catch { }
+                AppendTestLog(msg);
+            }
             return primary;
         }
 
@@ -503,6 +508,12 @@ public class TerminalCanvas : Control
                 var tf = new Typeface(fam, primary.Style, primary.Weight);
                     if (GlyphAvailableInTypeface(tf, codepoint))
                     {
+                        if (Environment.GetEnvironmentVariable("DOTTY_DEBUG_GLYPHS") == "1")
+                        {
+                            var msg = $"[Dotty][GlyphDbg] candidate {candidate} supports U+{codepoint:X4}";
+                            try { Console.WriteLine(msg); } catch { }
+                            AppendTestLog(msg);
+                        }
                         return tf;
                     }
             }
@@ -525,6 +536,12 @@ public class TerminalCanvas : Control
                     var tf = new Typeface(fam, primary.Style, primary.Weight);
                     if (GlyphAvailableInTypeface(tf, codepoint))
                     {
+                        if (Environment.GetEnvironmentVariable("DOTTY_DEBUG_GLYPHS") == "1")
+                        {
+                            var msg = $"[Dotty][GlyphDbg] fallback family {famName} supports U+{codepoint:X4}";
+                            try { Console.WriteLine(msg); } catch { }
+                            AppendTestLog(msg);
+                        }
                         return tf;
                     }
                 }
@@ -553,6 +570,12 @@ public class TerminalCanvas : Control
             }
 
             // No explicit fallback family matched. We will rely on the OS/text-engine fallback
+            if (Environment.GetEnvironmentVariable("DOTTY_DEBUG_GLYPHS") == "1")
+            {
+                var msg = $"[Dotty][GlyphDbg] No explicit fallback found for U+{codepoint:X4}";
+                try { Console.WriteLine(msg); } catch { }
+                AppendTestLog(msg);
+            }
             // No explicit fallback found; rely on system/text-engine fallback
         }
 
@@ -641,6 +664,19 @@ public class TerminalCanvas : Control
         catch { }
 
         return false;
+    }
+
+    private static void AppendTestLog(string line)
+    {
+        try
+        {
+            var path = Environment.GetEnvironmentVariable("DOTTY_TEST_OUTPUT");
+            if (string.IsNullOrEmpty(path)) return;
+            // Ensure directory exists
+            try { Directory.CreateDirectory(Path.GetDirectoryName(path) ?? "."); } catch { }
+            File.AppendAllText(path, DateTime.UtcNow.ToString("o") + " " + line + Environment.NewLine);
+        }
+        catch { }
     }
 
     // Symbol heuristics were moved to `FontHelpers` to make them testable.

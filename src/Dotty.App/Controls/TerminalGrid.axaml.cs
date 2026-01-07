@@ -64,7 +64,8 @@ namespace Dotty.App.Controls
                 canvas.Buffer = buffer;
                 canvas.CursorShape = CursorShape;
                 canvas.ShowCursor = _blinkOn;
-                canvas.InvalidateVisual();
+                try { canvas.OnBufferUpdated(buffer); } catch { }
+                try { canvas.RequestFrame(); } catch { }
                 try { Scroll?.ScrollToEnd(); } catch { }
             }
             catch { }

@@ -52,13 +52,11 @@ public sealed class SkiaDrawing : ICustomDrawOperation
             var paint = _owner.SkPaint;
             if (paint == null) return;
 
-            // If a composer is available, use it to render the full frame offscreen,
-            // then blit the resulting image once. This avoids scanline / partial-present issues.
+            // Use the composer to render directly into the leased Skia canvas. The composer
+            // maintains persistent per-row bitmaps and only repaints rows whose version changed.
             if (_composer != null && _atlas != null)
             {
-                using var img = _composer.Compose(_buffer, _atlas, paint, _cellW, _cellH);
-                var dest = new SKRect(0, 0, (float)_bounds.Width, (float)_bounds.Height);
-                canvas.DrawImage(img, dest);
+                _composer.RenderTo(canvas, _buffer, _atlas, paint, _cellW, _cellH);
             }
             else
             {

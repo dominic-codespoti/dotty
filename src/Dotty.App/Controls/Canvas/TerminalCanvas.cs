@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Dotty.App.Controls.Canvas;
+using Avalonia.Threading;
 using Dotty.Terminal.Adapter;
 using Dotty.App.Rendering;
 using Dotty.App.Discovery;
@@ -77,6 +78,7 @@ public class TerminalCanvas : Control
     private GlyphAtlas? _glyphAtlas;
     private GlyphDiscovery? _glyphDiscovery;
 	private TerminalFrameComposer? _frameComposer;
+    private int _framePending = 0;
     
 	public SKPaint? SkPaint { get; private set; }
 	public double CellWidth => _cellWidth;
@@ -104,21 +106,58 @@ public class TerminalCanvas : Control
 
 		EnsureMetrics();
 
-		// Inform discovery about changed rows so the atlas is populated before draw.
-		if (_glyphDiscovery != null)
-		{
-			for (int r = 0; r < buffer.Rows; r++)
-			{
-				if (_glyphDiscovery.HasRowChanged(buffer, r))
-				{
-					_glyphDiscovery.UpdateRow(buffer, r);
-				}
-			}
-		}
 
 		// Enqueue a single Skia custom draw operation. The Skia operation will
 		// compose the entire frame offscreen and blit it in one GPU operation.
 		context.Custom(new SkiaDrawing(this, buffer, _cellWidth, _cellHeight, _glyphAtlas, _frameComposer));
+	}
+
+	/// <summary>
+	/// Called when the buffer is updated (mutation time). This allows discovery
+	/// to run at mutation time instead of during Render.
+	/// </summary>
+	public void OnBufferUpdated(TerminalBuffer buffer)
+	{
+		if (buffer == null) return;
+		if (_glyphDiscovery == null) return;
+		_glyphDiscovery.EnsureSize(buffer.Rows);
+		var dirty = buffer.DirtyRows;
+		if (dirty == null) return;
+		for (int r = 0; r < buffer.Rows; r++)
+		{
+			if (r < dirty.Length && dirty[r])
+			{
+				_glyphDiscovery.EnqueueRow(r);
+			}
+		}
+		// discovery work is enqueued; it will be processed a bit at a time when a frame is requested
+	}
+
+	/// <summary>
+	/// Request a single coalesced frame. Multiple calls before the dispatcher
+	/// runs will only cause a single InvalidateVisual.
+	/// </summary>
+	public void RequestFrame()
+	{
+		if (System.Threading.Interlocked.Exchange(ref _framePending, 1) == 1) return;
+		Dispatcher.UIThread.Post(() =>
+		{
+			try
+			{
+				// Budget discovery work on the UI thread before we render. This keeps discovery off the hot
+				// path while letting glyphs populate over a few frames.
+				try
+				{
+					_glyphDiscovery?.Process(Buffer!, 20);
+				}
+				catch { }
+				InvalidateVisual();
+			}
+			finally
+			{
+				System.Threading.Interlocked.Exchange(ref _framePending, 0);
+			}
+		}, DispatcherPriority.Render);
 	}
 
 	private void EnsureMetrics()

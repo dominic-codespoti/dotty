@@ -63,8 +63,10 @@ public class GlyphAtlas : IDisposable
             var text = key.Grapheme ?? string.Empty;
             var bounds = new SKRect();
             paint.MeasureText(text, ref bounds);
+            var fmLocal = paint.FontMetrics;
             int w = Math.Max(1, (int)Math.Ceiling(bounds.Width)) + _padding * 2;
-            int h = Math.Max(1, (int)Math.Ceiling(bounds.Height)) + _padding * 2;
+            // Use ascent+descent to determine vertical space so we don't cut glyphs
+            int h = Math.Max(1, (int)Math.Ceiling(Math.Abs(fmLocal.Ascent) + Math.Abs(fmLocal.Descent))) + _padding * 2;
 
             // If not enough space in current row, move to next row
             if (_nextX + w > _bitmap.Width)
@@ -82,9 +84,9 @@ public class GlyphAtlas : IDisposable
 
             // Rasterise text at (_nextX + padding, baseline)
             var destX = _nextX + _padding;
-            // compute baseline assuming ascent is negative
-            var fm = paint.FontMetrics;
-            var baseline = _nextY + _padding - fm.Ascent;
+            // compute baseline using font metrics (ascent is negative)
+            var fm = fmLocal;
+            var baseline = _nextY + _padding + Math.Abs(fm.Ascent);
 
             _canvas.DrawText(text, destX, baseline, paint);
 
@@ -98,7 +100,7 @@ public class GlyphAtlas : IDisposable
             };
 
             // compute baseline offset relative to top of glyph image
-            info.BaselineOffset = _padding - fm.Ascent;
+            info.BaselineOffset = _padding + Math.Abs(fm.Ascent);
 
             _map[key.Clone()] = info;
 

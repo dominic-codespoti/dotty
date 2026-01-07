@@ -15,6 +15,7 @@ public class TerminalBuffer
     private readonly BufferEraser _eraser = new();
     private BufferTextWriter _writer;
     private int[] _rowVersions;
+    private bool[] _dirtyRows;
 
     public int Columns { get; private set; }
     public int Rows { get; private set; }
@@ -30,6 +31,7 @@ public class TerminalBuffer
         Columns = columns;
         _screens = new ScreenManager(Rows, Columns);
         _rowVersions = new int[Rows];
+        _dirtyRows = new bool[Rows];
         _cursor.SetSize(Rows, Columns);
         _writer = CreateWriter();
         ClearScreen();
@@ -226,6 +228,14 @@ public class TerminalBuffer
         return _rowVersions[row];
     }
 
+    public bool[] DirtyRows => _dirtyRows;
+
+    public void ClearDirtyRows()
+    {
+        if (_dirtyRows == null) return;
+        Array.Clear(_dirtyRows, 0, _dirtyRows.Length);
+    }
+
     private void MarkRowDirty(int row)
     {
         if (row < 0 || row >= _rowVersions.Length)
@@ -234,6 +244,10 @@ public class TerminalBuffer
         }
 
         unchecked { _rowVersions[row]++; }
+        if (_dirtyRows != null && row >= 0 && row < _dirtyRows.Length)
+        {
+            _dirtyRows[row] = true;
+        }
     }
 
     private void MarkRowRangeDirty(int start, int count)
@@ -243,6 +257,7 @@ public class TerminalBuffer
         for (int i = start; i < end; i++)
         {
             unchecked { _rowVersions[i]++; }
+            if (_dirtyRows != null && i >= 0 && i < _dirtyRows.Length) _dirtyRows[i] = true;
         }
     }
 
@@ -251,6 +266,7 @@ public class TerminalBuffer
         for (int i = 0; i < _rowVersions.Length; i++)
         {
             unchecked { _rowVersions[i]++; }
+            if (_dirtyRows != null && i >= 0 && i < _dirtyRows.Length) _dirtyRows[i] = true;
         }
     }
 
@@ -260,6 +276,12 @@ public class TerminalBuffer
         int copyCount = Math.Min(rows, _rowVersions.Length);
         Array.Copy(_rowVersions, newVersions, copyCount);
         _rowVersions = newVersions;
+        var newDirty = new bool[rows];
+        if (_dirtyRows != null)
+        {
+            Array.Copy(_dirtyRows, newDirty, Math.Min(_dirtyRows.Length, newDirty.Length));
+        }
+        _dirtyRows = newDirty;
     }
 
     private void ShiftRowVersionsUp(int lines)

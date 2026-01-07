@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Text;
 using Dotty.Abstractions.Adapter;
 using Dotty.Abstractions.Parser;
@@ -17,8 +18,51 @@ namespace Dotty.Terminal.Parser
         private const byte ESC = 0x1b;
         private readonly byte[] _leftover = new byte[32];
         private int _leftoverLen = 0;
+        private Charset _charset = Charset.Ascii;
 
         public ITerminalHandler? Handler { get; set; }
+
+        private enum Charset
+        {
+            Ascii,
+            DecSpecialGraphics,
+        }
+
+        private static readonly Dictionary<char, char> s_decSpecialGraphicsMap = new()
+        {
+            ['j'] = '┘',
+            ['k'] = '┐',
+            ['l'] = '┌',
+            ['m'] = '└',
+            ['t'] = '├',
+            ['u'] = '┤',
+            ['v'] = '┴',
+            ['w'] = '┬',
+            ['n'] = '┼',
+            ['q'] = '─',
+            ['x'] = '│',
+            ['o'] = '⎺',
+            ['s'] = '⎽',
+            ['p'] = '⎻',
+            ['r'] = '⎼',
+            ['`'] = '◆',
+            ['a'] = '▒',
+            ['f'] = '°',
+            ['g'] = '±',
+            ['~'] = '•',
+            ['h'] = '▦',
+            ['i'] = '✦',
+            ['0'] = '█',
+            [','] = '←',
+            ['+'] = '→',
+            ['.'] = '↓',
+            ['-'] = '↑',
+            ['y'] = '≤',
+            ['z'] = '≥',
+            ['{'] = 'π',
+            ['|'] = '≠',
+            ['}'] = '£',
+        };
 
         public void Feed(ReadOnlySpan<byte> bytes)
         {
@@ -85,7 +129,7 @@ namespace Dotty.Terminal.Parser
                     }
                     else
                     {
-                        // Not CSI - handle OSC (] ... BEL) and a few single byte sequences like ESC c
+                        // Not CSI - handle OSC (] ... BEL), charset selects, and a few single byte sequences like ESC c
                         if (next == (byte)']') // OSC - Operating System Command
                         {
                             i++; // move into payload
@@ -96,14 +140,12 @@ namespace Dotty.Terminal.Parser
                                 byte cb = inputSpan[i];
                                 if (cb == 0x07) // BEL terminator
                                 {
-                                    // payload is from payloadStart to i-1
                                     var payload = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
                                     Handler?.OnOperatingSystemCommand(payload.AsSpan());
                                     i++;
                                     finished = true;
                                     break;
                                 }
-                                // also support ST sequence: ESC '\\' (0x1b 0x5c) as terminator
                                 if (cb == ESC && i + 1 < inputSpan.Length && inputSpan[i + 1] == (byte)'\\')
                                 {
                                     var payload = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
@@ -117,20 +159,30 @@ namespace Dotty.Terminal.Parser
 
                             if (!finished)
                             {
-                                // incomplete OSC sequence, save leftover
                                 SaveLeftover(inputSpan.Slice(seqStart));
                                 return;
                             }
                         }
                         else if (next == (byte)'c')
                         {
-                            // RIS (Reset) - treat as full clear
                             Handler?.OnEraseDisplay(2);
+                            i++;
+                        }
+                        else if (next == (byte)'(' || next == (byte)')')
+                        {
+                            i++;
+                            if (i >= inputSpan.Length)
+                            {
+                                SaveLeftover(inputSpan.Slice(seqStart));
+                                return;
+                            }
+
+                            var selection = (char)inputSpan[i];
+                            ApplyCharsetSelection(selection);
                             i++;
                         }
                         else
                         {
-                            // Unknown escape, skip it
                             i++;
                         }
                     }
@@ -147,9 +199,9 @@ namespace Dotty.Terminal.Parser
                     while (i < inputSpan.Length && inputSpan[i] != ESC && inputSpan[i] != 0x07)
                         i++;
                     var run = inputSpan.Slice(start, i - start);
-                    // Decode UTF-8 run and send to handler
-                    string s = Encoding.UTF8.GetString(run);
-                    Handler?.OnPrint(s.AsSpan());
+                    // Decode UTF-8 run, translate DEC graphics if active, and send to handler
+                    var decoded = DecodePrintableRun(run);
+                    Handler?.OnPrint(decoded.AsSpan());
                 }
             }
 
@@ -173,15 +225,7 @@ namespace Dotty.Terminal.Parser
             {
                 case 'J':
                     // erase display - common params: 2 (entire screen)
-                    try
-                    {
-                        var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_PARSER");
-                        if (!string.IsNullOrEmpty(dbg) && dbg != "0")
-                        {
-                            Console.Error.WriteLine($"[PARSER] CSI J params='{@params}'");
-                        }
-                    }
-                    catch { }
+                    // (parser debug logging removed)
                         // Interpret parameter per ANSI: default is 0 (erase from cursor to end of screen)
                         int mode = 0;
                         if (!string.IsNullOrEmpty(@params) && int.TryParse(@params, out var m)) mode = m;
@@ -270,6 +314,58 @@ namespace Dotty.Terminal.Parser
             int len = Math.Min(bytes.Length, _leftover.Length);
             bytes.Slice(0, len).CopyTo(_leftover.AsSpan());
             _leftoverLen = len;
+        }
+
+        private void ApplyCharsetSelection(char selector)
+        {
+            switch (selector)
+            {
+                case '0':
+                    _charset = Charset.DecSpecialGraphics;
+                    return;
+                case 'B':
+                    _charset = Charset.Ascii;
+                    return;
+                default:
+                    _charset = Charset.Ascii;
+                    return;
+            }
+        }
+
+        private string DecodePrintableRun(ReadOnlySpan<byte> run)
+        {
+            if (run.IsEmpty)
+            {
+                return string.Empty;
+            }
+
+            var text = Encoding.UTF8.GetString(run);
+            if (_charset != Charset.DecSpecialGraphics)
+            {
+                return text;
+            }
+
+            StringBuilder? builder = null;
+            for (int idx = 0; idx < text.Length; idx++)
+            {
+                var ch = text[idx];
+                if (s_decSpecialGraphicsMap.TryGetValue(ch, out var mapped))
+                {
+                    if (builder == null)
+                    {
+                        builder = new StringBuilder(text.Length);
+                        builder.Append(text, 0, idx);
+                    }
+
+                    builder.Append(mapped);
+                }
+                else if (builder != null)
+                {
+                    builder.Append(ch);
+                }
+            }
+
+            return builder?.ToString() ?? text;
         }
     }
 }

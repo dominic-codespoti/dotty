@@ -14,6 +14,7 @@ public class TerminalBuffer
     private readonly CursorController _cursor = new();
     private readonly BufferEraser _eraser = new();
     private BufferTextWriter _writer;
+    private int[] _rowVersions;
 
     public int Columns { get; private set; }
     public int Rows { get; private set; }
@@ -28,6 +29,7 @@ public class TerminalBuffer
         Rows = rows;
         Columns = columns;
         _screens = new ScreenManager(Rows, Columns);
+        _rowVersions = new int[Rows];
         _cursor.SetSize(Rows, Columns);
         _writer = CreateWriter();
         ClearScreen();
@@ -40,6 +42,7 @@ public class TerminalBuffer
         _screens.ClearAll();
         _cursor.Reset();
         _clearLineOnNextWrite = false;
+        MarkAllRowsDirty();
     }
 
     public void ClearScrollback()
@@ -74,6 +77,7 @@ public class TerminalBuffer
     public void EraseLine(int mode)
     {
         _eraser.EraseLine(ActiveBuffer, _cursor, Columns, mode);
+        MarkRowDirty(_cursor.Row);
     }
 
     public void EraseDisplay(int mode)
@@ -82,6 +86,18 @@ public class TerminalBuffer
         if (reset)
         {
             _cursor.Reset();
+        }
+        if (mode == 2)
+        {
+            MarkAllRowsDirty();
+        }
+        else if (mode == 0)
+        {
+            MarkRowRangeDirty(_cursor.Row, Rows - _cursor.Row);
+        }
+        else if (mode == 1)
+        {
+            MarkRowRangeDirty(0, _cursor.Row + 1);
         }
     }
 
@@ -110,6 +126,7 @@ public class TerminalBuffer
     private void ScrollUp(int lines)
     {
         ActiveBuffer.ScrollUp(lines);
+        ShiftRowVersionsUp(lines);
     }
 
     public string GetCurrentDisplay(bool showCursor = false, string? promptPrefix = null)
@@ -155,6 +172,7 @@ public class TerminalBuffer
     {
         _screens.SetAlternate(enable);
         _cursor.Reset();
+        MarkAllRowsDirty();
     }
 
     public void SetCursorVisible(bool visible)
@@ -178,6 +196,8 @@ public class TerminalBuffer
         Columns = columns;
         _cursor.SetSize(Rows, Columns);
         _writer = CreateWriter();
+        ResizeRowVersions(rows);
+        MarkAllRowsDirty();
     }
 
     private BufferTextWriter CreateWriter()
@@ -192,6 +212,68 @@ public class TerminalBuffer
             () => _clearLineOnNextWrite,
             v => _clearLineOnNextWrite = v,
             CarriageReturn,
-            LineFeed);
+            LineFeed,
+            MarkRowDirty);
+    }
+
+    public int GetRowVersion(int row)
+    {
+        if (row < 0 || row >= _rowVersions.Length)
+        {
+            return 0;
+        }
+
+        return _rowVersions[row];
+    }
+
+    private void MarkRowDirty(int row)
+    {
+        if (row < 0 || row >= _rowVersions.Length)
+        {
+            return;
+        }
+
+        unchecked { _rowVersions[row]++; }
+    }
+
+    private void MarkRowRangeDirty(int start, int count)
+    {
+        if (start < 0) start = 0;
+        int end = Math.Min(_rowVersions.Length, start + count);
+        for (int i = start; i < end; i++)
+        {
+            unchecked { _rowVersions[i]++; }
+        }
+    }
+
+    private void MarkAllRowsDirty()
+    {
+        for (int i = 0; i < _rowVersions.Length; i++)
+        {
+            unchecked { _rowVersions[i]++; }
+        }
+    }
+
+    private void ResizeRowVersions(int rows)
+    {
+        var newVersions = new int[rows];
+        int copyCount = Math.Min(rows, _rowVersions.Length);
+        Array.Copy(_rowVersions, newVersions, copyCount);
+        _rowVersions = newVersions;
+    }
+
+    private void ShiftRowVersionsUp(int lines)
+    {
+        if (lines <= 0 || lines >= Rows)
+        {
+            MarkAllRowsDirty();
+            return;
+        }
+
+        Array.Copy(_rowVersions, lines, _rowVersions, 0, Rows - lines);
+        for (int i = Rows - lines; i < Rows; i++)
+        {
+            unchecked { _rowVersions[i]++; }
+        }
     }
 }

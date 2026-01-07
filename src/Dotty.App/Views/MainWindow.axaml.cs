@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private string _currentWorkingDirectory = Environment.CurrentDirectory;
     private ITerminalParser? _parser;
     private ITerminalHandler? _terminalAdapter;
+    private int _renderScheduled;
 
     public MainWindow()
     {
@@ -61,12 +62,9 @@ public partial class MainWindow : Window
             }, DispatcherPriority.Render);
 
             string projectPath = FindPtyTestsProjectPath();
-            string? helperExe = Environment.GetEnvironmentVariable("DOTTY_PTY_HELPER");
-            if (string.IsNullOrEmpty(helperExe))
-            {
-                var candidate = Path.Combine(projectPath, "Dotty.NativePty", "bin", "pty-helper");
-                if (File.Exists(candidate)) helperExe = Path.GetFullPath(candidate);
-            }
+            string? helperExe = null;
+            var candidate = Path.Combine(projectPath, "Dotty.NativePty", "bin", "pty-helper");
+            if (File.Exists(candidate)) helperExe = Path.GetFullPath(candidate);
 
             ProcessStartInfo psi;
             if (!string.IsNullOrEmpty(helperExe) && File.Exists(helperExe))
@@ -93,12 +91,7 @@ public partial class MainWindow : Window
             psi.Environment["DOTTY_CONTROL_SOCKET"] = controlPath;
             _controlSocketPath = controlPath;
 
-            var userShell = Environment.GetEnvironmentVariable("SHELL");
-            if (!string.IsNullOrEmpty(userShell))
-            {
-                psi.Environment["DOTTY_SHELL"] = userShell;
-                psi.Environment["SHELL"] = userShell;
-            }
+            // Use the default system shell inside the helper; do not inherit user environment shell.
 
             _childProcess = Process.Start(psi);
             if (_childProcess == null)
@@ -119,38 +112,12 @@ public partial class MainWindow : Window
             _parser = new BasicAnsiParser();
             _terminalAdapter = new TerminalAdapter(rows: 24, columns: 80);
             _parser.Handler = _terminalAdapter;
-            _terminalAdapter.RenderRequested += (display) =>
-            {
-                Dispatcher.UIThread.Post(() =>
-                {
-                    try {
-                        var tb = _terminalAdapter.Buffer as TerminalBuffer;
-                        if (tb != null) TerminalView.SetBuffer(tb);
-                    } catch { }
-                });
-            };
+            _terminalAdapter.RenderRequested += _ => ScheduleRender();
 
             _readCancellation = new CancellationTokenSource();
             StartBackgroundReaders(_readCancellation.Token);
 
-            // If DOTTY_TEST_SCRIPT is set, run the scripted interactions against the child PTY
-            var testScript = Environment.GetEnvironmentVariable("DOTTY_TEST_SCRIPT");
-            // If env var not set, prefer a root-level scripts/ directory
-            if (string.IsNullOrEmpty(testScript))
-            {
-                var defaultRoot = Path.Combine(Environment.CurrentDirectory, "scripts", "nvim-glyph-test.txt");
-                if (File.Exists(defaultRoot)) testScript = defaultRoot;
-            }
-
-            if (!string.IsNullOrEmpty(testScript) && File.Exists(testScript))
-            {
-                _ = Task.Run(async () =>
-                {
-                    try { await RunTestScriptAsync(testScript); } catch { }
-                    // After the test completes, close the window
-                    try { this.Close(); } catch { }
-                });
-            }
+            // Automatic test-script execution disabled: no environment-variable-driven actions.
 
             TerminalView.RawInput += (bytes) =>
             {
@@ -180,6 +147,33 @@ public partial class MainWindow : Window
         }
     }
 
+    private void ScheduleRender()
+    {
+        if (Interlocked.Exchange(ref _renderScheduled, 1) == 1)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                var tb = _terminalAdapter?.Buffer as TerminalBuffer;
+                if (tb != null)
+                {
+                    TerminalView.SetBuffer(tb);
+                }
+            }
+            catch
+            {
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _renderScheduled, 0);
+            }
+        }, DispatcherPriority.Render);
+    }
+
     private async Task ReadChildOutputAsync(CancellationToken cancellationToken)
     {
         if (_childOutputStream == null) return;
@@ -200,19 +194,7 @@ public partial class MainWindow : Window
                     {
                             // Feed parser
                             _parser?.Feed(buffer.AsSpan(0, bytesRead));
-                            // If running a test, optionally dump raw PTY bytes for inspection
-                            try
-                            {
-                                var rawPath = Environment.GetEnvironmentVariable("DOTTY_TEST_OUTPUT");
-                                if (!string.IsNullOrEmpty(rawPath))
-                                {
-                                    var rawFile = rawPath + ".raw";
-                                    try { Directory.CreateDirectory(Path.GetDirectoryName(rawFile) ?? "."); } catch { }
-                                    var hex = BitConverter.ToString(buffer, 0, bytesRead);
-                                    File.AppendAllText(rawFile, DateTime.UtcNow.ToString("o") + " " + hex + Environment.NewLine);
-                                }
-                            }
-                            catch { }
+                            // (diagnostic raw PTY dump removed)
                     }
                     else
                     {

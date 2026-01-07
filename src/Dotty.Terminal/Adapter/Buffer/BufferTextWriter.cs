@@ -1,3 +1,4 @@
+using System;
 using System.Globalization;
 
 namespace Dotty.Terminal.Adapter;
@@ -17,6 +18,7 @@ internal sealed class BufferTextWriter
     private readonly Action<bool> _setClearFlag;
     private readonly Action _carriageReturn;
     private readonly Action _lineFeed;
+    private readonly Action<int> _markRowDirty;
 
     public BufferTextWriter(
         CursorController cursor,
@@ -28,7 +30,8 @@ internal sealed class BufferTextWriter
         Func<bool> getClearFlag,
         Action<bool> setClearFlag,
         Action carriageReturn,
-        Action lineFeed)
+        Action lineFeed,
+        Action<int> markRowDirty)
     {
         _cursor = cursor;
         _eraser = eraser;
@@ -40,6 +43,7 @@ internal sealed class BufferTextWriter
         _setClearFlag = setClearFlag;
         _carriageReturn = carriageReturn;
         _lineFeed = lineFeed;
+        _markRowDirty = markRowDirty;
     }
 
     public void WriteText(ReadOnlySpan<char> text, in CellAttributes attributes)
@@ -70,6 +74,7 @@ internal sealed class BufferTextWriter
             {
                 _eraser.ClearLineFromCursor(_buffer(), _cursor, _cols());
                 _setClearFlag(false);
+                _markRowDirty(_cursor.Row);
             }
 
             WriteGrapheme(element, in attributes);
@@ -92,6 +97,7 @@ internal sealed class BufferTextWriter
             case '\b':
             case '\u007f':
                 _eraser.ErasePreviousGlyph(_buffer(), _cursor, _rows(), _cols());
+                _markRowDirty(_cursor.Row);
                 return true;
             default:
                 return char.IsControl(ch);
@@ -132,6 +138,7 @@ internal sealed class BufferTextWriter
         }
 
         var buf = _buffer();
+        int currentRow = _cursor.Row;
         ref var cell = ref buf.GetCellRef(_cursor.Row, _cursor.Col);
         cell.Grapheme = grapheme;
         ApplyAttributes(ref cell, in attributes);
@@ -150,6 +157,7 @@ internal sealed class BufferTextWriter
         {
             _scrollUp(1);
         }
+        _markRowDirty(currentRow);
     }
 
     private bool AttachCombiningMark(string mark)
@@ -168,6 +176,7 @@ internal sealed class BufferTextWriter
         }
 
         cell.Grapheme += mark;
+        _markRowDirty(row);
         return true;
     }
 

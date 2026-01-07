@@ -33,20 +33,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnPrint(ReadOnlySpan<char> text)
     {
-        try
-        {
-            var dbg = Environment.GetEnvironmentVariable("DOTTY_DEBUG_ADAPTER");
-            if (!string.IsNullOrEmpty(dbg) && dbg != "0")
-            {
-                try
-                {
-                    var printable = AnsiUtilities.StripAnsi(text.ToString()).Replace("\n", "\\n");
-                    Console.Error.WriteLine("[ADAPTER_PRINT] '" + printable + "'");
-                }
-                catch { }
-            }
-        }
-        catch { }
+        // (adapter debug logging removed)
 
         _buffer.WriteText(text, _currentAttributes);
         RequestRender();

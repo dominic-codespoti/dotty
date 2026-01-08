@@ -29,4 +29,11 @@
     <ProjectReference Include="..\Dotty.Terminal\Dotty.Terminal.csproj" />
     <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
   </ItemGroup>
+  
+  <!-- Ensure Avalonia XAML files are embedded as Avalonia resources so
+       runtime XAML loading or precompiled XAML lookup succeeds when
+       running locally. This helps avoid "No precompiled XAML found" errors. -->
+    <!-- Avalonia SDK already handles .axaml resources; explicit inclusion
+      can cause duplicate x:Class entries during build. Removed the
+      manual AvaloniaResource to avoid duplicate resource errors. -->
 </Project>

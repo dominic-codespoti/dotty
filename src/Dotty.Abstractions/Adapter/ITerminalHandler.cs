@@ -30,6 +30,8 @@ namespace Dotty.Abstractions.Adapter
         void OnEraseLine(int mode);
         void OnCarriageReturn();
         void OnLineFeed();
+        void OnSetScrollRegion(int top1Based, int bottom1Based);
+        void OnSetOriginMode(bool enabled);
         void OnSetAlternateScreen(bool enabled);
         void OnSetCursorVisibility(bool visible);
     }

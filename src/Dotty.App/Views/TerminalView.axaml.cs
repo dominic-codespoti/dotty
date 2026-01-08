@@ -56,7 +56,8 @@ namespace Dotty.App.Views
             if (e.Key == Key.Enter)
             {
                 // send LF to pty
-                RawInput?.Invoke(new byte[] { (byte)'\n' });
+                // send CR (carriage return) which is the conventional terminal newline
+                RawInput?.Invoke(new byte[] { (byte)'\r' });
                 // raise submitted with current line buffer
                 Submitted?.Invoke(this, _lineBuffer);
                 _lineBuffer = string.Empty;
@@ -76,6 +77,8 @@ namespace Dotty.App.Views
             // Arrow keys -> send escape sequences
             switch (e.Key)
             {
+                case Key.Escape:
+                    RawInput?.Invoke(new byte[] { 0x1b }); e.Handled = true; break;
                 case Key.Left:
                     RawInput?.Invoke(Encoding.UTF8.GetBytes("\u001b[D")); e.Handled = true; break;
                 case Key.Right:

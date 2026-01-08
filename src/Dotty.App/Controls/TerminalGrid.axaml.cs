@@ -61,6 +61,10 @@ namespace Dotty.App.Controls
             {
                 var canvas = Canvas;
                 if (canvas == null) return;
+                // Assign the incoming buffer instance. TerminalCanvas now preserves
+                // its composer/front-buffer state on property changes, so replacing
+                // the buffer here is safe and supports callers that provide a
+                // TerminalBuffer instance from elsewhere (e.g. TerminalAdapter).
                 canvas.Buffer = buffer;
                 canvas.CursorShape = CursorShape;
                 canvas.ShowCursor = _blinkOn;
@@ -171,8 +175,18 @@ namespace Dotty.App.Controls
         {
             try
             {
-                var buffer = BuildBufferFromPlainText(text);
-                SetBuffer(buffer);
+                if (_lastBuffer == null)
+                {
+                    _lastBuffer = new TerminalBuffer(24, 120);
+                }
+
+                // Treat the incoming plain text as content to write into the
+                // existing buffer in-place. This preserves row identity and
+                // lets the buffer behave like a mutable terminal grid.
+                _lastBuffer.ClearScreen();
+                _lastBuffer.WriteText(text.AsSpan(), null, null, false);
+                _lastBuffer.SetCursorVisible(false);
+                SetBuffer(_lastBuffer);
             }
             catch { }
         }
@@ -181,19 +195,26 @@ namespace Dotty.App.Controls
         {
             try
             {
-                var sb = new StringBuilder();
-                if (_lastBuffer != null)
+                // Append text into the existing buffer instead of rebuilding a
+                // new buffer from the concatenated display. Rebuilding loses
+                // row identity and breaks in-place updates (causes duplication).
+                if (_lastBuffer == null)
                 {
-                    sb.Append(_lastBuffer.GetCurrentDisplay());
+                    SetPlainText(text);
+                    return;
                 }
-                sb.Append(text);
-                SetPlainText(sb.ToString());
+
+                _lastBuffer.WriteText(text.AsSpan(), null, null, false);
+                SetBuffer(_lastBuffer);
             }
             catch { }
         }
 
         private static TerminalBuffer BuildBufferFromPlainText(string text)
         {
+            // Keep this helper for parity but prefer SetPlainText/AppendPlainText
+            // which now mutate an existing buffer in-place. This helper still
+            // produces a fresh buffer when callers explicitly need one.
             var buffer = new TerminalBuffer(24, 120);
             buffer.WriteText(text.AsSpan(), null, null, false);
             buffer.SetCursorVisible(false);

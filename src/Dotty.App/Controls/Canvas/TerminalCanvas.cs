@@ -78,7 +78,9 @@ public class TerminalCanvas : Control
     private GlyphAtlas? _glyphAtlas;
     private GlyphDiscovery? _glyphDiscovery;
 	private TerminalFrameComposer? _frameComposer;
-    private int _framePending = 0;
+	private DispatcherTimer? _renderTimer;
+	private volatile bool _needsFrame = false;
+	private bool _lastBufferWasAlternate = false;
     
 	public SKPaint? SkPaint { get; private set; }
 	public double CellWidth => _cellWidth;
@@ -105,7 +107,13 @@ public class TerminalCanvas : Control
 		if (buffer == null) return;
 
 		EnsureMetrics();
-
+		// If the buffer toggled between main/alternate screens, reset the
+		// composer's caches so stale per-row bitmaps are not reused.
+		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
+		{
+			_frameComposer.ResetCaches();
+			_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
+		}
 
 		// Enqueue a single Skia custom draw operation. The Skia operation will
 		// compose the entire frame offscreen and blit it in one GPU operation.
@@ -139,25 +147,35 @@ public class TerminalCanvas : Control
 	/// </summary>
 	public void RequestFrame()
 	{
-		if (System.Threading.Interlocked.Exchange(ref _framePending, 1) == 1) return;
-		Dispatcher.UIThread.Post(() =>
+		// Mark that we need a frame; the render timer will coalesce many requests
+		// and ensure we render at a steady, vsync-like cadence.
+		_needsFrame = true;
+	}
+
+	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+	{
+		base.OnAttachedToVisualTree(e);
+		// Start a single render timer (approx 60fps) that pulls the latest state.
+		if (_renderTimer == null)
 		{
-			try
+			_renderTimer = new DispatcherTimer
 			{
-				// Budget discovery work on the UI thread before we render. This keeps discovery off the hot
-				// path while letting glyphs populate over a few frames.
+				Interval = TimeSpan.FromMilliseconds(16)
+			};
+			_renderTimer.Tick += (_, __) =>
+			{
+				if (!_needsFrame) return;
+				_needsFrame = false;
 				try
 				{
-					_glyphDiscovery?.Process(Buffer!, 20);
+					// Budget a slice of discovery work before rendering so glyphs gradually populate.
+					try { _glyphDiscovery?.Process(Buffer!, 50); } catch { }
 				}
 				catch { }
 				InvalidateVisual();
-			}
-			finally
-			{
-				System.Threading.Interlocked.Exchange(ref _framePending, 0);
-			}
-		}, DispatcherPriority.Render);
+			};
+			_renderTimer.Start();
+		}
 	}
 
 	private void EnsureMetrics()
@@ -207,11 +225,39 @@ public class TerminalCanvas : Control
 			if (buf != null)
 			{
 				EnsureMetrics();
-				_glyphAtlas?.Dispose();
-				_glyphAtlas = new GlyphAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f);
-				_glyphDiscovery = new GlyphDiscovery(buf.Rows, _glyphAtlas);
-				_frameComposer?.Dispose();
-				_frameComposer = new TerminalFrameComposer();
+				// Ensure glyph atlas exists for current metrics. Replace only if missing
+				if (_glyphAtlas == null)
+				{
+					_glyphAtlas = new GlyphAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f);
+				}
+				else
+				{
+					// If metrics changed EnsureMetrics will have recreated SkPaint and caller
+					// might have updated the atlas there; keep existing atlas otherwise.
+				}
+				// Ensure discovery and composer are created only once so we preserve
+				// front-buffer and row caches across buffer swaps. If sizes differ,
+				// ensure the discovery knows about the row count.
+				if (_glyphDiscovery == null)
+				{
+					_glyphDiscovery = new GlyphDiscovery(buf.Rows, _glyphAtlas);
+				}
+				else
+				{
+					_glyphDiscovery.EnsureSize(buf.Rows);
+				}
+				// Ensure we have a composer. If one already exists, reset its caches
+				// for the new buffer (cheaper than recreating the object). Track
+				// alternate-screen state for later detection in Render.
+				if (_frameComposer == null)
+				{
+					_frameComposer = new TerminalFrameComposer();
+				}
+				else
+				{
+					_frameComposer.ResetCaches();
+				}
+				_lastBufferWasAlternate = buf.IsAlternateScreenActive;
 			}
 			else
 			{
@@ -227,6 +273,17 @@ public class TerminalCanvas : Control
 	protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnDetachedFromVisualTree(e);
+		// Stop the render timer to avoid background ticks after detachment.
+		try
+		{
+			if (_renderTimer != null)
+			{
+				_renderTimer.Stop();
+				_renderTimer.Tick -= (_, __) => { };
+				_renderTimer = null;
+			}
+		}
+		catch { }
 		SkPaint?.Dispose();
 		SkPaint = null;
 	}

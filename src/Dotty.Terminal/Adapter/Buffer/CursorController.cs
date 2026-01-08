@@ -42,7 +42,6 @@ internal sealed class CursorController
     public bool LineFeed(int rows)
     {
         Row++;
-        Col = 0;
         if (Row >= rows)
         {
             Row = rows - 1;

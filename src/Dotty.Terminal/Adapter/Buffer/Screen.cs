@@ -79,6 +79,37 @@ public class Screen
         }
     }
 
+    public void ScrollUpRegion(int top, int bottom, int lines)
+    {
+        if (top < 0) top = 0;
+        if (bottom >= Rows) bottom = Rows - 1;
+        if (top > bottom) return;
+        int regionHeight = bottom - top + 1;
+        if (lines <= 0) return;
+        if (lines >= regionHeight)
+        {
+            // clear region
+            for (int r = top; r <= bottom; r++)
+            for (int c = 0; c < Columns; c++)
+            {
+                ref var cell = ref _cells[r, c];
+                cell.Reset();
+            }
+            return;
+        }
+
+        for (int r = 0; r < regionHeight - lines; r++)
+        for (int c = 0; c < Columns; c++)
+            _cells[top + r, c] = _cells[top + r + lines, c];
+
+        for (int r = top + regionHeight - lines; r <= bottom; r++)
+        for (int c = 0; c < Columns; c++)
+        {
+            ref var cell = ref _cells[r, c];
+            cell.Reset();
+        }
+    }
+
     public Screen Resize(int rows, int columns)
     {
         rows = Math.Max(1, rows);

@@ -120,6 +120,28 @@ public class TerminalAdapter : ITerminalHandler
         RequestRender();
     }
 
+    public void OnSetOriginMode(bool enabled)
+    {
+        try
+        {
+            _buffer.SetOriginMode(enabled);
+            RequestRender();
+        }
+        catch { }
+    }
+
+    public void OnSetScrollRegion(int top1Based, int bottom1Based)
+    {
+        try
+        {
+            // If bottom omitted (0), treat as full screen bottom
+            if (bottom1Based == 0) bottom1Based = _buffer.Rows;
+            _buffer.SetScrollRegion(top1Based, bottom1Based);
+            RequestRender();
+        }
+        catch { }
+    }
+
     public void OnSetCursorVisibility(bool visible)
     {
         _buffer.SetCursorVisible(visible);

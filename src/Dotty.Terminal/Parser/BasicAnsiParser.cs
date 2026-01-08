@@ -224,6 +224,7 @@ namespace Dotty.Terminal.Parser
                 switch (final)
             {
                 case 'J':
+                    Console.WriteLine($"[CSI J] params='{@params}' final='{final}'");
                     // erase display - common params: 2 (entire screen)
                     // (parser debug logging removed)
                         // Interpret parameter per ANSI: default is 0 (erase from cursor to end of screen)
@@ -246,6 +247,7 @@ namespace Dotty.Terminal.Parser
                         }
                         break;
                 case 'K':
+                    Console.WriteLine($"[CSI K] params='{@params}' final='{final}'");
                     // Erase in line: 0=to end,1=to start,2=entire line
                     int modeK = 0;
                     if (!string.IsNullOrEmpty(@params) && int.TryParse(@params, out var mk)) modeK = mk;
@@ -253,6 +255,7 @@ namespace Dotty.Terminal.Parser
                     break;
                 case 'H':
                 case 'f':
+                    Console.WriteLine($"[CSI CUP] params='{@params}' final='{final}'");
                     // Cursor position: [row;col]
                     int row = GetParam(0, 1);
                     int col = GetParam(1, 1);
@@ -275,10 +278,22 @@ namespace Dotty.Terminal.Parser
                     Handler?.OnCursorBack(GetParam(0, 1));
                     break;
                 case 'm':
+                    Console.WriteLine($"[CSI SGR] params='{@params}'");
                     Handler?.OnSetGraphicsRendition(@params.AsSpan());
+                    break;
+                case 'r':
+                    Console.WriteLine($"[CSI r] params='{@params}'");
+                    // Set scroll region: CSI [top;bottom] r
+                    // Parameters are 1-based. If bottom is omitted, handler may
+                    // treat it as 'to the bottom of the screen'. We pass raw
+                    // params and let the handler interpret defaults.
+                    int topParam = GetParam(0, 1);
+                    int bottomParam = GetParam(1, 0); // 0 indicates omitted
+                    Handler?.OnSetScrollRegion(topParam, bottomParam);
                     break;
                 case 'h':
                 case 'l':
+                    Console.WriteLine($"[CSI mode {final}] params='{@params}'");
                     // Mode set/reset. Support DEC-private ?1049 (alternate screen) and ?25 (cursor visibility) minimally.
                     // paramBytes may contain a leading '?' when it's a DEC private mode. Handle both forms.
                     try
@@ -298,6 +313,12 @@ namespace Dotty.Terminal.Parser
                                 // DEC Private Mode 25: cursor visibility
                                 bool enable = final == 'h';
                                 Handler?.OnSetCursorVisibility(enable);
+                            }
+                            else if (code == 6)
+                            {
+                                // DECOM: origin mode (cursor addressing relative to scroll region)
+                                bool enable = final == 'h';
+                                Handler?.OnSetOriginMode(enable);
                             }
                         }
                     }

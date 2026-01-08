@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Text;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -19,6 +20,9 @@ internal sealed class BufferTextWriter
     private readonly Action _carriageReturn;
     private readonly Action _lineFeed;
     private readonly Action<int> _markRowDirty;
+    // Batch state: when true, dirty-mark requests are coalesced into _batchedRows
+    private bool _inBatchWrite = false;
+    private System.Collections.Generic.HashSet<int>? _batchedRows;
 
     public BufferTextWriter(
         CursorController cursor,
@@ -53,6 +57,19 @@ internal sealed class BufferTextWriter
             return;
         }
 
+        // No diagnostic logging during normal operation.
+
+        // If this write affects the bottom rows, take a snapshot of the
+        // target row (the row we're about to write) so we can compare
+        // before/after and see exactly what changes are being applied.
+        string? beforeSnapshot = null;
+        int targetRow = _cursor.Row;
+        // No snapshot logging during normal operation.
+
+        // Begin batch: coalesce repeated marks during this logical write
+        _inBatchWrite = true;
+        _batchedRows = new System.Collections.Generic.HashSet<int>();
+
         var enumerator = StringInfo.GetTextElementEnumerator(text.ToString());
         while (enumerator.MoveNext())
         {
@@ -70,15 +87,74 @@ internal sealed class BufferTextWriter
                 continue;
             }
 
+            // If the application has requested a clear-on-next-write (carriage
+            // return behavior), honor it by clearing from the cursor to the end
+            // of line. Additionally, many full-screen apps (vim/neovim) write
+            // status lines by positioning the cursor at column 0 and then
+            // writing a shorter string than the previous content. Terminals
+            // implicitly clear the entire line when writing begins at column
+            // zero; emulate that behaviour here so stale characters to the
+            // right do not remain.
             if (_getClearFlag())
             {
                 _eraser.ClearLineFromCursor(_buffer(), _cursor, _cols());
                 _setClearFlag(false);
-                _markRowDirty(_cursor.Row);
+                RequestMarkRowDirty(_cursor.Row);
+            }
+
+            // Implicit EL2 when writing starts at column 0: clear the entire
+            // line before emitting the first grapheme. This matches what
+            // applications expect when they do `CUP row,0` followed by text.
+            if (_cursor.Col == 0)
+            {
+                _eraser.EraseLine(_buffer(), _cursor, _cols(), 2);
+                RequestMarkRowDirty(_cursor.Row);
             }
 
             WriteGrapheme(element, in attributes);
         }
+
+        // No snapshot logging during normal operation.
+        finally
+        {
+            // Flush any coalesced dirty marks
+            try
+            {
+                if (_inBatchWrite && _batchedRows != null)
+                {
+                    foreach (var r in _batchedRows)
+                    {
+                        try { _markRowDirty(r); } catch { }
+                    }
+                }
+            }
+            catch { }
+            _inBatchWrite = false;
+            _batchedRows = null;
+        }
+    }
+
+    private string SnapshotRow(Screen buf, int row)
+    {
+        var sb = new StringBuilder();
+        int cols = _cols();
+        for (int j = 0; j < cols; j++)
+        {
+            var cell = buf.GetCell(row, j);
+            if (cell.IsContinuation)
+            {
+                sb.Append(' ');
+            }
+            else if (string.IsNullOrEmpty(cell.Grapheme))
+            {
+                sb.Append(' ');
+            }
+            else
+            {
+                sb.Append(cell.Grapheme);
+            }
+        }
+        return sb.ToString();
     }
 
     private bool TryHandleControlChar(char ch, in CellAttributes attributes)
@@ -97,7 +173,7 @@ internal sealed class BufferTextWriter
             case '\b':
             case '\u007f':
                 _eraser.ErasePreviousGlyph(_buffer(), _cursor, _rows(), _cols());
-                _markRowDirty(_cursor.Row);
+                RequestMarkRowDirty(_cursor.Row);
                 return true;
             default:
                 return char.IsControl(ch);
@@ -132,9 +208,11 @@ internal sealed class BufferTextWriter
             width = 1;
         }
 
+        bool scrolledOnEnsure = false;
         if (_cursor.EnsureSpace(width, _rows(), _cols()))
         {
             _scrollUp(1);
+            scrolledOnEnsure = true;
         }
 
         var buf = _buffer();
@@ -153,11 +231,13 @@ internal sealed class BufferTextWriter
             ApplyAttributes(ref cont, in attributes);
         }
 
-        if (_cursor.AdvanceCursor(width, _rows(), _cols()))
+        // Avoid double-scrolling: if EnsureSpace already caused a scroll,
+        // don't perform another scroll for the same written grapheme.
+        if (!scrolledOnEnsure && _cursor.AdvanceCursor(width, _rows(), _cols()))
         {
             _scrollUp(1);
         }
-        _markRowDirty(currentRow);
+        RequestMarkRowDirty(currentRow);
     }
 
     private bool AttachCombiningMark(string mark)
@@ -176,8 +256,21 @@ internal sealed class BufferTextWriter
         }
 
         cell.Grapheme += mark;
-        _markRowDirty(row);
+        RequestMarkRowDirty(row);
         return true;
+    }
+
+    private void RequestMarkRowDirty(int row)
+    {
+        if (_inBatchWrite)
+        {
+            _batchedRows ??= new System.Collections.Generic.HashSet<int>();
+            _batchedRows.Add(row);
+        }
+        else
+        {
+            try { _markRowDirty(row); } catch { }
+        }
     }
 
     private (int row, int col) GetPreviousBaseCell()

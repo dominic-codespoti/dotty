@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private ITerminalParser? _parser;
     private ITerminalHandler? _terminalAdapter;
     private int _renderScheduled;
+    private Size _lastTerminalSize = new Size(0, 0);
 
     public MainWindow()
     {
@@ -55,6 +56,8 @@ public partial class MainWindow : Window
 
             TerminalView.SetPlainText("");
             TerminalView.PropertyChanged += TerminalViewOnPropertyChanged;
+            TerminalView.SizeChanged += TerminalViewOnSizeChanged;
+            TerminalView.LayoutUpdated += TerminalViewOnLayoutUpdated;
             Dispatcher.UIThread.Post(() =>
             {
                 try { _ = SendResizeMessageAsync(CalculateCols(), CalculateRows()); } catch { }
@@ -472,6 +475,34 @@ public partial class MainWindow : Window
         }
     }
 
+    private void TerminalViewOnSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        if (e.NewSize.Width <= 0 || e.NewSize.Height <= 0)
+        {
+            return;
+        }
+
+        try { _ = SendResizeMessageAsync(CalculateCols(), CalculateRows()); } catch { }
+    }
+
+    private void TerminalViewOnLayoutUpdated(object? sender, EventArgs e)
+    {
+        var bounds = TerminalView.Bounds;
+        var size = new Size(bounds.Width, bounds.Height);
+        if (size.Width <= 0 || size.Height <= 0)
+        {
+            return;
+        }
+
+        if (size.Equals(_lastTerminalSize))
+        {
+            return;
+        }
+
+        _lastTerminalSize = size;
+        try { _ = SendResizeMessageAsync(CalculateCols(), CalculateRows()); } catch { }
+    }
+
     private int CalculateCols()
     {
         try
@@ -563,6 +594,9 @@ public partial class MainWindow : Window
         }
         catch { }
 
+        try { TerminalView.PropertyChanged -= TerminalViewOnPropertyChanged; } catch { }
+        try { TerminalView.SizeChanged -= TerminalViewOnSizeChanged; } catch { }
+        try { TerminalView.LayoutUpdated -= TerminalViewOnLayoutUpdated; } catch { }
         try { _controlSocketStream?.Dispose(); } catch { }
         _readCancellation?.Dispose();
     }

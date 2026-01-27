@@ -8,11 +8,13 @@ internal sealed class CursorController
     public int Row { get; private set; }
     public int Col { get; private set; }
     public bool Visible { get; private set; } = true;
+    public bool WrapPending { get; private set; } = false;
 
     public void Reset()
     {
         Row = 0;
         Col = 0;
+        WrapPending = false;
     }
 
     public void SetVisible(bool visible) => Visible = visible;
@@ -27,6 +29,7 @@ internal sealed class CursorController
     {
         Row = Clamp(row, rows);
         Col = Clamp(col, cols);
+        WrapPending = false;
     }
 
     public void MoveBy(int dRow, int dCol, int rows, int cols)
@@ -37,11 +40,13 @@ internal sealed class CursorController
     public void CarriageReturn()
     {
         Col = 0;
+        WrapPending = false;
     }
 
     public bool LineFeed(int rows)
     {
         Row++;
+        WrapPending = false;
         if (Row >= rows)
         {
             Row = rows - 1;
@@ -57,6 +62,7 @@ internal sealed class CursorController
         {
             Col = 0;
             Row++;
+            WrapPending = false;
             if (Row >= rows)
             {
                 Row = rows - 1;
@@ -70,6 +76,7 @@ internal sealed class CursorController
     {
         if (width <= 0) width = 1;
         Col += width;
+        WrapPending = false;
         bool scrolled = false;
         while (Col >= cols)
         {
@@ -82,6 +89,11 @@ internal sealed class CursorController
             }
         }
         return scrolled;
+    }
+
+    public void SetWrapPending(bool pending)
+    {
+        WrapPending = pending;
     }
 
     public void MoveBackward(int rows, int cols)

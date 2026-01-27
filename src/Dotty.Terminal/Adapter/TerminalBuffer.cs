@@ -247,6 +247,11 @@ public class TerminalBuffer
         EnsureSpace(width);
 
         var buf = ActiveBuffer;
+        // Defensive: clear any existing grapheme span that might have its
+        // base to the left if the cursor is currently at a continuation
+        // cell. This prevents orphaned base graphemes when writes target
+        // continuation columns from other code paths.
+        buf.ClearCell(CursorRow, CursorCol);
         ref var cell = ref buf[CursorRow, CursorCol];
         cell.Grapheme = grapheme;
         ApplyAttributes(ref cell, in attributes);

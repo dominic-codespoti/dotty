@@ -11,7 +11,7 @@ namespace Dotty.App.Discovery;
 /// </summary>
 public class GlyphDiscovery
 {
-    private int[] _lastSeenRowVersions;
+    // versions removed; we simply process enqueued rows unconditionally
     private readonly GlyphAtlas _atlas;
     private readonly System.Collections.Generic.Queue<int> _pendingRows = new();
     private readonly System.Collections.Generic.HashSet<int> _pendingSet = new();
@@ -19,16 +19,6 @@ public class GlyphDiscovery
     public GlyphDiscovery(int rows, GlyphAtlas atlas)
     {
         _atlas = atlas ?? throw new ArgumentNullException(nameof(atlas));
-        _lastSeenRowVersions = new int[Math.Max(0, rows)];
-    }
-
-    public void EnsureSize(int rows)
-    {
-        if (rows == _lastSeenRowVersions.Length) return;
-        var newArr = new int[rows];
-        var copy = Math.Min(rows, _lastSeenRowVersions.Length);
-        Array.Copy(_lastSeenRowVersions, newArr, copy);
-        _lastSeenRowVersions = newArr;
     }
 
     public void EnqueueRow(int row)
@@ -52,28 +42,21 @@ public class GlyphDiscovery
     {
         if (buffer == null) return;
         if (maxRows <= 0) return;
-        EnsureSize(buffer.Rows);
-
         int processed = 0;
         while (_pendingRows.Count > 0 && processed < maxRows)
         {
             var row = _pendingRows.Dequeue();
             _pendingSet.Remove(row);
             if (row < 0 || row >= buffer.Rows) continue;
-            var ver = buffer.GetRowVersion(row);
-            if (_lastSeenRowVersions[row] == ver) continue;
+            // Process the enqueued row so glyph discovery populates the atlas.
             UpdateRow(buffer, row);
-            _lastSeenRowVersions[row] = ver;
             processed++;
         }
     }
 
-    public bool HasRowChanged(TerminalBuffer buffer, int row)
+    public void EnsureSize(int rows)
     {
-        if (buffer == null) return false;
-        if (row < 0 || row >= buffer.Rows) return false;
-        EnsureSize(buffer.Rows);
-        return buffer.GetRowVersion(row) != _lastSeenRowVersions[row];
+        // No-op: sizing for per-row version arrays removed.
     }
 
     public void UpdateRow(TerminalBuffer buffer, int row)
@@ -81,11 +64,7 @@ public class GlyphDiscovery
         if (buffer == null) return;
         if (row < 0 || row >= buffer.Rows) return;
 
-        EnsureSize(buffer.Rows);
-
-        var ver = buffer.GetRowVersion(row);
-        if (_lastSeenRowVersions[row] == ver) return;
-
+        // sizing not required
         // Row changed: enumerate glyphs and inform atlas
         for (int col = 0; col < buffer.Columns; col++)
         {
@@ -98,6 +77,6 @@ public class GlyphDiscovery
             _atlas.EnsureGlyph(key);
         }
 
-        _lastSeenRowVersions[row] = ver;
+        // No-op: versions removed. Glyph discovery simply ensures glyphs exist in atlas.
     }
 }

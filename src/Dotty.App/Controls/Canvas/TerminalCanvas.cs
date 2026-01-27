@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using Dotty.Terminal.Adapter;
 using Dotty.App.Rendering;
 using Dotty.App.Discovery;
+using Dotty.App.Services;
 using SkiaSharp;
 
 namespace Dotty.App.Controls;
@@ -30,6 +31,9 @@ public class TerminalCanvas : Control
 	public static readonly StyledProperty<double> FontSizeProperty =
 		AvaloniaProperty.Register<TerminalCanvas, double>(nameof(FontSize), 14d);
 
+	public static readonly StyledProperty<double> CellPaddingProperty =
+		AvaloniaProperty.Register<TerminalCanvas, double>(nameof(CellPadding), 1.5d);
+
 	public TerminalBuffer? Buffer
 	{
 		get => GetValue(BufferProperty);
@@ -37,7 +41,7 @@ public class TerminalCanvas : Control
 	}
 
 	public static readonly StyledProperty<Thickness> ContentPaddingProperty =
-		AvaloniaProperty.Register<TerminalCanvas, Thickness>(nameof(ContentPadding), new Thickness(0));
+		AvaloniaProperty.Register<TerminalCanvas, Thickness>(nameof(ContentPadding), new Thickness(0.0));
 
 	public Thickness ContentPadding
 	{
@@ -66,21 +70,30 @@ public class TerminalCanvas : Control
 		set => SetValue(FontSizeProperty, value);
 	}
 
+	public double CellPadding
+	{
+		get => GetValue(CellPaddingProperty);
+		set => SetValue(CellPaddingProperty, value);
+	}
+
 	static TerminalCanvas()
 	{
-		AffectsRender<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty);
-		AffectsMeasure<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty);
+		AffectsRender<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty, CellPaddingProperty, ContentPaddingProperty);
+		AffectsMeasure<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty, CellPaddingProperty, ContentPaddingProperty);
 	}
 
 	private float _cellWidth = 8;
 	private float _cellHeight = 16;
 	private bool _metricsDirty = true;
-    private GlyphAtlas? _glyphAtlas;
-    private GlyphDiscovery? _glyphDiscovery;
+	private GlyphAtlas? _glyphAtlas;
+	private GlyphDiscovery? _glyphDiscovery;
 	private TerminalFrameComposer? _frameComposer;
-	private DispatcherTimer? _renderTimer;
-	private volatile bool _needsFrame = false;
+	private DispatcherTimer? _frameDebounceTimer;
+	private bool _framePending;
+	private const double FrameDebounceMs = 8;
 	private bool _lastBufferWasAlternate = false;
+	private double _renderScaling = 1.0;
+	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
     
 	public SKPaint? SkPaint { get; private set; }
 	public double CellWidth => _cellWidth;
@@ -92,7 +105,10 @@ public class TerminalCanvas : Control
 		EnsureMetrics();
 		var buf = Buffer;
 		if (buf == null) return base.MeasureOverride(availableSize);
-		return new Size(buf.Columns * _cellWidth, buf.Rows * _cellHeight);
+		var padding = ContentPadding;
+		return new Size(
+			buf.Columns * _cellWidth + padding.Left + padding.Right,
+			buf.Rows * _cellHeight + padding.Top + padding.Bottom);
 	}
 
 	public override void Render(DrawingContext context)
@@ -102,6 +118,8 @@ public class TerminalCanvas : Control
 		// Fill background using Avalonia so it's consistent with theming
 		var bg = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
 		context.FillRectangle(bg, new Rect(Bounds.Size));
+
+		var padding = ContentPadding;
 
 		var buffer = Buffer;
 		if (buffer == null) return;
@@ -117,7 +135,7 @@ public class TerminalCanvas : Control
 
 		// Enqueue a single Skia custom draw operation. The Skia operation will
 		// compose the entire frame offscreen and blit it in one GPU operation.
-		context.Custom(new SkiaDrawing(this, buffer, _cellWidth, _cellHeight, _glyphAtlas, _frameComposer));
+		context.Custom(new SkiaDrawing(this, buffer, _cellWidth, _cellHeight, _frameComposer, padding));
 	}
 
 	/// <summary>
@@ -129,15 +147,8 @@ public class TerminalCanvas : Control
 		if (buffer == null) return;
 		if (_glyphDiscovery == null) return;
 		_glyphDiscovery.EnsureSize(buffer.Rows);
-		var dirty = buffer.DirtyRows;
-		if (dirty == null) return;
-		for (int r = 0; r < buffer.Rows; r++)
-		{
-			if (r < dirty.Length && dirty[r])
-			{
-				_glyphDiscovery.EnqueueRow(r);
-			}
-		}
+		// Dirty tracking removed: enqueue all rows for discovery.
+		for (int r = 0; r < buffer.Rows; r++) _glyphDiscovery.EnqueueRow(r);
 		// discovery work is enqueued; it will be processed a bit at a time when a frame is requested
 	}
 
@@ -147,66 +158,128 @@ public class TerminalCanvas : Control
 	/// </summary>
 	public void RequestFrame()
 	{
-		// Mark that we need a frame; the render timer will coalesce many requests
-		// and ensure we render at a steady, vsync-like cadence.
-		_needsFrame = true;
+		_framePending = true;
+		EnsureFrameTimer();
+		if (_frameDebounceTimer != null && !_frameDebounceTimer.IsEnabled)
+		{
+			_frameDebounceTimer.Start();
+		}
 	}
 
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnAttachedToVisualTree(e);
-		// Start a single render timer (approx 60fps) that pulls the latest state.
-		if (_renderTimer == null)
+		EnsureFrameTimer();
+	}
+
+	private void EnsureFrameTimer()
+	{
+		if (_frameDebounceTimer != null) return;
+		_frameDebounceTimer = new DispatcherTimer
 		{
-			_renderTimer = new DispatcherTimer
-			{
-				Interval = TimeSpan.FromMilliseconds(16)
-			};
-			_renderTimer.Tick += (_, __) =>
-			{
-				if (!_needsFrame) return;
-				_needsFrame = false;
-				try
-				{
-					// Budget a slice of discovery work before rendering so glyphs gradually populate.
-					try { _glyphDiscovery?.Process(Buffer!, 50); } catch { }
-				}
-				catch { }
-				InvalidateVisual();
-			};
-			_renderTimer.Start();
+			Interval = TimeSpan.FromMilliseconds(FrameDebounceMs)
+		};
+		_frameDebounceTimer.Tick += FrameDebounceTick;
+	}
+
+	private void FrameDebounceTick(object? sender, EventArgs e)
+	{
+		if (_frameDebounceTimer == null) return;
+		_frameDebounceTimer.Stop();
+		if (!_framePending) return;
+		_framePending = false;
+		ProcessGlyphDiscoverySlice();
+		try
+		{
+			InvalidateVisual();
 		}
+		catch { }
+	}
+
+	private void ProcessGlyphDiscoverySlice()
+	{
+		if (_glyphDiscovery == null) return;
+		try
+		{
+			var disable = !string.IsNullOrEmpty(Dotty.Env.GetEnvironmentVariable("DOTTY_DISABLE_GLYPH_DISCOVERY"));
+			if (disable) return;
+			var buf = Buffer;
+			if (buf != null)
+			{
+				try { _glyphDiscovery.Process(buf, 5); } catch { }
+			}
+		}
+		catch { }
 	}
 
 	private void EnsureMetrics()
 	{
+		var scaling = GetRenderScaling();
+		if (Math.Abs(scaling - _renderScaling) > 0.001)
+		{
+			_renderScaling = scaling;
+			_metricsDirty = true;
+		}
+
 		if (!_metricsDirty && SkPaint != null) return;
 
 		SkPaint?.Dispose();
+		var fontSize = double.IsNaN(FontSize) || FontSize <= 0 ? 13.0 : FontSize;
+		var scale = Math.Max(0.1, _renderScaling);
+		var scaledFontSize = Math.Max(1f, (float)(fontSize * scale));
 		var familyName = FontFamily?.Name ?? "monospace";
 		var typeface = SKTypeface.FromFamilyName(familyName);
 		SkPaint = new SKPaint
 		{
 			Typeface = typeface,
-			TextSize = (float)FontSize,
+			TextSize = scaledFontSize,
 			IsAntialias = true,
+			IsLinearText = true,
+			SubpixelText = true,
+			IsAutohinted = true,
+			LcdRenderText = true,
 			Color = SKColors.White,
 		};
 
-		// Measure a 'W' for approximate cell size
-		_cellWidth = Math.Max(4, SkPaint.MeasureText("W"));
 		var fm = SkPaint.FontMetrics;
-		_cellHeight = Math.Max((float)FontSize, Math.Abs(fm.Descent) + Math.Abs(fm.Ascent));
+		float glyphHeight = Math.Max(scaledFontSize, Math.Abs(fm.Descent) + Math.Abs(fm.Ascent));
+		float glyphAdvance;
+		using (var font = new SKFont(SkPaint.Typeface, SkPaint.TextSize))
+		{
+			var fontMetrics = font.Metrics;
+			glyphAdvance = Math.Max(0.5f, fontMetrics.AverageCharacterWidth);
+			var measuredW = Math.Max(1f, SkPaint.MeasureText("W"));
+			glyphAdvance = Math.Max(glyphAdvance, measuredW);
+		}
+
+		var padding = Math.Max(0.0, CellPadding);
+		_cellWidth = Math.Max(4, glyphAdvance / (float)scale + (float)(padding * 2.0));
+		_cellHeight = Math.Max((float)fontSize, glyphHeight / (float)scale + (float)(padding * 2.0));
 
 		// Recreate glyph atlas when metrics change (font family/size)
+		_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
 		_glyphAtlas?.Dispose();
-		_glyphAtlas = new GlyphAtlas(SkPaint.Typeface, SkPaint.TextSize);
+		_glyphAtlas = new GlyphAtlas(SkPaint.Typeface, SkPaint.TextSize, _glyphRasterizationOptions);
+		_glyphAtlas.PreloadCommonGlyphs();
 		if (Buffer != null)
 		{
 			_glyphDiscovery = new GlyphDiscovery(Buffer.Rows, _glyphAtlas);
 		}
 
 		_metricsDirty = false;
+
+		// Optionally disable glyph discovery (atlas population) to avoid heavy
+		// UI-thread work on resource-constrained systems. Set env var
+		// DOTTY_DISABLE_GLYPH_DISCOVERY=1 to disable.
+		var disableDiscovery = !string.IsNullOrEmpty(Dotty.Env.GetEnvironmentVariable("DOTTY_DISABLE_GLYPH_DISCOVERY"));
+		if (disableDiscovery)
+		{
+			_glyphDiscovery = null;
+		}
+		else
+		{
+			_glyphDiscovery = new GlyphDiscovery(Buffer?.Rows ?? 24, _glyphAtlas);
+		}
 	}
 
 	protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -228,7 +301,8 @@ public class TerminalCanvas : Control
 				// Ensure glyph atlas exists for current metrics. Replace only if missing
 				if (_glyphAtlas == null)
 				{
-					_glyphAtlas = new GlyphAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f);
+					_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
+					_glyphAtlas = new GlyphAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f, _glyphRasterizationOptions);
 				}
 				else
 				{
@@ -273,17 +347,12 @@ public class TerminalCanvas : Control
 	protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnDetachedFromVisualTree(e);
-		// Stop the render timer to avoid background ticks after detachment.
-		try
+		if (_frameDebounceTimer != null)
 		{
-			if (_renderTimer != null)
-			{
-				_renderTimer.Stop();
-				_renderTimer.Tick -= (_, __) => { };
-				_renderTimer = null;
-			}
+			_frameDebounceTimer.Stop();
+			_frameDebounceTimer.Tick -= FrameDebounceTick;
+			_frameDebounceTimer = null;
 		}
-		catch { }
 		SkPaint?.Dispose();
 		SkPaint = null;
 	}
@@ -296,5 +365,23 @@ public class TerminalCanvas : Control
 		}
 
 		return fallback;
+	}
+
+
+	private double GetRenderScaling()
+	{
+		return VisualRoot?.RenderScaling ?? 1.0;
+	}
+
+	private static GlyphRasterizationOptions CreateRasterizationOptions(SKPaint? paint)
+	{
+		return new GlyphRasterizationOptions
+		{
+			IsAntialias = paint?.IsAntialias ?? true,
+			IsLinearText = paint?.IsLinearText ?? true,
+			SubpixelText = paint?.SubpixelText ?? true,
+			IsAutohinted = paint?.IsAutohinted ?? true,
+			LcdRenderText = paint?.LcdRenderText ?? true,
+		};
 	}
 }

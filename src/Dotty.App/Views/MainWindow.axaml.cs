@@ -37,8 +37,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         Title = "Dotty";
-        Opacity = Services.Defaults.DefaultWindowOpacity;
-        Background = new SolidColorBrush(Color.Parse(Services.Defaults.DefaultBackgroundAlpha));
+        Background = new SolidColorBrush(Color.Parse(Services.Defaults.DefaultBackground));
 
         TerminalView.Submitted += InputControl_Submitted;
         Opened += OnOpened;
@@ -192,9 +191,18 @@ public partial class MainWindow : Window
 
                     if (bytesRead > 0)
                     {
-                            // Feed parser
-                            _parser?.Feed(buffer.AsSpan(0, bytesRead));
-                            // (diagnostic raw PTY dump removed)
+                        // Copy the bytes we read and dispatch parser feed to the UI
+                        // thread. Parser callbacks mutate `TerminalBuffer` which is
+                        // not thread-safe; running the parser on the UI thread
+                        // avoids concurrent access between background IO and
+                        // rendering.
+                        var copy = new byte[bytesRead];
+                        Array.Copy(buffer, 0, copy, 0, bytesRead);
+                        Dispatcher.UIThread.Post(() =>
+                        {
+                            try { _parser?.Feed(copy.AsSpan()); } catch { }
+                        }, DispatcherPriority.Background);
+                        // (diagnostic raw PTY dump removed)
                     }
                     else
                     {

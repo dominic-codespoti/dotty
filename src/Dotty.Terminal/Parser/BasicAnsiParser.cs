@@ -211,9 +211,7 @@ namespace Dotty.Terminal.Parser
 
         private void HandleCsi(char final, ReadOnlySpan<byte> paramBytes)
         {
-            // decode param bytes to chars
             string @params = Encoding.UTF8.GetString(paramBytes);
-            // Split numeric parameters (e.g., "12;34")
             string[] parts = @params.Split(';', StringSplitOptions.RemoveEmptyEntries);
             int GetParam(int idx, int def)
             {
@@ -221,103 +219,68 @@ namespace Dotty.Terminal.Parser
                 return def;
             }
 
-                switch (final)
+            switch (final)
             {
                 case 'J':
-                    Console.WriteLine($"[CSI J] params='{@params}' final='{final}'");
-                    // erase display - common params: 2 (entire screen)
-                    // (parser debug logging removed)
-                        // Interpret parameter per ANSI: default is 0 (erase from cursor to end of screen)
-                        int mode = 0;
-                        if (!string.IsNullOrEmpty(@params) && int.TryParse(@params, out var m)) mode = m;
-                        if (mode == 3)
-                        {
-                            Handler?.OnClearScrollback();
-                        }
-                        else if (mode == 2)
-                        {
-                            // full clear
-                            Handler?.OnEraseDisplay(2);
-                        }
-                        else
-                        {
-                            // mode 0 (erase to end) and mode 1 are currently ignored to avoid
-                            // surprising clears triggered by prompt updates; implement more
-                            // precise erase semantics later.
-                        }
-                        break;
+                    int mode = GetParam(0, 0);
+                    if (mode == 3)
+                    {
+                        Handler?.OnClearScrollback();
+                    }
+                    else if (mode == 2)
+                    {
+                        Handler?.OnEraseDisplay(2);
+                    }
+                    break;
                 case 'K':
-                    Console.WriteLine($"[CSI K] params='{@params}' final='{final}'");
-                    // Erase in line: 0=to end,1=to start,2=entire line
-                    int modeK = 0;
-                    if (!string.IsNullOrEmpty(@params) && int.TryParse(@params, out var mk)) modeK = mk;
-                    Handler?.OnEraseLine(modeK);
+                    Handler?.OnEraseLine(GetParam(0, 0));
                     break;
                 case 'H':
                 case 'f':
-                    Console.WriteLine($"[CSI CUP] params='{@params}' final='{final}'");
-                    // Cursor position: [row;col]
-                    int row = GetParam(0, 1);
-                    int col = GetParam(1, 1);
-                    Handler?.OnMoveCursor(row, col);
+                    Handler?.OnMoveCursor(GetParam(0, 1), GetParam(1, 1));
                     break;
                 case 'A':
-                    // CUU - cursor up by n
                     Handler?.OnCursorUp(GetParam(0, 1));
                     break;
                 case 'B':
-                    // CUD - cursor down by n
                     Handler?.OnCursorDown(GetParam(0, 1));
                     break;
                 case 'C':
-                    // CUF - cursor forward
                     Handler?.OnCursorForward(GetParam(0, 1));
                     break;
                 case 'D':
-                    // CUB - cursor back
                     Handler?.OnCursorBack(GetParam(0, 1));
                     break;
                 case 'm':
-                    Console.WriteLine($"[CSI SGR] params='{@params}'");
                     Handler?.OnSetGraphicsRendition(@params.AsSpan());
                     break;
                 case 'r':
-                    Console.WriteLine($"[CSI r] params='{@params}'");
-                    // Set scroll region: CSI [top;bottom] r
-                    // Parameters are 1-based. If bottom is omitted, handler may
-                    // treat it as 'to the bottom of the screen'. We pass raw
-                    // params and let the handler interpret defaults.
-                    int topParam = GetParam(0, 1);
-                    int bottomParam = GetParam(1, 0); // 0 indicates omitted
-                    Handler?.OnSetScrollRegion(topParam, bottomParam);
+                    Handler?.OnSetScrollRegion(GetParam(0, 1), GetParam(1, 0));
                     break;
                 case 'h':
                 case 'l':
-                    Console.WriteLine($"[CSI mode {final}] params='{@params}'");
-                    // Mode set/reset. Support DEC-private ?1049 (alternate screen) and ?25 (cursor visibility) minimally.
-                    // paramBytes may contain a leading '?' when it's a DEC private mode. Handle both forms.
                     try
                     {
                         var p = @params;
                         bool isPrivate = false;
-                        if (p.StartsWith("?")) { isPrivate = true; p = p.Substring(1); }
+                        if (p.StartsWith("?"))
+                        {
+                            isPrivate = true;
+                            p = p.Substring(1);
+                        }
                         if (isPrivate && int.TryParse(p, out var code))
                         {
+                            bool enable = final == 'h';
                             if (code == 1049)
                             {
-                                bool enable = final == 'h';
                                 Handler?.OnSetAlternateScreen(enable);
                             }
                             else if (code == 25)
                             {
-                                // DEC Private Mode 25: cursor visibility
-                                bool enable = final == 'h';
                                 Handler?.OnSetCursorVisibility(enable);
                             }
                             else if (code == 6)
                             {
-                                // DECOM: origin mode (cursor addressing relative to scroll region)
-                                bool enable = final == 'h';
                                 Handler?.OnSetOriginMode(enable);
                             }
                         }
@@ -325,7 +288,6 @@ namespace Dotty.Terminal.Parser
                     catch { }
                     break;
                 default:
-                    // ignore other sequences for now
                     break;
             }
         }

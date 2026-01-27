@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using SkiaSharp;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Dotty.App.Rendering;
 
@@ -32,17 +33,33 @@ public class GlyphAtlas : IDisposable
     // The paint used to rasterise glyphs. Caller should pass a Typeface and size.
     private SKTypeface _typeface;
     private float _textSize;
+    private readonly GlyphRasterizationOptions _rasterizationOptions;
 
     public SKBitmap AtlasBitmap => _bitmap;
 
-    public GlyphAtlas(SKTypeface typeface, float textSize, int initialSize = 1024)
+    public GlyphAtlas(SKTypeface typeface, float textSize, GlyphRasterizationOptions? rasterizationOptions = null, int initialSize = 1024)
     {
         _typeface = typeface ?? SKTypeface.Default;
         _textSize = textSize <= 0 ? 12f : textSize;
         _bitmap = new SKBitmap(initialSize, initialSize, SKColorType.Rgba8888, SKAlphaType.Premul);
         _canvas = new SKCanvas(_bitmap);
         _canvas.Clear(SKColors.Transparent);
+        _rasterizationOptions = rasterizationOptions ?? new GlyphRasterizationOptions();
     }
+
+    private static readonly string[] CommonGlyphs = new[]
+    {
+        " ", "!", "\"", "#", "$", "%", "&", "'", "(", ")",
+        "*", "+", ",", "-", ".", "/",
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+        ":", ";", "<", "=", ">", "?", "@",
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+        "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+        "[", "\\", "]", "^", "_", "`",
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+        "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+        "{", "|", "}", "~"
+    };
 
     public void EnsureGlyph(GlyphKey key)
     {
@@ -56,8 +73,12 @@ public class GlyphAtlas : IDisposable
             {
                 Typeface = _typeface,
                 TextSize = _textSize,
-                IsAntialias = true,
-                Color = SKColors.White,
+                IsAntialias = _rasterizationOptions.IsAntialias,
+                IsLinearText = _rasterizationOptions.IsLinearText,
+                SubpixelText = _rasterizationOptions.SubpixelText,
+                IsAutohinted = _rasterizationOptions.IsAutohinted,
+                LcdRenderText = _rasterizationOptions.LcdRenderText,
+                Color = ResolveForegroundColor(key.ForegroundHex),
             };
 
             var text = key.Grapheme ?? string.Empty;
@@ -109,7 +130,7 @@ public class GlyphAtlas : IDisposable
         }
     }
 
-    public bool TryGetGlyph(GlyphKey key, out GlyphInfo info)
+    public bool TryGetGlyph(GlyphKey key, [NotNullWhen(true)] out GlyphInfo? info)
     {
         if (key == null) throw new ArgumentNullException(nameof(key));
         lock (_lock)
@@ -118,8 +139,28 @@ public class GlyphAtlas : IDisposable
         }
     }
 
+    public void PreloadCommonGlyphs()
+    {
+        foreach (var glyph in CommonGlyphs)
+        {
+            EnsureGlyph(new GlyphKey(glyph));
+        }
+    }
+
+    private static SKColor ResolveForegroundColor(string? hex)
+    {
+        if (!string.IsNullOrEmpty(hex) && SKColor.TryParse(hex, out var parsed))
+        {
+            return parsed;
+        }
+
+        return SKColors.White;
+    }
+
     private void GrowBitmap(int minWidth, int minHeight)
     {
+        var oldW = _bitmap.Width;
+        var oldH = _bitmap.Height;
         var newW = Math.Max(_bitmap.Width * 2, minWidth);
         var newH = Math.Max(_bitmap.Height * 2, minHeight);
 
@@ -129,7 +170,7 @@ public class GlyphAtlas : IDisposable
         newCanvas.DrawBitmap(_bitmap, 0, 0);
 
         _canvas.Dispose();
-        _bitmap.Dispose();
+        try { _bitmap.Dispose(); } catch { }
         _bitmap = newBmp;
         _canvas = new SKCanvas(_bitmap);
     }
@@ -137,7 +178,31 @@ public class GlyphAtlas : IDisposable
     public void Dispose()
     {
         _canvas?.Dispose();
-        _bitmap?.Dispose();
+        try { _bitmap?.Dispose(); } catch { }
+    }
+
+    /// <summary>
+    /// Create an immutable SKImage snapshot of the current atlas bitmap.
+    /// Caller is responsible for disposing the returned SKImage.
+    /// This captures the atlas under lock so callers can draw safely
+    /// without holding the atlas lock or racing with Grow/Dispose.
+    /// </summary>
+    public SKImage CreateSnapshot()
+    {
+        lock (_lock)
+        {
+            if (_bitmap == null) return null!;
+            try
+            {
+                // Return an SKImage backed by the current bitmap. SKImage is immutable
+                // and safe to use on the drawing thread even if the atlas grows later.
+                return SKImage.FromBitmap(_bitmap);
+            }
+            catch
+            {
+                return null!;
+            }
+        }
     }
 }
 

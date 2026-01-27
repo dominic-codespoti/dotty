@@ -61,7 +61,23 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnEraseLine(int mode) { }
         void ITerminalHandler.OnCarriageReturn() { }
         void ITerminalHandler.OnLineFeed() { }
+        void ITerminalHandler.OnSetScrollRegion(int top1Based, int bottom1Based) { }
+        void ITerminalHandler.OnSetOriginMode(bool enabled) { }
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) { }
         void ITerminalHandler.OnSetCursorVisibility(bool visible) { }
+        void ITerminalHandler.OnSaveCursor() { }
+        void ITerminalHandler.OnRestoreCursor() { }
+        void ITerminalHandler.OnInsertChars(int n) { }
+        void ITerminalHandler.OnDeleteChars(int n) { }
+        void ITerminalHandler.OnInsertLines(int n) { }
+        void ITerminalHandler.OnDeleteLines(int n) { }
+        void ITerminalHandler.OnSetAutoWrap(bool enabled) { }
+        void ITerminalHandler.OnSetTabStop() { }
+        void ITerminalHandler.OnClearTabStop() { }
+        void ITerminalHandler.OnClearAllTabStops() { }
+        void ITerminalHandler.OnSetBracketedPasteMode(bool enabled) { }
+        void ITerminalHandler.OnDeviceStatusReport(int code) { }
+        void ITerminalHandler.OnCursorPositionReport() { }
+        void ITerminalHandler.OnReverseIndex() { }
     }
 }

@@ -5,6 +5,7 @@ using Avalonia.Platform;
 using Avalonia.Rendering.SceneGraph;
 using Avalonia.Skia;
 using Dotty.App.Controls;
+using Dotty.App.Services;
 using Dotty.Terminal.Adapter;
 using SkiaSharp;
 
@@ -16,19 +17,19 @@ public sealed class SkiaDrawing : ICustomDrawOperation
     private readonly TerminalBuffer _buffer;
     private readonly float _cellW;
     private readonly float _cellH;
-    private readonly Dotty.App.Rendering.GlyphAtlas? _atlas;
     private readonly Dotty.App.Rendering.TerminalFrameComposer? _composer;
+    private readonly Thickness _padding;
     private readonly Rect _bounds;
 
-    public SkiaDrawing(TerminalCanvas owner, TerminalBuffer buffer, float cellW, float cellH, Dotty.App.Rendering.GlyphAtlas? atlas = null, Dotty.App.Rendering.TerminalFrameComposer? composer = null)
+    public SkiaDrawing(TerminalCanvas owner, TerminalBuffer buffer, float cellW, float cellH, Dotty.App.Rendering.TerminalFrameComposer? composer = null, Thickness padding = default)
     {
         _owner = owner;
         _buffer = buffer;
         _cellW = cellW;
         _cellH = cellH;
-        _bounds = new Rect(0, 0, buffer.Columns * cellW, buffer.Rows * cellH);
-        _atlas = atlas;
         _composer = composer;
+        _padding = padding;
+        _bounds = new Rect(0, 0, buffer.Columns * cellW + padding.Left + padding.Right, buffer.Rows * cellH + padding.Top + padding.Bottom);
     }
 
     public Rect Bounds => _bounds;
@@ -43,36 +44,57 @@ public sealed class SkiaDrawing : ICustomDrawOperation
 
         canvas.Save();
 
+        var buffer = _buffer ?? throw new InvalidOperationException("Terminal buffer missing");
         try
         {
+            // Mark the buffer for the start of this render so per-render
+            // diagnostics (like DumpRowRange) can dedupe output and so
+            // we record frame events for investigation.
+            try { buffer.MarkRender(); } catch { }
+
+            // Clear the entire Skia surface BEFORE applying any transform so
+            // we cover the full control area (avoid relying on Bounds which
+            // may not match the actual rendered surface size). Use the default
+            // background color with alpha so opacity is respected.
+            canvas.Save();
+            canvas.ResetMatrix();
+            var bgColor = SKColor.Parse(Defaults.DefaultBackground);
+            canvas.Clear(bgColor);
+            canvas.Restore();
+
             // Apply Avalonia transform to Skia canvas
             var m = ToSkiaMatrix(context.CurrentTransform);
             canvas.SetMatrix(m);
+            if (_padding.Left != 0 || _padding.Top != 0)
+            {
+                canvas.Translate((float)_padding.Left, (float)_padding.Top);
+            }
 
             var paint = _owner.SkPaint;
             if (paint == null) return;
 
             // Use the composer to render directly into the leased Skia canvas. The composer
             // maintains persistent per-row bitmaps and only repaints rows whose version changed.
-            if (_composer != null && _atlas != null)
+            var composer = _composer;
+            if (composer != null)
             {
-                _composer.RenderTo(canvas, _buffer, _atlas, paint, _cellW, _cellH);
+                composer.RenderTo(canvas, buffer, paint, _cellW, _cellH);
             }
             else
             {
                 // Fallback: draw each glyph directly as before
-                for (int r = 0; r < _buffer.Rows; r++)
+                for (int r = 0; r < buffer.Rows; r++)
                 {
-                    for (int c = 0; c < _buffer.Columns; c++)
+                    for (int c = 0; c < buffer.Columns; c++)
                     {
-                        var cell = _buffer.GetCell(r, c);
+                        var cell = buffer.GetCell(r, c);
                         if (cell.IsContinuation || string.IsNullOrEmpty(cell.Grapheme)) continue;
                         var text = cell.Grapheme!;
                         float x = (float)(c * _cellW);
-                        // compute baseline y: we want baseline at cell top + cell height - descent
                         var fm = paint.FontMetrics;
-                        float baselineOffset = Math.Abs(fm.Descent);
-                        float y = (float)(r * _cellH + _cellH - baselineOffset);
+                        float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
+                        float baselineOffset = (float)(_cellH * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
+                        float y = (float)(r * _cellH + baselineOffset);
                         canvas.DrawText(text, x, y, paint);
                     }
                 }

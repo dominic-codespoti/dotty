@@ -20,6 +20,8 @@ internal sealed class BufferTextWriter
     private readonly Action _carriageReturn;
     private readonly Action _lineFeed;
     private readonly Action<int> _markRowDirty;
+    private readonly Func<bool> _getAutoWrap;
+    private readonly Func<int,int> _getNextTabStopFrom;
     // Batch state: when true, dirty-mark requests are coalesced into _batchedRows
     private bool _inBatchWrite = false;
     private System.Collections.Generic.HashSet<int>? _batchedRows;
@@ -31,6 +33,8 @@ internal sealed class BufferTextWriter
         Func<int> rows,
         Func<int> cols,
         Action<int> scrollUp,
+        Func<bool> getAutoWrap,
+        Func<int,int> getNextTabStopFrom,
         Func<bool> getClearFlag,
         Action<bool> setClearFlag,
         Action carriageReturn,
@@ -43,6 +47,8 @@ internal sealed class BufferTextWriter
         _rows = rows;
         _cols = cols;
         _scrollUp = scrollUp;
+        _getAutoWrap = getAutoWrap;
+        _getNextTabStopFrom = getNextTabStopFrom;
         _getClearFlag = getClearFlag;
         _setClearFlag = setClearFlag;
         _carriageReturn = carriageReturn;
@@ -62,7 +68,6 @@ internal sealed class BufferTextWriter
         // If this write affects the bottom rows, take a snapshot of the
         // target row (the row we're about to write) so we can compare
         // before/after and see exactly what changes are being applied.
-        string? beforeSnapshot = null;
         int targetRow = _cursor.Row;
         // No snapshot logging during normal operation.
 
@@ -85,6 +90,18 @@ internal sealed class BufferTextWriter
             if (element.Length == 1 && TryHandleControlChar(element[0], in attributes))
             {
                 continue;
+            }
+
+            // If the previous write hit the last column with auto-wrap on,
+            // terminals defer the wrap until the next printable. Emulate that
+            // by applying a line feed + carriage return before writing.
+            bool autoWrap = true;
+            try { autoWrap = _getAutoWrap(); } catch { }
+            if (autoWrap && _cursor.WrapPending)
+            {
+                _lineFeed();
+                _carriageReturn();
+                _cursor.SetWrapPending(false);
             }
 
             // If the application has requested a clear-on-next-write (carriage
@@ -115,7 +132,6 @@ internal sealed class BufferTextWriter
         }
 
         // No snapshot logging during normal operation.
-        finally
         {
             // Flush any coalesced dirty marks
             try
@@ -182,11 +198,21 @@ internal sealed class BufferTextWriter
 
     private void WriteTab(in CellAttributes attributes)
     {
-        int tabStop = 8;
-        int spaces = tabStop - (_cursor.Col % tabStop);
-        for (int i = 0; i < spaces; i++)
+        try
         {
-            WriteGrapheme(" ", in attributes);
+            int cols = _cols();
+            int current = _cursor.Col;
+            int target = _getNextTabStopFrom(current);
+            if (target <= current) target = Math.Min(cols - 1, current + 1);
+            int spaces = target - current;
+            for (int i = 0; i < spaces; i++) WriteGrapheme(" ", in attributes);
+        }
+        catch
+        {
+            // Fallback simple tab
+            int tabStop = 8;
+            int spaces = tabStop - (_cursor.Col % tabStop);
+            for (int i = 0; i < spaces; i++) WriteGrapheme(" ", in attributes);
         }
     }
 
@@ -202,22 +228,45 @@ internal sealed class BufferTextWriter
         {
             if (AttachCombiningMark(grapheme))
             {
-                return;
+                return; // combining mark attached to previous base
             }
 
+            // If attach failed, treat as a single-width placeholder.
             width = 1;
         }
 
         bool scrolledOnEnsure = false;
-        if (_cursor.EnsureSpace(width, _rows(), _cols()))
+
+        bool autoWrap = true;
+        try { autoWrap = _getAutoWrap(); } catch { }
+
+        int startCol;
+        if (autoWrap)
         {
-            _scrollUp(1);
-            scrolledOnEnsure = true;
+            if (_cursor.EnsureSpace(width, _rows(), _cols()))
+            {
+                _scrollUp(1);
+                scrolledOnEnsure = true;
+            }
+            startCol = _cursor.Col;
+        }
+        else
+        {
+            // When wrap is disabled, clamp start column so grapheme fits in last columns
+            int cols = _cols();
+            startCol = _cursor.Col;
+            if (startCol > cols - width) startCol = Math.Max(0, cols - width);
+            _cursor.Set(_cursor.Row, startCol, _rows(), cols);
         }
 
         var buf = _buffer();
         int currentRow = _cursor.Row;
-        ref var cell = ref buf.GetCellRef(_cursor.Row, _cursor.Col);
+        // If we're about to write at a column that may be a continuation
+        // of an existing grapheme, clear the addressed cell so we don't
+        // leave an orphaned base glyph to the left. Screen.ClearCell
+        // knows how to find the base when given a continuation column.
+        buf.ClearCell(currentRow, startCol);
+        ref var cell = ref buf.GetCellRef(_cursor.Row, startCol);
         cell.Grapheme = grapheme;
         ApplyAttributes(ref cell, in attributes);
         cell.Width = (byte)Math.Clamp(width, 1, 2);
@@ -225,17 +274,34 @@ internal sealed class BufferTextWriter
 
         for (int i = 1; i < width; i++)
         {
-            ref var cont = ref buf.GetCellRef(_cursor.Row, _cursor.Col + i);
+            ref var cont = ref buf.GetCellRef(_cursor.Row, startCol + i);
             cont.Reset();
             cont.IsContinuation = true;
             ApplyAttributes(ref cont, in attributes);
         }
 
-        // Avoid double-scrolling: if EnsureSpace already caused a scroll,
-        // don't perform another scroll for the same written grapheme.
-        if (!scrolledOnEnsure && _cursor.AdvanceCursor(width, _rows(), _cols()))
+        // Avoid immediate row-advance on the last column. Set a wrap-pending
+        // flag so the next printable triggers the linefeed.
+        if (autoWrap)
         {
-            _scrollUp(1);
+            int cols = _cols();
+            int endCol = startCol + width - 1;
+            if (endCol >= cols - 1)
+            {
+                _cursor.Set(_cursor.Row, Math.Min(cols - 1, endCol), _rows(), cols);
+                _cursor.SetWrapPending(true);
+            }
+            else
+            {
+                _cursor.Set(_cursor.Row, endCol + 1, _rows(), cols);
+                _cursor.SetWrapPending(false);
+            }
+        }
+        else
+        {
+            int cols = _cols();
+            _cursor.Set(_cursor.Row, Math.Min(_cursor.Col + width, cols - 1), _rows(), cols);
+            _cursor.SetWrapPending(false);
         }
         RequestMarkRowDirty(currentRow);
     }

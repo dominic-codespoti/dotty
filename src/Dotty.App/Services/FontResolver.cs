@@ -7,6 +7,8 @@ namespace Dotty.App.Services
 {
     public static class FontResolver
     {
+        public static Action<FontFamily>? FontResolved;
+
         public static FontFamily ResolveFontFamily(string? fontStack)
         {
             var stack = string.IsNullOrWhiteSpace(fontStack)
@@ -24,12 +26,14 @@ namespace Dotty.App.Services
                 var direct = TryCreateFontFamily(candidate);
                 if (direct != null)
                 {
+                    NotifyFontResolved(direct);
                     return direct;
                 }
 
                 var mapped = FindMatchingSystemFont(candidate);
                 if (mapped != null)
                 {
+                    NotifyFontResolved(mapped);
                     return mapped;
                 }
             }
@@ -39,11 +43,26 @@ namespace Dotty.App.Services
             // will perform per-glyph fallback across the listed families.
             try
             {
-                return new FontFamily(stack);
+                var fallback = new FontFamily(stack);
+                NotifyFontResolved(fallback);
+                return fallback;
             }
             catch
             {
-                return FontManager.Current.DefaultFontFamily;
+                var fallback = FontManager.Current.DefaultFontFamily;
+                NotifyFontResolved(fallback);
+                return fallback;
+            }
+        }
+
+        private static void NotifyFontResolved(FontFamily family)
+        {
+            try
+            {
+                FontResolved?.Invoke(family);
+            }
+            catch
+            {
             }
         }
 

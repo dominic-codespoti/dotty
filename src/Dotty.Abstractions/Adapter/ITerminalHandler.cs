@@ -34,5 +34,19 @@ namespace Dotty.Abstractions.Adapter
         void OnSetOriginMode(bool enabled);
         void OnSetAlternateScreen(bool enabled);
         void OnSetCursorVisibility(bool visible);
+        void OnSaveCursor();
+        void OnRestoreCursor();
+        void OnInsertChars(int n);
+        void OnDeleteChars(int n);
+        void OnInsertLines(int n);
+        void OnDeleteLines(int n);
+        void OnSetAutoWrap(bool enabled);
+        void OnSetTabStop();
+        void OnClearTabStop();
+        void OnClearAllTabStops();
+        void OnReverseIndex();
+        void OnSetBracketedPasteMode(bool enabled);
+        void OnDeviceStatusReport(int code); // DSR (e.g., 5=terminal status, 6=CPR)
+        void OnCursorPositionReport(); // CPR - request current cursor position
     }
 }

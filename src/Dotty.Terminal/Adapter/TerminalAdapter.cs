@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 using Dotty.Abstractions.Adapter;
 
 namespace Dotty.Terminal.Adapter;
@@ -12,10 +11,10 @@ public class TerminalAdapter : ITerminalHandler
 {
     private readonly TerminalBuffer _buffer;
     private CellAttributes _currentAttributes = CellAttributes.Default;
-    private static int s_printSeq = 0;
     private CellAttributes _savedAttributes = CellAttributes.Default;
-    private bool _hasSavedAttributes = false;
+    private bool _hasSavedAttributes;
     private string? _windowTitle;
+    private char _lastPrintedChar;
 
     public TerminalAdapter(int rows = 24, int columns = 80)
     {
@@ -41,182 +40,130 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnPrint(ReadOnlySpan<char> text)
     {
-        // (adapter debug logging removed)
-
-        // Debug logging removed.
         _buffer.WriteText(text, _currentAttributes);
+        // Track last printed character for REP support
+        if (!text.IsEmpty)
+        {
+            _lastPrintedChar = text[text.Length - 1];
+        }
         RequestRender();
     }
 
     public void OnOperatingSystemCommand(ReadOnlySpan<char> payload)
     {
-        try
+        // Payloads are typically of the form "0;title" or "2;title".
+        if (payload.IsEmpty) return;
+
+        int semi = payload.IndexOf(';');
+        if (semi <= 0) return;
+
+        var codePart = payload.Slice(0, semi);
+        if (int.TryParse(codePart, out var code) && (code == 0 || code == 2))
         {
-            // Payloads are typically of the form "0;title" or "2;title".
-            var s = payload.ToString();
-            if (string.IsNullOrEmpty(s)) return;
-            int semi = s.IndexOf(';');
-            if (semi <= 0) return;
-            var codePart = s.Substring(0, semi);
-            var rest = s.Substring(semi + 1);
-            if (int.TryParse(codePart, out var code))
-            {
-                if (code == 0 || code == 2)
-                {
-                    _windowTitle = rest;
-                    RequestRender();
-                }
-            }
+            _windowTitle = payload.Slice(semi + 1).ToString();
+            RequestRender();
         }
-        catch { }
     }
 
     public void OnSaveCursor()
     {
-        try
-        {
-            _buffer.SaveCursor();
-            _savedAttributes = _currentAttributes;
-            _hasSavedAttributes = true;
-        }
-        catch { }
+        _buffer.SaveCursor();
+        _savedAttributes = _currentAttributes;
+        _hasSavedAttributes = true;
     }
 
     public void OnRestoreCursor()
     {
-        try
+        _buffer.RestoreCursor();
+        if (_hasSavedAttributes)
         {
-            _buffer.RestoreCursor();
-            if (_hasSavedAttributes)
-            {
-                _currentAttributes = _savedAttributes;
-                _hasSavedAttributes = false;
-            }
-            RequestRender();
+            _currentAttributes = _savedAttributes;
+            _hasSavedAttributes = false;
         }
-        catch { }
+        RequestRender();
     }
 
     public void OnSetAutoWrap(bool enabled)
     {
-        try { _buffer.SetAutoWrap(enabled); } catch { }
+        _buffer.SetAutoWrap(enabled);
     }
 
     public void OnSetTabStop()
     {
-        try { _buffer.SetTabStopAt(_buffer.CursorCol); } catch { }
+        _buffer.SetTabStopAt(_buffer.CursorCol);
     }
 
     public void OnClearTabStop()
     {
-        try { _buffer.ClearTabStopAt(_buffer.CursorCol); } catch { }
+        _buffer.ClearTabStopAt(_buffer.CursorCol);
     }
 
     public void OnClearAllTabStops()
     {
-        try { _buffer.ClearAllTabStops(); } catch { }
+        _buffer.ClearAllTabStops();
     }
 
     public void OnReverseIndex()
     {
-        try
-        {
-            _buffer.ReverseIndex();
-            RequestRender();
-        }
-        catch { }
+        _buffer.ReverseIndex();
+        RequestRender();
     }
 
     public void OnSetBracketedPasteMode(bool enabled)
     {
-        try
-        {
-            _buffer.SetBracketedPasteMode(enabled);
-        }
-        catch { }
+        _buffer.SetBracketedPasteMode(enabled);
     }
 
     public void OnDeviceStatusReport(int code)
     {
-        try
+        switch (code)
         {
-            switch (code)
-            {
-                case 6:
-                    // Cursor Position Report (CPR) requested via DSR variant:
-                    var r = _buffer.CursorRow + 1;
-                    var c = _buffer.CursorCol + 1;
-                    ReplyRequested?.Invoke($"\u001b[{r};{c}R");
-                    break;
-                case 5:
-                case 0:
-                    // Terminal status OK
-                    ReplyRequested?.Invoke("\u001b[0n");
-                    break;
-                default:
-                    // Unknown/unsupported: return failure
-                    ReplyRequested?.Invoke("\u001b[3n");
-                    break;
-            }
+            case 6:
+                // Cursor Position Report (CPR) requested via DSR variant:
+                var r = _buffer.CursorRow + 1;
+                var c = _buffer.CursorCol + 1;
+                ReplyRequested?.Invoke($"\u001b[{r};{c}R");
+                break;
+            case 5:
+            case 0:
+                // Terminal status OK
+                ReplyRequested?.Invoke("\u001b[0n");
+                break;
+            default:
+                // Unknown/unsupported: return failure
+                ReplyRequested?.Invoke("\u001b[3n");
+                break;
         }
-        catch { }
     }
 
     public void OnCursorPositionReport()
     {
-        // CPR: caller expects a response with current cursor position.
-        // We don't have a direct way to write to the device from here
-        // (the parser/IO layer should implement the reply), so expose a
-        // RenderRequested callback that consumers can use to query state.
-        try
-        {
-            // Reply with CSI {row+1};{col+1}R
-            var r = _buffer.CursorRow + 1;
-            var c = _buffer.CursorCol + 1;
-            var resp = $"\u001b[{r};{c}R";
-            ReplyRequested?.Invoke(resp);
-        }
-        catch { }
+        // CPR: delegate to the DSR code=6 handler which already implements this.
+        OnDeviceStatusReport(6);
     }
 
     public void OnInsertChars(int n)
     {
-        try
-        {
-            _buffer.InsertChars(n);
-            RequestRender();
-        }
-        catch { }
+        _buffer.InsertChars(n);
+        RequestRender();
     }
 
     public void OnDeleteChars(int n)
     {
-        try
-        {
-            _buffer.DeleteChars(n);
-            RequestRender();
-        }
-        catch { }
+        _buffer.DeleteChars(n);
+        RequestRender();
     }
 
     public void OnInsertLines(int n)
     {
-        try
-        {
-            _buffer.InsertLines(n);
-            RequestRender();
-        }
-        catch { }
+        _buffer.InsertLines(n);
+        RequestRender();
     }
 
     public void OnDeleteLines(int n)
     {
-        try
-        {
-            _buffer.DeleteLines(n);
-            RequestRender();
-        }
-        catch { }
+        _buffer.DeleteLines(n);
+        RequestRender();
     }
 
     public void OnClearScreen()
@@ -298,24 +245,16 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnSetOriginMode(bool enabled)
     {
-        try
-        {
-            _buffer.SetOriginMode(enabled);
-            RequestRender();
-        }
-        catch { }
+        _buffer.SetOriginMode(enabled);
+        RequestRender();
     }
 
     public void OnSetScrollRegion(int top1Based, int bottom1Based)
     {
-        try
-        {
-            // If bottom omitted (0), treat as full screen bottom
-            if (bottom1Based == 0) bottom1Based = _buffer.Rows;
-            _buffer.SetScrollRegion(top1Based, bottom1Based);
-            RequestRender();
-        }
-        catch { }
+        // If bottom omitted (0), treat as full screen bottom
+        if (bottom1Based == 0) bottom1Based = _buffer.Rows;
+        _buffer.SetScrollRegion(top1Based, bottom1Based);
+        RequestRender();
     }
 
     public void OnSetCursorVisibility(bool visible)
@@ -328,17 +267,100 @@ public class TerminalAdapter : ITerminalHandler
     {
     }
 
+    public void OnCursorHorizontalAbsolute(int col)
+    {
+        // CHA - CSI n G - move cursor to column n (1-based)
+        _buffer.SetCursor(_buffer.CursorRow, Math.Max(0, col - 1));
+        RequestRender();
+    }
+
+    public void OnCursorVerticalAbsolute(int row)
+    {
+        // VPA - CSI n d - move cursor to row n (1-based)
+        _buffer.SetCursor(Math.Max(0, row - 1), _buffer.CursorCol);
+        RequestRender();
+    }
+
+    public void OnCursorNextLine(int n)
+    {
+        // CNL - CSI n E - move cursor down n lines, to column 1
+        _buffer.MoveCursorBy(Math.Max(1, n), 0);
+        _buffer.SetCursor(_buffer.CursorRow, 0);
+        RequestRender();
+    }
+
+    public void OnCursorPreviousLine(int n)
+    {
+        // CPL - CSI n F - move cursor up n lines, to column 1
+        _buffer.MoveCursorBy(-Math.Max(1, n), 0);
+        _buffer.SetCursor(_buffer.CursorRow, 0);
+        RequestRender();
+    }
+
+    public void OnScrollUp(int n)
+    {
+        // SU - CSI n S - scroll up n lines within scroll region
+        _buffer.ScrollUpLines(Math.Max(1, n));
+        RequestRender();
+    }
+
+    public void OnScrollDown(int n)
+    {
+        // SD - CSI n T - scroll down n lines within scroll region
+        _buffer.ScrollDownLines(Math.Max(1, n));
+        RequestRender();
+    }
+
+    public void OnFullReset()
+    {
+        // RIS - ESC c - full terminal reset
+        _buffer.FullReset();
+        _currentAttributes = CellAttributes.Default;
+        _savedAttributes = CellAttributes.Default;
+        _hasSavedAttributes = false;
+        _windowTitle = null;
+        _lastPrintedChar = '\0';
+        RequestRender();
+    }
+
+    public void OnRepeatCharacter(int n)
+    {
+        // REP - CSI n b - repeat previous character n times
+        if (_lastPrintedChar == '\0' || n <= 0) return;
+        Span<char> chars = stackalloc char[Math.Min(n, 256)];
+        chars.Fill(_lastPrintedChar);
+        int remaining = n;
+        while (remaining > 0)
+        {
+            int batch = Math.Min(remaining, 256);
+            _buffer.WriteText(chars.Slice(0, batch), _currentAttributes);
+            remaining -= batch;
+        }
+        RequestRender();
+    }
+
+    public void OnTab()
+    {
+        // HT - horizontal tab
+        int nextStop = _buffer.GetNextTabStopFrom(_buffer.CursorCol);
+        _buffer.SetCursor(_buffer.CursorRow, nextStop);
+        RequestRender();
+    }
+
+    public void OnBackTab(int n)
+    {
+        // CBT - CSI n Z - cursor backward tabulation
+        int col = _buffer.CursorCol;
+        for (int i = 0; i < Math.Max(1, n); i++)
+        {
+            col = _buffer.GetPrevTabStopFrom(col);
+        }
+        _buffer.SetCursor(_buffer.CursorRow, col);
+        RequestRender();
+    }
+
     private void RequestRender()
     {
-        // Bump a lightweight sequence counter for diagnostic ordering of
-        // render events. Use Interlocked to be safe if adapter is used from
-        // multiple threads.
-        try
-        {
-            System.Threading.Interlocked.Increment(ref s_printSeq);
-        }
-        catch { }
-
         RenderRequested?.Invoke(_buffer.GetCurrentDisplay(showCursor: _buffer.CursorVisible, promptPrefix: null));
     }
 

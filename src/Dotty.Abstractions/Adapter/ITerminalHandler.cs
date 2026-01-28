@@ -48,5 +48,25 @@ namespace Dotty.Abstractions.Adapter
         void OnSetBracketedPasteMode(bool enabled);
         void OnDeviceStatusReport(int code); // DSR (e.g., 5=terminal status, 6=CPR)
         void OnCursorPositionReport(); // CPR - request current cursor position
+
+        // Additional cursor movement
+        void OnCursorHorizontalAbsolute(int col); // CHA - CSI n G
+        void OnCursorVerticalAbsolute(int row);   // VPA - CSI n d
+        void OnCursorNextLine(int n);             // CNL - CSI n E
+        void OnCursorPreviousLine(int n);         // CPL - CSI n F
+
+        // Explicit scroll commands
+        void OnScrollUp(int n);   // SU - CSI n S
+        void OnScrollDown(int n); // SD - CSI n T
+
+        // Full reset
+        void OnFullReset(); // RIS - ESC c
+
+        // Repeat previous character
+        void OnRepeatCharacter(int n); // REP - CSI n b
+
+        // Horizontal tab
+        void OnTab();     // HT - move to next tab stop
+        void OnBackTab(int n); // CBT - CSI n Z - move back n tab stops
     }
 }

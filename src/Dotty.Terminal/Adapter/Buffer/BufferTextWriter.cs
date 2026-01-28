@@ -1,6 +1,6 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
-using System.Text;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -22,9 +22,8 @@ internal sealed class BufferTextWriter
     private readonly Action<int> _markRowDirty;
     private readonly Func<bool> _getAutoWrap;
     private readonly Func<int,int> _getNextTabStopFrom;
-    // Batch state: when true, dirty-mark requests are coalesced into _batchedRows
-    private bool _inBatchWrite = false;
-    private System.Collections.Generic.HashSet<int>? _batchedRows;
+    private bool _inBatchWrite;
+    private HashSet<int>? _batchedRows;
 
     public BufferTextWriter(
         CursorController cursor,
@@ -63,114 +62,73 @@ internal sealed class BufferTextWriter
             return;
         }
 
-        // No diagnostic logging during normal operation.
-
-        // If this write affects the bottom rows, take a snapshot of the
-        // target row (the row we're about to write) so we can compare
-        // before/after and see exactly what changes are being applied.
-        int targetRow = _cursor.Row;
-        // No snapshot logging during normal operation.
-
-        // Begin batch: coalesce repeated marks during this logical write
         _inBatchWrite = true;
-        _batchedRows = new System.Collections.Generic.HashSet<int>();
+        _batchedRows ??= new HashSet<int>();
+        _batchedRows.Clear();
 
-        var enumerator = StringInfo.GetTextElementEnumerator(text.ToString());
-        while (enumerator.MoveNext())
+        try
         {
-            var element = enumerator.GetTextElement();
-
-            if (element == "\r\n")
+            var enumerator = StringInfo.GetTextElementEnumerator(text.ToString());
+            while (enumerator.MoveNext())
             {
-                _carriageReturn();
-                _lineFeed();
-                continue;
-            }
+                var element = enumerator.GetTextElement();
 
-            if (element.Length == 1 && TryHandleControlChar(element[0], in attributes))
-            {
-                continue;
-            }
+                if (element == "\r\n")
+                {
+                    _carriageReturn();
+                    _lineFeed();
+                    continue;
+                }
 
-            // If the previous write hit the last column with auto-wrap on,
-            // terminals defer the wrap until the next printable. Emulate that
-            // by applying a line feed + carriage return before writing.
-            bool autoWrap = true;
-            try { autoWrap = _getAutoWrap(); } catch { }
-            if (autoWrap && _cursor.WrapPending)
-            {
-                _lineFeed();
-                _carriageReturn();
-                _cursor.SetWrapPending(false);
-            }
+                if (element.Length == 1 && TryHandleControlChar(element[0], in attributes))
+                {
+                    continue;
+                }
 
-            // If the application has requested a clear-on-next-write (carriage
-            // return behavior), honor it by clearing from the cursor to the end
-            // of line. Additionally, many full-screen apps (vim/neovim) write
-            // status lines by positioning the cursor at column 0 and then
-            // writing a shorter string than the previous content. Terminals
-            // implicitly clear the entire line when writing begins at column
-            // zero; emulate that behaviour here so stale characters to the
-            // right do not remain.
-            if (_getClearFlag())
-            {
-                _eraser.ClearLineFromCursor(_buffer(), _cursor, _cols());
-                _setClearFlag(false);
-                RequestMarkRowDirty(_cursor.Row);
-            }
+                // If the previous write hit the last column with auto-wrap on,
+                // terminals defer the wrap until the next printable. Emulate that
+                // by applying a line feed + carriage return before writing.
+                if (_getAutoWrap() && _cursor.WrapPending)
+                {
+                    _lineFeed();
+                    _carriageReturn();
+                    _cursor.SetWrapPending(false);
+                }
 
-            // Implicit EL2 when writing starts at column 0: clear the entire
-            // line before emitting the first grapheme. This matches what
-            // applications expect when they do `CUP row,0` followed by text.
-            if (_cursor.Col == 0)
-            {
-                _eraser.EraseLine(_buffer(), _cursor, _cols(), 2);
-                RequestMarkRowDirty(_cursor.Row);
-            }
+                // If the application has requested a clear-on-next-write (carriage
+                // return behavior), honor it by clearing from the cursor to the end
+                // of line.
+                if (_getClearFlag())
+                {
+                    _eraser.ClearLineFromCursor(_buffer(), _cursor, _cols());
+                    _setClearFlag(false);
+                    RequestMarkRowDirty(_cursor.Row);
+                }
 
-            WriteGrapheme(element, in attributes);
+                // Implicit EL2 when writing starts at column 0: clear the entire
+                // line before emitting the first grapheme. This matches what
+                // applications expect when they do `CUP row,0` followed by text.
+                if (_cursor.Col == 0)
+                {
+                    _eraser.EraseLine(_buffer(), _cursor, _cols(), 2);
+                    RequestMarkRowDirty(_cursor.Row);
+                }
+
+                WriteGrapheme(element, in attributes);
+            }
         }
-
-        // No snapshot logging during normal operation.
+        finally
         {
             // Flush any coalesced dirty marks
-            try
+            if (_batchedRows != null)
             {
-                if (_inBatchWrite && _batchedRows != null)
+                foreach (var r in _batchedRows)
                 {
-                    foreach (var r in _batchedRows)
-                    {
-                        try { _markRowDirty(r); } catch { }
-                    }
+                    _markRowDirty(r);
                 }
             }
-            catch { }
             _inBatchWrite = false;
-            _batchedRows = null;
         }
-    }
-
-    private string SnapshotRow(Screen buf, int row)
-    {
-        var sb = new StringBuilder();
-        int cols = _cols();
-        for (int j = 0; j < cols; j++)
-        {
-            var cell = buf.GetCell(row, j);
-            if (cell.IsContinuation)
-            {
-                sb.Append(' ');
-            }
-            else if (string.IsNullOrEmpty(cell.Grapheme))
-            {
-                sb.Append(' ');
-            }
-            else
-            {
-                sb.Append(cell.Grapheme);
-            }
-        }
-        return sb.ToString();
     }
 
     private bool TryHandleControlChar(char ch, in CellAttributes attributes)
@@ -198,21 +156,14 @@ internal sealed class BufferTextWriter
 
     private void WriteTab(in CellAttributes attributes)
     {
-        try
+        int cols = _cols();
+        int current = _cursor.Col;
+        int target = _getNextTabStopFrom(current);
+        if (target <= current) target = Math.Min(cols - 1, current + 1);
+        int spaces = target - current;
+        for (int i = 0; i < spaces; i++)
         {
-            int cols = _cols();
-            int current = _cursor.Col;
-            int target = _getNextTabStopFrom(current);
-            if (target <= current) target = Math.Min(cols - 1, current + 1);
-            int spaces = target - current;
-            for (int i = 0; i < spaces; i++) WriteGrapheme(" ", in attributes);
-        }
-        catch
-        {
-            // Fallback simple tab
-            int tabStop = 8;
-            int spaces = tabStop - (_cursor.Col % tabStop);
-            for (int i = 0; i < spaces; i++) WriteGrapheme(" ", in attributes);
+            WriteGrapheme(" ", in attributes);
         }
     }
 
@@ -235,10 +186,7 @@ internal sealed class BufferTextWriter
             width = 1;
         }
 
-        bool scrolledOnEnsure = false;
-
-        bool autoWrap = true;
-        try { autoWrap = _getAutoWrap(); } catch { }
+        bool autoWrap = _getAutoWrap();
 
         int startCol;
         if (autoWrap)
@@ -246,7 +194,6 @@ internal sealed class BufferTextWriter
             if (_cursor.EnsureSpace(width, _rows(), _cols()))
             {
                 _scrollUp(1);
-                scrolledOnEnsure = true;
             }
             startCol = _cursor.Col;
         }
@@ -330,12 +277,11 @@ internal sealed class BufferTextWriter
     {
         if (_inBatchWrite)
         {
-            _batchedRows ??= new System.Collections.Generic.HashSet<int>();
-            _batchedRows.Add(row);
+            _batchedRows?.Add(row);
         }
         else
         {
-            try { _markRowDirty(row); } catch { }
+            _markRowDirty(row);
         }
     }
 

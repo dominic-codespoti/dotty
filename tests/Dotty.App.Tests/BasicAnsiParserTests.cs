@@ -79,5 +79,15 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnDeviceStatusReport(int code) { }
         void ITerminalHandler.OnCursorPositionReport() { }
         void ITerminalHandler.OnReverseIndex() { }
+        void ITerminalHandler.OnCursorHorizontalAbsolute(int col) { }
+        void ITerminalHandler.OnCursorVerticalAbsolute(int row) { }
+        void ITerminalHandler.OnCursorNextLine(int n) { }
+        void ITerminalHandler.OnCursorPreviousLine(int n) { }
+        void ITerminalHandler.OnScrollUp(int n) { }
+        void ITerminalHandler.OnScrollDown(int n) { }
+        void ITerminalHandler.OnFullReset() { }
+        void ITerminalHandler.OnRepeatCharacter(int n) { }
+        void ITerminalHandler.OnTab() { }
+        void ITerminalHandler.OnBackTab(int n) { }
     }
 }

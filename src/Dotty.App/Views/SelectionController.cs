@@ -1,4 +1,3 @@
-using System.Text;
 using Dotty.App.Controls.Canvas;
 using Dotty.Terminal.Adapter;
 
@@ -58,7 +57,7 @@ internal sealed class SelectionController
             return string.Empty;
         }
 
-        var sb = new StringBuilder();
+        using var sb = ZStr.CreateStringBuilder(buffer.Columns * (Range.EndRow - Range.StartRow + 1));
         for (int row = Range.StartRow; row <= Range.EndRow; row++)
         {
             int startCol = row == Range.StartRow ? Range.StartColumn : 0;

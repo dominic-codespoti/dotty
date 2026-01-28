@@ -54,9 +54,9 @@ public class TerminalBuffer
         // compatibility with BufferTextWriter delegate signatures.
         _cursor.SetSize(Rows, Columns);
         _writer = CreateWriter();
-            _scrollTop = 0;
-            _scrollBottom = Rows - 1;
-            ClearScreen();
+        _scrollTop = 0;
+        _scrollBottom = Rows - 1;
+        ClearScreen();
         InitializeTabStops();
     }
 
@@ -84,14 +84,14 @@ public class TerminalBuffer
     {
         if (_tabStops == null) InitializeTabStops();
         if (col < 0 || col >= Columns) return;
-        _tabStops[col] = true;
+        _tabStops![col] = true;
     }
 
     public void ClearTabStopAt(int col)
     {
         if (_tabStops == null) InitializeTabStops();
         if (col < 0 || col >= Columns) return;
-        _tabStops[col] = false;
+        _tabStops![col] = false;
     }
 
     public void ClearAllTabStops()
@@ -104,12 +104,66 @@ public class TerminalBuffer
         if (_tabStops == null) InitializeTabStops();
         for (int c = col + 1; c < Columns; c++)
         {
-            if (_tabStops[c]) return c;
+            if (_tabStops![c]) return c;
         }
         // fallback to next multiple of 8 or end
         int tabStop = ((col / 8) + 1) * 8;
         return Math.Min(Columns - 1, tabStop);
     }
+
+    public int GetPrevTabStopFrom(int col)
+    {
+        if (_tabStops == null) InitializeTabStops();
+        for (int c = col - 1; c >= 0; c--)
+        {
+            if (_tabStops![c]) return c;
+        }
+        return 0;
+    }
+
+    public void ScrollUpLines(int n)
+    {
+        if (n <= 0) return;
+        ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, n);
+        MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+        BumpScrollGeneration();
+    }
+
+    public void ScrollDownLines(int n)
+    {
+        if (n <= 0) return;
+        ActiveBuffer.ScrollDownRegion(_scrollTop, _scrollBottom, n);
+        MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+        BumpScrollGeneration();
+    }
+
+    public void FullReset()
+    {
+        // RIS - Reset to Initial State
+        _screens.ClearAll();
+        _cursor.Reset();
+        _currentAttributes = CellAttributes.Default;
+        _scrollTop = 0;
+        _scrollBottom = Rows - 1;
+        _originMode = false;
+        _autoWrap = true;
+        _bracketedPaste = false;
+        _hasSavedCursor = false;
+        _clearLineOnNextWrite = false;
+        InitializeTabStops();
+        _scrollback.Clear();
+        MarkAllRowsDirty();
+        BumpScrollGeneration();
+    }
+
+    private CellAttributes _currentAttributes = CellAttributes.Default;
+
+    public void SetCurrentAttributes(in CellAttributes attrs)
+    {
+        _currentAttributes = attrs;
+    }
+
+    public CellAttributes GetCurrentAttributes() => _currentAttributes;
 
     // Saved cursor state for DECSC/DECRC
     private bool _hasSavedCursor = false;
@@ -132,7 +186,7 @@ public class TerminalBuffer
         _cursor.SetVisible(_savedCursorVisible);
         _hasSavedCursor = false;
         MarkAllRowsDirty();
-        BumpScrollGeneration("RestoreCursor");
+        BumpScrollGeneration();
     }
 
     private Screen ActiveBuffer => _screens.Active;
@@ -147,14 +201,14 @@ public class TerminalBuffer
         _cursor.Reset();
         _clearLineOnNextWrite = false;
         MarkAllRowsDirty();
-        BumpScrollGeneration("ClearScreen");
+        BumpScrollGeneration();
     }
 
     public void ClearScrollback()
     {
         // Clear the preserved history but do not modify the visible screen.
         _scrollback.Clear();
-        BumpScrollGeneration("ClearScrollback");
+        BumpScrollGeneration();
     }
 
     public void SetCursor(int row, int col)
@@ -193,7 +247,7 @@ public class TerminalBuffer
         }
         // Changing origin may change visible content; mark all rows dirty.
         MarkAllRowsDirty();
-        BumpScrollGeneration("SetOriginMode");
+        BumpScrollGeneration();
     }
 
     public void MoveCursorBy(int dRow, int dCol)
@@ -227,40 +281,17 @@ public class TerminalBuffer
         // like Neovim.
         if (_cursor.Row == _scrollBottom)
         {
-            // Capture the top-most line(s) of the scroll region before they
-            // are moved out by the region scroll so we can preserve them in
-            // the scrollback history.
-            try
-            {
-                int lines = 1;
-                for (int r = _scrollTop; r <= Math.Min(_scrollBottom, _scrollTop + lines - 1); r++)
-                {
-                    _scrollback.Add(GetRowText(r));
-                }
-                if (_scrollback.Count > _maxScrollback)
-                {
-                    int remove = _scrollback.Count - _maxScrollback;
-                    _scrollback.RemoveRange(0, remove);
-                }
-            }
-            catch { }
+            // Capture the top-most line of the scroll region before it's
+            // scrolled out, preserving it in scrollback history.
+            AddToScrollback(GetRowText(_scrollTop));
 
             ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, 1);
 
-            // After a region scroll, clear the newly revealed bottom row(s)
-            // within the region so stale UI (command palettes / statuslines)
-            // does not remain visible.
-            try
+            // Clear the newly revealed bottom row within the region.
+            for (int cc = 0; cc < Columns; cc++)
             {
-                int lines = 1;
-                int clearStart = Math.Max(_scrollTop, _scrollBottom - lines + 1);
-                int clearEnd = _scrollBottom;
-                for (int rr = clearStart; rr <= clearEnd; rr++)
-                {
-                    for (int cc = 0; cc < Columns; cc++) ActiveBuffer.ClearCell(rr, cc);
-                }
+                ActiveBuffer.ClearCell(_scrollBottom, cc);
             }
-            catch { }
 
             // Mark the whole region dirty so the renderer repaints in-place.
             MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
@@ -286,7 +317,7 @@ public class TerminalBuffer
         {
             ActiveBuffer.ScrollDownRegion(_scrollTop, _scrollBottom, 1);
             // Signal movement so renderer can update caches
-            BumpScrollGeneration("ReverseIndex");
+            BumpScrollGeneration();
             MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
             return;
         }
@@ -453,40 +484,51 @@ public class TerminalBuffer
         if (lines <= 0) return;
 
         // Capture the rows that will be scrolled out (top `lines` rows).
-        try
+        int rowsToCapture = Math.Min(lines, Rows);
+        for (int r = 0; r < rowsToCapture; r++)
         {
-            for (int r = 0; r < Math.Min(lines, Rows); r++)
-            {
-                _scrollback.Add(GetRowText(r));
-            }
-            // Enforce a simple cap to avoid unbounded memory growth.
-            if (_scrollback.Count > _maxScrollback)
-            {
-                int remove = _scrollback.Count - _maxScrollback;
-                _scrollback.RemoveRange(0, remove);
-            }
+            AddToScrollback(GetRowText(r));
         }
-        catch { }
 
         ActiveBuffer.ScrollUp(lines);
+
         // Ensure newly revealed rows at the bottom are cleared so stale
         // content (e.g., statuslines) does not persist after a scroll.
-        try
+        int start = Math.Max(0, Rows - lines);
+        for (int r = start; r < Rows; r++)
         {
-            int start = Math.Max(0, Rows - lines);
-            for (int r = start; r < Rows; r++)
+            for (int c = 0; c < Columns; c++)
             {
-                for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
+                ActiveBuffer.ClearCell(r, c);
             }
         }
-        catch { }
 
-        BumpScrollGeneration($"ScrollUp({lines})");
+        BumpScrollGeneration();
+    }
+
+    /// <summary>
+    /// Adds a row to scrollback, trimming old entries if over capacity.
+    /// Uses a more efficient approach than RemoveRange(0, n) for trimming.
+    /// </summary>
+    private void AddToScrollback(string row)
+    {
+        _scrollback.Add(row);
+        if (_scrollback.Count > _maxScrollback)
+        {
+            // Trim excess - for small overages, RemoveRange is fine.
+            // For large bursts, this prevents excessive shifting.
+            int excess = _scrollback.Count - _maxScrollback;
+            if (excess > 0)
+            {
+                _scrollback.RemoveRange(0, excess);
+            }
+        }
     }
 
     public string GetCurrentDisplay(bool showCursor = false, string? promptPrefix = null)
     {
-        var sb = new StringBuilder();
+        // Pre-allocate capacity: columns + newline per row
+        using var sb = ZStr.CreateStringBuilder((Columns + Environment.NewLine.Length) * Rows);
         var buf = ActiveBuffer;
         for (int i = 0; i < Rows; i++)
         {
@@ -529,7 +571,7 @@ public class TerminalBuffer
         _isAlternate = enable;
         _cursor.Reset();
         MarkAllRowsDirty();
-        BumpScrollGeneration("SetAlternateScreen");
+        BumpScrollGeneration();
         // Reset scroll region to full when switching screens
         _scrollTop = 0;
         _scrollBottom = Rows - 1;
@@ -561,6 +603,25 @@ public class TerminalBuffer
         Columns = columns;
         _cursor.SetSize(Rows, Columns);
         _writer = CreateWriter();
+
+        // Resize tab stops array if columns changed
+        if (_tabStops == null || _tabStops.Length != columns)
+        {
+            var newTabStops = new bool[columns];
+            // Copy existing tab stops
+            if (_tabStops != null)
+            {
+                int copyLen = Math.Min(_tabStops.Length, columns);
+                Array.Copy(_tabStops, newTabStops, copyLen);
+            }
+            // Initialize new columns with default tab stops (every 8)
+            for (int c = _tabStops?.Length ?? 0; c < columns; c++)
+            {
+                newTabStops[c] = (c % 8) == 0;
+            }
+            _tabStops = newTabStops;
+        }
+
         MarkAllRowsDirty();
         // Reset scroll region on resize
         _scrollTop = 0;
@@ -612,8 +673,8 @@ public class TerminalBuffer
 
     public string GetRowText(int row)
     {
-        var sb = new StringBuilder();
-        
+        // Pre-allocate for typical row (mostly single-width chars)
+        using var sb = ZStr.CreateStringBuilder(Columns);
         var buf = _screens.Active;
         for (int j = 0; j < Columns; j++)
         {
@@ -659,24 +720,24 @@ public class TerminalBuffer
     {
         // Per-row versions removed. Signal a generation bump so renderers
         // can detect that something changed and perform a full repaint.
-        BumpScrollGeneration($"MarkRowDirty({row})");
+        BumpScrollGeneration();
     }
 
     private void MarkRowRangeDirty(int start, int count)
     {
         // Per-row versions removed — bump global generation for compatibility.
-        BumpScrollGeneration($"MarkRowRangeDirty({start},{count})");
+        BumpScrollGeneration();
     }
 
     private void MarkAllRowsDirty()
     {
         // Per-row versions removed — bump global generation.
-        BumpScrollGeneration("MarkAllRowsDirty");
+        BumpScrollGeneration();
     }
 
     // per-row version shifting helpers removed
 
-    private void BumpScrollGeneration(string reason)
+    private void BumpScrollGeneration()
     {
         unchecked { _scrollGeneration++; }
     }
@@ -694,13 +755,5 @@ public class TerminalBuffer
     public void MarkRender()
     {
         ActiveBuffer.MarkRender();
-    }
-
-    // Focused input logging: writes compact, replayable records of inputs
-    // sent to the buffer when `DOTTY_DEBUG_INPUT_LOG` is enabled.
-    private static string EscapeForLog(ReadOnlySpan<char> s)
-    {
-        var str = s.ToString();
-        return str.Replace("\r", "\\r").Replace("\n", "\\n");
     }
 }

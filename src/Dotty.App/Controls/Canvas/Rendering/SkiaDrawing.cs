@@ -99,6 +99,7 @@ public sealed class SkiaDrawing : ICustomDrawOperation
                     }
                 }
             }
+            DrawSelectionOverlay(canvas, buffer);
         }
         finally
         {
@@ -110,6 +111,49 @@ public sealed class SkiaDrawing : ICustomDrawOperation
     public override bool Equals(object? obj) => Equals(obj as ICustomDrawOperation);
     public override int GetHashCode() => _bounds.GetHashCode();
     public void Dispose() { }
+
+    private void DrawSelectionOverlay(SKCanvas canvas, TerminalBuffer buffer)
+    {
+        var selection = _owner.SelectionRange;
+        if (selection.IsEmpty) return;
+
+        // Clamp selection to buffer bounds
+        int startRow = Math.Clamp(selection.StartRow, 0, buffer.Rows - 1);
+        int endRow = Math.Clamp(selection.EndRow, 0, buffer.Rows - 1);
+
+        int cellPxW = Math.Max(1, (int)MathF.Round(_cellW));
+        int cellPxH = Math.Max(1, (int)MathF.Round(_cellH));
+
+        for (int row = startRow; row <= endRow; row++)
+        {
+            int startCol = row == selection.StartRow ? Math.Clamp(selection.StartColumn, 0, buffer.Columns - 1) : 0;
+            int endCol = row == selection.EndRow ? Math.Clamp(selection.EndColumn, 0, buffer.Columns - 1) : buffer.Columns - 1;
+
+            int x = startCol * cellPxW;
+            int columns = Math.Max(1, endCol - startCol + 1);
+            int width = columns * cellPxW;
+            int y = row * cellPxH;
+
+            // Create paint inside loop - this pattern was working
+            using var selectionPaint = new SKPaint
+            {
+                Color = new SKColor(0, 255, 0, 200),
+                Style = SKPaintStyle.Fill,
+            };
+            canvas.DrawRect(new SKRect(x, y, x + width, y + cellPxH), selectionPaint);
+        }
+    }
+
+    private static SKColor ToSkiaColor(IBrush? brush)
+    {
+        if (brush is ISolidColorBrush solid)
+        {
+            var color = solid.Color;
+            return new SKColor(color.R, color.G, color.B, color.A);
+        }
+
+        return new SKColor(0x33, 0x85, 0xDB, 0x80);
+    }
 
     private static SKMatrix ToSkiaMatrix(Matrix matrix)
     {

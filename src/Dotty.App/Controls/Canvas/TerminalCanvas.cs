@@ -43,10 +43,27 @@ public class TerminalCanvas : Control
 	public static readonly StyledProperty<Thickness> ContentPaddingProperty =
 		AvaloniaProperty.Register<TerminalCanvas, Thickness>(nameof(ContentPadding), new Thickness(0.0));
 
+	public static readonly StyledProperty<IBrush> SelectionBrushProperty =
+		AvaloniaProperty.Register<TerminalCanvas, IBrush>(nameof(SelectionBrush),
+			new SolidColorBrush(Color.FromArgb(0xA0, 0x33, 0x85, 0xDB)));
+
 	public Thickness ContentPadding
 	{
 		get => GetValue(ContentPaddingProperty);
 		set => SetValue(ContentPaddingProperty, value);
+	}
+
+	private TerminalSelectionRange _selectionRange = TerminalSelectionRange.Empty;
+
+	public TerminalSelectionRange SelectionRange
+	{
+		get => _selectionRange;
+		set
+		{
+			if (_selectionRange == value) return;
+			_selectionRange = value;
+			InvalidateVisual();
+		}
 	}
 
 	public static readonly StyledProperty<TerminalCursorShape> CursorShapeProperty =
@@ -56,6 +73,12 @@ public class TerminalCanvas : Control
 	{
 		get => GetValue(CursorShapeProperty);
 		set => SetValue(CursorShapeProperty, value);
+	}
+
+	public IBrush SelectionBrush
+	{
+		get => GetValue(SelectionBrushProperty);
+		set => SetValue(SelectionBrushProperty, value);
 	}
 
 	public FontFamily FontFamily
@@ -78,7 +101,7 @@ public class TerminalCanvas : Control
 
 	static TerminalCanvas()
 	{
-		AffectsRender<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty, CellPaddingProperty, ContentPaddingProperty);
+		AffectsRender<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty, CellPaddingProperty, ContentPaddingProperty, SelectionBrushProperty);
 		AffectsMeasure<TerminalCanvas>(BufferProperty, FontFamilyProperty, FontSizeProperty, CellPaddingProperty, ContentPaddingProperty);
 	}
 

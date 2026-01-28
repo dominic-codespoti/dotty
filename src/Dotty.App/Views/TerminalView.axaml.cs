@@ -1,9 +1,11 @@
 using System;
 using System.Text;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Input.Platform;
 using Dotty.App.Controls;
 using Dotty.Terminal.Adapter;
 
@@ -15,43 +17,145 @@ namespace Dotty.App.Views
         private TerminalCanvas? _canvas;
         private string _lineBuffer = string.Empty;
         private bool _suppressText = false;
+        private readonly SelectionController _selectionController = new();
+        private readonly SelectionContextMenuBuilder _contextMenuBuilder;
 
+        public string? WorkingDirectory { get; set; }
         public event Action<byte[]>? RawInput;
         public event EventHandler<string?>? Submitted;
 
         public TerminalView()
         {
+            _contextMenuBuilder = new SelectionContextMenuBuilder(_selectionController);
             InitializeComponent();
-            this.AttachedToVisualTree += OnAttached;
+            AttachedToVisualTree += OnAttached;
         }
 
         private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)
         {
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
-            // Focusable border is the root; subscribe to input events
-            this.AddHandler(KeyDownEvent, TerminalView_KeyDown, RoutingStrategies.Tunnel);
-            this.AddHandler(TextInputEvent, TerminalView_TextInput, RoutingStrategies.Tunnel);
-            this.AddHandler(PointerPressedEvent, TerminalView_PointerPressed, RoutingStrategies.Tunnel);
+
+            AddHandler(KeyDownEvent, TerminalView_KeyDown, RoutingStrategies.Tunnel);
+            AddHandler(TextInputEvent, TerminalView_TextInput, RoutingStrategies.Tunnel);
+            AddHandler(PointerPressedEvent, TerminalView_PointerPressed, RoutingStrategies.Tunnel);
+            AddHandler(PointerMovedEvent, TerminalView_PointerMoved, RoutingStrategies.Tunnel);
+            AddHandler(PointerReleasedEvent, TerminalView_PointerReleased, RoutingStrategies.Tunnel);
         }
 
         private void TerminalView_PointerPressed(object? sender, PointerPressedEventArgs e)
         {
-            try { this.Focus(); } catch { }
+            EnsureCanvas();
+            if (_canvas == null) return;
+            var current = e.GetCurrentPoint(_canvas);
+            
+            // Handle right-click for context menu
+            if (current.Properties.IsRightButtonPressed)
+            {
+                ShowContextMenu(e);
+                return;
+            }
+            
+            if (!current.Properties.IsLeftButtonPressed) return;
+            if (!TryGetCellFromPointer(e, out int row, out int column)) return;
+            
+            // Handle double-click to select entire line
+            if (e.ClickCount == 2)
+            {
+                var buffer = _canvas.Buffer;
+                if (buffer != null)
+                {
+                    _selectionController.SelectLine(row, buffer.Columns);
+                    UpdateCanvasSelection();
+                }
+                return;
+            }
+            
+            _selectionController.BeginSelection(row, column);
+            UpdateCanvasSelection();
+            // Focus after selection to ensure keyboard input works
+            try { Focus(); } catch { }
+        }
+
+        private void TerminalView_PointerMoved(object? sender, PointerEventArgs e)
+        {
+            if (!_selectionController.IsDragging) return;
+            if (!TryGetCellFromPointer(e, out int row, out int column)) return;
+            _selectionController.UpdateSelection(row, column);
+            UpdateCanvasSelection();
+        }
+
+        private void TerminalView_PointerReleased(object? sender, PointerReleasedEventArgs e)
+        {
+            if (!_selectionController.IsDragging) return;
+            _selectionController.EndSelection();
+            UpdateCanvasSelection();
+        }
+
+        private void ShowContextMenu(PointerPressedEventArgs e)
+        {
+            var actions = new SelectionContextMenuBuilder.SelectionContextMenuActions(
+                CopyAsync: CopySelectionAsync,
+                PasteAsync: PasteFromClipboardAsync,
+                SelectAll: SelectAll,
+                ClearSelection: ClearSelection
+            );
+            var menu = _contextMenuBuilder.Build(actions);
+            menu.Open(this);
+        }
+
+        private void ClearSelection()
+        {
+            _selectionController.Clear();
+            UpdateCanvasSelection();
+        }
+
+        private void SelectAll()
+        {
+            EnsureCanvas();
+            var buffer = _canvas?.Buffer;
+            if (buffer == null) return;
+            _selectionController.SelectAll(buffer.Rows, buffer.Columns);
+            UpdateCanvasSelection();
+        }
+
+        private void EnsureCanvas()
+        {
+            if (_canvas != null) return;
+            _grid ??= this.FindControl<TerminalGrid>("PART_Grid");
+            _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
         }
 
         private void TerminalView_TextInput(object? sender, TextInputEventArgs e)
         {
             if (e.Text == null) return;
             if (_suppressText) return;
+
             var bytes = Encoding.UTF8.GetBytes(e.Text);
             RawInput?.Invoke(bytes);
-            // update line buffer for simple line editing (used by Submitted)
             _lineBuffer += e.Text;
         }
 
         private void TerminalView_KeyDown(object? sender, KeyEventArgs e)
         {
+            var modifiers = e.KeyModifiers;
+            if (modifiers.HasFlag(KeyModifiers.Control) && modifiers.HasFlag(KeyModifiers.Shift))
+            {
+                if (e.Key == Key.C && _selectionController.HasSelection)
+                {
+                    _ = CopySelectionAsync();
+                    e.Handled = true;
+                    return;
+                }
+
+                if (e.Key == Key.V)
+                {
+                    _ = PasteFromClipboardAsync();
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             // Handle special keys
             if (e.Key == Key.Enter)
             {
@@ -95,21 +199,24 @@ namespace Dotty.App.Views
         public void SetBuffer(TerminalBuffer buffer)
         {
             _grid?.SetBuffer(buffer);
+            ResetSelection();
         }
 
         public void SetPlainText(string text)
         {
             _grid?.SetPlainText(text);
+            ResetSelection();
         }
 
         public void AppendPlainText(string text)
         {
             _grid?.AppendPlainText(text);
+            ResetSelection();
         }
 
         public void FocusInput()
         {
-            try { this.Focus(); } catch { }
+            try { Focus(); } catch { }
         }
 
         public bool TryGetTerminalMetrics(out double cellWidth, out double cellHeight, out Thickness padding)
@@ -143,6 +250,21 @@ namespace Dotty.App.Views
         public void Clear()
         {
             try { _grid?.SetPlainText(string.Empty); } catch { }
+            ResetSelection();
+        }
+
+        private void ResetSelection()
+        {
+            // Don't clear selection while user is actively dragging
+            if (_selectionController.IsDragging) return;
+            _selectionController.Clear();
+            UpdateCanvasSelection();
+        }
+
+        private void UpdateCanvasSelection()
+        {
+            if (_canvas == null) return;
+            _canvas.SelectionRange = _selectionController.Range;
         }
 
         // Clear only the input line buffer (used after submit); does NOT clear the displayed terminal buffer
@@ -151,6 +273,74 @@ namespace Dotty.App.Views
             try { _lineBuffer = string.Empty; } catch { }
         }
 
-        public string? WorkingDirectory { get; set; }
+        private bool TryGetCellFromPointer(PointerEventArgs e, out int row, out int column)
+        {
+            row = column = 0;
+            EnsureCanvas();
+            if (_canvas == null) return false;
+            var buffer = _canvas.Buffer;
+            if (buffer == null) return false;
+
+            var position = e.GetPosition(_canvas);
+            var padding = _canvas.ContentPadding;
+            var x = position.X - padding.Left;
+            var y = position.Y - padding.Top;
+            x = Math.Max(0, x);
+            y = Math.Max(0, y);
+
+            var cellWidth = Math.Max(1.0, _canvas.CellWidth);
+            var cellHeight = Math.Max(1.0, _canvas.CellHeight);
+
+            column = (int)Math.Floor(x / cellWidth);
+            row = (int)Math.Floor(y / cellHeight);
+            column = Math.Clamp(column, 0, buffer.Columns - 1);
+            row = Math.Clamp(row, 0, buffer.Rows - 1);
+            return true;
+        }
+
+        private async Task CopySelectionAsync()
+        {
+            if (_canvas?.Buffer == null) return;
+            var text = _selectionController.ExtractText(_canvas.Buffer);
+            if (string.IsNullOrEmpty(text)) return;
+
+            var clipboard = GetClipboard();
+            if (clipboard == null) return;
+            try
+            {
+                await clipboard.SetTextAsync(text);
+            }
+            catch { }
+        }
+
+        private async Task PasteFromClipboardAsync()
+        {
+            var clipboard = GetClipboard();
+            if (clipboard == null) return;
+            try
+            {
+                var text = await clipboard.TryGetTextAsync();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    SendRawInput(text);
+                }
+            }
+            catch { }
+        }
+
+        private IClipboard? GetClipboard()
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            return topLevel?.Clipboard;
+        }
+
+        private void SendRawInput(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            if (_suppressText) return;
+            var bytes = Encoding.UTF8.GetBytes(text);
+            RawInput?.Invoke(bytes);
+            _lineBuffer += text;
+        }
     }
 }

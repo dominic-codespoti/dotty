@@ -22,10 +22,5 @@ namespace Dotty.App.Services
             if (code >= 0x1F300 && code <= 0x1FAFF) return true;
             return false;
         }
-
-        /// <summary>
-        /// Overload for char compatibility.
-        /// </summary>
-        public static bool IsLikelySymbol(char ch) => IsLikelySymbol((int)ch);
     }
 }

@@ -44,10 +44,12 @@ public partial class MainWindow : Window
                         processed++;
                         if (processed > 50)
                         {
+                            _terminalAdapter?.RequestRenderExtern();
                             await Task.Yield();
                             processed = 0;
                         }
                     }
+                    _terminalAdapter?.RequestRenderExtern();
                 }
             }
             catch { }

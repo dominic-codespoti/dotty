@@ -93,12 +93,7 @@ public class Screen
 
     public void Clear()
     {
-        for (int r = 0; r < Rows; r++)
-        for (int c = 0; c < Columns; c++)
-        {
-            ref var cell = ref _cells[_rowMap[r] * Columns + c];
-            cell.Reset();
-        }
+        Array.Clear(_cells, 0, _cells.Length);
     }
 
     // Expose internal cells array for tests. This is intentionally marked
@@ -199,13 +194,38 @@ public class Screen
             return;
         }
 
-        for (int l = 0; l < lines; l++)
+        // Extremely fast path for full screen single line scroll, very common
+        if (lines == 1 && top == 0 && bottom == Rows - 1)
+        {
+            int oldRow = _rowMap[0];
+            _rowMap.AsSpan(1, Rows - 1).CopyTo(_rowMap.AsSpan(0, Rows - 1));
+            _rowMap[Rows - 1] = oldRow;
+            Array.Clear(_cells, oldRow * Columns, Columns);
+            return;
+        }
+
+        if (lines == 1)
         {
             int oldRow = _rowMap[top];
             Array.Copy(_rowMap, top + 1, _rowMap, top, regionHeight - 1);
             _rowMap[bottom] = oldRow;
-            int offset = oldRow * Columns;
-            Array.Clear(_cells, offset, Columns);
+            Array.Clear(_cells, oldRow * Columns, Columns);
+            return;
+        }
+
+        // Save the lost rows
+        int[] oldRows = new int[lines];
+        Array.Copy(_rowMap, top, oldRows, 0, lines);
+        
+        // Shift the remaning rows up
+        Array.Copy(_rowMap, top + lines, _rowMap, top, regionHeight - lines);
+        
+        // Move lost rows to the bottom and clear them
+        for (int l = 0; l < lines; l++)
+        {
+            int oldRow = oldRows[l];
+            _rowMap[bottom - lines + 1 + l] = oldRow;
+            Array.Clear(_cells, oldRow * Columns, Columns);
         }
     }
 
@@ -236,11 +256,8 @@ public class Screen
         {
             for (int r = top; r <= bottom; r++)
             {
-                for (int c = 0; c < Columns; c++)
-                {
-                    ref var cell = ref _cells[_rowMap[r] * Columns + c];
-                    cell.Reset();
-                }
+                int offset = _rowMap[r] * Columns;
+                Array.Clear(_cells, offset, Columns);
             }
             return;
         }

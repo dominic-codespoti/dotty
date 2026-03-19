@@ -283,15 +283,9 @@ public class TerminalBuffer
         {
             // Capture the top-most line of the scroll region before it's
             // scrolled out, preserving it in scrollback history.
-            AddToScrollback(GetRowText(_scrollTop));
+            AddToScrollback(GetRowTextFast(_scrollTop));
 
             ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, 1);
-
-            // Clear the newly revealed bottom row within the region.
-            for (int cc = 0; cc < Columns; cc++)
-            {
-                ActiveBuffer.ClearCell(_scrollBottom, cc);
-            }
 
             // Mark the whole region dirty so the renderer repaints in-place.
             MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
@@ -487,21 +481,11 @@ public class TerminalBuffer
         int rowsToCapture = Math.Min(lines, Rows);
         for (int r = 0; r < rowsToCapture; r++)
         {
-            AddToScrollback(GetRowText(r));
+            // If a custom string-array pool could be used, this would be even faster.
+            AddToScrollback(GetRowTextFast(r));
         }
 
         ActiveBuffer.ScrollUp(lines);
-
-        // Ensure newly revealed rows at the bottom are cleared so stale
-        // content (e.g., statuslines) does not persist after a scroll.
-        int start = Math.Max(0, Rows - lines);
-        for (int r = start; r < Rows; r++)
-        {
-            for (int c = 0; c < Columns; c++)
-            {
-                ActiveBuffer.ClearCell(r, c);
-            }
-        }
 
         BumpScrollGeneration();
     }
@@ -674,6 +658,52 @@ public class TerminalBuffer
 
         // Region change invalidates rows so the renderer repaints.
         MarkAllRowsDirty();
+    }
+
+    
+    private string GetRowTextFast(int row)
+    {
+        var buf = _screens.Active;
+        int lastCol = -1;
+        for (int j = Columns - 1; j >= 0; j--)
+        {
+            var cell = buf.GetCell(row, j);
+            if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme) && cell.Grapheme != " ")
+            {
+                lastCol = j;
+                break;
+            }
+        }
+        if (lastCol < 0) return string.Empty;
+
+        // Use array pool for intermediate chars to avoid large StringBuilder closures internally
+        char[] arr = System.Buffers.ArrayPool<char>.Shared.Rent(lastCol + 1);
+        int writeIdx = 0;
+        for (int j = 0; j <= lastCol; j++)
+        {
+            var cell = buf.GetCell(row, j);
+            if (cell.IsContinuation || string.IsNullOrEmpty(cell.Grapheme))
+            {
+                arr[writeIdx++] = ' ';
+            }
+            else
+            {
+                var g = cell.Grapheme;
+                for(int k=0; k < g.Length; k++) {
+                    // resize if needed
+                    if (writeIdx >= arr.Length) {
+                        var newArr = System.Buffers.ArrayPool<char>.Shared.Rent(arr.Length * 2);
+                        System.Array.Copy(arr, newArr, arr.Length);
+                        System.Buffers.ArrayPool<char>.Shared.Return(arr);
+                        arr = newArr;
+                    }
+                    arr[writeIdx++] = g[k];
+                }
+            }
+        }
+        var s = new string(arr, 0, writeIdx);
+        System.Buffers.ArrayPool<char>.Shared.Return(arr);
+        return s;
     }
 
     public string GetRowText(int row)

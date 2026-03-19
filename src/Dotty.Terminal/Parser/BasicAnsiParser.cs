@@ -280,7 +280,8 @@ namespace Dotty.Terminal.Parser
             }
             finally
             {
-                Handler?.FlushRender();
+                // Defer flush to caller to allow batching
+                // Handler?.FlushRender();
             }
         }
 

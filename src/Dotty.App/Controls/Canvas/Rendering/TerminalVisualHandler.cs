@@ -96,7 +96,48 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                 startVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, startVisibleRow));
                 endVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, endVisibleRow));
 
-                composer.RenderTo(canvas, buffer, s.Paint, s.CellWidth, s.CellHeight, startVisibleRow, endVisibleRow);
+                int composerStart = Math.Max(0, startVisibleRow);
+                int composerEnd = Math.Max(0, Math.Min(buffer.Rows - 1, endVisibleRow));
+                
+                if (composerStart <= composerEnd)
+                {
+                    composer.RenderTo(canvas, buffer, s.Paint, s.CellWidth, s.CellHeight, composerStart, composerEnd);
+                }
+
+                int sbStart = Math.Max(-sbCount, startVisibleRow);
+                int sbEnd = Math.Min(-1, endVisibleRow);
+                if (sbStart <= sbEnd)
+                {
+                    var lines = buffer.GetScrollbackLines();
+                    var paint = s.Paint;
+                    paint.LcdRenderText = true;
+                    paint.SubpixelText = true;
+                    paint.IsAntialias = true;
+                    var fm = paint.FontMetrics;
+                    float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
+                    float baselineOffset = (float)(s.CellHeight * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
+                    
+                    for (int r = sbStart; r <= sbEnd; r++)
+                    {
+                        int idx = r + sbCount;
+                        if (idx >= 0 && idx < lines.Count)
+                        {
+                            var lineStr = lines[idx];
+                            if (string.IsNullOrEmpty(lineStr)) continue;
+                            float y = (float)(r * s.CellHeight + baselineOffset);
+                            
+                            int col = 0;
+                            var enumerator = System.Globalization.StringInfo.GetTextElementEnumerator(lineStr);
+                            while (enumerator.MoveNext())
+                            {
+                                string g = enumerator.GetTextElement();
+                                float x = MathF.Round(col * s.CellWidth);
+                                canvas.DrawText(g, x, y, paint);
+                                col++;
+                            }
+                        }
+                    }
+                }
             }
             else
             {

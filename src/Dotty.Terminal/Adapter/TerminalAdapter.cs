@@ -359,13 +359,57 @@ public class TerminalAdapter : ITerminalHandler
         RequestRender();
     }
 
+    public void OnSetCursorShape(int shape)
+    {
+        // TODO: track cursor shape if needed
+    }
+
+    public void OnSetApplicationCursorKeys(bool enabled)
+    {
+        // TODO: track application cursor keys mode if needed
+    }
+
+    public void OnSendDeviceAttributes(int daType)
+    {
+        switch (daType)
+        {
+            case 0:
+            case 1:
+                ReplyRequested?.Invoke("\u001b[?1;0c");
+                break;
+            case 2:
+                ReplyRequested?.Invoke("\u001b[>0;0;0c");
+                break;
+        }
+    }
+
+    public void OnMouseEvent(int button, int col, int row, bool isPress)
+    {
+    }
+
+    public void OnSetMouseMode(int mode, bool enabled)
+    {
+    }
+
+    private bool _renderDirty;
+
+    public void FlushRender()
+    {
+        if (_renderDirty)
+        {
+            _renderDirty = false;
+            RenderRequested?.Invoke(string.Empty);
+        }
+    }
+
     private void RequestRender()
     {
-        RenderRequested?.Invoke(_buffer.GetCurrentDisplay(showCursor: _buffer.CursorVisible, promptPrefix: null));
+        _renderDirty = true;
     }
 
     public void RequestRenderExtern()
     {
         RequestRender();
+        FlushRender();
     }
 }

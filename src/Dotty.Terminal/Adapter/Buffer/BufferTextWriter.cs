@@ -4,214 +4,206 @@ using System.Globalization;
 
 namespace Dotty.Terminal.Adapter;
 
-/// <summary>
-/// Handles text/grapheme writing, control chars, and attribute application on a screen.
-/// </summary>
 internal sealed class BufferTextWriter
 {
     private readonly CursorController _cursor;
     private readonly BufferEraser _eraser;
-    private readonly Func<Screen> _buffer;
-    private readonly Func<int> _rows;
-    private readonly Func<int> _cols;
-    private readonly Action<int> _scrollUp;
-    private readonly Func<bool> _getClearFlag;
-    private readonly Action<bool> _setClearFlag;
-    private readonly Action _carriageReturn;
-    private readonly Action _lineFeed;
-    private readonly Action<int> _markRowDirty;
-    private readonly Func<bool> _getAutoWrap;
-    private readonly Func<int,int> _getNextTabStopFrom;
-    private bool _inBatchWrite;
-    private HashSet<int>? _batchedRows;
+    private readonly TerminalBuffer _ctx;
+    private static readonly string[] _asciiCache = new string[128];
 
-    public BufferTextWriter(
-        CursorController cursor,
-        BufferEraser eraser,
-        Func<Screen> buffer,
-        Func<int> rows,
-        Func<int> cols,
-        Action<int> scrollUp,
-        Func<bool> getAutoWrap,
-        Func<int,int> getNextTabStopFrom,
-        Func<bool> getClearFlag,
-        Action<bool> setClearFlag,
-        Action carriageReturn,
-        Action lineFeed,
-        Action<int> markRowDirty)
+    static BufferTextWriter()
     {
+        for (int i = 0; i < 128; i++) _asciiCache[i] = ((char)i).ToString();
+    }
+
+    public BufferTextWriter(TerminalBuffer ctx, CursorController cursor, BufferEraser eraser)
+    {
+        _ctx = ctx;
         _cursor = cursor;
         _eraser = eraser;
-        _buffer = buffer;
-        _rows = rows;
-        _cols = cols;
-        _scrollUp = scrollUp;
-        _getAutoWrap = getAutoWrap;
-        _getNextTabStopFrom = getNextTabStopFrom;
-        _getClearFlag = getClearFlag;
-        _setClearFlag = setClearFlag;
-        _carriageReturn = carriageReturn;
-        _lineFeed = lineFeed;
-        _markRowDirty = markRowDirty;
+    }
+
+    private static bool IsAllAscii(ReadOnlySpan<char> text) {
+        for (int i = 0; i < text.Length; i++) {
+            if (text[i] >= 128) return false;
+        }
+        return true;
     }
 
     public void WriteText(ReadOnlySpan<char> text, in CellAttributes attributes)
     {
-        if (text.IsEmpty)
-        {
-            return;
-        }
-
-        _inBatchWrite = true;
-        _batchedRows ??= new HashSet<int>();
-        _batchedRows.Clear();
-
-        try
-        {
+        if (text.IsEmpty) return;
+        if (IsAllAscii(text)) WriteTextAsciiFast(text, in attributes);
+        else {
             var enumerator = StringInfo.GetTextElementEnumerator(text.ToString());
-            while (enumerator.MoveNext())
-            {
-                var element = enumerator.GetTextElement();
-
-                if (element == "\r\n")
-                {
-                    _carriageReturn();
-                    _lineFeed();
-                    continue;
-                }
-
-                if (element.Length == 1 && TryHandleControlChar(element[0], in attributes))
-                {
-                    continue;
-                }
-
-                // If the previous write hit the last column with auto-wrap on,
-                // terminals defer the wrap until the next printable. Emulate that
-                // by applying a line feed + carriage return before writing.
-                if (_getAutoWrap() && _cursor.WrapPending)
-                {
-                    _lineFeed();
-                    _carriageReturn();
-                    _cursor.SetWrapPending(false);
-                }
-
-                // If the application has requested a clear-on-next-write (carriage
-                // return behavior), honor it by clearing from the cursor to the end
-                // of line.
-                if (_getClearFlag())
-                {
-                    _eraser.ClearLineFromCursor(_buffer(), _cursor, _cols());
-                    _setClearFlag(false);
-                    RequestMarkRowDirty(_cursor.Row);
-                }
-
-                // Implicit EL2 when writing starts at column 0: clear the entire
-                // line before emitting the first grapheme. This matches what
-                // applications expect when they do `CUP row,0` followed by text.
-                if (_cursor.Col == 0)
-                {
-                    _eraser.EraseLine(_buffer(), _cursor, _cols(), 2);
-                    RequestMarkRowDirty(_cursor.Row);
-                }
-
-                WriteGrapheme(element, in attributes);
+            while (enumerator.MoveNext()) {
+                ProcessElement(enumerator.GetTextElement(), in attributes);
             }
         }
-        finally
+    }
+
+    private void WriteTextAsciiFast(ReadOnlySpan<char> text, in CellAttributes attributes)
+    {
+        int length = text.Length;
+        for (int i = 0; i < length; i++)
         {
-            // Flush any coalesced dirty marks
-            if (_batchedRows != null)
+            char c = text[i];
+            if (c < 32 || c == 127)
             {
-                foreach (var r in _batchedRows)
+                if (c == '\r' && i + 1 < length && text[i + 1] == '\n')
                 {
-                    _markRowDirty(r);
+                    _ctx.CarriageReturn();
+                    _ctx.LineFeed();
+                    i++;
+                    continue;
                 }
+                if (TryHandleControlChar(c, in attributes)) continue;
             }
-            _inBatchWrite = false;
+            ProcessElementInner(_asciiCache[c], in attributes, isAscii: true);
         }
+    }
+
+    private void ProcessElement(string element, in CellAttributes attributes)
+    {
+        if (element == "\r\n") { _ctx.CarriageReturn(); _ctx.LineFeed(); return; }
+        if (element.Length == 1 && TryHandleControlChar(element[0], in attributes)) return;
+        ProcessElementInner(element, in attributes, isAscii: false);
+    }
+
+    private void ProcessElementInner(string element, in CellAttributes attributes, bool isAscii)
+    {
+        if (_ctx._autoWrap && _cursor.WrapPending)
+        {
+            _ctx.LineFeed();
+            _ctx.CarriageReturn();
+            _cursor.SetWrapPending(false);
+        }
+
+        if (_ctx._clearLineOnNextWrite)
+        {
+            _eraser.ClearLineFromCursor(_ctx.ActiveBuffer, _cursor, _ctx.Columns);
+            _ctx._clearLineOnNextWrite = false;
+            RequestMarkRowDirty(_cursor.Row);
+        }
+
+        /*
+        if (_cursor.Col == 0)
+        {
+            _eraser.EraseLine(_ctx.ActiveBuffer, _cursor, _ctx.Columns, 2);
+            RequestMarkRowDirty(_cursor.Row);
+        }
+        */
+
+        if (isAscii) WriteGraphemeAscii(element, in attributes);
+        else WriteGrapheme(element, in attributes);
     }
 
     private bool TryHandleControlChar(char ch, in CellAttributes attributes)
     {
         switch (ch)
         {
-            case '\r':
-                _carriageReturn();
-                return true;
-            case '\n':
-                _lineFeed();
-                return true;
-            case '\t':
-                WriteTab(in attributes);
-                return true;
-            case '\b':
-            case '\u007f':
-                _eraser.ErasePreviousGlyph(_buffer(), _cursor, _rows(), _cols());
+            case '\r': _ctx.CarriageReturn(); return true;
+            case '\n': _ctx.LineFeed(); return true;
+            case '\t': WriteTab(in attributes); return true;
+            case '\b': case '\u007f':
+                _eraser.ErasePreviousGlyph(_ctx.ActiveBuffer, _cursor, _ctx.Rows, _ctx.Columns);
                 RequestMarkRowDirty(_cursor.Row);
                 return true;
-            default:
-                return char.IsControl(ch);
+            default: return char.IsControl(ch);
         }
     }
 
     private void WriteTab(in CellAttributes attributes)
     {
-        int cols = _cols();
+        int cols = _ctx.Columns;
         int current = _cursor.Col;
-        int target = _getNextTabStopFrom(current);
+        int target = _ctx.GetNextTabStopFrom(current);
         if (target <= current) target = Math.Min(cols - 1, current + 1);
         int spaces = target - current;
-        for (int i = 0; i < spaces; i++)
-        {
-            WriteGrapheme(" ", in attributes);
-        }
+        for (int i = 0; i < spaces; i++) WriteGraphemeAscii(_asciiCache[' '], in attributes);
     }
 
-    private void WriteGrapheme(string grapheme, in CellAttributes attributes)
+    private void WriteGraphemeAscii(string grapheme, in CellAttributes attributes)
     {
-        if (string.IsNullOrEmpty(grapheme))
-        {
-            return;
-        }
-
-        int width = UnicodeWidth.GetWidth(grapheme);
-        if (width == 0)
-        {
-            if (AttachCombiningMark(grapheme))
-            {
-                return; // combining mark attached to previous base
-            }
-
-            // If attach failed, treat as a single-width placeholder.
-            width = 1;
-        }
-
-        bool autoWrap = _getAutoWrap();
-
+        bool autoWrap = _ctx._autoWrap;
         int startCol;
         if (autoWrap)
         {
-            if (_cursor.EnsureSpace(width, _rows(), _cols()))
-            {
-                _scrollUp(1);
-            }
+            if (_cursor.EnsureSpace(1, _ctx.Rows, _ctx.Columns)) _ctx.ScrollUp(1);
             startCol = _cursor.Col;
         }
         else
         {
-            // When wrap is disabled, clamp start column so grapheme fits in last columns
-            int cols = _cols();
+            int cols = _ctx.Columns;
             startCol = _cursor.Col;
-            if (startCol > cols - width) startCol = Math.Max(0, cols - width);
-            _cursor.Set(_cursor.Row, startCol, _rows(), cols);
+            if (startCol > cols - 1) startCol = Math.Max(0, cols - 1);
+            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, cols);
         }
 
-        var buf = _buffer();
+        var buf = _ctx.ActiveBuffer;
         int currentRow = _cursor.Row;
-        // If we're about to write at a column that may be a continuation
-        // of an existing grapheme, clear the addressed cell so we don't
-        // leave an orphaned base glyph to the left. Screen.ClearCell
-        // knows how to find the base when given a continuation column.
+        
+        ref var cell = ref buf.GetCellRef(currentRow, startCol);
+        if (cell.IsContinuation || cell.Width > 1) {
+            buf.ClearCell(currentRow, startCol);
+            // Need to get ref again because ClearCell might have changed it? No, ref is stable.
+        }
+
+        cell.Grapheme = grapheme;
+        ApplyAttributes(ref cell, in attributes);
+        cell.Width = 1;
+        cell.IsContinuation = false;
+
+        if (autoWrap)
+        {
+            int cols = _ctx.Columns;
+            if (startCol >= cols - 1)
+            {
+                _cursor.Set(currentRow, Math.Min(cols - 1, startCol), _ctx.Rows, cols);
+                _cursor.SetWrapPending(true);
+            }
+            else
+            {
+                _cursor.Set(currentRow, startCol + 1, _ctx.Rows, cols);
+                _cursor.SetWrapPending(false);
+            }
+        }
+        else
+        {
+            int cols = _ctx.Columns;
+            _cursor.Set(currentRow, Math.Min(startCol + 1, cols - 1), _ctx.Rows, cols);
+            _cursor.SetWrapPending(false);
+        }
+        RequestMarkRowDirty(currentRow);
+    }
+
+    private void WriteGrapheme(string grapheme, in CellAttributes attributes)
+    {
+        if (string.IsNullOrEmpty(grapheme)) return;
+        int width = UnicodeWidth.GetWidth(grapheme);
+        if (width == 0)
+        {
+            if (AttachCombiningMark(grapheme)) return;
+            width = 1;
+        }
+
+        bool autoWrap = _ctx._autoWrap;
+        int startCol;
+        if (autoWrap)
+        {
+            if (_cursor.EnsureSpace(width, _ctx.Rows, _ctx.Columns)) _ctx.ScrollUp(1);
+            startCol = _cursor.Col;
+        }
+        else
+        {
+            int cols = _ctx.Columns;
+            startCol = _cursor.Col;
+            if (startCol > cols - width) startCol = Math.Max(0, cols - width);
+            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, cols);
+        }
+
+        var buf = _ctx.ActiveBuffer;
+        int currentRow = _cursor.Row;
         buf.ClearCell(currentRow, startCol);
         ref var cell = ref buf.GetCellRef(_cursor.Row, startCol);
         cell.Grapheme = grapheme;
@@ -227,27 +219,25 @@ internal sealed class BufferTextWriter
             ApplyAttributes(ref cont, in attributes);
         }
 
-        // Avoid immediate row-advance on the last column. Set a wrap-pending
-        // flag so the next printable triggers the linefeed.
         if (autoWrap)
         {
-            int cols = _cols();
+            int cols = _ctx.Columns;
             int endCol = startCol + width - 1;
             if (endCol >= cols - 1)
             {
-                _cursor.Set(_cursor.Row, Math.Min(cols - 1, endCol), _rows(), cols);
+                _cursor.Set(_cursor.Row, Math.Min(cols - 1, endCol), _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
             {
-                _cursor.Set(_cursor.Row, endCol + 1, _rows(), cols);
+                _cursor.Set(_cursor.Row, endCol + 1, _ctx.Rows, cols);
                 _cursor.SetWrapPending(false);
             }
         }
         else
         {
-            int cols = _cols();
-            _cursor.Set(_cursor.Row, Math.Min(_cursor.Col + width, cols - 1), _rows(), cols);
+            int cols = _ctx.Columns;
+            _cursor.Set(_cursor.Row, Math.Min(_cursor.Col + width, cols - 1), _ctx.Rows, cols);
             _cursor.SetWrapPending(false);
         }
         RequestMarkRowDirty(currentRow);
@@ -256,80 +246,37 @@ internal sealed class BufferTextWriter
     private bool AttachCombiningMark(string mark)
     {
         var (row, col) = GetPreviousBaseCell();
-        if (row < 0)
-        {
-            return false;
-        }
-
-        var buf = _buffer();
+        if (row < 0) return false;
+        var buf = _ctx.ActiveBuffer;
         ref var cell = ref buf.GetCellRef(row, col);
-        if (string.IsNullOrEmpty(cell.Grapheme))
-        {
-            return false;
-        }
-
+        if (string.IsNullOrEmpty(cell.Grapheme)) return false;
         cell.Grapheme += mark;
         RequestMarkRowDirty(row);
         return true;
     }
 
-    private void RequestMarkRowDirty(int row)
-    {
-        if (_inBatchWrite)
-        {
-            _batchedRows?.Add(row);
-        }
-        else
-        {
-            _markRowDirty(row);
-        }
-    }
+    private void RequestMarkRowDirty(int row) => _ctx.MarkRowDirty(row);
 
     private (int row, int col) GetPreviousBaseCell()
     {
         int row = _cursor.Row;
         int col = _cursor.Col;
+        if (row == 0 && col == 0) return (-1, -1);
+        if (col == 0) { row--; col = _ctx.Columns - 1; }
+        else col--;
 
-        if (row == 0 && col == 0)
-        {
-            return (-1, -1);
-        }
-
-        if (col == 0)
-        {
-            row--;
-            col = _cols() - 1;
-        }
-        else
-        {
-            col--;
-        }
-
-        var buf = _buffer();
+        var buf = _ctx.ActiveBuffer;
         while (row >= 0)
         {
             ref var cell = ref buf.GetCellRef(row, col);
             if (!cell.IsContinuation)
             {
-                if (!cell.IsEmpty)
-                {
-                    return (row, col);
-                }
-
+                if (!cell.IsEmpty) return (row, col);
                 return (-1, -1);
             }
-
-            if (col == 0)
-            {
-                row--;
-                col = _cols() - 1;
-            }
-            else
-            {
-                col--;
-            }
+            if (col == 0) { row--; col = _ctx.Columns - 1; }
+            else col--;
         }
-
         return (-1, -1);
     }
 

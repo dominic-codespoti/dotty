@@ -26,7 +26,7 @@ public class TerminalBuffer
     private readonly System.Collections.Generic.List<string> _scrollback = new System.Collections.Generic.List<string>();
     private int _maxScrollback = 10000;
     private bool[]? _tabStops;
-    private bool _autoWrap = true; // DECAWM default is enabled
+    internal bool _autoWrap = true; // DECAWM default is enabled
     private bool _bracketedPaste = false;
     public int ScrollbackCount => _scrollback.Count;
     public IReadOnlyList<string> GetScrollbackLines() => _scrollback.AsReadOnly();
@@ -42,7 +42,7 @@ public class TerminalBuffer
     public int CursorCol => _cursor.Col;
     public bool CursorVisible => _cursor.Visible;
 
-    private bool _clearLineOnNextWrite;
+    internal bool _clearLineOnNextWrite;
 
     public TerminalBuffer(int rows = 24, int columns = 80)
     {
@@ -189,7 +189,7 @@ public class TerminalBuffer
         BumpScrollGeneration();
     }
 
-    private Screen ActiveBuffer => _screens.Active;
+    internal Screen ActiveBuffer => _screens.Active;
 
     // Internal accessor for tests to inspect the active screen without
     // resorting to reflection. Marked internal to avoid widening the public API.
@@ -479,7 +479,7 @@ public class TerminalBuffer
         _writer.WriteText(text, in attributes);
     }
 
-    private void ScrollUp(int lines)
+    internal void ScrollUp(int lines)
     {
         if (lines <= 0) return;
 
@@ -512,11 +512,16 @@ public class TerminalBuffer
     /// </summary>
     private void AddToScrollback(string row)
     {
+        if (_maxScrollback <= 0) return;
+
         _scrollback.Add(row);
-        if (_scrollback.Count > _maxScrollback)
+        // Add an amortized threshold to heavily reduce O(N) shift operations
+        // when trimming from the front of the list. We allow the scrollback to
+        // exceed max by 10% before trimming down to max.
+        int threshold = _maxScrollback + Math.Max(100, _maxScrollback / 10);
+        
+        if (_scrollback.Count > threshold)
         {
-            // Trim excess - for small overages, RemoveRange is fine.
-            // For large bursts, this prevents excessive shifting.
             int excess = _scrollback.Count - _maxScrollback;
             if (excess > 0)
             {
@@ -698,25 +703,12 @@ public class TerminalBuffer
 
     private BufferTextWriter CreateWriter()
     {
-        return new BufferTextWriter(
-            _cursor,
-            _eraser,
-            () => ActiveBuffer,
-            () => Rows,
-            () => Columns,
-            ScrollUp,
-            () => _autoWrap,
-            (int c) => GetNextTabStopFrom(c),
-            () => _clearLineOnNextWrite,
-            v => _clearLineOnNextWrite = v,
-            CarriageReturn,
-            LineFeed,
-            MarkRowDirty);
+        return new BufferTextWriter(this, _cursor, _eraser);
     }
 
     // per-row versioning and dirty arrays removed
 
-    private void MarkRowDirty(int row)
+    internal void MarkRowDirty(int row)
     {
         // Per-row versions removed. Signal a generation bump so renderers
         // can detect that something changed and perform a full repaint.

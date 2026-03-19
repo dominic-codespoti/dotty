@@ -64,54 +64,44 @@ public sealed class TerminalFrameComposer : IDisposable
         TerminalBuffer buffer,
         SKPaint paint,
         float cellW,
-        float cellH)
+        float cellH,
+        int startRow = 0,
+        int? endRow = null)
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
         if (buffer == null) throw new ArgumentNullException(nameof(buffer));
         if (paint == null) throw new ArgumentNullException(nameof(paint));
         if (cellW <= 0 || cellH <= 0) return;
 
-        // ---- grid contract ----
-        int cellPxW = Math.Max(1, (int)MathF.Round(cellW));
-        int cellPxH = Math.Max(1, (int)MathF.Round(cellH));
+        int safeEndRow = endRow ?? (buffer.Rows - 1);
 
         // Themeable metrics derived from appearance settings.
         float horizontalPadding = _appearance.HorizontalPadding;
-        float verticalPadding = _appearance.GetVerticalPadding(cellPxH);
-        float radius = _appearance.GetRadius(cellPxH, verticalPadding);
+        float verticalPadding = _appearance.GetVerticalPadding(cellH);
+        float radius = _appearance.GetRadius(cellH, verticalPadding);
 
-        int surfaceW = buffer.Columns * cellPxW;
-        int surfaceH = buffer.Rows * cellPxH;
-
-        using var surface = SKSurface.Create(
-            new SKImageInfo(surfaceW, surfaceH, SKColorType.Rgba8888, SKAlphaType.Premul))
-            ?? throw new InvalidOperationException("Failed to allocate surface.");
-
-        var canvas = surface.Canvas;
-        canvas.Clear(SKColors.Transparent);
+        int computedRows = safeEndRow - startRow + 1;
+        float surfaceW = buffer.Columns * cellW;
+        float surfaceH = computedRows * cellH;
 
         // Cell classification will handle per-row sizing/flags.
         EnsureCellClasses(buffer.Columns);
 
         // ---- background regions ----
-        CollectBackgroundRegions(buffer);
-        DrawBackgroundRegions(canvas, cellPxW, cellPxH, surfaceW, surfaceH, horizontalPadding, verticalPadding, radius);
+        CollectBackgroundRegions(buffer, startRow, safeEndRow);
+        DrawBackgroundRegions(target, cellW, cellH, surfaceW, surfaceH, horizontalPadding, verticalPadding, radius);
 
         // ---- glyphs ----
         SyncGlyphPaint(paint);
 
-        // The surface was created with premultiplied alpha; subpixel (LCD)
-        // text rendering assumes an opaque, non-premultiplied target. Disable
-        // LCD/subpixel when composing to a premultiplied/transparent surface.
-        bool allowLcd = false; // premultiplied surface => disable
-        _glyphPaint.LcdRenderText = allowLcd;
-        _glyphPaint.SubpixelText = allowLcd;
-        _glyphPaint.IsAntialias = !allowLcd;
+        // We are rendering directly to the target canvas, which typically allows LCD text if opaque, 
+        // but default to standard antialiasing constraints if unknown. Let's use target properties if possible,
+        // or just enable it aggressively for bleeding edge performance/quality.
+        _glyphPaint.LcdRenderText = true;
+        _glyphPaint.SubpixelText = true;
+        _glyphPaint.IsAntialias = true;
 
-        DrawGlyphs(canvas, buffer, paint, cellPxW, cellPxH);
-
-        using var image = surface.Snapshot();
-        target.DrawImage(image, 0, 0);
+        DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
     }
 
     public void ResetCaches()
@@ -125,12 +115,12 @@ public sealed class TerminalFrameComposer : IDisposable
     // BACKGROUND REGION PIPELINE
     // ============================================================
 
-    private void CollectBackgroundRegions(TerminalBuffer buffer)
+    private void CollectBackgroundRegions(TerminalBuffer buffer, int startRow, int endRow)
     {
         _regions.Clear();
         _activeRegions.Clear();
 
-        for (int row = 0; row < buffer.Rows; row++)
+        for (int row = startRow; row <= endRow; row++)
         {
             // Classify the row once and let the span builder and glyph
             // renderer consume that single source of truth.
@@ -220,20 +210,20 @@ public sealed class TerminalFrameComposer : IDisposable
 
     private void DrawBackgroundRegions(
         SKCanvas canvas,
-        int cellPxW,
-        int cellPxH,
-        int surfaceW,
-        int surfaceH,
+        float cellW,
+        float cellH,
+        float surfaceW,
+        float surfaceH,
         float horizontalPadding,
         float verticalPadding,
         float baseRadius)
     {
         foreach (var r in _regions)
         {
-            float left = Math.Max(0f, r.X0 * cellPxW - horizontalPadding);
-            float right = Math.Min(surfaceW, r.X1 * cellPxW + horizontalPadding);
-            float top = Math.Max(0f, r.TopRow * cellPxH + verticalPadding);
-            float bottom = Math.Min(surfaceH, r.BottomRow * cellPxH - verticalPadding);
+            float left = r.X0 * cellW - horizontalPadding;
+            float right = r.X1 * cellW + horizontalPadding;
+            float top = r.TopRow * cellH + verticalPadding;
+            float bottom = r.BottomRow * cellH - verticalPadding;
 
             if (right <= left || bottom <= top) continue;
 
@@ -280,8 +270,10 @@ public sealed class TerminalFrameComposer : IDisposable
         SKCanvas canvas,
         TerminalBuffer buffer,
         SKPaint paint,
-        int cellPxW,
-        int cellPxH)
+        float cellW,
+        float cellH,
+        int startRow,
+        int endRow)
     {
         var fm = _glyphPaint.FontMetrics;
         float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
@@ -289,15 +281,15 @@ public sealed class TerminalFrameComposer : IDisposable
         // Center the glyph box vertically inside the cell box (capsule). We
         // compute an offset relative to the top of the row and then add the
         // row origin so we can snap the final baseline to the pixel grid.
-        float baselineOffset = (cellPxH * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
+        float baselineOffset = (cellH * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
 
         var defaultColor = paint.Color;
 
-        for (int row = 0; row < buffer.Rows; row++)
+        for (int row = startRow; row <= endRow; row++)
         {
             ClassifyRowCells(buffer, row);
 
-            float baseline = MathF.Round(row * cellPxH + baselineOffset);
+            float baseline = MathF.Round(row * cellH + baselineOffset);
 
             for (int col = 0; col < buffer.Columns; col++)
             {
@@ -311,7 +303,7 @@ public sealed class TerminalFrameComposer : IDisposable
                 _glyphPaint.Style = SKPaintStyle.Fill;
 
                 // Snap X positions to integer pixels to align glyphs to the grid.
-                float x = MathF.Round(col * cellPxW);
+                float x = MathF.Round(col * cellW);
                 canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
             }
         }
@@ -328,12 +320,22 @@ public sealed class TerminalFrameComposer : IDisposable
             _cellClasses = new CellClass[columns];
     }
 
-    private static int GetFirstRune(string? s)
+    private static unsafe int GetFirstRune(string? s)
     {
         if (string.IsNullOrEmpty(s)) return -1;
-        var en = s.EnumerateRunes().GetEnumerator();
-        if (en.MoveNext()) return en.Current.Value;
-        return -1;
+        fixed (char* ptr = s)
+        {
+            char c0 = ptr[0];
+            if (char.IsHighSurrogate(c0) && s.Length > 1)
+            {
+                char c1 = ptr[1];
+                if (char.IsLowSurrogate(c1))
+                {
+                    return char.ConvertToUtf32(c0, c1);
+                }
+            }
+            return c0;
+        }
     }
 
     private struct CellClass
@@ -414,24 +416,43 @@ public sealed class TerminalFrameComposer : IDisposable
         _glyphPaint.TextSkewX = source.TextSkewX;
     }
 
-    private static bool TryParseHexColor(string? hex, out SKColor color)
+    private static unsafe bool TryParseHexColor(string? hex, out SKColor color)
     {
         color = default;
         if (string.IsNullOrEmpty(hex) || hex.Length < 7 || hex[0] != '#')
             return false;
 
-        try
+        fixed (char* ptr = hex)
         {
-            byte r = Convert.ToByte(hex.Substring(1, 2), 16);
-            byte g = Convert.ToByte(hex.Substring(3, 2), 16);
-            byte b = Convert.ToByte(hex.Substring(5, 2), 16);
-            color = new SKColor(r, g, b);
+            int r = ParseHexByte(ptr[1], ptr[2]);
+            if (r < 0) return false;
+            
+            int g = ParseHexByte(ptr[3], ptr[4]);
+            if (g < 0) return false;
+            
+            int b = ParseHexByte(ptr[5], ptr[6]);
+            if (b < 0) return false;
+            
+            color = new SKColor((byte)r, (byte)g, (byte)b);
             return true;
         }
-        catch
-        {
-            return false;
-        }
+    }
+
+    private static int ParseHexByte(char high, char low)
+    {
+        int h = ParseHexChar(high);
+        if (h < 0) return -1;
+        int l = ParseHexChar(low);
+        if (l < 0) return -1;
+        return (h << 4) | l;
+    }
+
+    private static int ParseHexChar(char c)
+    {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
     }
 
     private static SKColor DarkenColor(SKColor c)

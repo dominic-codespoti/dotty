@@ -5,7 +5,8 @@ namespace Dotty.Terminal.Adapter;
 /// </summary>
 public class Screen
 {
-    private Cell[,] _cells;
+    private Cell[] _cells;
+    private int[] _rowMap;
 
     public void MarkRender()
     {
@@ -19,11 +20,30 @@ public class Screen
     {
         Rows = rows;
         Columns = columns;
-        _cells = new Cell[rows, columns];
+        _cells = new Cell[rows * columns];
+        _rowMap = new int[rows];
+        for (int i = 0; i < rows; i++) _rowMap[i] = i;
         Clear();
     }
 
-    public ref Cell GetCellRef(int row, int col) => ref _cells[row, col];
+    public ref Cell GetCellRef(int row, int col) => ref _cells[_rowMap[row] * Columns + col];
+
+    public Cell[] ExtractRow(int row)
+    {
+        var result = new Cell[Columns];
+        if (row >= 0 && row < Rows)
+        {
+            Array.Copy(_cells, _rowMap[row] * Columns, result, 0, Columns);
+            // We can skip deep inspecting continuations here because we never write continuation cells with non-null graphemes internally anyway. 
+            // It was just a safety feature taking too much time on yes command 500k lines.
+        }
+        else
+        {
+            for (int i = 0; i < Columns; i++)
+                result[i] = new Cell { Grapheme = " ", Width = 1 };
+        }
+        return result;
+    }
 
     public Cell GetCell(int row, int col)
     {
@@ -32,7 +52,7 @@ public class Screen
             return new Cell { Grapheme = " ", Width = 1, Bold = false };
         }
 
-        ref var cell = ref _cells[row, col];
+        ref var cell = ref _cells[_rowMap[row] * Columns + col];
         if (cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
         {
             cell.Grapheme = null;
@@ -46,7 +66,7 @@ public class Screen
             {
                 int cc = col + i;
                 if (cc >= Columns) { missing = true; break; }
-                var cont = _cells[row, cc];
+                var cont = _cells[_rowMap[row] * Columns + cc];
                 if (!cont.IsContinuation)
                 {
                     missing = true;
@@ -60,7 +80,7 @@ public class Screen
                 {
                     int cc = col + i;
                     if (cc >= Columns) break;
-                    ref var cont = ref _cells[row, cc];
+                    ref var cont = ref _cells[_rowMap[row] * Columns + cc];
                     cont.Reset();
                     cont.IsContinuation = true;
                     cont.Width = 0;
@@ -68,7 +88,7 @@ public class Screen
             }
         }
 
-        return _cells[row, col];
+        return _cells[_rowMap[row] * Columns + col];
     }
 
     public void Clear()
@@ -76,7 +96,7 @@ public class Screen
         for (int r = 0; r < Rows; r++)
         for (int c = 0; c < Columns; c++)
         {
-            ref var cell = ref _cells[r, c];
+            ref var cell = ref _cells[_rowMap[r] * Columns + c];
             cell.Reset();
         }
     }
@@ -84,7 +104,18 @@ public class Screen
     // Expose internal cells array for tests. This is intentionally marked
     // `internal` so production code is unaffected; tests can access this via
     // `InternalsVisibleTo` from the test project.
-    internal Cell[,] GetCellsForTests() => _cells;
+    internal Cell[,] GetCellsForTests()
+    {
+        var result = new Cell[Rows, Columns];
+        for (int r = 0; r < Rows; r++)
+        {
+            for (int c = 0; c < Columns; c++)
+            {
+                result[r, c] = _cells[_rowMap[r] * Columns + c];
+            }
+        }
+        return result;
+    }
 
     public void ClearCell(int row, int col)
     {
@@ -95,9 +126,9 @@ public class Screen
 
         // Find the base cell that covers the addressed column.
         int baseCol = col;
-        if (_cells[row, baseCol].IsContinuation)
+        if (_cells[_rowMap[row] * Columns + baseCol].IsContinuation)
         {
-            while (baseCol > 0 && _cells[row, baseCol].IsContinuation)
+            while (baseCol > 0 && _cells[_rowMap[row] * Columns + baseCol].IsContinuation)
             {
                 baseCol--;
             }
@@ -108,7 +139,7 @@ public class Screen
             int scan = baseCol - 1;
             while (scan >= 0)
             {
-                ref var cand = ref _cells[row, scan];
+                ref var cand = ref _cells[_rowMap[row] * Columns + scan];
                 // Treat zero/unknown width as 1 for safety.
                 int w = Math.Max(1, (int)cand.Width);
                 if (!cand.IsContinuation && w > 1 && scan + w > col)
@@ -121,13 +152,13 @@ public class Screen
         }
 
         // Reset the base cell and any continuation cells that follow.
-        ref var cell = ref _cells[row, baseCol];
+        ref var cell = ref _cells[_rowMap[row] * Columns + baseCol];
         cell.Reset();
 
         int c = baseCol + 1;
         while (c < Columns)
         {
-            ref var nxt = ref _cells[row, c];
+            ref var nxt = ref _cells[_rowMap[row] * Columns + c];
             if (!nxt.IsContinuation) break;
             nxt.Reset();
             c++;
@@ -135,54 +166,18 @@ public class Screen
 
     }
 
-    public void ScrollUp(int lines)
+        public void ScrollUp(int lines)
     {
-        bool fastPathDone = false;
-        try
+        if (lines <= 0) return;
+        if (lines >= Rows) { Clear(); return; }
+
+        for (int i = 0; i < lines; i++)
         {
-            int srcIndex = lines * Columns;
-            int destIndex = 0;
-            int count = (Rows - lines) * Columns;
-            if (count > 0) Array.Copy(_cells, srcIndex, _cells, destIndex, count);
-
-            // Clear trailing lines at the bottom
-            int clearStart = (Rows - lines) * Columns;
-            int clearCount = lines * Columns;
-            if (clearCount > 0) Array.Clear(_cells, clearStart, clearCount);
-
-            fastPathDone = true;
-        }
-        catch
-        {
-            fastPathDone = false;
-        }
-
-        if (!fastPathDone)
-        {
-            for (int i = 0; i < Rows - lines; i++)
-            {
-                for (int j = 0; j < Columns; j++)
-                {
-                    _cells[i, j] = _cells[i + lines, j];
-                }
-            }
-
-            for (int i = Rows - lines; i < Rows; i++)
-            {
-                for (int j = 0; j < Columns; j++)
-                {
-                    ref var cell = ref _cells[i, j];
-                    cell.Reset();
-                }
-            }
-
-            try
-            {
-                int startRow = 0;
-                int endRow = Math.Max(0, Rows - lines - 1);
-                RepairOrphanedBases(startRow, endRow, 0, Columns - 1);
-            }
-            catch { }
+            int oldRow = _rowMap[0];
+            Array.Copy(_rowMap, 1, _rowMap, 0, Rows - 1);
+            _rowMap[Rows - 1] = oldRow;
+            int offset = oldRow * Columns;
+            Array.Clear(_cells, offset, Columns);
         }
     }
 
@@ -191,118 +186,42 @@ public class Screen
         if (lines <= 0) return;
         if (top < 0) top = 0;
         if (bottom >= Rows) bottom = Rows - 1;
-        if (top > bottom) return;
+        if (top >= bottom) return;
 
         int regionHeight = bottom - top + 1;
         if (lines >= regionHeight)
         {
             for (int r = top; r <= bottom; r++)
             {
-                for (int c = 0; c < Columns; c++)
-                {
-                    ref var cell = ref _cells[r, c];
-                    cell.Reset();
-                }
+                int offset = _rowMap[r] * Columns;
+                Array.Clear(_cells, offset, Columns);
             }
             return;
         }
 
-        bool fastPathDone = false;
-        try
+        for (int l = 0; l < lines; l++)
         {
-            int srcIndex = (top + lines) * Columns;
-            int destIndex = top * Columns;
-            int count = (regionHeight - lines) * Columns;
-            if (count > 0) Array.Copy(_cells, srcIndex, _cells, destIndex, count);
-
-            int clearStart = destIndex + count;
-            int clearCount = lines * Columns;
-            if (clearCount > 0) Array.Clear(_cells, clearStart, clearCount);
-
-            fastPathDone = true;
-        }
-        catch
-        {
-            fastPathDone = false;
-        }
-
-        if (!fastPathDone)
-        {
-            for (int r = 0; r < regionHeight - lines; r++)
-            {
-                for (int c = 0; c < Columns; c++)
-                {
-                    _cells[top + r, c] = _cells[top + r + lines, c];
-                }
-            }
-
-            for (int r = top + regionHeight - lines; r <= bottom; r++)
-            {
-                for (int c = 0; c < Columns; c++)
-                {
-                    ref var cell = ref _cells[r, c];
-                    cell.Reset();
-                }
-            }
-
-            try
-            {
-                int startRow = top;
-                int endRow = Math.Min(bottom, top + regionHeight - lines - 1);
-                RepairOrphanedBases(startRow, endRow, 0, Columns - 1);
-            }
-            catch { }
+            int oldRow = _rowMap[top];
+            Array.Copy(_rowMap, top + 1, _rowMap, top, regionHeight - 1);
+            _rowMap[bottom] = oldRow;
+            int offset = oldRow * Columns;
+            Array.Clear(_cells, offset, Columns);
         }
     }
 
     public void ScrollDown(int lines)
     {
         if (lines <= 0) return;
+        if (lines >= Rows) { Clear(); return; }
 
-        bool fastPathDone = false;
-        try
+        for (int i = 0; i < lines; i++)
         {
-            int srcIndex = 0;
-            int destIndex = lines * Columns;
-            int count = (Rows - lines) * Columns;
-            if (count > 0) Array.Copy(_cells, srcIndex, _cells, destIndex, count);
-
-            if (lines * Columns > 0) Array.Clear(_cells, 0, lines * Columns);
-
-            fastPathDone = true;
+            int oldRow = _rowMap[Rows - 1];
+            Array.Copy(_rowMap, 0, _rowMap, 1, Rows - 1);
+            _rowMap[0] = oldRow;
+            int offset = oldRow * Columns;
+            Array.Clear(_cells, offset, Columns);
         }
-        catch
-        {
-            fastPathDone = false;
-        }
-
-        if (!fastPathDone)
-        {
-            for (int i = Rows - 1; i >= lines; i--)
-            {
-                for (int j = 0; j < Columns; j++)
-                {
-                    _cells[i, j] = _cells[i - lines, j];
-                }
-            }
-
-            for (int i = 0; i < Math.Min(lines, Rows); i++)
-            {
-                for (int j = 0; j < Columns; j++)
-                {
-                    ref var cell = ref _cells[i, j];
-                    cell.Reset();
-                }
-            }
-        }
-
-        try
-        {
-            int startRow = Math.Max(0, lines);
-            int endRow = Rows - 1;
-            RepairOrphanedBases(startRow, endRow, 0, Columns - 1);
-        }
-        catch { }
     }
 
     public void ScrollDownRegion(int top, int bottom, int lines)
@@ -319,7 +238,7 @@ public class Screen
             {
                 for (int c = 0; c < Columns; c++)
                 {
-                    ref var cell = ref _cells[r, c];
+                    ref var cell = ref _cells[_rowMap[r] * Columns + c];
                     cell.Reset();
                 }
             }
@@ -351,7 +270,7 @@ public class Screen
             {
                 for (int c = 0; c < Columns; c++)
                 {
-                    _cells[r, c] = _cells[r - lines, c];
+                    _cells[_rowMap[r] * Columns + c] = _cells[_rowMap[r - lines] * Columns + c];
                 }
             }
 
@@ -359,7 +278,7 @@ public class Screen
             {
                 for (int c = 0; c < Columns; c++)
                 {
-                    ref var cell = ref _cells[r, c];
+                    ref var cell = ref _cells[_rowMap[r] * Columns + c];
                     cell.Reset();
                 }
             }
@@ -385,7 +304,7 @@ public class Screen
         {
             for (int c = colStart; c <= colEnd; c++)
             {
-                ref var cell = ref _cells[r, c];
+                ref var cell = ref _cells[_rowMap[r] * Columns + c];
                 if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
                 {
                     int w = Math.Max(1, (int)cell.Width);
@@ -393,7 +312,7 @@ public class Screen
                     for (int i = 1; i < w; i++)
                     {
                         if (c + i > colEnd) { missing = true; break; }
-                        var cont = _cells[r, c + i];
+                        var cont = _cells[_rowMap[r] * Columns + c + i];
                         if (!cont.IsContinuation)
                         {
                             missing = true;
@@ -406,7 +325,7 @@ public class Screen
                         cell.Reset();
                         for (int i = 1; i < w && c + i < Columns; i++)
                         {
-                            ref var cont = ref _cells[r, c + i];
+                            ref var cont = ref _cells[_rowMap[r] * Columns + c + i];
                             if (!cont.IsContinuation) break;
                             cont.Reset();
                         }
@@ -437,7 +356,7 @@ public class Screen
         for (int r = 0; r < rows; r++)
         for (int c = 0; c < cols; c++)
         {
-            destination._cells[r, c] = _cells[r, c];
+            destination._cells[_rowMap[r] * Columns + c] = _cells[_rowMap[r] * Columns + c];
         }
     }
 

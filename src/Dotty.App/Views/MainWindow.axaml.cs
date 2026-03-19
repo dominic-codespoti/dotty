@@ -9,6 +9,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Threading;
+using System.Buffers;
 using Dotty.Abstractions.Adapter;
 using Dotty.Abstractions.Parser;
 using Dotty.Terminal.Adapter;
@@ -18,6 +19,41 @@ namespace Dotty.App;
 
 public partial class MainWindow : Window
 {
+    private struct PtyChunk
+    {
+        public byte[] Data;
+        public int Length;
+    }
+
+    private readonly System.Threading.Channels.Channel<PtyChunk> _ptyDataQueue = System.Threading.Channels.Channel.CreateUnbounded<PtyChunk>();
+
+    private void ProcessPtyQueueAsync(CancellationToken token)
+    {
+        Task.Run(async () =>
+        {
+            try
+            {
+                // Continuously wait for data from the background reader thread
+                while (await _ptyDataQueue.Reader.WaitToReadAsync(token))
+                {
+                    int processed = 0;
+                    while (_ptyDataQueue.Reader.TryRead(out var chunk))
+                    {
+                        try { _parser?.Feed(chunk.Data.AsSpan(0, chunk.Length)); } catch { }
+                        ArrayPool<byte>.Shared.Return(chunk.Data);
+                        processed++;
+                        if (processed > 50)
+                        {
+                            await Task.Yield();
+                            processed = 0;
+                        }
+                    }
+                }
+            }
+            catch { }
+        }, token);
+    }
+
     private Process? _childProcess;
     private Stream? _childOutputStream;
     private Stream? _childErrorStream;
@@ -118,21 +154,30 @@ public partial class MainWindow : Window
 
             _readCancellation = new CancellationTokenSource();
             StartBackgroundReaders(_readCancellation.Token);
+            ProcessPtyQueueAsync(_readCancellation.Token);
 
             // Automatic test-script execution disabled: no environment-variable-driven actions.
 
             TerminalView.RawInput += (bytes) =>
             {
                 if (bytes == null || _childInputStream == null) return;
-                try
+                
+                // Copy the bytes so we don't hold references to internal buffers
+                var copy = new byte[bytes.Length];
+                Array.Copy(bytes, copy, bytes.Length);
+
+                Task.Run(async () =>
                 {
-                    lock (_writeLock)
+                    try
                     {
-                        _childInputStream.Write(bytes, 0, bytes.Length);
-                        _childInputStream.Flush();
+                        // Some PTY streams block their writes entirely rather than 
+                        // returning uncompleted Tasks when the kernel buffer gets full.
+                        // Executing in a background Task ensures the UI thread never freezes.
+                        await _childInputStream.WriteAsync(copy, 0, copy.Length).ConfigureAwait(false);
+                        await _childInputStream.FlushAsync().ConfigureAwait(false);
                     }
-                }
-                catch { }
+                    catch { }
+                });
             };
 
             try { this.Activate(); } catch { }
@@ -184,28 +229,20 @@ public partial class MainWindow : Window
         {
             var reader = _childOutputStream;
             var readerId = Guid.NewGuid().ToString("N");
-            byte[] buffer = new byte[4096];
+            byte[] buffer = new byte[131072];
 
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
                     int bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
-
                     if (bytesRead > 0)
                     {
-                        // Copy the bytes we read and dispatch parser feed to the UI
-                        // thread. Parser callbacks mutate `TerminalBuffer` which is
-                        // not thread-safe; running the parser on the UI thread
-                        // avoids concurrent access between background IO and
-                        // rendering.
-                        var copy = new byte[bytesRead];
+                        var copy = ArrayPool<byte>.Shared.Rent(bytesRead);
                         Array.Copy(buffer, 0, copy, 0, bytesRead);
-                        Dispatcher.UIThread.Post(() =>
-                        {
-                            try { _parser?.Feed(copy.AsSpan()); } catch { }
-                        }, DispatcherPriority.Background);
-                        // (diagnostic raw PTY dump removed)
+                        var chunk = new PtyChunk { Data = copy, Length = bytesRead };
+                        
+                        _ptyDataQueue.Writer.TryWrite(chunk);
                     }
                     else
                     {
@@ -235,7 +272,7 @@ public partial class MainWindow : Window
         try
         {
             var reader = _childErrorStream;
-            byte[] buffer = new byte[4096];
+            byte[] buffer = new byte[131072];
 
             while (!cancellationToken.IsCancellationRequested)
             {

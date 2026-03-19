@@ -55,25 +55,34 @@ namespace Dotty.App.Controls
             if (buffer == null) return;
             _lastBuffer = buffer;
 
-            Dispatcher.UIThread.Post(() =>
-        {
-            try
+            Action action = () =>
             {
-                var canvas = Canvas;
-                if (canvas == null) return;
-                // Assign the incoming buffer instance. TerminalCanvas now preserves
-                // its composer/front-buffer state on property changes, so replacing
-                // the buffer here is safe and supports callers that provide a
-                // TerminalBuffer instance from elsewhere (e.g. TerminalAdapter).
-                canvas.Buffer = buffer;
-                canvas.CursorShape = CursorShape;
-                canvas.ShowCursor = _blinkOn;
-                try { canvas.OnBufferUpdated(buffer); } catch { }
-                try { canvas.RequestFrame(); } catch { }
-                try { Scroll?.ScrollToEnd(); } catch { }
+                try
+                {
+                    var canvas = Canvas;
+                    if (canvas == null) return;
+                    // Assign the incoming buffer instance. TerminalCanvas now preserves
+                    // its composer/front-buffer state on property changes, so replacing
+                    // the buffer here is safe and supports callers that provide a
+                    // TerminalBuffer instance from elsewhere (e.g. TerminalAdapter).
+                    canvas.Buffer = buffer;
+                    canvas.CursorShape = CursorShape;
+                    canvas.ShowCursor = _blinkOn;
+                    try { canvas.OnBufferUpdated(buffer); } catch { }
+                    try { canvas.RequestFrame(); } catch { }
+                    try { Scroll?.ScrollToEnd(); } catch { }
+                }
+                catch { }
+            };
+
+            if (Dispatcher.UIThread.CheckAccess())
+            {
+                action();
             }
-            catch { }
-        });
+            else
+            {
+                Dispatcher.UIThread.Post(action);
+            }
         }
 
         private void StartBlinkLoop()

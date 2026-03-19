@@ -1,9 +1,13 @@
 using System;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.Rendering.Composition;
 using Dotty.App.Controls.Canvas;
+using Dotty.App.Controls.Canvas.Rendering;
 using Avalonia.Threading;
 using Dotty.Terminal.Adapter;
 using Dotty.App.Rendering;
@@ -20,7 +24,7 @@ public enum TerminalCursorShape
 	Underline
 }
 
-public class TerminalCanvas : Control
+public class TerminalCanvas : Control, ILogicalScrollable
 {
 	public static readonly StyledProperty<TerminalBuffer?> BufferProperty =
 		AvaloniaProperty.Register<TerminalCanvas, TerminalBuffer?>(nameof(Buffer));
@@ -62,7 +66,7 @@ public class TerminalCanvas : Control
 		{
 			if (_selectionRange == value) return;
 			_selectionRange = value;
-			InvalidateVisual();
+			SendRenderState();
 		}
 	}
 
@@ -113,25 +117,155 @@ public class TerminalCanvas : Control
 	private TerminalFrameComposer? _frameComposer;
 	private DispatcherTimer? _frameDebounceTimer;
 	private bool _framePending;
-	private const double FrameDebounceMs = 8;
+	private const double FrameDebounceMs = 1;
 	private bool _lastBufferWasAlternate = false;
 	private double _renderScaling = 1.0;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
+	private CompositionCustomVisual? _customVisual;
     
 	public SKPaint? SkPaint { get; private set; }
 	public double CellWidth => _cellWidth;
 	public double CellHeight => _cellHeight;
-	public bool ShowCursor { get; set; } = true;
+
+	private bool _showCursor = true;
+	public bool ShowCursor 
+	{ 
+		get => _showCursor; 
+		set 
+		{
+			if (_showCursor != value)
+			{
+				_showCursor = value;
+				SendRenderState();
+			}
+		} 
+	}
+
+    // --- ILogicalScrollable implementation ---
+    public bool CanHorizontallyScroll { get; set; } = false;
+    public bool CanVerticallyScroll { get; set; } = true;
+    public bool IsLogicalScrollEnabled => true;
+
+    private Size _viewport;
+    public Size Viewport => _viewport;
+
+    private Vector _offset;
+    public Vector Offset 
+    { 
+        get => _offset; 
+        set
+        {
+            if (_offset != value)
+            {
+                _offset = value;
+                ScrollInvalidated?.Invoke(this, EventArgs.Empty);
+                SendRenderState();
+            }
+        } 
+    }
+
+    public Size Extent 
+    {
+        get
+        {
+            var buf = Buffer;
+            if (buf == null) return _viewport;
+            double height = (buf.Rows + buf.ScrollbackCount) * _cellHeight + ContentPadding.Top + ContentPadding.Bottom;
+            double width = buf.Columns * _cellWidth + ContentPadding.Left + ContentPadding.Right;
+            return new Size(width, height);
+        }
+    }
+
+    public Size ScrollSize => new Size(16, _cellHeight);
+    public Size PageScrollSize => new Size(16, _viewport.Height);
+
+    public event EventHandler? ScrollInvalidated;
+    
+    public Action? InvalidateScroll { get; set; }
+
+    public bool BringIntoView(Control target, Rect targetRect) => false;
+    
+    public Control? GetControlInDirection(NavigationDirection direction, Control? from) => null;
+
+    public void RaiseScrollInvalidated(EventArgs e)
+    {
+        ScrollInvalidated?.Invoke(this, e);
+    }
+
+    private Size _lastExtent;
+    private Size _lastViewport;
+
+    private void UpdateScrollState(int? explicitScrollbackCount = null)
+    {
+        Size extent;
+        var buf = Buffer;
+        if (buf == null) extent = _viewport;
+        else 
+        {
+            int sb = explicitScrollbackCount ?? buf.ScrollbackCount;
+            double height = (buf.Rows + sb) * _cellHeight + ContentPadding.Top + ContentPadding.Bottom;
+            double width = buf.Columns * _cellWidth + ContentPadding.Left + ContentPadding.Right;
+            extent = new Size(width, height);
+        }
+
+        bool changed = false;
+
+        if (extent != _lastExtent || _viewport != _lastViewport)
+        {
+            changed = true;
+            
+            // if we were completely scrolled to bottom, track bottom
+            bool wasAtBottom = Math.Abs(_offset.Y - Math.Max(0, _lastExtent.Height - _lastViewport.Height)) < 0.1;
+            if (wasAtBottom && extent.Height > _lastExtent.Height)
+            {
+                _offset = _offset.WithY(Math.Max(0, extent.Height - _viewport.Height));
+            }
+        }
+
+        if (_offset.Y > extent.Height - _viewport.Height)
+        {
+            var clamped = Math.Max(0, extent.Height - _viewport.Height);
+            if (Math.Abs(_offset.Y - clamped) > 0.001)
+            {
+                _offset = _offset.WithY(clamped);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            _lastExtent = extent;
+            _lastViewport = _viewport;
+            ScrollInvalidated?.Invoke(this, EventArgs.Empty);
+        }
+    }
+    // -----------------------------------------
+
+	protected override void OnSizeChanged(SizeChangedEventArgs e)
+	{
+		base.OnSizeChanged(e);
+        _viewport = e.NewSize;
+        UpdateScrollState();
+		if (_customVisual != null)
+		{
+			_customVisual.Size = new Avalonia.Vector(e.NewSize.Width, e.NewSize.Height);
+		}
+	}
 
 	protected override Size MeasureOverride(Size availableSize)
 	{
 		EnsureMetrics();
-		var buf = Buffer;
-		if (buf == null) return base.MeasureOverride(availableSize);
-		var padding = ContentPadding;
-		return new Size(
-			buf.Columns * _cellWidth + padding.Left + padding.Right,
-			buf.Rows * _cellHeight + padding.Top + padding.Bottom);
+        // Since we are ILogicalScrollable, we don't need to report the full combined extent as our desired size.
+        // We report 0,0 or just the minimum we need so that ScrollViewer handles us correctly as a viewport.
+        var buf = Buffer;
+        if (buf == null) return base.MeasureOverride(availableSize);
+        // But for terminal to take whatever space ScrollViewer gives it (often the full terminal height if short),
+        // we can return bounded size or let Arrange handle the viewport.
+        var padding = ContentPadding;
+        return new Size(
+             buf.Columns * _cellWidth + padding.Left + padding.Right,
+             Math.Min(availableSize.Height, buf.Rows * _cellHeight + padding.Top + padding.Bottom)
+        );
 	}
 
 	public override void Render(DrawingContext context)
@@ -148,17 +282,35 @@ public class TerminalCanvas : Control
 		if (buffer == null) return;
 
 		EnsureMetrics();
-		// If the buffer toggled between main/alternate screens, reset the
-		// composer's caches so stale per-row bitmaps are not reused.
+		
 		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
 		{
 			_frameComposer.ResetCaches();
 			_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
 		}
 
-		// Enqueue a single Skia custom draw operation. The Skia operation will
-		// compose the entire frame offscreen and blit it in one GPU operation.
-		context.Custom(new SkiaDrawing(this, buffer, _cellWidth, _cellHeight, _frameComposer, padding));
+		var bgBrush = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
+		var bgColor = SKColors.Black;
+		if (bgBrush is ISolidColorBrush solid)
+		{
+			bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
+		}
+
+		var state = new TerminalRenderState(
+			buffer,
+			(float)_cellWidth,
+			(float)_cellHeight,
+			_frameComposer,
+			ContentPadding,
+			_selectionRange,
+			SkPaint,
+			bgColor,
+            _offset.Y,
+            _viewport.Height,
+            buffer.ScrollbackCount
+		);
+
+		_customVisual?.SendHandlerMessage(state);
 	}
 
 	/// <summary>
@@ -181,18 +333,29 @@ public class TerminalCanvas : Control
 	/// </summary>
 	public void RequestFrame()
 	{
-		_framePending = true;
-		EnsureFrameTimer();
-		if (_frameDebounceTimer != null && !_frameDebounceTimer.IsEnabled)
-		{
-			_frameDebounceTimer.Start();
-		}
+		 ProcessGlyphDiscoverySlice();
+		 try
+		 {
+			 SendRenderState();
+		 }
+		 catch { }
 	}
 
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnAttachedToVisualTree(e);
 		EnsureFrameTimer();
+
+		var compositor = ElementComposition.GetElementVisual(this)?.Compositor;
+		if (compositor != null && _customVisual == null)
+		{
+			var handler = new TerminalVisualHandler();
+			_customVisual = compositor.CreateCustomVisual(handler);
+			ElementComposition.SetElementChildVisual(this, _customVisual);
+			
+			// Optional: force an initial update
+			SendRenderState();
+		}
 	}
 
 	private void EnsureFrameTimer()
@@ -214,9 +377,50 @@ public class TerminalCanvas : Control
 		ProcessGlyphDiscoverySlice();
 		try
 		{
-			InvalidateVisual();
+			SendRenderState();
 		}
 		catch { }
+	}
+
+	private void SendRenderState()
+	{
+		if (_customVisual == null) return;
+
+		var buffer = Buffer;
+		if (buffer == null) return;
+
+		EnsureMetrics();
+		
+		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
+		{
+			_frameComposer.ResetCaches();
+			_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
+		}
+
+		var bgBrush = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
+		var bgColor = SKColors.Black;
+		if (bgBrush is ISolidColorBrush solid)
+		{
+			bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
+		}
+
+		UpdateScrollState();
+
+		var state = new TerminalRenderState(
+			buffer,
+			(float)_cellWidth,
+			(float)_cellHeight,
+			_frameComposer,
+			ContentPadding,
+			_selectionRange,
+			SkPaint,
+			bgColor,
+            _offset.Y,
+            _viewport.Height,
+            buffer.ScrollbackCount
+		);
+
+		_customVisual?.SendHandlerMessage(state);
 	}
 
 	private void ProcessGlyphDiscoverySlice()
@@ -312,7 +516,7 @@ public class TerminalCanvas : Control
 		{
 			_metricsDirty = true;
 			InvalidateMeasure();
-			InvalidateVisual();
+			SendRenderState();
 		}
 
 		if (change.Property == BufferProperty)

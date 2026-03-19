@@ -68,5 +68,19 @@ namespace Dotty.Abstractions.Adapter
         // Horizontal tab
         void OnTab();     // HT - move to next tab stop
         void OnBackTab(int n); // CBT - CSI n Z - move back n tab stops
+
+        // Cursor shape
+        void OnSetCursorShape(int shape); // DECSCUSR - CSI n SP q
+        void OnSetApplicationCursorKeys(bool enabled); // DECCKM - CSI ? 1 h/l
+
+        // Device attributes
+        void OnSendDeviceAttributes(int daType); // DA - CSI c / CSI > c
+
+        // Mouse support
+        void OnMouseEvent(int button, int col, int row, bool isPress);
+        void OnSetMouseMode(int mode, bool enabled);
+
+        // Render batching
+        void FlushRender();
     }
 }

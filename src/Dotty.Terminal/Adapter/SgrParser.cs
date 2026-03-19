@@ -9,111 +9,110 @@ public static class SgrParser
 {
     public static CellAttributes Apply(ReadOnlySpan<char> parameters, in CellAttributes current)
     {
-        var s = parameters.ToString();
-        if (string.IsNullOrEmpty(s))
+        if (parameters.IsEmpty)
         {
             return CellAttributes.Default;
         }
 
-        var parts = s.Split(';', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length == 0)
+        var enumerator = new ParametersEnumerator(parameters);
+        if (!enumerator.MoveNext())
         {
             return CellAttributes.Default;
         }
 
         var attributes = current;
-        int i = 0;
-        while (i < parts.Length)
+        bool hasMore = true;
+
+        while (hasMore)
         {
-            if (!int.TryParse(parts[i], out var code))
-            {
-                i++;
-                continue;
-            }
+            int code = enumerator.Current;
 
             switch (code)
             {
                 case 0:
                     attributes = CellAttributes.Default;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 1:
                     attributes.Bold = true;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 2:
                     attributes.Faint = true;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 3:
                     attributes.Italic = true;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 4:
                     attributes.Underline = true;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 7:
                     attributes.Inverse = true;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 22:
                     attributes.Bold = false;
                     attributes.Faint = false;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 23:
                     attributes.Italic = false;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 24:
                     attributes.Underline = false;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 27:
                     attributes.Inverse = false;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 39:
                     attributes.Foreground = null;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 49:
                     attributes.Background = null;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 59:
                     attributes.UnderlineColor = null;
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
                 case 38:
-                    if (TryParseExtendedColor(parts, ref i, out var fg))
+                    hasMore = TryParseExtendedColor(ref enumerator, out var fg);
+                    if (hasMore || fg.HasValue)
                     {
-                        attributes.Foreground = fg;
+                        if (fg.HasValue) attributes.Foreground = fg;
                     }
                     else
                     {
-                        i++;
+                        hasMore = enumerator.MoveNext();
                     }
                     break;
                 case 48:
-                    if (TryParseExtendedColor(parts, ref i, out var bg))
+                    hasMore = TryParseExtendedColor(ref enumerator, out var bg);
+                    if (hasMore || bg.HasValue)
                     {
-                        attributes.Background = bg;
+                        if (bg.HasValue) attributes.Background = bg;
                     }
                     else
                     {
-                        i++;
+                        hasMore = enumerator.MoveNext();
                     }
                     break;
                 case 58:
-                    if (TryParseExtendedColor(parts, ref i, out var ul))
+                    hasMore = TryParseExtendedColor(ref enumerator, out var ul);
+                    if (hasMore || ul.HasValue)
                     {
-                        attributes.UnderlineColor = ul;
+                        if (ul.HasValue) attributes.UnderlineColor = ul;
                     }
                     else
                     {
-                        i++;
+                        hasMore = enumerator.MoveNext();
                     }
                     break;
                 default:
@@ -125,7 +124,7 @@ public static class SgrParser
                     {
                         attributes.Background = bgColor;
                     }
-                    i++;
+                    hasMore = enumerator.MoveNext();
                     break;
             }
         }
@@ -133,43 +132,102 @@ public static class SgrParser
         return attributes;
     }
 
-    private static bool TryParseExtendedColor(string[] parts, ref int index, out SgrColor color)
+    private static bool TryParseExtendedColor(ref ParametersEnumerator enumerator, out SgrColor? color)
     {
-        color = default;
-        if (index + 1 >= parts.Length)
-        {
-            return false;
-        }
+        color = null;
+        if (!enumerator.MoveNext()) return false;
 
-        var mode = parts[index + 1];
-        if (mode == "2")
+        int mode = enumerator.Current;
+        if (mode == 2)
         {
-            if (index + 4 < parts.Length &&
-                byte.TryParse(parts[index + 2], out var r) &&
-                byte.TryParse(parts[index + 3], out var g) &&
-                byte.TryParse(parts[index + 4], out var b))
+            if (enumerator.MoveNext())
             {
-                color = SgrColor.FromRgb(r, g, b);
-                index += 5;
-                return true;
+                int r = enumerator.Current;
+                if (enumerator.MoveNext())
+                {
+                    int g = enumerator.Current;
+                    if (enumerator.MoveNext())
+                    {
+                        int b = enumerator.Current;
+                        color = SgrColor.FromRgb((byte)r, (byte)g, (byte)b);
+                        return enumerator.MoveNext();
+                    }
+                }
             }
             return false;
         }
 
-        if (mode == "5")
+        if (mode == 5)
         {
-            if (index + 2 < parts.Length && int.TryParse(parts[index + 2], out var idx))
+            if (enumerator.MoveNext())
             {
-                if (SgrColor.TryFrom256(idx, out color))
+                int idx = enumerator.Current;
+                if (SgrColor.TryFrom256(idx, out var c))
                 {
-                    index += 3;
-                    return true;
+                    color = c;
                 }
+                return enumerator.MoveNext();
+            }
+            return false;
+        }
+
+        return enumerator.MoveNext();
+    }
+
+    private ref struct ParametersEnumerator
+    {
+        private ReadOnlySpan<char> _span;
+        public int Current { get; private set; }
+
+        public ParametersEnumerator(ReadOnlySpan<char> span)
+        {
+            _span = span;
+            Current = -1;
+        }
+
+        public bool MoveNext()
+        {
+            if (_span.IsEmpty)
+            {
                 return false;
             }
-            return false;
+
+            int index = _span.IndexOf(';');
+            if (index == -1)
+            {
+                ParseCurrent(_span);
+                _span = ReadOnlySpan<char>.Empty;
+                return true;
+            }
+
+            ParseCurrent(_span.Slice(0, index));
+            _span = _span.Slice(index + 1);
+            return true;
         }
 
-        return false;
+        private void ParseCurrent(ReadOnlySpan<char> slice)
+        {
+            if (slice.IsEmpty)
+            {
+                Current = 0;
+                return;
+            }
+
+            int val = 0;
+            for (int i = 0; i < slice.Length; i++)
+            {
+                char c = slice[i];
+                if (c >= '0' && c <= '9')
+                {
+                    val = val * 10 + (c - '0');
+                }
+                else
+                {
+                    Current = 0; // fallback just in case
+                    return;
+                }
+            }
+            Current = val;
+        }
     }
 }

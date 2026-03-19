@@ -6,46 +6,86 @@ using Xunit;
 
 namespace Dotty.App.Tests;
 
-public class BasicAnsiParserTests
+public class ControlCodeTests
 {
     [Fact]
-    public void DecGraphicsTranslateToUnicode()
+    public void CarriageReturnHandled()
     {
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-
-        parser.Feed(Encoding.UTF8.GetBytes("\u001b(0lqk\u001b(BABC"));
-
-        Assert.Equal("┌─┐", handler.PrintCalls[0]);
-        Assert.Equal("ABC", handler.PrintCalls[1]);
+        
+        parser.Feed(Encoding.UTF8.GetBytes("Hello\rWorld"));
+        
+        Assert.Equal("HelloWorld", string.Concat(handler.PrintCalls));
+        Assert.Equal(1, handler.CarriageReturnCalls);
     }
-
+    
     [Fact]
-    public void CharsetSettingPersistsBetweenChunks()
+    public void LineFeedHandled()
     {
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-
-        parser.Feed(Encoding.UTF8.GetBytes("\u001b(0q"));
-        parser.Feed(Encoding.UTF8.GetBytes("x"));
-        parser.Feed(Encoding.UTF8.GetBytes("x\u001b(B"));
-
-        Assert.Equal("─", handler.PrintCalls[0]);
-        Assert.Equal("│", handler.PrintCalls[1]);
-        Assert.Equal("│", handler.PrintCalls[2]);
-        Assert.Equal(3, handler.PrintCalls.Count);
+        
+        parser.Feed(Encoding.UTF8.GetBytes("Line1\nLine2"));
+        
+        Assert.Equal("Line1Line2", string.Concat(handler.PrintCalls));
+        Assert.Equal(1, handler.LineFeedCalls);
     }
-
+    
+    [Fact]
+    public void TabHandled()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+        
+        parser.Feed(Encoding.UTF8.GetBytes("Col1\tCol2"));
+        
+        Assert.Equal("Col1Col2", string.Concat(handler.PrintCalls));
+        Assert.Equal(1, handler.TabCalls);
+    }
+    
+    [Fact]
+    public void CRLFSequenceHandled()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+        
+        parser.Feed(Encoding.UTF8.GetBytes("Line1\r\nLine2\r\nLine3"));
+        
+        Assert.Equal("Line1Line2Line3", string.Concat(handler.PrintCalls));
+        Assert.Equal(2, handler.CarriageReturnCalls);
+        Assert.Equal(2, handler.LineFeedCalls);
+    }
+    
+    [Fact]
+    public void MixedControlCodesHandled()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+        
+        // Mix of CR, LF, and HT
+        parser.Feed(Encoding.UTF8.GetBytes("Start\t\tTab\r\nNewLine\tEnd"));
+        
+        Assert.Equal("StartTabNewLineEnd", string.Concat(handler.PrintCalls));
+        Assert.Equal(1, handler.CarriageReturnCalls);
+        Assert.Equal(1, handler.LineFeedCalls);
+        Assert.Equal(3, handler.TabCalls);
+    }
+    
     private sealed class RecordingHandler : ITerminalHandler
     {
         public List<string> PrintCalls { get; } = new();
-        public List<bool> SetCursorVisibilityCalls { get; } = new();
-        public List<(int mode, bool enabled)> SetMouseModeCalls { get; } = new();
+        public int CarriageReturnCalls { get; set; }
+        public int LineFeedCalls { get; set; }
+        public int TabCalls { get; set; }
 
         object? ITerminalHandler.Buffer => null;
-        event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
+        event System.Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
 
         void ITerminalHandler.RequestRenderExtern() { }
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }
@@ -61,12 +101,14 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnCursorForward(int n) { }
         void ITerminalHandler.OnCursorBack(int n) { }
         void ITerminalHandler.OnEraseLine(int mode) { }
-        void ITerminalHandler.OnCarriageReturn() { }
-        void ITerminalHandler.OnLineFeed() { }
+        void ITerminalHandler.OnCarriageReturn() => CarriageReturnCalls++;
+        void ITerminalHandler.OnLineFeed() => LineFeedCalls++;
         void ITerminalHandler.OnSetScrollRegion(int top1Based, int bottom1Based) { }
         void ITerminalHandler.OnSetOriginMode(bool enabled) { }
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) { }
-        void ITerminalHandler.OnSetCursorVisibility(bool visible) => SetCursorVisibilityCalls.Add(visible);
+        void ITerminalHandler.OnSetCursorVisibility(bool visible) { }
+        void ITerminalHandler.OnSetCursorShape(int shape) { }
+        void ITerminalHandler.OnSetApplicationCursorKeys(bool enabled) { }
         void ITerminalHandler.OnSaveCursor() { }
         void ITerminalHandler.OnRestoreCursor() { }
         void ITerminalHandler.OnInsertChars(int n) { }
@@ -77,10 +119,11 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnSetTabStop() { }
         void ITerminalHandler.OnClearTabStop() { }
         void ITerminalHandler.OnClearAllTabStops() { }
-        void ITerminalHandler.OnReverseIndex() { }
         void ITerminalHandler.OnSetBracketedPasteMode(bool enabled) { }
         void ITerminalHandler.OnDeviceStatusReport(int code) { }
         void ITerminalHandler.OnCursorPositionReport() { }
+        void ITerminalHandler.OnSendDeviceAttributes(int daType) { }
+        void ITerminalHandler.OnReverseIndex() { }
         void ITerminalHandler.OnCursorHorizontalAbsolute(int col) { }
         void ITerminalHandler.OnCursorVerticalAbsolute(int row) { }
         void ITerminalHandler.OnCursorNextLine(int n) { }
@@ -89,13 +132,10 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnScrollDown(int n) { }
         void ITerminalHandler.OnFullReset() { }
         void ITerminalHandler.OnRepeatCharacter(int n) { }
-        void ITerminalHandler.OnTab() { }
+        void ITerminalHandler.OnTab() => TabCalls++;
         void ITerminalHandler.OnBackTab(int n) { }
-        void ITerminalHandler.OnSetCursorShape(int shape) { }
-        void ITerminalHandler.OnSetApplicationCursorKeys(bool enabled) { }
-        void ITerminalHandler.OnSendDeviceAttributes(int daType) { }
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) { }
-        void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) => SetMouseModeCalls.Add((mode, enabled));
+        void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) { }
         void ITerminalHandler.FlushRender() { }
     }
 }

@@ -22,8 +22,9 @@ public record struct TerminalRenderState(
     SKColor BgColor,
     double ScrollY,
     double ViewportHeight,
-    int ScrollbackCount
-);
+    int ScrollbackCount,
+    bool ShowCursor,
+    Dotty.App.Controls.TerminalCursorShape CursorShape);
 
 public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
 {

@@ -15,6 +15,7 @@ public struct CellAttributes
     public bool Overline { get; set; }
     public bool Invisible { get; set; }
     public bool SlowBlink { get; set; }
+    public ushort HyperlinkId { get; set; }
 
     public static readonly CellAttributes Default = new();
 }

@@ -477,7 +477,24 @@ public class MouseModeTests
         public List<(int button, int col, int row, bool isPress)> MouseEventCalls { get; } = new();
 
         object? ITerminalHandler.Buffer => null;
-        event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
+        event Action<string>? ITerminalHandler.RenderRequested {
+            add {}
+            remove {}
+        }
+        event Action<string>? ITerminalHandler.ClipboardWriteRequested {
+            add {}
+            remove {}
+        }
+        event Action<string>? ITerminalHandler.TitleChanged {
+            add {}
+            remove {}
+        }
+        event Action<string>? ITerminalHandler.LinkOpened {
+            add {}
+            remove {}
+        }
+        void ITerminalHandler.OnHyperlink(string uri) {} 
+        // add { } remove { } }
 
         void ITerminalHandler.RequestRenderExtern() { }
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }
@@ -486,7 +503,7 @@ public class MouseModeTests
         void ITerminalHandler.OnClearScrollback() { }
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> parameters) { }
         void ITerminalHandler.OnBell() { }
-        void ITerminalHandler.OnOperatingSystemCommand(ReadOnlySpan<char> payload) { }
+        void ITerminalHandler.OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload) { }
         void ITerminalHandler.OnMoveCursor(int row, int col) { }
         void ITerminalHandler.OnCursorUp(int n) { }
         void ITerminalHandler.OnCursorDown(int n) { }
@@ -499,6 +516,7 @@ public class MouseModeTests
         void ITerminalHandler.OnSetOriginMode(bool enabled) { }
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) { }
         void ITerminalHandler.OnSetCursorVisibility(bool visible) { }
+        void ITerminalHandler.OnSetKeypadApplicationMode(bool enabled) { }
         void ITerminalHandler.OnSetCursorShape(int shape) { }
         void ITerminalHandler.OnSaveCursor() { }
         void ITerminalHandler.OnRestoreCursor() { }
@@ -526,6 +544,7 @@ public class MouseModeTests
         void ITerminalHandler.OnTab() { }
         void ITerminalHandler.OnBackTab(int n) { }
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) => MouseEventCalls.Add((button, col, row, isPress));
+        void ITerminalHandler.OnSetSynchronizedUpdate(bool enabled) { }
         void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) => SetMouseModeCalls.Add((mode, enabled));
         void ITerminalHandler.OnSetApplicationCursorKeys(bool enabled) { }
         void ITerminalHandler.FlushRender() { }

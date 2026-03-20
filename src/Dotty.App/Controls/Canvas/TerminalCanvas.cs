@@ -307,7 +307,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			bgColor,
             _offset.Y,
             _viewport.Height,
-            buffer.ScrollbackCount
+            buffer.ScrollbackCount,
+            _showCursor,
+            CursorShape
 		);
 
 		_customVisual?.SendHandlerMessage(state);
@@ -417,7 +419,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			bgColor,
             _offset.Y,
             _viewport.Height,
-            buffer.ScrollbackCount
+            buffer.ScrollbackCount,
+            _showCursor,
+            CursorShape
 		);
 
 		_customVisual?.SendHandlerMessage(state);

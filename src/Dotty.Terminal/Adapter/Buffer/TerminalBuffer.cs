@@ -19,6 +19,23 @@ public class TerminalBuffer
     private bool _originMode = false;
     private bool _isAlternate = false;
     private int _scrollGeneration = 0;
+    private List<string> _hyperlinks = new List<string> { string.Empty };
+
+    public ushort GetOrCreateHyperlinkId(string uri)
+    {
+        if (string.IsNullOrEmpty(uri))
+        {
+            return 0;
+        }
+        int idx = _hyperlinks.IndexOf(uri);
+        if (idx < 0)
+        {
+            idx = _hyperlinks.Count;
+            _hyperlinks.Add(uri);
+        }
+        return (ushort)idx;
+    }
+
     // Simple in-memory scrollback storage. Stores textual rows that have
     // scrolled off the top of the active screen. This is intentionally
     // lightweight; consumers that need richer history should snapshot
@@ -283,7 +300,10 @@ public class TerminalBuffer
         {
             // Capture the top-most line of the scroll region before it's
             // scrolled out, preserving it in scrollback history.
-            AddToScrollback(GetRowTextFast(_scrollTop));
+            if (_scrollTop == 0)
+            {
+                AddToScrollback(GetRowTextFast(_scrollTop));
+            }
 
             ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, 1);
 
@@ -477,15 +497,17 @@ public class TerminalBuffer
     {
         if (lines <= 0) return;
 
-        // Capture the rows that will be scrolled out (top `lines` rows).
-        int rowsToCapture = Math.Min(lines, Rows);
-        for (int r = 0; r < rowsToCapture; r++)
+        if (_scrollTop == 0)
         {
-            // If a custom string-array pool could be used, this would be even faster.
-            AddToScrollback(GetRowTextFast(r));
+            int rowsToCapture = Math.Min(lines, _scrollBottom + 1);
+            for (int r = 0; r < rowsToCapture; r++)
+            {
+                AddToScrollback(GetRowTextFast(r));
+            }
         }
 
-        ActiveBuffer.ScrollUp(lines);
+        ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, lines);
+        MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
 
         BumpScrollGeneration();
     }

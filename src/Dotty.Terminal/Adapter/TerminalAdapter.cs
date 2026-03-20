@@ -16,12 +16,21 @@ public class TerminalAdapter : ITerminalHandler
     private string? _windowTitle;
     private char _lastPrintedChar;
 
+    public int CursorShape { get; private set; }
+    public bool KeypadApplicationMode { get; private set; }
+
     public TerminalAdapter(int rows = 24, int columns = 80)
     {
         _buffer = new TerminalBuffer(rows, columns);
     }
 
     public event Action<string>? RenderRequested;
+    public event Action<string>? ClipboardWriteRequested;
+    public event Action<string>? TitleChanged;
+    public event Action<string>? LinkOpened;
+
+    public void OnHyperlink(string uri) { _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri); }
+
     public event Action<string>? ReplyRequested;
     public TerminalBuffer Buffer => _buffer;
     object? ITerminalHandler.Buffer => _buffer;
@@ -49,19 +58,44 @@ public class TerminalAdapter : ITerminalHandler
         RequestRender();
     }
 
-    public void OnOperatingSystemCommand(ReadOnlySpan<char> payload)
+    
+    public void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload)
     {
-        // Payloads are typically of the form "0;title" or "2;title".
-        if (payload.IsEmpty) return;
-
-        int semi = payload.IndexOf(';');
-        if (semi <= 0) return;
-
-        var codePart = payload.Slice(0, semi);
-        if (int.TryParse(codePart, out var code) && (code == 0 || code == 2))
+        if (code == 0 || code == 2)
         {
-            _windowTitle = payload.Slice(semi + 1).ToString();
+            _windowTitle = payload.ToString();
+            TitleChanged?.Invoke(_windowTitle);
             RequestRender();
+        }
+        else if (code == 8)
+        {
+            var payloadStr = payload.ToString();
+            int semiIdx = payloadStr.IndexOf(';');
+            if (semiIdx >= 0)
+            {
+                var uri = payloadStr.Substring(semiIdx + 1);
+                OnHyperlink(uri);
+            }
+            else
+            {
+                OnHyperlink(string.Empty);
+            }
+        }
+        else if (code == 52)
+        {
+            var payloadStr = payload.ToString();
+            int semiIdx = payloadStr.IndexOf(';');
+            if (semiIdx >= 0)
+            {
+                var base64Part = payloadStr.Substring(semiIdx + 1);
+                if (base64Part != "?")
+                {
+                    try {
+                        var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64Part));
+                        ClipboardWriteRequested?.Invoke(decoded);
+                    } catch { }
+                }
+            }
         }
     }
 
@@ -319,7 +353,8 @@ public class TerminalAdapter : ITerminalHandler
         _savedAttributes = CellAttributes.Default;
         _hasSavedAttributes = false;
         _windowTitle = null;
-        _lastPrintedChar = '\0';
+        CursorShape = 0;
+        KeypadApplicationMode = false;
         RequestRender();
     }
 
@@ -361,7 +396,13 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnSetCursorShape(int shape)
     {
-        // TODO: track cursor shape if needed
+        CursorShape = shape;
+        RequestRender();
+    }
+
+    public void OnSetKeypadApplicationMode(bool enabled)
+    {
+        KeypadApplicationMode = enabled;
     }
 
     public void OnSetApplicationCursorKeys(bool enabled)
@@ -392,9 +433,17 @@ public class TerminalAdapter : ITerminalHandler
     }
 
     private bool _renderDirty;
+    private bool _synchronizedUpdateActive;
+
+    public void OnSetSynchronizedUpdate(bool enabled)
+    {
+        _synchronizedUpdateActive = enabled;
+        if (!enabled) FlushRender();
+    }
 
     public void FlushRender()
     {
+        if (_synchronizedUpdateActive) return;
         if (_renderDirty)
         {
             _renderDirty = false;

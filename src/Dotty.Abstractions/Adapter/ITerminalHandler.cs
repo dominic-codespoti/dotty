@@ -13,6 +13,10 @@ namespace Dotty.Abstractions.Adapter
     {
         object? Buffer { get; }
         event Action<string>? RenderRequested;
+        event Action<string>? ClipboardWriteRequested;
+        event Action<string>? TitleChanged;
+        event Action<string>? LinkOpened;
+        void OnHyperlink(string uri);
         void RequestRenderExtern();
         void ResizeBuffer(int rows, int cols);
 
@@ -21,7 +25,7 @@ namespace Dotty.Abstractions.Adapter
         void OnClearScrollback();
         void OnSetGraphicsRendition(ReadOnlySpan<char> parameters);
         void OnBell();
-        void OnOperatingSystemCommand(ReadOnlySpan<char> payload);
+        void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload);
         void OnMoveCursor(int row, int col);
         void OnCursorUp(int n);
         void OnCursorDown(int n);
@@ -72,6 +76,7 @@ namespace Dotty.Abstractions.Adapter
         // Cursor shape
         void OnSetCursorShape(int shape); // DECSCUSR - CSI n SP q
         void OnSetApplicationCursorKeys(bool enabled); // DECCKM - CSI ? 1 h/l
+        void OnSetKeypadApplicationMode(bool enabled); // DECKPAM / DECKPNM - ESC = / ESC >
 
         // Device attributes
         void OnSendDeviceAttributes(int daType); // DA - CSI c / CSI > c
@@ -79,6 +84,9 @@ namespace Dotty.Abstractions.Adapter
         // Mouse support
         void OnMouseEvent(int button, int col, int row, bool isPress);
         void OnSetMouseMode(int mode, bool enabled);
+
+        // Synchronized Update
+        void OnSetSynchronizedUpdate(bool enabled);
 
         // Render batching
         void FlushRender();

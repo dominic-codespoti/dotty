@@ -23,6 +23,42 @@ namespace Dotty.App.Views
         private readonly TerminalInputEncoder _inputEncoder = new();
 
         public string? WorkingDirectory { get; set; }
+        public bool KeypadApplicationMode { get; set; }
+
+        private int _cursorShape = 0;
+        public int CursorShape
+        {
+            get => _cursorShape;
+            set
+            {
+                if (_cursorShape != value)
+                {
+                    _cursorShape = value;
+                    UpdateCursorShape();
+                }
+            }
+        }
+
+        private void UpdateCursorShape()
+        {
+            if (_grid == null) return;
+            
+            // DECSCUSR mapping to TerminalCursorShape (Block, Beam, Underline)
+            TerminalCursorShape shape = _cursorShape switch
+            {
+                0 => TerminalCursorShape.Block,      // Default
+                1 => TerminalCursorShape.Block,      // Blinking Block
+                2 => TerminalCursorShape.Block,      // Steady Block
+                3 => TerminalCursorShape.Underline,  // Blinking Underline
+                4 => TerminalCursorShape.Underline,  // Steady Underline
+                5 => TerminalCursorShape.Beam,       // Blinking Bar
+                6 => TerminalCursorShape.Beam,       // Steady Bar
+                _ => TerminalCursorShape.Block
+            };
+
+            _grid.CursorShape = shape;
+        }
+
         public event Action<byte[]>? RawInput;
         public event EventHandler<string?>? Submitted;
 
@@ -148,7 +184,7 @@ namespace Dotty.App.Views
                 }
             }
 
-            var encoded = _inputEncoder.Encode(e.Key, e.KeyModifiers);
+            var encoded = _inputEncoder.Encode(e.Key, e.KeyModifiers, KeypadApplicationMode);
             if (encoded != null)
             {
                 RawInput?.Invoke(encoded);

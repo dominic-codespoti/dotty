@@ -163,16 +163,36 @@ namespace Dotty.Terminal.Parser
                                     byte cb = inputSpan[i];
                                     if (cb == 0x07) // BEL terminator
                                     {
-                                        var payload = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
-                                        Handler?.OnOperatingSystemCommand(payload.AsSpan());
+
+                                        var payloadText = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
+                                        int semiIdx = payloadText.IndexOf(';');
+                                        if (semiIdx > 0 && int.TryParse(payloadText.Substring(0, semiIdx), out int oscCode))
+                                        {
+                                            Handler?.OnOperatingSystemCommand(oscCode, payloadText.AsSpan(semiIdx + 1));
+                                        }
+                                        else if (int.TryParse(payloadText, out int oscCodeNoPayload))
+                                        {
+                                            Handler?.OnOperatingSystemCommand(oscCodeNoPayload, ReadOnlySpan<char>.Empty);
+                                        }
+
                                         i++;
                                         finished = true;
                                         break;
                                     }
                                     if (cb == ESC && i + 1 < inputSpan.Length && inputSpan[i + 1] == (byte)'\\')
                                     {
-                                        var payload = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
-                                        Handler?.OnOperatingSystemCommand(payload.AsSpan());
+
+                                        var payloadText = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
+                                        int semiIdx = payloadText.IndexOf(';');
+                                        if (semiIdx > 0 && int.TryParse(payloadText.Substring(0, semiIdx), out int oscCode))
+                                        {
+                                            Handler?.OnOperatingSystemCommand(oscCode, payloadText.AsSpan(semiIdx + 1));
+                                        }
+                                        else if (int.TryParse(payloadText, out int oscCodeNoPayload))
+                                        {
+                                            Handler?.OnOperatingSystemCommand(oscCodeNoPayload, ReadOnlySpan<char>.Empty);
+                                        }
+
                                         i += 2;
                                         finished = true;
                                         break;
@@ -212,6 +232,18 @@ namespace Dotty.Terminal.Parser
 
                                 var selection = (char)inputSpan[i];
                                 ApplyCharsetSelection(selection);
+                                i++;
+                            }
+                            else if (next == (byte)'=')
+                            {
+                                // DECKPAM - Keypad Application Mode
+                                Handler?.OnSetKeypadApplicationMode(true);
+                                i++;
+                            }
+                            else if (next == (byte)'>')
+                            {
+                                // DECKPNM - Keypad Numeric Mode
+                                Handler?.OnSetKeypadApplicationMode(false);
                                 i++;
                             }
                             else
@@ -374,6 +406,9 @@ namespace Dotty.Terminal.Parser
                             paramCount > 0 ? parsedParams[0] : 1,
                             paramCount > 1 ? parsedParams[1] : 0);
                         break;
+                    case 'q':
+                        Handler?.OnSetCursorShape(paramCount > 0 ? parsedParams[0] : 0);
+                        break;
                     case 'h':
                     case 'l':
                         if (isPrivate && paramCount > 0)
@@ -479,6 +514,9 @@ namespace Dotty.Terminal.Parser
                     break;
                 case 'r':
                     Handler?.OnSetScrollRegion(GetParam(0, 1), GetParam(1, 0));
+                    break;
+                case 'q':
+                    Handler?.OnSetCursorShape(GetParam(0, 0));
                     break;
                 case 'h':
                 case 'l':

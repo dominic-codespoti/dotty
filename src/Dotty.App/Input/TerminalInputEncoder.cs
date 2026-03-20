@@ -7,7 +7,7 @@ namespace Dotty.App.Input
 {
     public class TerminalInputEncoder
     {
-        public byte[]? Encode(Key key, KeyModifiers modifiers)
+        public byte[]? Encode(Key key, KeyModifiers modifiers, bool keypadApplicationMode = false)
         {
             // Handle Control + Char
             if (modifiers.HasFlag(KeyModifiers.Control) && !modifiers.HasFlag(KeyModifiers.Shift) && !modifiers.HasFlag(KeyModifiers.Alt))
@@ -39,6 +39,31 @@ namespace Dotty.App.Input
             if (modifiers == KeyModifiers.None || modifiers == KeyModifiers.Shift)
             {
                 var modStr = modifiers.HasFlag(KeyModifiers.Shift) ? "2" : "";
+
+                if (keypadApplicationMode)
+                {
+                    string? keypadSeq = key switch
+                    {
+                        Key.NumPad0 => "\x1bOp",
+                        Key.NumPad1 => "\x1bOq",
+                        Key.NumPad2 => "\x1bOr",
+                        Key.NumPad3 => "\x1bOs",
+                        Key.NumPad4 => "\x1bOt",
+                        Key.NumPad5 => "\x1bOu",
+                        Key.NumPad6 => "\x1bOv",
+                        Key.NumPad7 => "\x1bOw",
+                        Key.NumPad8 => "\x1bOx",
+                        Key.NumPad9 => "\x1bOy",
+                        Key.Decimal => "\x1bOn",
+                        Key.Divide => "\x1bOl",
+                        Key.Multiply => "\x1bOR",
+                        Key.Subtract => "\x1bOS",
+                        Key.Add => "\x1bOm",
+                        _ => null
+                    };
+
+                    if (keypadSeq != null) return Encoding.UTF8.GetBytes(keypadSeq);
+                }
                 
                 string? seq = key switch
                 {

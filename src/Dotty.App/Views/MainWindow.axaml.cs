@@ -67,7 +67,7 @@ public partial class MainWindow : Window
     private int _openedInitialized = 0;
     private string _currentWorkingDirectory = Environment.CurrentDirectory;
     private ITerminalParser? _parser;
-    private ITerminalHandler? _terminalAdapter;
+    private TerminalAdapter? _terminalAdapter;
     private int _renderScheduled;
     private Size _lastTerminalSize = new Size(0, 0);
 
@@ -211,6 +211,8 @@ public partial class MainWindow : Window
                 if (tb != null)
                 {
                     TerminalView.SetBuffer(tb);
+                    TerminalView.KeypadApplicationMode = _terminalAdapter!.KeypadApplicationMode;
+                    TerminalView.CursorShape = _terminalAdapter!.CursorShape;
                 }
             }
             catch

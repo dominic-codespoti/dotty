@@ -292,9 +292,19 @@ namespace Dotty.App.Views
             var cellHeight = Math.Max(1.0, _canvas.CellHeight);
 
             column = (int)Math.Floor(x / cellWidth);
-            row = (int)Math.Floor(y / cellHeight);
+            
+            // Adjust row for scrollback
+            int scrollbackCount = buffer.ScrollbackCount;
+            // The canvas handles visually shifting the viewport, we must convert pointer Y
+            // into virtual row coordinates:
+            // Since Y=0 is visually offset down inside the ScrollViewer, we must map 
+            // the pointer coordinate Y to the physical pixel space. Wait, TerminalView receives 
+            // e.GetPosition relative to the Canvas which is full height!
+            // Let's verify: In Avalonia, pointer on a scrolled Canvas is already scaled to full Canvas bounds.
+            row = (int)Math.Floor(y / cellHeight) - scrollbackCount;
+            
             column = Math.Clamp(column, 0, buffer.Columns - 1);
-            row = Math.Clamp(row, 0, buffer.Rows - 1);
+            row = Math.Clamp(row, -scrollbackCount, buffer.Rows - 1);
             return true;
         }
 

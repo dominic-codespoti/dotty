@@ -287,8 +287,13 @@ internal sealed class BufferTextWriter
         cell.Bold = attributes.Bold;
         cell.Italic = attributes.Italic;
         cell.Underline = attributes.Underline;
+        cell.DoubleUnderline = attributes.DoubleUnderline;
         cell.Faint = attributes.Faint;
         cell.Inverse = attributes.Inverse;
+        cell.Strikethrough = attributes.Strikethrough;
+        cell.Overline = attributes.Overline;
+        cell.Invisible = attributes.Invisible;
+        cell.SlowBlink = attributes.SlowBlink;
         cell.UnderlineColor = attributes.UnderlineColor;
     }
 }

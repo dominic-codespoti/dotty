@@ -14,6 +14,25 @@ public class SgrParserTests
     }
 
     [Fact]
+    public void ExtendedAttributes_SetAndClear()
+    {
+        var updated = SgrParser.Apply("5;8;9;21;53".AsSpan(), CellAttributes.Default);
+        Assert.True(updated.SlowBlink);
+        Assert.True(updated.Invisible);
+        Assert.True(updated.Strikethrough);
+        Assert.True(updated.DoubleUnderline);
+        Assert.True(updated.Overline);
+
+        var cleared = SgrParser.Apply("24;25;28;29;55".AsSpan(), updated);
+        Assert.False(cleared.Underline); // 24 clears Underline and DoubleUnderline
+        Assert.False(cleared.DoubleUnderline);
+        Assert.False(cleared.SlowBlink);
+        Assert.False(cleared.Invisible);
+        Assert.False(cleared.Strikethrough);
+        Assert.False(cleared.Overline);
+    }
+
+    [Fact]
     public void BasicAttributes_SetAndClear()
     {
         var updated = SgrParser.Apply("1;3;4;7".AsSpan(), CellAttributes.Default);

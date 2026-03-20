@@ -188,7 +188,17 @@ namespace Dotty.Terminal.Parser
                             }
                             else if (next == (byte)'c')
                             {
-                                Handler?.OnEraseDisplay(2);
+                                Handler?.OnFullReset();
+                                i++;
+                            }
+                            else if (next == (byte)'7')
+                            {
+                                Handler?.OnSaveCursor();
+                                i++;
+                            }
+                            else if (next == (byte)'8')
+                            {
+                                Handler?.OnRestoreCursor();
                                 i++;
                             }
                             else if (next == (byte)'(' || next == (byte)')')
@@ -331,6 +341,34 @@ namespace Dotty.Terminal.Parser
                     case 'D':
                         Handler?.OnCursorBack(paramCount > 0 ? parsedParams[0] : 1);
                         break;
+                    case 'E':
+                        Handler?.OnCursorNextLine(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'F':
+                        Handler?.OnCursorPreviousLine(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'G':
+                        Handler?.OnCursorHorizontalAbsolute(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'L':
+                        Handler?.OnInsertLines(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case '@':
+                        Handler?.OnInsertChars(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'P':
+                        Handler?.OnDeleteChars(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'n':
+                        if (paramCount > 0 && parsedParams[0] == 6)
+                        {
+                            Handler?.OnDeviceStatusReport(6);
+                        }
+                        else
+                        {
+                            Handler?.OnDeviceStatusReport(paramCount > 0 ? parsedParams[0] : 0);
+                        }
+                        break;
                     case 'r':
                         Handler?.OnSetScrollRegion(
                             paramCount > 0 ? parsedParams[0] : 1,
@@ -363,6 +401,10 @@ namespace Dotty.Terminal.Parser
                             int cy = parsedParams[2];
                             bool isPress = (cb & 0x03) != 0x03;
                             Handler?.OnMouseEvent(cb, cx, cy, isPress);
+                        }
+                        else if (final == 'M')
+                        {
+                            Handler?.OnDeleteLines(paramCount > 0 ? parsedParams[0] : 1);
                         }
                         break;
                     default:
@@ -414,6 +456,27 @@ namespace Dotty.Terminal.Parser
                 case 'D':
                     Handler?.OnCursorBack(GetParam(0, 1));
                     break;
+                case 'E':
+                    Handler?.OnCursorNextLine(GetParam(0, 1));
+                    break;
+                case 'F':
+                    Handler?.OnCursorPreviousLine(GetParam(0, 1));
+                    break;
+                case 'G':
+                    Handler?.OnCursorHorizontalAbsolute(GetParam(0, 1));
+                    break;
+                case 'L':
+                    Handler?.OnInsertLines(GetParam(0, 1));
+                    break;
+                case '@':
+                    Handler?.OnInsertChars(GetParam(0, 1));
+                    break;
+                case 'P':
+                    Handler?.OnDeleteChars(GetParam(0, 1));
+                    break;
+                case 'n':
+                    Handler?.OnDeviceStatusReport(GetParam(0, 0));
+                    break;
                 case 'r':
                     Handler?.OnSetScrollRegion(GetParam(0, 1), GetParam(1, 0));
                     break;
@@ -452,21 +515,22 @@ namespace Dotty.Terminal.Parser
                     break;
                 case 'M':
                 case 'm':
-                    try
+                    bool isSgrMouse = @params.StartsWith("<");
+                    if (isSgrMouse)
                     {
-                        var p = @params;
-                        if (p.StartsWith("<"))
+                        var partsArray = @params.Substring(1).Split(';', StringSplitOptions.RemoveEmptyEntries);
+                        if (partsArray.Length >= 3)
                         {
-                            p = p.Substring(1);
-                            string[] mParts = p.Split(';', StringSplitOptions.RemoveEmptyEntries);
-                            if (mParts.Length >= 3 && int.TryParse(mParts[0], out int cb) && int.TryParse(mParts[1], out int cx) && int.TryParse(mParts[2], out int cy))
-                            {
-                                bool isPress = final == 'M';
-                                Handler?.OnMouseEvent(cb, cx, cy, isPress);
-                            }
+                            int.TryParse(partsArray[0], out int cb);
+                            int.TryParse(partsArray[1], out int cx);
+                            int.TryParse(partsArray[2], out int cy);
+                            Handler?.OnMouseEvent(cb, cx, cy, final == 'M');
                         }
                     }
-                    catch { }
+                    else if (final == 'M')
+                    {
+                        Handler?.OnDeleteLines(GetParam(0, 1));
+                    }
                     break;
                 default:
                     break;

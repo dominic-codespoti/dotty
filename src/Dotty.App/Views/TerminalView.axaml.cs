@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Input.Platform;
 using Dotty.App.Controls;
 using Dotty.Terminal.Adapter;
+using Dotty.App.Input;
 
 namespace Dotty.App.Views
 {
@@ -19,6 +20,7 @@ namespace Dotty.App.Views
         private bool _suppressText = false;
         private readonly SelectionController _selectionController = new();
         private readonly SelectionContextMenuBuilder _contextMenuBuilder;
+        private readonly TerminalInputEncoder _inputEncoder = new();
 
         public string? WorkingDirectory { get; set; }
         public event Action<byte[]>? RawInput;
@@ -126,16 +128,6 @@ namespace Dotty.App.Views
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
         }
 
-        private void TerminalView_TextInput(object? sender, TextInputEventArgs e)
-        {
-            if (e.Text == null) return;
-            if (_suppressText) return;
-
-            var bytes = Encoding.UTF8.GetBytes(e.Text);
-            RawInput?.Invoke(bytes);
-            _lineBuffer += e.Text;
-        }
-
         private void TerminalView_KeyDown(object? sender, KeyEventArgs e)
         {
             var modifiers = e.KeyModifiers;
@@ -156,44 +148,31 @@ namespace Dotty.App.Views
                 }
             }
 
-            // Handle special keys
-            if (e.Key == Key.Enter)
+            var encoded = _inputEncoder.Encode(e.Key, e.KeyModifiers);
+            if (encoded != null)
             {
-                // send LF to pty
-                // send CR (carriage return) which is the conventional terminal newline
-                RawInput?.Invoke(new byte[] { (byte)'\r' });
-                // raise submitted with current line buffer
-                Submitted?.Invoke(this, _lineBuffer);
-                _lineBuffer = string.Empty;
+                RawInput?.Invoke(encoded);
+                if (e.Key == Key.Enter)
+                {
+                    Submitted?.Invoke(this, _lineBuffer);
+                    _lineBuffer = string.Empty;
+                }
                 e.Handled = true;
+                _suppressText = true;
                 return;
             }
 
-            if (e.Key == Key.Back)
-            {
-                // DEL to pty
-                RawInput?.Invoke(new byte[] { 0x7f });
-                if (_lineBuffer.Length > 0) _lineBuffer = _lineBuffer.Substring(0, _lineBuffer.Length - 1);
-                e.Handled = true;
-                return;
-            }
+            _suppressText = false;
+        }
 
-            // Arrow keys -> send escape sequences
-            switch (e.Key)
-            {
-                case Key.Escape:
-                    RawInput?.Invoke(new byte[] { 0x1b }); e.Handled = true; break;
-                case Key.Left:
-                    RawInput?.Invoke(Encoding.UTF8.GetBytes("\u001b[D")); e.Handled = true; break;
-                case Key.Right:
-                    RawInput?.Invoke(Encoding.UTF8.GetBytes("\u001b[C")); e.Handled = true; break;
-                case Key.Up:
-                    RawInput?.Invoke(Encoding.UTF8.GetBytes("\u001b[A")); e.Handled = true; break;
-                case Key.Down:
-                    RawInput?.Invoke(Encoding.UTF8.GetBytes("\u001b[B")); e.Handled = true; break;
-                default:
-                    break;
-            }
+        private void TerminalView_TextInput(object? sender, TextInputEventArgs e)
+        {
+            if (e.Text == null) return;
+            if (_suppressText) return;
+
+            var bytes = Encoding.UTF8.GetBytes(e.Text);
+            RawInput?.Invoke(bytes);
+            _lineBuffer += e.Text;
         }
 
         public void SetBuffer(TerminalBuffer buffer)

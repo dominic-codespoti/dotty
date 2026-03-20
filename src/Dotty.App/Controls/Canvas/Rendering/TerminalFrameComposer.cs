@@ -284,6 +284,15 @@ public sealed class TerminalFrameComposer : IDisposable
         float baselineOffset = (cellH * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
 
         var defaultColor = paint.Color;
+        long ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        bool isBlinkVisible = (ms % 1000) < 500;
+
+        using var linePaint = new SKPaint
+        {
+            Style = SKPaintStyle.Stroke,
+            IsAntialias = true,
+            StrokeWidth = Math.Max(1f, cellH * 0.05f)
+        };
 
         for (int row = startRow; row <= endRow; row++)
         {
@@ -296,17 +305,57 @@ public sealed class TerminalFrameComposer : IDisposable
                 var cc = _cellClasses[col];
                 if (!cc.ShouldDrawGlyph) continue;
 
-                _glyphPaint.Color = cc.HasFg ? cc.Fg : defaultColor;
+                var raw = cc.RawCell;
+                if (raw.Invisible) continue;
+                if (raw.SlowBlink && !isBlinkVisible) continue;
+
+                var fgColor = cc.HasFg ? cc.Fg : defaultColor;
+                _glyphPaint.Color = fgColor;
 
                 // Use a stroke-based embolden instead of Skia's FakeBoldText.
-                _glyphPaint.StrokeWidth = cc.RawCell.Bold ? 0.8f : 0f;
+                _glyphPaint.StrokeWidth = raw.Bold ? 0.8f : 0f;
                 _glyphPaint.Style = SKPaintStyle.Fill;
 
                 // Snap X positions to integer pixels to align glyphs to the grid.
                 float x = MathF.Round(col * cellW);
                 canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
+
+                bool hasLine = raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline;
+                if (hasLine)
+                {
+                    linePaint.Color = (raw.UnderlineColor.HasValue) ? ToSkColor(raw.UnderlineColor.Value) : fgColor;
+                    float lineW = cellW * cc.Width;
+                    
+                    if (raw.Underline)
+                    {
+                        float y = baseline + fm.Descent * 0.5f;
+                        canvas.DrawLine(x, y, x + lineW, y, linePaint);
+                    }
+                    if (raw.DoubleUnderline)
+                    {
+                        float y1 = baseline + fm.Descent * 0.3f;
+                        float y2 = baseline + fm.Descent * 0.8f;
+                        canvas.DrawLine(x, y1, x + lineW, y1, linePaint);
+                        canvas.DrawLine(x, y2, x + lineW, y2, linePaint);
+                    }
+                    if (raw.Strikethrough)
+                    {
+                        float y = baseline - (fm.Ascent * -0.3f);
+                        canvas.DrawLine(x, y, x + lineW, y, linePaint);
+                    }
+                    if (raw.Overline)
+                    {
+                        float y = baseline + fm.Ascent * 1.05f;
+                        canvas.DrawLine(x, y, x + lineW, y, linePaint);
+                    }
+                }
             }
         }
+    }
+
+    private static SKColor ToSkColor(SgrColor sgrColor)
+    {
+        return SKColor.Parse(sgrColor.Hex);
     }
 
     // ============================================================

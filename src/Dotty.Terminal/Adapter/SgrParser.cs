@@ -49,8 +49,24 @@ public static class SgrParser
                     attributes.Underline = true;
                     hasMore = enumerator.MoveNext();
                     break;
+                case 5:
+                    attributes.SlowBlink = true;
+                    hasMore = enumerator.MoveNext();
+                    break;
                 case 7:
                     attributes.Inverse = true;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 8:
+                    attributes.Invisible = true;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 9:
+                    attributes.Strikethrough = true;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 21:
+                    attributes.DoubleUnderline = true;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 22:
@@ -64,10 +80,23 @@ public static class SgrParser
                     break;
                 case 24:
                     attributes.Underline = false;
+                    attributes.DoubleUnderline = false;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 25:
+                    attributes.SlowBlink = false;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 27:
                     attributes.Inverse = false;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 28:
+                    attributes.Invisible = false;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 29:
+                    attributes.Strikethrough = false;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 39:
@@ -76,6 +105,14 @@ public static class SgrParser
                     break;
                 case 49:
                     attributes.Background = null;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 53:
+                    attributes.Overline = true;
+                    hasMore = enumerator.MoveNext();
+                    break;
+                case 55:
+                    attributes.Overline = false;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 59:

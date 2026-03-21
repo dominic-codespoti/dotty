@@ -101,7 +101,20 @@ namespace Dotty.App.Controls
 
         private void OnStyledPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
         {
-            if (e.Property == CursorBlinkIntervalProperty)
+            
+            if (e.Property == IsVisibleProperty)
+            {
+                if (IsVisible)
+                {
+                    if (_blinkTimer != null) _blinkTimer.Start();
+                }
+                else
+                {
+                    if (_blinkTimer != null) _blinkTimer.Stop();
+                }
+            }
+
+            else if (e.Property == CursorBlinkIntervalProperty)
             {
                 try
                 {

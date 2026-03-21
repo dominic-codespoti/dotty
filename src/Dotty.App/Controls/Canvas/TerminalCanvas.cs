@@ -333,8 +333,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	/// Request a single coalesced frame. Multiple calls before the dispatcher
 	/// runs will only cause a single InvalidateVisual.
 	/// </summary>
-	public void RequestFrame()
-	{
+	public void RequestFrame() { if (!IsVisible) return;
 		 ProcessGlyphDiscoverySlice();
 		 try
 		 {
@@ -516,6 +515,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
 	{
 		base.OnPropertyChanged(change);
+            if (change.Property == IsVisibleProperty && IsVisible) { var _ = 0; /* hack */ }
+
 		if (change.Property == FontFamilyProperty || change.Property == FontSizeProperty)
 		{
 			_metricsDirty = true;

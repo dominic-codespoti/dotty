@@ -1,10 +1,38 @@
 <Window xmlns="https://github.com/avaloniaui"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="clr-namespace:Dotty.App.Views;assembly=Dotty.App"
-    x:Class="Dotty.App.MainWindow"
-    Width="1000" Height="700"
-    Title="Terminal (Phase 0)">
-  <DockPanel>
-  <controls:TerminalView Name="TerminalView" />
-  </DockPanel>
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Dotty.App.ViewModels"
+        xmlns:controls="using:Dotty.App.Views"
+        xmlns:layout="using:Dotty.App.Controls.Layout"
+        x:Class="Dotty.App.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Width="1000" Height="700"
+        Title="Dotty"
+        Background="Transparent"
+        TransparencyLevelHint="Mica,Blur"
+        ExtendClientAreaToDecorationsHint="True">
+
+    <DockPanel Margin="0 30 0 0">
+        <TabStrip DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
+            <TabStrip.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding Title}" Padding="8,4" />
+                </DataTemplate>
+            </TabStrip.ItemTemplate>
+        </TabStrip>
+
+        <ItemsControl ItemsSource="{Binding Tabs}">
+             <ItemsControl.ItemsPanel>
+                 <ItemsPanelTemplate>
+                     <Grid />
+                 </ItemsPanelTemplate>
+             </ItemsControl.ItemsPanel>
+             <ItemsControl.ItemTemplate>
+                 <DataTemplate DataType="vm:TabViewModel">
+                     <Border IsVisible="{Binding IsActive}">
+                         <layout:SplitPaneHost DataContext="{Binding RootNode}" />
+                     </Border>
+                 </DataTemplate>
+             </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </DockPanel>
 </Window>

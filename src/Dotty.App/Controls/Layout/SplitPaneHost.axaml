@@ -1,0 +1,8 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Dotty.App.ViewModels"
+             xmlns:controls="using:Dotty.App.Views"
+             xmlns:layout="using:Dotty.App.Controls.Layout"
+             x:Class="Dotty.App.Controls.Layout.SplitPaneHost"
+             x:DataType="vm:SplitNodeViewModel">
+</UserControl>

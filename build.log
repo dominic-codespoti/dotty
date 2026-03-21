@@ -1,0 +1,11 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Dotty.Abstractions -> /home/dom/projects/dotnet-term/src/Dotty.Abstractions/bin/Debug/net10.0/Dotty.Abstractions.dll
+  Dotty.Terminal -> /home/dom/projects/dotnet-term/src/Dotty.Terminal/bin/Debug/net10.0/Dotty.Terminal.dll
+  Dotty.App -> /home/dom/projects/dotnet-term/src/Dotty.App/bin/Debug/net10.0/linux-x64/Dotty.App.dll
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.21

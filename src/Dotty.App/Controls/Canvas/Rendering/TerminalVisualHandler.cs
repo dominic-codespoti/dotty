@@ -21,6 +21,7 @@ public record struct TerminalRenderState(
     SKPaint? Paint,
     SKColor BgColor,
     double ScrollY,
+    double ViewportWidth,
     double ViewportHeight,
     int ScrollbackCount,
     bool ShowCursor,
@@ -59,13 +60,13 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
         {
             try { buffer.MarkRender(); } catch { }
 
-            canvas.Save();
-            canvas.ResetMatrix();
-            canvas.Clear(s.BgColor);
-            canvas.Restore();
-
+            
             var m = ToSkiaMatrix(context.CurrentTransform);
-            canvas.SetMatrix(m);
+            canvas.Concat(ref m);
+            using var bgPaint = new SKPaint { Color = s.BgColor, Style = SKPaintStyle.Fill };
+            canvas.DrawRect(new SKRect(0, 0, (float)s.ViewportWidth, (float)s.ViewportHeight), bgPaint);
+
+
             if (s.Padding.Left != 0 || s.Padding.Top != 0)
             {
                 canvas.Translate((float)s.Padding.Left, (float)s.Padding.Top);

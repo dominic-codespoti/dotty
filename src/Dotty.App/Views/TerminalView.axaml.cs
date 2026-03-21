@@ -120,7 +120,14 @@ namespace Dotty.App.Views
         public event Action<byte[]>? RawInput;
         public event EventHandler<string?>? Submitted;
 
+        public static readonly RoutedEvent<RoutedEventArgs> NewTabRequestedEvent = RoutedEvent.Register<TerminalView, RoutedEventArgs>("NewTabRequested", RoutingStrategies.Bubble);
         
+        public event EventHandler<RoutedEventArgs> NewTabRequested
+        {
+            add => AddHandler(NewTabRequestedEvent, value);
+            remove => RemoveHandler(NewTabRequestedEvent, value);
+        }
+
         protected override void OnSizeChanged(SizeChangedEventArgs e)
         {
             base.OnSizeChanged(e);
@@ -133,6 +140,13 @@ namespace Dotty.App.Views
             if (change.Property == BoundsProperty)
             {
                 UpdateSize();
+            }
+            if (change.Property == DataContextProperty)
+            {
+                if (DataContext is Dotty.App.ViewModels.TerminalSession session)
+                {
+                    Session = session;
+                }
             }
         }
 
@@ -210,7 +224,8 @@ namespace Dotty.App.Views
                 CopyAsync: CopySelectionAsync,
                 PasteAsync: PasteFromClipboardAsync,
                 SelectAll: SelectAll,
-                ClearSelection: ClearSelection
+                ClearSelection: ClearSelection,
+                NewTab: () => RaiseEvent(new RoutedEventArgs(NewTabRequestedEvent))
             );
             var menu = _contextMenuBuilder.Build(actions);
             menu.Open(this);

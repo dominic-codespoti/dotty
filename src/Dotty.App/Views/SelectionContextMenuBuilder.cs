@@ -23,7 +23,8 @@ internal sealed class SelectionContextMenuBuilder
         Func<System.Threading.Tasks.Task> CopyAsync,
         Func<System.Threading.Tasks.Task> PasteAsync,
         Action SelectAll,
-        Action ClearSelection
+        Action ClearSelection,
+        Action NewTab
     );
 
     /// <summary>
@@ -63,6 +64,16 @@ internal sealed class SelectionContextMenuBuilder
         };
         clearSelectionItem.Click += (s, args) => actions.ClearSelection();
         menu.Items.Add(clearSelectionItem);
+
+        menu.Items.Add(new Separator());
+
+        var newTabItem = new MenuItem
+        {
+            Header = "New Tab",
+            InputGesture = new KeyGesture(Key.T, KeyModifiers.Control | KeyModifiers.Shift)
+        };
+        newTabItem.Click += (s, args) => actions.NewTab();
+        menu.Items.Add(newTabItem);
 
         return menu;
     }

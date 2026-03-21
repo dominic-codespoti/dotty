@@ -2,22 +2,62 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Dotty.App.ViewModels"
         xmlns:controls="using:Dotty.App.Views"
-        xmlns:layout="using:Dotty.App.Controls.Layout"
         x:Class="Dotty.App.MainWindow"
         x:DataType="vm:MainViewModel"
         Width="1000" Height="700"
         Title="Dotty">
 
+    <Window.Styles>
+        <Style Selector="TabStrip">
+            <Setter Property="Background" Value="#181818" />
+            <Setter Property="Padding" Value="4,4,4,0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style Selector="TabStripItem">
+            <Setter Property="Foreground" Value="#999999" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="CornerRadius" Value="6,6,0,0" />
+            <Setter Property="VerticalAlignment" Value="Bottom" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style Selector="TabStripItem:pointerover">
+            <Setter Property="Background" Value="#2A2A2A" />
+            <Setter Property="Foreground" Value="#DDDDDD" />
+        </Style>
+        <Style Selector="TabStripItem:selected">
+            <Setter Property="Background" Value="#1E1E1E" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+    </Window.Styles>
+
     <DockPanel>
-        <TabStrip DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}" Background="#1E1E1E">
+        <TabStrip DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
             <TabStrip.ItemTemplate>
                 <DataTemplate>
-                    <TextBlock Text="{Binding Title}" Padding="8,4" />
+                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Background="Transparent" MinWidth="60" Margin="0,0,0,0">
+                        <StackPanel.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Rename Tab" Click="OnRenameTabClick" />
+                            </ContextMenu>
+                        </StackPanel.ContextMenu>
+                        <!-- A small subtle dot to look terminal-esque -->
+                        <TextBlock Text="●" Foreground="#555555" FontSize="10" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding !IsEditingTitle}" />
+                        <TextBox Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding IsEditingTitle}"
+                                 MinHeight="18" Padding="4,0" Margin="0" FontSize="13"
+                                 KeyUp="OnRenameTextBoxKeyUp" 
+                                 LostFocus="OnRenameTextBoxLostFocus"
+                                 PropertyChanged="OnRenameTextBoxPropertyChanged" />
+                    </StackPanel>
                 </DataTemplate>
             </TabStrip.ItemTemplate>
         </TabStrip>
 
-        <ItemsControl ItemsSource="{Binding Tabs}" Margin="0,10,0,0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ClipToBounds="True">
+        <ItemsControl Name="PART_ItemsControl" ItemsSource="{Binding Tabs}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ClipToBounds="True">
              <ItemsControl.Styles>
                  <Style Selector="ContentPresenter">
                      <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -26,13 +66,13 @@
              </ItemsControl.Styles>
              <ItemsControl.ItemsPanel>
                  <ItemsPanelTemplate>
-                     <DockPanel />
+                     <Grid />
                  </ItemsPanelTemplate>
              </ItemsControl.ItemsPanel>
              <ItemsControl.ItemTemplate>
                  <DataTemplate DataType="vm:TabViewModel">
-                     <Border IsVisible="{Binding IsActive}" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" ClipToBounds="True">
-                         <layout:SplitPaneHost DataContext="{Binding RootNode}" />
+                     <Border IsVisible="{Binding IsActive}" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" ClipToBounds="True" Background="#1E1E1E" Padding="0">
+                         <controls:TerminalView DataContext="{Binding Session}" NewTabRequested="OnNewTabRequested" />
                      </Border>
                  </DataTemplate>
              </ItemsControl.ItemTemplate>

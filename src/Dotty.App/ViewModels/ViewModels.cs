@@ -14,54 +14,10 @@ public abstract class ViewModelBase : INotifyPropertyChanged
     }
 }
 
-public abstract class SplitNodeViewModel : ViewModelBase
-{
-}
-
-public class TerminalViewModel : SplitNodeViewModel, IDisposable
-{
-    public TerminalSession Session { get; }
-
-    public TerminalViewModel()
-    {
-        Session = new TerminalSession();
-    }
-
-    public void Dispose()
-    {
-        Session.Dispose();
-    }
-}
-
-public class SplitContainerViewModel : SplitNodeViewModel
-{
-    private SplitNodeViewModel _firstChild = null!;
-    private SplitNodeViewModel _secondChild = null!;
-    private bool _isHorizontal;
-
-    public SplitNodeViewModel FirstChild
-    {
-        get => _firstChild;
-        set { _firstChild = value; RaisePropertyChanged(); }
-    }
-
-    public SplitNodeViewModel SecondChild
-    {
-        get => _secondChild;
-        set { _secondChild = value; RaisePropertyChanged(); }
-    }
-
-    public bool IsHorizontal
-    {
-        get => _isHorizontal;
-        set { _isHorizontal = value; RaisePropertyChanged(); }
-    }
-}
-
 public class TabViewModel : ViewModelBase, IDisposable
 {
     private string _title = "Terminal";
-    private SplitNodeViewModel _rootNode;
+    private TerminalSession _session;
 
     private bool _isActive;
     public bool IsActive
@@ -70,9 +26,16 @@ public class TabViewModel : ViewModelBase, IDisposable
         set { _isActive = value; RaisePropertyChanged(); }
     }
 
+    private bool _isEditingTitle;
+    public bool IsEditingTitle
+    {
+        get => _isEditingTitle;
+        set { _isEditingTitle = value; RaisePropertyChanged(); }
+    }
+
     public TabViewModel()
     {
-        _rootNode = new TerminalViewModel();
+        _session = new TerminalSession();
     }
 
     public string Title
@@ -81,26 +44,15 @@ public class TabViewModel : ViewModelBase, IDisposable
         set { _title = value; RaisePropertyChanged(); }
     }
 
-    public SplitNodeViewModel RootNode
+    public TerminalSession Session
     {
-        get => _rootNode;
-        set { _rootNode = value; RaisePropertyChanged(); }
+        get => _session;
+        set { _session = value; RaisePropertyChanged(); }
     }
 
     public void Dispose()
     {
-        DisposeNode(RootNode);
-    }
-
-    private void DisposeNode(SplitNodeViewModel node)
-    {
-        if (node is TerminalViewModel tvm)
-            tvm.Dispose();
-        else if (node is SplitContainerViewModel scvm)
-        {
-            DisposeNode(scvm.FirstChild);
-            DisposeNode(scvm.SecondChild);
-        }
+        _session.Dispose();
     }
 }
 
@@ -109,6 +61,8 @@ public class MainViewModel : ViewModelBase
     private TabViewModel? _activeTab;
 
     public ObservableCollection<TabViewModel> Tabs { get; } = new();
+
+    public event EventHandler? ActiveTabChanged;
 
     public TabViewModel? ActiveTab
     {
@@ -119,6 +73,7 @@ public class MainViewModel : ViewModelBase
             _activeTab = value;
             if (_activeTab != null) _activeTab.IsActive = true;
             RaisePropertyChanged();
+            ActiveTabChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -127,5 +82,12 @@ public class MainViewModel : ViewModelBase
         var initialTab = new TabViewModel();
         Tabs.Add(initialTab);
         ActiveTab = initialTab;
+    }
+
+    public void AddNewTab()
+    {
+        var newTab = new TabViewModel();
+        Tabs.Add(newTab);
+        ActiveTab = newTab;
     }
 }

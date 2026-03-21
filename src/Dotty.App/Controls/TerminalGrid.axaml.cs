@@ -14,7 +14,7 @@ namespace Dotty.App.Controls
         private DispatcherTimer? _blinkTimer;
 
         public static readonly StyledProperty<Thickness> CanvasPaddingProperty =
-            AvaloniaProperty.Register<TerminalGrid, Thickness>(nameof(CanvasPadding), new Thickness(16, 12, 16, 16));
+            AvaloniaProperty.Register<TerminalGrid, Thickness>(nameof(CanvasPadding), new Thickness(16, 24, 16, 16));
 
         public static readonly StyledProperty<TerminalCursorShape> CursorShapeProperty =
             AvaloniaProperty.Register<TerminalGrid, TerminalCursorShape>(nameof(CursorShape), TerminalCursorShape.Block);

@@ -9,7 +9,7 @@
         Title="Dotty">
 
     <DockPanel>
-        <TabStrip DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
+        <TabStrip DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}" Background="#1E1E1E">
             <TabStrip.ItemTemplate>
                 <DataTemplate>
                     <TextBlock Text="{Binding Title}" Padding="8,4" />
@@ -17,15 +17,21 @@
             </TabStrip.ItemTemplate>
         </TabStrip>
 
-        <ItemsControl ItemsSource="{Binding Tabs}">
+        <ItemsControl ItemsSource="{Binding Tabs}" Margin="0,10,0,0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ClipToBounds="True">
+             <ItemsControl.Styles>
+                 <Style Selector="ContentPresenter">
+                     <Setter Property="HorizontalAlignment" Value="Stretch" />
+                     <Setter Property="VerticalAlignment" Value="Stretch" />
+                 </Style>
+             </ItemsControl.Styles>
              <ItemsControl.ItemsPanel>
                  <ItemsPanelTemplate>
-                     <Grid />
+                     <DockPanel />
                  </ItemsPanelTemplate>
              </ItemsControl.ItemsPanel>
              <ItemsControl.ItemTemplate>
                  <DataTemplate DataType="vm:TabViewModel">
-                     <Border IsVisible="{Binding IsActive}">
+                     <Border IsVisible="{Binding IsActive}" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" ClipToBounds="True">
                          <layout:SplitPaneHost DataContext="{Binding RootNode}" />
                      </Border>
                  </DataTemplate>

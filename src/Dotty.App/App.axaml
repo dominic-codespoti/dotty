@@ -13,7 +13,7 @@
     <!-- Default preference; runtime will resolve this to the first installed font from the configured stack. -->
     <FontFamily x:Key="TerminalFontFamily">JetBrainsMono Nerd Font</FontFamily>
         <x:Double x:Key="TerminalFontSize">13</x:Double>
-        <Thickness x:Key="TerminalContentPadding">16,12,16,16</Thickness>
+        <Thickness x:Key="TerminalContentPadding">16,32,16,16</Thickness>
         <controls:TerminalCursorShape x:Key="TerminalCursorShape">Block</controls:TerminalCursorShape>
         <sys:TimeSpan x:Key="TerminalCursorBlinkInterval">00:00:00.600</sys:TimeSpan>
     </Application.Resources>

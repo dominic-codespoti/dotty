@@ -4,5 +4,9 @@
              xmlns:controls="using:Dotty.App.Views"
              xmlns:layout="using:Dotty.App.Controls.Layout"
              x:Class="Dotty.App.Controls.Layout.SplitPaneHost"
-             x:DataType="vm:SplitNodeViewModel">
+             x:DataType="vm:SplitNodeViewModel"
+             HorizontalAlignment="Stretch"
+             VerticalAlignment="Stretch"
+             HorizontalContentAlignment="Stretch"
+             VerticalContentAlignment="Stretch">
 </UserControl>

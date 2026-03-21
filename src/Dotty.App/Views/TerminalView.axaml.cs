@@ -311,6 +311,9 @@ namespace Dotty.App.Views
         public bool TryGetTerminalMetrics(out double cellWidth, out double cellHeight, out Thickness padding)
         {
             padding = _grid?.CanvasPadding ?? new Thickness(0);
+            
+            // INCREASE TOP PADDING TO FIX SQUASHED UI
+            
 
             double fontSize = FontSize;
             if (double.IsNaN(fontSize) || fontSize <= 0)

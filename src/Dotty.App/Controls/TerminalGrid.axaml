@@ -2,21 +2,24 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:controls="clr-namespace:Dotty.App.Controls"
              x:Class="Dotty.App.Controls.TerminalGrid"
+             x:Name="Root"
              CanvasPadding="{DynamicResource TerminalContentPadding}"
              CursorShape="{DynamicResource TerminalCursorShape}"
-             CursorBlinkInterval="{DynamicResource TerminalCursorBlinkInterval}">
+             CursorBlinkInterval="{DynamicResource TerminalCursorBlinkInterval}"
+             HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
 
-  <Border Background="{DynamicResource TerminalBackground}" Padding="0">
+  <Border Background="{DynamicResource TerminalBackground}" Padding="0" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
     <ScrollViewer Name="PART_Scroll"
                   HorizontalScrollBarVisibility="Hidden"
                   VerticalScrollBarVisibility="Auto"
+                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                   HorizontalContentAlignment="Stretch"
                   VerticalContentAlignment="Stretch">
       <controls:TerminalCanvas Name="PART_Canvas"
-                               FontFamily="{Binding FontFamily, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                               FontSize="{Binding FontSize, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                               ContentPadding="{Binding CanvasPadding, RelativeSource={RelativeSource AncestorType=controls:TerminalGrid}}"
-                               CursorShape="{Binding CursorShape, RelativeSource={RelativeSource AncestorType=controls:TerminalGrid}}"
+                               FontFamily="{Binding #Root.FontFamily}"
+                               FontSize="{Binding #Root.FontSize}"
+                               ContentPadding="{Binding #Root.CanvasPadding}"
+                               CursorShape="{Binding #Root.CursorShape}"
                                HorizontalAlignment="Stretch"
                                VerticalAlignment="Stretch" />
     </ScrollViewer>

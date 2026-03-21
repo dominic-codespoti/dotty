@@ -6,12 +6,9 @@
         x:Class="Dotty.App.MainWindow"
         x:DataType="vm:MainViewModel"
         Width="1000" Height="700"
-        Title="Dotty"
-        Background="Transparent"
-        TransparencyLevelHint="Mica,Blur"
-        ExtendClientAreaToDecorationsHint="True">
+        Title="Dotty">
 
-    <DockPanel Margin="0 30 0 0">
+    <DockPanel>
         <TabStrip DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
             <TabStrip.ItemTemplate>
                 <DataTemplate>

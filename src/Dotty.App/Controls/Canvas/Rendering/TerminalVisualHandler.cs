@@ -124,7 +124,7 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                         int idx = r + sbCount;
                         if (idx >= 0 && idx < lines.Count)
                         {
-                            var lineStr = lines[idx];
+                            var lineStr = lines[idx].ToString();
                             if (string.IsNullOrEmpty(lineStr)) continue;
                             float y = (float)(r * s.CellHeight + baselineOffset);
                             

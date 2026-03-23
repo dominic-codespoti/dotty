@@ -35,9 +35,37 @@ internal sealed class BufferTextWriter
         if (text.IsEmpty) return;
         if (IsAllAscii(text)) WriteTextAsciiFast(text, in attributes);
         else {
-            var enumerator = StringInfo.GetTextElementEnumerator(text.ToString());
-            while (enumerator.MoveNext()) {
-                ProcessElement(enumerator.GetTextElement(), in attributes);
+            int index = 0;
+            while (index < text.Length)
+            {
+                int len = System.Globalization.StringInfo.GetNextTextElementLength(text.Slice(index));
+                if (len == 0) break;
+                // Avoid substring allocations if length is 1 and it's ascii
+                if (len == 1 && text[index] < 128)
+                {
+                    char c = text[index];
+                    if (c < 32 || c == 127)
+                    {
+                        if (c == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
+                        {
+                            _ctx.CarriageReturn();
+                            _ctx.LineFeed();
+                            index += 2;
+                            continue;
+                        }
+                        if (TryHandleControlChar(c, in attributes)) 
+                        {
+                            index++;
+                            continue;
+                        }
+                    }
+                    ProcessElementInner(_asciiCache[c], in attributes, isAscii: true);
+                }
+                else
+                {
+                    ProcessElement(text.Slice(index, len).ToString(), in attributes);
+                }
+                index += len;
             }
         }
     }

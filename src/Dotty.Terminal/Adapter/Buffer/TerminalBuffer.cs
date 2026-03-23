@@ -40,13 +40,30 @@ public class TerminalBuffer
     // scrolled off the top of the active screen. This is intentionally
     // lightweight; consumers that need richer history should snapshot
     // cells via `GetCell`/`GetRowText` or extend this with attributes.
-    private readonly System.Collections.Generic.List<string> _scrollback = new System.Collections.Generic.List<string>();
+    private ScrollbackLine[] _scrollbackRing = System.Array.Empty<ScrollbackLine>();
+    private int _scrollbackHead = 0;
+    private int _scrollbackCount = 0;
     private int _maxScrollback = 10000;
     private bool[]? _tabStops;
     internal bool _autoWrap = true; // DECAWM default is enabled
     private bool _bracketedPaste = false;
-    public int ScrollbackCount => _scrollback.Count;
-    public IReadOnlyList<string> GetScrollbackLines() => _scrollback.AsReadOnly();
+        public readonly struct ScrollbackLine
+    {
+        public readonly char[] Buffer;
+        public readonly int Length;
+        public ScrollbackLine(char[] buffer, int length) { Buffer = buffer; Length = length; }
+        public override string ToString() => Buffer == null ? string.Empty : new string(Buffer, 0, Length);
+    }
+    public int ScrollbackCount => _scrollbackCount;
+    public IReadOnlyList<string> GetScrollbackLines()
+    {
+        string[] lines = new string[_scrollbackCount];
+        for (int i = 0; i < _scrollbackCount; i++)
+        {
+            lines[i] = _scrollbackRing[(_scrollbackHead + i) % _scrollbackRing.Length].ToString();
+        }
+        return lines;
+    }
     public int MaxScrollback
     {
         get => _maxScrollback;
@@ -168,7 +185,7 @@ public class TerminalBuffer
         _hasSavedCursor = false;
         _clearLineOnNextWrite = false;
         InitializeTabStops();
-        _scrollback.Clear();
+        _scrollbackCount = 0; _scrollbackHead = 0;
         MarkAllRowsDirty();
         BumpScrollGeneration();
     }
@@ -224,7 +241,7 @@ public class TerminalBuffer
     public void ClearScrollback()
     {
         // Clear the preserved history but do not modify the visible screen.
-        _scrollback.Clear();
+        _scrollbackCount = 0; _scrollbackHead = 0;
         BumpScrollGeneration();
     }
 
@@ -302,7 +319,7 @@ public class TerminalBuffer
             // scrolled out, preserving it in scrollback history.
             if (_scrollTop == 0)
             {
-                AddToScrollback(GetRowTextFast(_scrollTop));
+                AddToScrollback(_scrollTop);
             }
 
             ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, 1);
@@ -502,7 +519,7 @@ public class TerminalBuffer
             int rowsToCapture = Math.Min(lines, _scrollBottom + 1);
             for (int r = 0; r < rowsToCapture; r++)
             {
-                AddToScrollback(GetRowTextFast(r));
+                AddToScrollback(r);
             }
         }
 
@@ -516,24 +533,39 @@ public class TerminalBuffer
     /// Adds a row to scrollback, trimming old entries if over capacity.
     /// Uses a more efficient approach than RemoveRange(0, n) for trimming.
     /// </summary>
-    private void AddToScrollback(string row)
+    private void AddToScrollback(int row)
     {
         if (_maxScrollback <= 0) return;
 
-        _scrollback.Add(row);
-        // Add an amortized threshold to heavily reduce O(N) shift operations
-        // when trimming from the front of the list. We allow the scrollback to
-        // exceed max by 10% before trimming down to max.
-        int threshold = _maxScrollback + Math.Max(100, _maxScrollback / 10);
-        
-        if (_scrollback.Count > threshold)
+        if (_scrollbackRing == null || _scrollbackRing.Length != _maxScrollback)
         {
-            int excess = _scrollback.Count - _maxScrollback;
-            if (excess > 0)
+            var newRing = new ScrollbackLine[_maxScrollback];
+            if (_scrollbackRing != null && _scrollbackCount > 0)
             {
-                _scrollback.RemoveRange(0, excess);
+                int copyCount = System.Math.Min(_scrollbackCount, _maxScrollback);
+                for (int i = 0; i < copyCount; i++)
+                {
+                    newRing[i] = _scrollbackRing[(_scrollbackHead + i) % _scrollbackRing.Length];
+                }
+                _scrollbackCount = copyCount;
+                _scrollbackHead = 0;
             }
+            _scrollbackRing = newRing;
         }
+
+        int targetIdx = (_scrollbackHead + _scrollbackCount) % _scrollbackRing.Length;
+        
+        if (_scrollbackCount == _scrollbackRing.Length)
+        {
+            targetIdx = _scrollbackHead;
+            _scrollbackHead = (_scrollbackHead + 1) % _scrollbackRing.Length;
+        }
+        else
+        {
+            _scrollbackCount++;
+        }
+
+        _scrollbackRing[targetIdx] = GetRowTextFast(row, _scrollbackRing[targetIdx].Buffer);
     }
 
     public string GetCurrentDisplay(bool showCursor = false, string? promptPrefix = null)
@@ -683,7 +715,7 @@ public class TerminalBuffer
     }
 
     
-    private string GetRowTextFast(int row)
+    private ScrollbackLine GetRowTextFast(int row, char[] existingArr)
     {
         var buf = _screens.Active;
         int lastCol = -1;
@@ -696,10 +728,13 @@ public class TerminalBuffer
                 break;
             }
         }
-        if (lastCol < 0) return string.Empty;
+        if (lastCol < 0) return new ScrollbackLine(existingArr ?? System.Array.Empty<char>(), 0);
 
-        // Use array pool for intermediate chars to avoid large StringBuilder closures internally
-        char[] arr = System.Buffers.ArrayPool<char>.Shared.Rent(lastCol + 1);
+        char[] arr = existingArr;
+        if (arr == null || arr.Length < lastCol + 1)
+        {
+            arr = new char[System.Math.Max(lastCol + 1, Columns)];
+        }
         int writeIdx = 0;
         for (int j = 0; j <= lastCol; j++)
         {
@@ -712,20 +747,16 @@ public class TerminalBuffer
             {
                 var g = cell.Grapheme;
                 for(int k=0; k < g.Length; k++) {
-                    // resize if needed
                     if (writeIdx >= arr.Length) {
-                        var newArr = System.Buffers.ArrayPool<char>.Shared.Rent(arr.Length * 2);
+                        var newArr = new char[arr.Length * 2];
                         System.Array.Copy(arr, newArr, arr.Length);
-                        System.Buffers.ArrayPool<char>.Shared.Return(arr);
                         arr = newArr;
                     }
                     arr[writeIdx++] = g[k];
                 }
             }
         }
-        var s = new string(arr, 0, writeIdx);
-        System.Buffers.ArrayPool<char>.Shared.Return(arr);
-        return s;
+        return new ScrollbackLine(arr, writeIdx);
     }
 
     public string GetRowText(int row)

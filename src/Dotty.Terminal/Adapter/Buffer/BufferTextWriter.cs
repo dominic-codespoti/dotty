@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 
@@ -10,6 +11,7 @@ internal sealed class BufferTextWriter
     private readonly BufferEraser _eraser;
     private readonly TerminalBuffer _ctx;
     private static readonly string[] _asciiCache = new string[128];
+    private static readonly ConcurrentDictionary<string, string> _graphemeCache = new();
 
     static BufferTextWriter()
     {
@@ -63,7 +65,14 @@ internal sealed class BufferTextWriter
                 }
                 else
                 {
-                    ProcessElement(text.Slice(index, len).ToString(), in attributes);
+                    var slice = text.Slice(index, len);
+                    var lookup = _graphemeCache.GetAlternateLookup<ReadOnlySpan<char>>();
+                    if (!lookup.TryGetValue(slice, out string? element))
+                    {
+                        element = slice.ToString();
+                        lookup.TryAdd(slice, element);
+                    }
+                    ProcessElement(element, in attributes);
                 }
                 index += len;
             }

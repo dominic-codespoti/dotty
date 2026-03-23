@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -7,11 +8,22 @@ namespace Dotty.Terminal.Adapter;
 /// </summary>
 public readonly record struct SgrColor(string Hex)
 {
+    private static readonly ConcurrentDictionary<uint, string> _rgbCache = new();
+
     public bool IsEmpty => string.IsNullOrEmpty(Hex);
 
     public override string ToString() => Hex;
 
-    public static SgrColor FromRgb(byte r, byte g, byte b) => new($"#{r:X2}{g:X2}{b:X2}");
+    public static SgrColor FromRgb(byte r, byte g, byte b)
+    {
+        uint key = (uint)((r << 16) | (g << 8) | b);
+        if (!_rgbCache.TryGetValue(key, out string? hex))
+        {
+            hex = $"#{r:X2}{g:X2}{b:X2}";
+            _rgbCache.TryAdd(key, hex);
+        }
+        return new SgrColor(hex);
+    }
 
     public static bool TryFromAnsiCode(int code, out SgrColor color)
     {

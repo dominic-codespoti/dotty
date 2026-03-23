@@ -307,11 +307,7 @@ namespace Dotty.Terminal.Parser
                             }
                             else
                             {
-                                var decoded = DecodePrintableRun(run);
-                                if (decoded.Length > 0)
-                                {
-                                    Handler?.OnPrint(decoded.AsSpan());
-                                }
+                                DecodePrintableRun(run);
                             }
                         }
                     }
@@ -332,8 +328,17 @@ namespace Dotty.Terminal.Parser
             // SGR needs the full string for SgrParser
             if (final == 'm' && (paramBytes.IsEmpty || paramBytes[0] != '<'))
             {
-                string @params = Encoding.UTF8.GetString(paramBytes);
-                Handler?.OnSetGraphicsRendition(@params.AsSpan());
+                int maxChars = Encoding.UTF8.GetMaxCharCount(paramBytes.Length);
+                char[] pooled = System.Buffers.ArrayPool<char>.Shared.Rent(maxChars);
+                try
+                {
+                    int charsDecoded = Encoding.UTF8.GetChars(paramBytes, pooled.AsSpan());
+                    Handler?.OnSetGraphicsRendition(pooled.AsSpan(0, charsDecoded));
+                }
+                finally
+                {
+                    System.Buffers.ArrayPool<char>.Shared.Return(pooled);
+                }
                 return;
             }
 
@@ -659,40 +664,37 @@ namespace Dotty.Terminal.Parser
             }
         }
 
-        private string DecodePrintableRun(ReadOnlySpan<byte> run)
+        private void DecodePrintableRun(ReadOnlySpan<byte> run)
         {
             if (run.IsEmpty)
             {
-                return string.Empty;
+                return;
             }
 
-            var text = Encoding.UTF8.GetString(run);
-            if (_charset != Charset.DecSpecialGraphics)
+            int maxChars = Encoding.UTF8.GetMaxCharCount(run.Length);
+            char[] pooled = System.Buffers.ArrayPool<char>.Shared.Rent(maxChars);
+            try
             {
-                return text;
-            }
+                int charsDecoded = Encoding.UTF8.GetChars(run, pooled.AsSpan());
+                Span<char> charSpan = pooled.AsSpan(0, charsDecoded);
 
-            StringBuilder? builder = null;
-            for (int idx = 0; idx < text.Length; idx++)
-            {
-                var ch = text[idx];
-                if (s_decSpecialGraphicsMap.TryGetValue(ch, out var mapped))
+                if (_charset == Charset.DecSpecialGraphics)
                 {
-                    if (builder == null)
+                    for (int i = 0; i < charSpan.Length; i++)
                     {
-                        builder = new StringBuilder(text.Length);
-                        builder.Append(text, 0, idx);
+                        if (s_decSpecialGraphicsMap.TryGetValue(charSpan[i], out var mapped))
+                        {
+                            charSpan[i] = mapped;
+                        }
                     }
+                }
 
-                    builder.Append(mapped);
-                }
-                else if (builder != null)
-                {
-                    builder.Append(ch);
-                }
+                Handler?.OnPrint(charSpan);
             }
-
-            return builder?.ToString() ?? text;
+            finally
+            {
+                System.Buffers.ArrayPool<char>.Shared.Return(pooled);
+            }
         }
     }
 }

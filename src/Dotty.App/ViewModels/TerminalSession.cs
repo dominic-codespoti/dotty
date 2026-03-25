@@ -21,7 +21,7 @@ public class TerminalSession : IDisposable
         public int Length;
     }
 
-    private readonly System.Threading.Channels.Channel<PtyChunk> _ptyDataQueue = System.Threading.Channels.Channel.CreateUnbounded<PtyChunk>();
+    private readonly System.Threading.Channels.Channel<PtyChunk> _ptyDataQueue = System.Threading.Channels.Channel.CreateBounded<PtyChunk>(new System.Threading.Channels.BoundedChannelOptions(50) { SingleReader = true, SingleWriter = true, FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait });
 
     private Process? _childProcess;
     private Stream? _childOutputStream;
@@ -30,13 +30,13 @@ public class TerminalSession : IDisposable
     private CancellationTokenSource? _readCancellation;
     private string? _controlSocketPath;
     private Stream? _controlSocketStream;
-    private readonly object _writeLock = new();
 
     public ITerminalParser Parser { get; }
     public TerminalAdapter Adapter { get; }
 
     public event Action<byte[]>? RawInputReceived;
     public event Action? RenderScheduled;
+    public int TargetFps { get; set; } = 144;
 
     public TerminalSession(int rows = 24, int columns = 80)
     {
@@ -137,19 +137,20 @@ public class TerminalSession : IDisposable
         {
             try
             {
+                long nextRender = System.Diagnostics.Stopwatch.GetTimestamp() + System.Diagnostics.Stopwatch.Frequency / TargetFps;
                 while (await _ptyDataQueue.Reader.WaitToReadAsync(token))
                 {
-                    int processed = 0;
                     while (_ptyDataQueue.Reader.TryRead(out var chunk))
                     {
                         try { Parser.Feed(chunk.Data.AsSpan(0, chunk.Length)); } catch { }
-                        ArrayPool<byte>.Shared.Return(chunk.Data);
-                        processed++;
-                        if (processed > 50)
+                        System.Buffers.ArrayPool<byte>.Shared.Return(chunk.Data);
+                        
+                        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                        if (now >= nextRender)
                         {
                             Adapter.RequestRenderExtern();
                             await Task.Yield();
-                            processed = 0;
+                            nextRender = now + System.Diagnostics.Stopwatch.Frequency / TargetFps;
                         }
                     }
                     Adapter.RequestRenderExtern();

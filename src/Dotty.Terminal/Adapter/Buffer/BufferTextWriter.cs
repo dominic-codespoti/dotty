@@ -319,8 +319,8 @@ internal sealed class BufferTextWriter
 
     private static void ApplyAttributes(ref Cell cell, in CellAttributes attributes)
     {
-        cell.Foreground = attributes.Foreground;
-        cell.Background = attributes.Background;
+        cell.Foreground = attributes.Foreground?.ToArgb() ?? 0;
+        cell.Background = attributes.Background?.ToArgb() ?? 0;
         cell.Bold = attributes.Bold;
         cell.Italic = attributes.Italic;
         cell.Underline = attributes.Underline;
@@ -331,6 +331,6 @@ internal sealed class BufferTextWriter
         cell.Overline = attributes.Overline;
         cell.Invisible = attributes.Invisible;
         cell.SlowBlink = attributes.SlowBlink;
-        cell.UnderlineColor = attributes.UnderlineColor;
+        cell.UnderlineColor = attributes.UnderlineColor?.ToArgb() ?? 0;
     }
 }

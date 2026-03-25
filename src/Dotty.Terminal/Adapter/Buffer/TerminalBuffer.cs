@@ -223,7 +223,7 @@ public class TerminalBuffer
         BumpScrollGeneration();
     }
 
-    internal Screen ActiveBuffer => _screens.Active;
+    public Screen ActiveBuffer => _screens.Active;
 
     // Internal accessor for tests to inspect the active screen without
     // resorting to reflection. Marked internal to avoid widening the public API.

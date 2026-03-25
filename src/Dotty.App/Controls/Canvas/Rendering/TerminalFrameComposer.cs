@@ -59,7 +59,7 @@ public sealed class TerminalFrameComposer : IDisposable
     // PUBLIC API (unchanged)
     // ============================================================
 
-    public void RenderTo(
+    public unsafe void RenderTo(
         SKCanvas target,
         TerminalBuffer buffer,
         SKPaint paint,
@@ -88,8 +88,7 @@ public sealed class TerminalFrameComposer : IDisposable
         EnsureCellClasses(buffer.Columns);
 
         // ---- background regions ----
-        CollectBackgroundRegions(buffer, startRow, safeEndRow);
-        DrawBackgroundRegions(target, cellW, cellH, surfaceW, surfaceH, horizontalPadding, verticalPadding, radius);
+        BlitBackgroundRegions(target, buffer, cellW, cellH, startRow, safeEndRow);
 
         // ---- glyphs ----
         SyncGlyphPaint(paint);
@@ -102,6 +101,80 @@ public sealed class TerminalFrameComposer : IDisposable
         _glyphPaint.IsAntialias = true;
 
         DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+    }
+
+    
+    private SKBitmap? _bgBitmap;
+
+    private unsafe void BlitBackgroundRegions(
+        SKCanvas target,
+        TerminalBuffer buffer,
+        float cellW,
+        float cellH,
+        int startRow,
+        int endRow)
+    {
+        int vRows = buffer.Rows;
+        int vCols = buffer.Columns;
+        int pixelWidth = (int)Math.Ceiling(vCols * cellW);
+        int pixelHeight = (int)Math.Ceiling(vRows * cellH);
+        
+        if (pixelWidth <= 0 || pixelHeight <= 0) return;
+
+        if (_bgBitmap == null || _bgBitmap.Width < pixelWidth || _bgBitmap.Height < pixelHeight)
+        {
+            _bgBitmap?.Dispose();
+            _bgBitmap = new SKBitmap(new SKImageInfo(pixelWidth, pixelHeight, SKColorType.Bgra8888, SKAlphaType.Premul));
+        }
+
+        // Fast zero-fill
+        long bytesLength = _bgBitmap.RowBytes * _bgBitmap.Height;
+        System.Runtime.CompilerServices.Unsafe.InitBlock((void*)_bgBitmap.GetPixels(), 0, (uint)bytesLength);
+
+        IntPtr pixels = _bgBitmap.GetPixels();
+        uint* ptr = (uint*)pixels;
+        int stride = _bgBitmap.RowBytes / 4;
+        
+        var activeBuffer = buffer.ActiveBuffer; // Screen
+        var cells = activeBuffer.Cells;
+        var rowMap = activeBuffer.RowMap;
+
+        // Blit active buffer
+        fixed (Cell* cellPtr = cells)
+        fixed (int* rowPtr = rowMap)
+        {
+            for (int r = startRow; r <= endRow; r++)
+            {
+                int actualRow = rowPtr[r];
+                int startScreenY = (int)Math.Round(r * cellH);
+                int endScreenY = (int)Math.Round((r + 1) * cellH);
+                int pyHeight = endScreenY - startScreenY;
+                
+                for (int c = 0; c < vCols; c++)
+                {
+                    Cell* cell = cellPtr + (actualRow * vCols + c);
+                    uint bg = cell->Background;
+                    if (bg == 0) continue;
+                    
+                    int startScreenX = (int)Math.Round(c * cellW);
+                    int endScreenX = (int)Math.Round((c + 1) * cellW);
+                    int pxWidth = endScreenX - startScreenX;
+                    
+                    uint renderColor = (uint)new SKColor(bg).WithAlpha(255);
+                    
+                    for (int py = 0; py < pyHeight; py++)
+                    {
+                        uint* dstRow = ptr + ((startScreenY + py) * stride) + startScreenX;
+                        for (int px = 0; px < pxWidth; px++)
+                        {
+                            dstRow[px] = renderColor;
+                        }
+                    }
+                }
+            }
+        }
+        
+        target.DrawBitmap(_bgBitmap, 0, 0);
     }
 
     public void ResetCaches()
@@ -323,7 +396,7 @@ public sealed class TerminalFrameComposer : IDisposable
                 bool hasLine = raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline;
                 if (hasLine)
                 {
-                    linePaint.Color = (raw.UnderlineColor.HasValue) ? ToSkColor(raw.UnderlineColor.Value) : fgColor;
+                    linePaint.Color = ((raw.UnderlineColor != 0)) ? new SKColor(raw.UnderlineColor) : fgColor;
                     float lineW = cellW * cc.Width;
                     
                     if (raw.Underline)
@@ -417,14 +490,14 @@ public sealed class TerminalFrameComposer : IDisposable
             cc.Width = Math.Max(1, (int)cell.Width);
 
             SKColor bg = default;
-            cc.HasBg = cell.Background.HasValue && TryParseHexColor(cell.Background.Value.Hex, out bg);
-            cc.Bg = cc.HasBg ? bg : default;
+            cc.HasBg = cell.Background != 0;
+            cc.Bg = cell.Background != 0 ? new SKColor(cell.Background) : default;
 
             SKColor fg = default;
-            cc.HasFg = cell.Foreground.HasValue && TryParseHexColor(cell.Foreground.Value.Hex, out fg);
-            cc.Fg = cc.HasFg ? fg : default;
+            cc.HasFg = cell.Foreground != 0;
+            cc.Fg = cell.Foreground != 0 ? new SKColor(cell.Foreground) : default;
 
-            cc.Grapheme = cell.Grapheme ?? string.Empty;
+            cc.Grapheme = char.ConvertFromUtf32((int)cell.Rune);
             cc.FirstRune = GetFirstRune(cc.Grapheme);
             cc.IsSeparatorGlyph = cc.FirstRune != -1 && IsLikelySeparatorRune(cc.FirstRune);
 

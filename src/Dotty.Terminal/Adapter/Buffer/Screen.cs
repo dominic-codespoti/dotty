@@ -5,7 +5,9 @@ namespace Dotty.Terminal.Adapter;
 /// </summary>
 public class Screen
 {
+    public Cell[] Cells => _cells;
     private Cell[] _cells;
+    public int[] RowMap => _rowMap;
     private int[] _rowMap;
 
     public void MarkRender()

@@ -14,6 +14,20 @@ public readonly record struct SgrColor(string Hex)
 
     public override string ToString() => Hex;
 
+    public uint ToArgb()
+    {
+        if (string.IsNullOrEmpty(Hex)) return 0;
+        if (Hex.StartsWith("#") && Hex.Length == 7)
+        {
+            if (uint.TryParse(Hex.Substring(1), System.Globalization.NumberStyles.HexNumber, null, out uint rgb))
+            {
+                return 0xFF000000 | rgb;
+            }
+        }
+        return 0;
+    }
+
+
     public static SgrColor FromRgb(byte r, byte g, byte b)
     {
         uint key = (uint)((r << 16) | (g << 8) | b);

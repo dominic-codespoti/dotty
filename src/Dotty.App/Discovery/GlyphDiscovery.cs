@@ -72,7 +72,7 @@ public class GlyphDiscovery
             if (cell.IsContinuation) continue;
             if (cell.IsEmpty) continue;
 
-            var fg = cell.Foreground?.ToString();
+            var fg = cell.Foreground == 0 ? null : "#" + (cell.Foreground & 0xFFFFFF).ToString("X6");
             var key = new GlyphKey(cell.Grapheme ?? string.Empty, fg, cell.Bold);
             _atlas.EnsureGlyph(key);
         }

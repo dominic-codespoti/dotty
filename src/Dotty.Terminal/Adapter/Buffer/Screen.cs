@@ -51,16 +51,18 @@ public class Screen
     {
         if (row < 0 || row >= Rows || col < 0 || col >= Columns)
         {
-            return new Cell { Grapheme = " ", Width = 1, Bold = false };
+            var c = new Cell { Width = 1 };
+            c.Rune = 32; // space
+            return c;
         }
 
         ref var cell = ref _cells[_rowMap[row] * Columns + col];
-        if (cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
+        if (cell.IsContinuation && cell.Rune != 0)
         {
-            cell.Grapheme = null;
+            cell.Rune = 0;
             cell.Width = 0;
         }
-        if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme) && cell.Width > 1)
+        if (!cell.IsContinuation && cell.Rune != 0 && cell.Width > 1)
         {
             int w = Math.Max(1, (int)cell.Width);
             bool missing = false;
@@ -324,13 +326,12 @@ public class Screen
             for (int c = colStart; c <= colEnd; c++)
             {
                 ref var cell = ref _cells[_rowMap[r] * Columns + c];
-                if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
+                if (!cell.IsContinuation && cell.Rune != 0)
                 {
                     int w = Math.Max(1, (int)cell.Width);
                     bool missing = false;
-                    for (int i = 1; i < w; i++)
+                    for (int i = 1; i < w && c + i <= colEnd; i++)
                     {
-                        if (c + i > colEnd) { missing = true; break; }
                         var cont = _cells[_rowMap[r] * Columns + c + i];
                         if (!cont.IsContinuation)
                         {

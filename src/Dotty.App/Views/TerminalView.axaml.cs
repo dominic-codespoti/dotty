@@ -26,6 +26,9 @@ namespace Dotty.App.Views
         public bool KeypadApplicationMode { get; set; }
 
         private Dotty.App.ViewModels.TerminalSession? _session;
+        private Action<TimeSpan>? _fpsMeasurementCallback;
+        private TimeSpan _lastFrameTime;
+
         public Dotty.App.ViewModels.TerminalSession? Session
         {
             get => _session;
@@ -50,10 +53,40 @@ namespace Dotty.App.Views
                     _session.Start();
                     
                     UpdateSize();
+
+                    // Start measuring monitor refresh rate
+                    if (_fpsMeasurementCallback == null)
+                    {
+                        _fpsMeasurementCallback = OnMeasureRefreshRate;
+                        _lastFrameTime = TimeSpan.Zero;
+                        TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback);
+                    }
                 }
             }
         }
         
+        private void OnMeasureRefreshRate(TimeSpan currentTime)
+        {
+            if (_session != null)
+            {
+                if (_lastFrameTime != TimeSpan.Zero && currentTime > _lastFrameTime)
+                {
+                    var delta = (currentTime - _lastFrameTime).TotalSeconds;
+                    if (delta > 0 && delta < 0.25) // Ignore suspensions/huge gaps
+                    {
+                        // Set TargetFps based on the RequestAnimationFrame interval
+                        // E.g. 1 / 0.01666... = ~60 FPS
+                        _session.TargetFps = (int)Math.Round(1.0 / delta);
+                    }
+                }
+
+                _lastFrameTime = currentTime;
+                
+                // Keep polling to dynamically adapt to monitor moves
+                TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback!); 
+            }
+        }
+
         private void OnRenderScheduled()
         {
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
@@ -458,6 +491,17 @@ namespace Dotty.App.Views
             var bytes = Encoding.UTF8.GetBytes(text);
             RawInput?.Invoke(bytes);
             _lineBuffer += text;
+        }
+
+        protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+        {
+            base.OnAttachedToVisualTree(e);
+            
+            if (_session != null && _fpsMeasurementCallback != null)
+            {
+                _lastFrameTime = TimeSpan.Zero;
+                TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback);
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
@@ -48,18 +49,18 @@ public partial class MainWindow : Window
             if (activeTab != null && activeTab.IsActive)
             {
                 // Find and focus the active terminal view
-                // Since Avalonia's focusing can be tricky with generated items, 
+                // Since Avalonia's focusing can be tricky with generated items,
                 // we iterate over focusing logic
                 FocusManager?.ClearFocus();
                 
-                var itemsControl = this.FindControl<ItemsControl>("PART_ItemsControl");
-                if (itemsControl != null)
+                var carousel = this.FindControl<Carousel>("PART_Carousel");
+                if (carousel != null)
                 {
                     foreach (var item in _viewModel.Tabs)
                     {
                         if (item == activeTab)
                         {
-                            var container = itemsControl.ContainerFromItem(item) as Control;
+                            var container = carousel.ContainerFromItem(item) as Control;
                             if (container != null)
                             {
                                 // The layout structure is Border -> TerminalView
@@ -132,6 +133,53 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnDuplicateTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.DataContext is TabViewModel tvm)
+        {
+            var newTab = new TabViewModel();
+            newTab.Title = tvm.Title + " (Copy)";
+            // Note: Does not duplicate session state
+            _viewModel.Tabs.Add(newTab);
+            _viewModel.ActiveTab = newTab;
+        }
+    }
+
+    private void OnCloseTabClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.DataContext is TabViewModel tvm)
+        {
+            CloseTab(tvm);
+        }
+    }
+
+    private void OnCloseOtherTabsClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.DataContext is TabViewModel tvm)
+        {
+            var tabsToClose = _viewModel.Tabs.Where(t => t != tvm).ToList();
+            foreach (var tab in tabsToClose)
+            {
+                CloseTab(tab);
+            }
+        }
+    }
+
+    private void CloseTab(TabViewModel tab)
+    {
+        tab.Dispose();
+        _viewModel.Tabs.Remove(tab);
+        if (_viewModel.Tabs.Count > 0)
+        {
+            if (_viewModel.ActiveTab == tab)
+                _viewModel.ActiveTab = _viewModel.Tabs[0];
+        }
+        else
+        {
+            Close();
+        }
+    }
+
     private void OnNewTabRequested(object? sender, RoutedEventArgs e)
     {
         _viewModel.AddNewTab();
@@ -145,6 +193,7 @@ public partial class MainWindow : Window
             {
                 _viewModel.AddNewTab();
                 e.Handled = true;
+                return;
             }
             else if (e.Key == Key.W)
             {
@@ -158,7 +207,31 @@ public partial class MainWindow : Window
                         Close();
                 }
                 e.Handled = true;
+                return;
             }
+        }
+        
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.Tab)
+        {
+            if (_viewModel.Tabs.Count > 1)
+            {
+                var currentIndex = _viewModel.Tabs.IndexOf(_viewModel.ActiveTab!);
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                {
+                    // Move backwards
+                    currentIndex--;
+                    if (currentIndex < 0) currentIndex = _viewModel.Tabs.Count - 1;
+                }
+                else
+                {
+                    // Move forwards
+                    currentIndex++;
+                    if (currentIndex >= _viewModel.Tabs.Count) currentIndex = 0;
+                }
+                _viewModel.ActiveTab = _viewModel.Tabs[currentIndex];
+            }
+            e.Handled = true;
+            return;
         }
     }
 }

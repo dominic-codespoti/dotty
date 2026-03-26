@@ -2,11 +2,63 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Avalonia.Input;
+using Dotty.Terminal.Adapter;
 
 namespace Dotty.App.Input
 {
     public class TerminalInputEncoder
     {
+        public byte[]? EncodeMouseEvent(
+            TerminalAdapter.MouseMode mode, 
+            TerminalAdapter.MouseEncoding encoding, 
+            int button, // 0=Left, 1=Middle, 2=Right, 3=None, 64=ScrollUp, 65=ScrollDown
+            int row, 
+            int column, 
+            bool isPress, 
+            bool isMove, 
+            KeyModifiers modifiers)
+        {
+            if (mode == TerminalAdapter.MouseMode.None) return null;
+            
+            if (isMove)
+            {
+                if (mode != TerminalAdapter.MouseMode.ButtonEvent && mode != TerminalAdapter.MouseMode.AnyEvent)
+                    return null;
+                // Move without any button pressed requires AnyEvent
+                if (button == 3 && mode != TerminalAdapter.MouseMode.AnyEvent)
+                    return null;
+            }
+
+            int cb = button;
+            if (!isPress && !isMove && encoding != TerminalAdapter.MouseEncoding.SGR)
+            {
+                // Uncoded release is always 3 (except SGR which knows the button)
+                cb = 3;
+            }
+            if (isMove) cb += 32;
+
+            if (modifiers.HasFlag(KeyModifiers.Shift)) cb += 4;
+            if (modifiers.HasFlag(KeyModifiers.Alt)) cb += 8;
+            if (modifiers.HasFlag(KeyModifiers.Control)) cb += 16;
+            
+            int x = column + 1;
+            int y = row + 1;
+            
+            if (encoding == TerminalAdapter.MouseEncoding.SGR)
+            {
+                char endChar = (isPress || isMove) ? 'M' : 'm';
+                return Encoding.UTF8.GetBytes($"\x1b[<{cb};{x};{y}{endChar}");
+            }
+            else
+            {
+                if (x > 223 || y > 223) return null; // Standard limits
+                char bChar = (char)(cb + 32);
+                char xChar = (char)(x + 32);
+                char yChar = (char)(y + 32);
+                return Encoding.UTF8.GetBytes($"\x1b[M{bChar}{xChar}{yChar}");
+            }
+        }
+
         public byte[]? Encode(Key key, KeyModifiers modifiers, bool keypadApplicationMode = false)
         {
             // Handle Control + Char

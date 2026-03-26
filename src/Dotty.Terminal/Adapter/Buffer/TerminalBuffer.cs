@@ -38,9 +38,22 @@ public class TerminalBuffer
 
     public void Resize(int rows, int cols)
     {
+        // Maintain scroll region if it covered the entire screen
+        bool fullScreenScroll = (_scrollTop == 0 && _scrollBottom == Rows - 1);
+
         Rows = rows;
         Columns = cols;
         _screens.Resize(rows, cols);
+
+        if (fullScreenScroll)
+        {
+            _scrollBottom = rows - 1;
+        }
+        else
+        {
+            _scrollBottom = Math.Min(_scrollBottom, rows - 1);
+        }
+        _scrollTop = Math.Min(_scrollTop, _scrollBottom);
     }
 
     public void SetAlternateScreen(bool active)
@@ -53,8 +66,14 @@ public class TerminalBuffer
 
     public void SetScrollRegion(int top, int bottom)
     {
-        _scrollTop = Math.Max(0, top);
-        _scrollBottom = Math.Min(Rows - 1, bottom);
+        int newTop = Math.Max(0, top);
+        int newBottom = Math.Clamp(bottom, 0, Rows - 1);
+
+        if (newTop < newBottom)
+        {
+            _scrollTop = newTop;
+            _scrollBottom = newBottom;
+        }
     }
 
     public void SetCursorVisible(bool visible)

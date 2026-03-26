@@ -11,17 +11,18 @@
         <Style Selector="TabStrip">
             <Setter Property="Background" Value="#181818" />
             <Setter Property="Padding" Value="4,4,4,0" />
-            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="MinHeight" Value="36" />
         </Style>
         <Style Selector="TabStripItem">
             <Setter Property="Foreground" Value="#999999" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Margin" Value="0" />
-            <Setter Property="Padding" Value="12,6" />
+            <Setter Property="Padding" Value="12,8,12,10" /> <!-- Added bottom padding so the text stays away from the underline -->
             <Setter Property="CornerRadius" Value="6,6,0,0" />
             <Setter Property="VerticalAlignment" Value="Bottom" />
-            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="Height" Value="36" />
         </Style>
         <Style Selector="TabStripItem:pointerover">
             <Setter Property="Background" Value="#2A2A2A" />
@@ -32,50 +33,67 @@
             <Setter Property="Foreground" Value="#FFFFFF" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
+        <Style Selector="TabStripItem:selected /template/ Border#PART_SelectedPipe">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
     </Window.Styles>
 
     <DockPanel>
-        <TabStrip DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
-            <TabStrip.ItemTemplate>
-                <DataTemplate>
-                    <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Background="Transparent" MinWidth="60" Margin="0,0,0,0">
-                        <StackPanel.ContextMenu>
-                            <ContextMenu>
-                                <MenuItem Header="Rename Tab" Click="OnRenameTabClick" />
-                            </ContextMenu>
-                        </StackPanel.ContextMenu>
-                        <!-- A small subtle dot to look terminal-esque -->
-                        <TextBlock Text="●" Foreground="#555555" FontSize="10" VerticalAlignment="Center" />
-                        <TextBlock Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding !IsEditingTitle}" />
-                        <TextBox Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding IsEditingTitle}"
-                                 MinHeight="18" Padding="4,0" Margin="0" FontSize="13"
-                                 KeyUp="OnRenameTextBoxKeyUp" 
-                                 LostFocus="OnRenameTextBoxLostFocus"
-                                 PropertyChanged="OnRenameTextBoxPropertyChanged" />
-                    </StackPanel>
-                </DataTemplate>
-            </TabStrip.ItemTemplate>
-        </TabStrip>
+        <Grid DockPanel.Dock="Top" Background="#181818">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            
+            <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
+                <TabStrip ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
+                    <TabStrip.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Background="Transparent" MinWidth="60" Margin="0,0,0,0">
+                                <StackPanel.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Rename Tab" Click="OnRenameTabClick" />
+                                        <MenuItem Header="Duplicate Tab" Click="OnDuplicateTabClick" />
+                                        <MenuItem Header="-" />
+                                        <MenuItem Header="Close Tab" Click="OnCloseTabClick" />
+                                        <MenuItem Header="Close Other Tabs" Click="OnCloseOtherTabsClick" />
+                                    </ContextMenu>
+                                </StackPanel.ContextMenu>
+                                <!-- A small subtle dot to look terminal-esque -->
+                                <TextBlock Text="●" Foreground="#555555" FontSize="10" VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding !IsEditingTitle}" />
+                                <TextBox Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding IsEditingTitle}" 
+                                         MinHeight="18" Padding="4,0" Margin="0" FontSize="13" 
+                                         KeyUp="OnRenameTextBoxKeyUp" 
+                                         LostFocus="OnRenameTextBoxLostFocus"
+                                         PropertyChanged="OnRenameTextBoxPropertyChanged" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </TabStrip.ItemTemplate>
+                </TabStrip>
+            </ScrollViewer>
 
-        <ItemsControl Name="PART_ItemsControl" ItemsSource="{Binding Tabs}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ClipToBounds="True">
-             <ItemsControl.Styles>
-                 <Style Selector="ContentPresenter">
-                     <Setter Property="HorizontalAlignment" Value="Stretch" />
-                     <Setter Property="VerticalAlignment" Value="Stretch" />
-                 </Style>
-             </ItemsControl.Styles>
-             <ItemsControl.ItemsPanel>
-                 <ItemsPanelTemplate>
-                     <Grid />
-                 </ItemsPanelTemplate>
-             </ItemsControl.ItemsPanel>
-             <ItemsControl.ItemTemplate>
+            <Button Grid.Column="1" Content="+" Click="OnNewTabRequested" 
+                    Background="Transparent" Foreground="#999999" 
+                    FontSize="20" Padding="16,0" VerticalAlignment="Stretch" HorizontalAlignment="Center" 
+                    VerticalContentAlignment="Center" BorderThickness="0" Cursor="Hand">
+                <Button.Styles>
+                    <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+                        <Setter Property="Background" Value="#2A2A2A" />
+                        <Setter Property="Foreground" Value="#FFFFFF" />
+                    </Style>
+                </Button.Styles>
+            </Button>
+        </Grid>
+
+        <Carousel Name="PART_Carousel" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ClipToBounds="True">
+             <Carousel.ItemTemplate>
                  <DataTemplate DataType="vm:TabViewModel">
-                     <Border IsVisible="{Binding IsActive}" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" ClipToBounds="True" Background="#1E1E1E" Padding="0">
+                     <Border VerticalAlignment="Stretch" HorizontalAlignment="Stretch" ClipToBounds="True" Background="#1E1E1E" Padding="0">
                          <controls:TerminalView DataContext="{Binding Session}" NewTabRequested="OnNewTabRequested" />
                      </Border>
                  </DataTemplate>
-             </ItemsControl.ItemTemplate>
-        </ItemsControl>
+             </Carousel.ItemTemplate>
+        </Carousel>
     </DockPanel>
 </Window>

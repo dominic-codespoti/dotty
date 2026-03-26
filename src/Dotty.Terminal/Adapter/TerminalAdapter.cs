@@ -9,6 +9,23 @@ namespace Dotty.Terminal.Adapter;
 /// </summary>
 public class TerminalAdapter : ITerminalHandler
 {
+    public enum MouseMode
+    {
+        None = 0,
+        X10 = 9,
+        Normal = 1000,
+        ButtonEvent = 1002,
+        AnyEvent = 1003
+    }
+
+    public enum MouseEncoding
+    {
+        Default = 0,
+        UTF8 = 1005,
+        SGR = 1006,
+        URXVT = 1015
+    }
+
     private readonly TerminalBuffer _buffer;
     private CellAttributes _currentAttributes = CellAttributes.Default;
     private CellAttributes _savedAttributes = CellAttributes.Default;
@@ -18,6 +35,10 @@ public class TerminalAdapter : ITerminalHandler
 
     public int CursorShape { get; private set; }
     public bool KeypadApplicationMode { get; private set; }
+
+    public MouseMode CurrentMouseMode { get; private set; } = MouseMode.None;
+    public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
+    public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
 
     public TerminalAdapter(int rows = 24, int columns = 80)
     {
@@ -430,6 +451,28 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnSetMouseMode(int mode, bool enabled)
     {
+        if (mode == 9 || mode == 1000 || mode == 1002 || mode == 1003)
+        {
+            if (enabled)
+            {
+                CurrentMouseMode = (MouseMode)mode;
+            }
+            else if (CurrentMouseMode == (MouseMode)mode)
+            {
+                CurrentMouseMode = MouseMode.None;
+            }
+        }
+        else if (mode == 1005 || mode == 1006 || mode == 1015)
+        {
+            if (enabled)
+            {
+                CurrentMouseEncoding = (MouseEncoding)mode;
+            }
+            else if (CurrentMouseEncoding == (MouseEncoding)mode)
+            {
+                CurrentMouseEncoding = MouseEncoding.Default;
+            }
+        }
     }
 
     private bool _renderDirty;

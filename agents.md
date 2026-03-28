@@ -14,6 +14,10 @@ For detailed architectural information, we use progressive disclosure. Please re
   ➡️ See [Rendering Docs](./docs/rendering.md) for details on GlyphAtlas, BackgroundSynth, etc.
 - **Terminal Parsing:** `src/Dotty.Abstractions/` and `src/Dotty.Terminal/`
   ➡️ See [Parsing Docs](./docs/parsing.md) for control code handling and escaping sequences.
+- **Native PTY Integration:** `src/Dotty.NativePty/`
+  ➡️ See [Native PTY Docs](./docs/native-pty.md) for POSIX APIs and UNIX process isolation.
+- **Competitor Analysis:**
+  ➡️ See [Comparison Report](./docs/comparison-report.md) for a technical breakdown of how Dotty compares against tools like Ghostty and Wezterm.
 - **Testing:** `tests/`
   ➡️ See [Testing Docs](./docs/testing.md) for fuzzing, repro tests, and terminal emulation benchmarks.
 

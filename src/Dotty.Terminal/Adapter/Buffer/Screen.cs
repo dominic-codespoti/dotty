@@ -30,6 +30,18 @@ public class Screen
 
     public ref Cell GetCellRef(int row, int col) => ref _cells[_rowMap[row] * Columns + col];
 
+    public void ReadSnapshot(ref Cell[] cellsSnapshot, ref int[] rowMapSnapshot)
+    {
+        if (cellsSnapshot == null || cellsSnapshot.Length != _cells.Length)
+            cellsSnapshot = new Cell[_cells.Length];
+            
+        if (rowMapSnapshot == null || rowMapSnapshot.Length != _rowMap.Length)
+            rowMapSnapshot = new int[_rowMap.Length];
+            
+        Array.Copy(_rowMap, rowMapSnapshot, _rowMap.Length);
+        Array.Copy(_cells, cellsSnapshot, _cells.Length);
+    }
+
     public Cell[] ExtractRow(int row)
     {
         var result = new Cell[Columns];

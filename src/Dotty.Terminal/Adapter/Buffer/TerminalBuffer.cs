@@ -10,12 +10,14 @@ namespace Dotty.Terminal.Adapter;
 /// </summary>
 public class TerminalBuffer
 {
+    public object SyncRoot { get; } = new object();
+
     public Screen ActiveBuffer => _screens.Active;
 
     internal Screen ActiveScreenForTests => ActiveBuffer;
 
     private readonly ScreenManager _screens;
-    private readonly CursorController _cursor = new();
+    private CursorController _cursor = new();
     private readonly BufferEraser _eraser = new();
     private BufferTextWriter _writer;
     private int _scrollTop = 0;

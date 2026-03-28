@@ -142,18 +142,27 @@ public class TerminalSession : IDisposable
                 {
                     while (_ptyDataQueue.Reader.TryRead(out var chunk))
                     {
-                        try { Parser.Feed(chunk.Data.AsSpan(0, chunk.Length)); } catch { }
+                        try 
+                        { 
+                            lock (Adapter.Buffer.SyncRoot)
+                            {
+                                Parser.Feed(chunk.Data.AsSpan(0, chunk.Length)); 
+                            }
+                        } 
+                        catch { }
                         System.Buffers.ArrayPool<byte>.Shared.Return(chunk.Data);
                         
                         long now = System.Diagnostics.Stopwatch.GetTimestamp();
                         if (now >= nextRender)
                         {
                             Adapter.RequestRenderExtern();
+                            
                             await Task.Yield();
                             nextRender = now + System.Diagnostics.Stopwatch.Frequency / TargetFps;
                         }
                     }
                     Adapter.RequestRenderExtern();
+                            
                 }
             }
             catch { }
@@ -183,7 +192,7 @@ public class TerminalSession : IDisposable
                         // Emit if anything cares about raw output
                         RawInputReceived?.Invoke(buffer.AsSpan(0, bytesRead).ToArray());
                         
-                        _ptyDataQueue.Writer.TryWrite(chunk);
+                        await _ptyDataQueue.Writer.WriteAsync(chunk, cancellationToken);
                     }
                     else
                     {

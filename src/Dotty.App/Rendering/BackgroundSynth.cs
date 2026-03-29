@@ -30,7 +30,7 @@ namespace Dotty.App.Rendering
     {
         // Build row spans from a sequence of SynthCell. This mirrors the
         // behaviour used by the compositor but is pure and testable.
-        public static List<RowSpan> BuildRowSpans(SynthCell[] cells)
+        public static List<RowSpan> BuildRowSpans(ReadOnlySpan<SynthCell> cells)
         {
             var spans = new List<RowSpan>();
 

@@ -269,17 +269,27 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
                     _gridData[idx + 2] = BitConverter.Int32BitsToSingle(unchecked((int)cell.Background));
                     _gridData[idx + 3] = BitConverter.Int32BitsToSingle(unchecked((int)cell.Flags));
 
-                    string t = cell.Grapheme ?? (cell.Rune > 0 ? char.ConvertFromUtf32((int)cell.Rune) : string.Empty);
+                    string t = cell.Grapheme ?? string.Empty;
                     if (!string.IsNullOrEmpty(t) && t != " " && !cell.IsContinuation)
                     {
                         var key = new GlyphKey(t, null, cell.Bold);
-                        _atlas.EnsureGlyph(key);
                         if (_atlas.TryGetGlyph(key, out var info))
                         {
                             _uvData[idx] = info.X;
                             _uvData[idx + 1] = info.Y;
                             _uvData[idx + 2] = info.Width;
                             _uvData[idx + 3] = info.Height;
+                        }
+                        else
+                        {
+                            _atlas.EnsureGlyph(key);
+                            if (_atlas.TryGetGlyph(key, out info))
+                            {
+                                _uvData[idx] = info.X;
+                                _uvData[idx + 1] = info.Y;
+                                _uvData[idx + 2] = info.Width;
+                                _uvData[idx + 3] = info.Height;
+                            }
                         }
                     }
                 }

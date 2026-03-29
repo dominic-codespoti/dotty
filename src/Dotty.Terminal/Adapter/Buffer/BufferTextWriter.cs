@@ -10,13 +10,8 @@ internal sealed class BufferTextWriter
     private readonly CursorController _cursor;
     private readonly BufferEraser _eraser;
     private readonly TerminalBuffer _ctx;
-    private static readonly string[] _asciiCache = new string[128];
     private static readonly ConcurrentDictionary<string, string> _graphemeCache = new();
-
-    static BufferTextWriter()
-    {
-        for (int i = 0; i < 128; i++) _asciiCache[i] = ((char)i).ToString();
-    }
+    private int _lastDirtyRow = -1;
 
     public BufferTextWriter(TerminalBuffer ctx, CursorController cursor, BufferEraser eraser)
     {
@@ -61,7 +56,7 @@ internal sealed class BufferTextWriter
                             continue;
                         }
                     }
-                    ProcessElementInner(_asciiCache[c], in attributes, isAscii: true);
+                    WriteGraphemeAscii(c, in attributes);
                 }
                 else
                 {
@@ -81,9 +76,33 @@ internal sealed class BufferTextWriter
 
     private void WriteTextAsciiFast(ReadOnlySpan<char> text, in CellAttributes attributes)
     {
+        bool attrsDefault = IsDefaultAttributes(in attributes);
         int length = text.Length;
-        for (int i = 0; i < length; i++)
+        int i = 0;
+        while (i < length)
         {
+            int runStart = i;
+            while (i < length)
+            {
+                char ch = text[i];
+                if (ch < 32 || ch == 127) break;
+                i++;
+            }
+
+            if (i > runStart)
+            {
+                var run = text.Slice(runStart, i - runStart);
+                if (!TryWriteAsciiRunFast(run, in attributes, attrsDefault))
+                {
+                    for (int j = 0; j < run.Length; j++)
+                    {
+                        WriteGraphemeAscii(run[j], in attributes, attrsDefault);
+                    }
+                }
+
+                if (i >= length) break;
+            }
+
             char c = text[i];
             if (c < 32 || c == 127)
             {
@@ -96,8 +115,76 @@ internal sealed class BufferTextWriter
                 }
                 if (TryHandleControlChar(c, in attributes)) continue;
             }
-            ProcessElementInner(_asciiCache[c], in attributes, isAscii: true);
+            WriteGraphemeAscii(c, in attributes, attrsDefault);
+            i++;
         }
+    }
+
+    private bool TryWriteAsciiRunFast(ReadOnlySpan<char> run, in CellAttributes attributes, bool attrsDefault)
+    {
+        if (run.IsEmpty) return true;
+
+        if (_ctx._autoWrap && _cursor.WrapPending)
+        {
+            _ctx.LineFeed();
+            _ctx.CarriageReturn();
+            _cursor.SetWrapPending(false);
+        }
+
+        int row = _cursor.Row;
+        int col = _cursor.Col;
+        int cols = _ctx.Columns;
+
+        if (col < 0 || col >= cols) return false;
+        if (run.Length > cols - col) return false;
+
+        var buf = _ctx.ActiveBuffer;
+
+        if (_ctx._clearLineOnNextWrite)
+        {
+            _eraser.ClearLineFromCursor(buf, _cursor, _ctx.Columns);
+            _ctx._clearLineOnNextWrite = false;
+            RequestMarkRowDirty(row);
+        }
+
+        for (int i = 0; i < run.Length; i++)
+        {
+            int writeCol = col + i;
+            ref var cell = ref buf.GetCellRef(row, writeCol);
+            if (cell.IsContinuation || cell.Width > 1)
+            {
+                buf.ClearCell(row, writeCol);
+                cell = ref buf.GetCellRef(row, writeCol);
+            }
+
+            cell.SetAscii(run[i]);
+            ApplyAttributesFast(ref cell, in attributes, attrsDefault);
+            cell.Width = 1;
+            cell.IsContinuation = false;
+        }
+
+        int endCol = col + run.Length - 1;
+        if (_ctx._autoWrap)
+        {
+            if (endCol >= cols - 1)
+            {
+                _cursor.Set(row, cols - 1, _ctx.Rows, cols);
+                _cursor.SetWrapPending(true);
+            }
+            else
+            {
+                _cursor.Set(row, endCol + 1, _ctx.Rows, cols);
+                _cursor.SetWrapPending(false);
+            }
+        }
+        else
+        {
+            _cursor.Set(row, Math.Min(endCol + 1, cols - 1), _ctx.Rows, cols);
+            _cursor.SetWrapPending(false);
+        }
+
+        RequestMarkRowDirty(row);
+        return true;
     }
 
     private void ProcessElement(string element, in CellAttributes attributes)
@@ -131,7 +218,7 @@ internal sealed class BufferTextWriter
         }
         */
 
-        if (isAscii) WriteGraphemeAscii(element, in attributes);
+        if (isAscii) WriteGraphemeAscii(element[0], in attributes);
         else WriteGrapheme(element, in attributes);
     }
 
@@ -157,10 +244,11 @@ internal sealed class BufferTextWriter
         int target = _ctx.GetNextTabStopFrom(current);
         if (target <= current) target = Math.Min(cols - 1, current + 1);
         int spaces = target - current;
-        for (int i = 0; i < spaces; i++) WriteGraphemeAscii(_asciiCache[' '], in attributes);
+        bool attrsDefault = IsDefaultAttributes(in attributes);
+        for (int i = 0; i < spaces; i++) WriteGraphemeAscii(' ', in attributes, attrsDefault);
     }
 
-    private void WriteGraphemeAscii(string grapheme, in CellAttributes attributes)
+    private void WriteGraphemeAscii(char ch, in CellAttributes attributes, bool attrsDefault)
     {
         bool autoWrap = _ctx._autoWrap;
         int startCol;
@@ -186,8 +274,8 @@ internal sealed class BufferTextWriter
             // Need to get ref again because ClearCell might have changed it? No, ref is stable.
         }
 
-        cell.Grapheme = grapheme;
-        ApplyAttributes(ref cell, in attributes);
+        cell.SetAscii(ch);
+        ApplyAttributesFast(ref cell, in attributes, attrsDefault);
         cell.Width = 1;
         cell.IsContinuation = false;
 
@@ -212,6 +300,11 @@ internal sealed class BufferTextWriter
             _cursor.SetWrapPending(false);
         }
         RequestMarkRowDirty(currentRow);
+    }
+
+    private void WriteGraphemeAscii(char ch, in CellAttributes attributes)
+    {
+        WriteGraphemeAscii(ch, in attributes, IsDefaultAttributes(in attributes));
     }
 
     private void WriteGrapheme(string grapheme, in CellAttributes attributes)
@@ -292,7 +385,12 @@ internal sealed class BufferTextWriter
         return true;
     }
 
-    private void RequestMarkRowDirty(int row) => _ctx.MarkRowDirty(row);
+    private void RequestMarkRowDirty(int row)
+    {
+        if (row == _lastDirtyRow) return;
+        _lastDirtyRow = row;
+        _ctx.MarkRowDirty(row);
+    }
 
     private (int row, int col) GetPreviousBaseCell()
     {
@@ -332,5 +430,36 @@ internal sealed class BufferTextWriter
         cell.Invisible = attributes.Invisible;
         cell.SlowBlink = attributes.SlowBlink;
         cell.UnderlineColor = attributes.UnderlineColor?.ToArgb() ?? 0;
+    }
+
+    private static void ApplyAttributesFast(ref Cell cell, in CellAttributes attributes, bool attrsDefault)
+    {
+        if (attrsDefault)
+        {
+            cell.Foreground = 0;
+            cell.Background = 0;
+            cell.UnderlineColor = 0;
+            cell.Flags = 0;
+            return;
+        }
+
+        ApplyAttributes(ref cell, in attributes);
+    }
+
+    private static bool IsDefaultAttributes(in CellAttributes attributes)
+    {
+        return !attributes.Foreground.HasValue
+            && !attributes.Background.HasValue
+            && !attributes.UnderlineColor.HasValue
+            && !attributes.Bold
+            && !attributes.Italic
+            && !attributes.Underline
+            && !attributes.DoubleUnderline
+            && !attributes.Faint
+            && !attributes.Inverse
+            && !attributes.Strikethrough
+            && !attributes.Overline
+            && !attributes.Invisible
+            && !attributes.SlowBlink;
     }
 }

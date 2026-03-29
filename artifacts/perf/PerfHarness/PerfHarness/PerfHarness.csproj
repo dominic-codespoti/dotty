@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\..\src\Dotty.Abstractions\Dotty.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\..\src\Dotty.App\Dotty.App.csproj" />
     <ProjectReference Include="..\..\..\..\src\Dotty.Terminal\Dotty.Terminal.csproj" />
   </ItemGroup>
 

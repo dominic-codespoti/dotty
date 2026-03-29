@@ -22,7 +22,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1000h"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1000, true), handler.SetMouseModeCalls[0]);
     }
 
@@ -35,7 +35,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1000l"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1000, false), handler.SetMouseModeCalls[0]);
     }
 
@@ -48,7 +48,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1002h"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1002, true), handler.SetMouseModeCalls[0]);
     }
 
@@ -61,7 +61,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1003h"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1003, true), handler.SetMouseModeCalls[0]);
     }
 
@@ -74,7 +74,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1005h"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1005, true), handler.SetMouseModeCalls[0]);
     }
 
@@ -87,7 +87,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1005l"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1005, false), handler.SetMouseModeCalls[0]);
     }
 
@@ -100,7 +100,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1006h"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1006, true), handler.SetMouseModeCalls[0]);
     }
 
@@ -113,7 +113,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1006l"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1006, false), handler.SetMouseModeCalls[0]);
     }
 
@@ -126,7 +126,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1015h"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1015, true), handler.SetMouseModeCalls[0]);
     }
 
@@ -139,7 +139,7 @@ public class MouseModeTests
 
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1015l"));
 
-        Assert.Equal(1, handler.SetMouseModeCalls.Count);
+        Assert.Single(handler.SetMouseModeCalls);
         Assert.Equal((1015, false), handler.SetMouseModeCalls[0]);
     }
 
@@ -155,7 +155,7 @@ public class MouseModeTests
         byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 32, 42, 37 };
         parser.Feed(mouseSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(0, evt.button);      // left button
         Assert.Equal(10, evt.col);         // col = 42 - 32 = 10
@@ -175,7 +175,7 @@ public class MouseModeTests
         byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 35, 42, 37 }; // 35 = 32 + 3
         parser.Feed(mouseSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(3, evt.button);      // release button
         Assert.Equal(10, evt.col);
@@ -194,7 +194,7 @@ public class MouseModeTests
         byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 34, 50, 45 }; // 34 = 32 + 2
         parser.Feed(mouseSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(2, evt.button);      // right button
         Assert.Equal(18, evt.col);        // col = 50 - 32 = 18
@@ -213,7 +213,7 @@ public class MouseModeTests
         byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 33, 32, 32 }; // 33 = 32 + 1
         parser.Feed(mouseSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(1, evt.button);      // middle button
         Assert.Equal(0, evt.col);         // col = 32 - 32 = 0
@@ -232,7 +232,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<0;10;5M");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(0, evt.button);      // left button
         Assert.Equal(10, evt.col);
@@ -251,7 +251,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<0;10;5m");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(0, evt.button);
         Assert.Equal(10, evt.col);
@@ -270,7 +270,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<2;20;15M");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(2, evt.button);      // right button
         Assert.Equal(20, evt.col);
@@ -289,7 +289,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<1;15;10M");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(1, evt.button);      // middle button
         Assert.Equal(15, evt.col);
@@ -308,7 +308,7 @@ public class MouseModeTests
         var urxvtSeq = Encoding.UTF8.GetBytes("\u001b[0;10;5M");
         parser.Feed(urxvtSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(0, evt.button);
         Assert.Equal(10, evt.col);
@@ -327,7 +327,7 @@ public class MouseModeTests
         var urxvtSeq = Encoding.UTF8.GetBytes("\u001b[3;10;5M"); // 2 = 0 | 0x02
         parser.Feed(urxvtSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(3, evt.button);      // release button
         Assert.Equal(10, evt.col);
@@ -346,7 +346,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<0;300;200M");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(300, evt.col);
         Assert.Equal(200, evt.row);
@@ -363,7 +363,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<0;1;1M");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(1, evt.col);
         Assert.Equal(1, evt.row);
@@ -441,7 +441,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<4;10;5M");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(4, evt.button);      // button with shift modifier
         Assert.Equal(10, evt.col);
@@ -460,7 +460,7 @@ public class MouseModeTests
         var sgrSeq = Encoding.UTF8.GetBytes("\u001b[<64;10;5M");
         parser.Feed(sgrSeq);
 
-        Assert.Equal(1, handler.MouseEventCalls.Count);
+        Assert.Single(handler.MouseEventCalls);
         var evt = handler.MouseEventCalls[0];
         Assert.Equal(64, evt.button);     // scroll up button code
         Assert.Equal(10, evt.col);

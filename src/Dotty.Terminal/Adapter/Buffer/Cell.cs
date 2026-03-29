@@ -5,6 +5,8 @@ namespace Dotty.Terminal.Adapter;
 [StructLayout(LayoutKind.Sequential)]
 public struct Cell
 {
+    private static readonly string[] s_asciiCache = BuildAsciiCache();
+
     public uint Rune;
     public uint Foreground;
     public uint Background;
@@ -13,6 +15,10 @@ public struct Cell
     public ushort Flags;
     public byte Width;
     public bool IsContinuation;
+    
+    // Stores multi-character graphemes (base + combining marks)
+    // When this is null, use Rune field for single codepoint graphemes
+    private string? _grapheme;
 
     public void Reset()
     {
@@ -23,6 +29,7 @@ public struct Cell
         Width = 0;
         IsContinuation = false;
         UnderlineColor = 0;
+        _grapheme = null;
     }
 
     public readonly bool IsEmpty => Rune == 0 && !IsContinuation;
@@ -40,7 +47,65 @@ public struct Cell
     
     public string? Grapheme 
     { 
-        get => Rune == 0 ? null : char.ConvertFromUtf32((int)Rune); 
-        set => Rune = string.IsNullOrEmpty(value) ? 0 : (uint)char.ConvertToUtf32(value, 0); 
+        get
+        {
+            if (_grapheme != null) return _grapheme;
+            if (Rune == 0) return null;
+            if (Rune < 128) return s_asciiCache[Rune];
+            return char.ConvertFromUtf32((int)Rune);
+        }
+        set
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                Rune = 0;
+                _grapheme = null;
+                return;
+            }
+
+            // Check if it's a multi-character grapheme cluster (combining marks, etc.)
+            // or contains invalid UTF-16 that can't be represented as a single codepoint
+            if (value.Length > 1)
+            {
+                _grapheme = value;
+                // Try to store the first codepoint in Rune as well for fast access
+                try
+                {
+                    Rune = (uint)char.ConvertToUtf32(value, 0);
+                }
+                catch (ArgumentException)
+                {
+                    // Invalid surrogate pair - just keep Rune as 0, we have the full string
+                    Rune = 0;
+                }
+            }
+            else
+            {
+                // Single character
+                _grapheme = null;
+                try
+                {
+                    Rune = (uint)char.ConvertToUtf32(value, 0);
+                }
+                catch (ArgumentException)
+                {
+                    // Invalid surrogate pair - treat as empty
+                    Rune = 0;
+                }
+            }
+        }
+    }
+
+    public void SetAscii(char ch)
+    {
+        Rune = ch;
+        _grapheme = null;
+    }
+
+    private static string[] BuildAsciiCache()
+    {
+        var cache = new string[128];
+        for (int i = 0; i < cache.Length; i++) cache[i] = ((char)i).ToString();
+        return cache;
     }
 }

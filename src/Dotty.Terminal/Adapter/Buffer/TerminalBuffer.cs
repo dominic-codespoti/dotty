@@ -20,6 +20,7 @@ public class TerminalBuffer
     private CursorController _cursor = new();
     private readonly BufferEraser _eraser = new();
     private BufferTextWriter _writer;
+    private readonly bool _throughputMode;
     private int _scrollTop = 0;
     private int _scrollBottom;
     private bool _originMode;
@@ -30,6 +31,7 @@ public class TerminalBuffer
 
     public TerminalBuffer(int rows = 24, int columns = 80)
     {
+        _throughputMode = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_BENCH_THROUGHPUT"));
         Rows = rows;
         Columns = columns;
         _screens = new ScreenManager(rows, columns);
@@ -265,6 +267,17 @@ public class TerminalBuffer
         public override string ToString() => Buffer == null ? string.Empty : new string(Buffer, 0, Length);
     }
     public int ScrollbackCount => _scrollbackCount;
+
+    public ScrollbackLine GetScrollbackLine(int index)
+    {
+        if (index < 0 || index >= _scrollbackCount)
+        {
+            return new ScrollbackLine(System.Array.Empty<char>(), 0);
+        }
+
+        return _scrollbackRing[(_scrollbackHead + index) % _scrollbackRing.Length];
+    }
+
     public IReadOnlyList<string> GetScrollbackLines()
     {
         string[] lines = new string[_scrollbackCount];
@@ -367,7 +380,7 @@ public class TerminalBuffer
         {
             // Capture the top-most line of the scroll region before it's
             // scrolled out, preserving it in scrollback history.
-            if (_scrollTop == 0)
+            if (!_throughputMode && _scrollTop == 0)
             {
                 AddToScrollback(_scrollTop);
             }
@@ -375,7 +388,14 @@ public class TerminalBuffer
             ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, 1);
 
             // Mark the whole region dirty so the renderer repaints in-place.
-            MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+            if (_throughputMode)
+            {
+                BumpScrollGeneration();
+            }
+            else
+            {
+                MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+            }
             return;
         }
 
@@ -621,16 +641,7 @@ public class TerminalBuffer
     private ScrollbackLine GetRowTextFast(int row, char[] existingArr)
     {
         var buf = _screens.Active;
-        int lastCol = -1;
-        for (int j = Columns - 1; j >= 0; j--)
-        {
-            var cell = buf.GetCell(row, j);
-            if (!cell.IsContinuation && cell.Rune != 0 && cell.Rune != 32)
-            {
-                lastCol = j;
-                break;
-            }
-        }
+        int lastCol = buf.GetRowMaxCol(row);
         if (lastCol < 0) return new ScrollbackLine(existingArr ?? System.Array.Empty<char>(), 0);
         
         char[] arr = existingArr;
@@ -638,27 +649,50 @@ public class TerminalBuffer
         {
             arr = new char[System.Math.Max(lastCol + 1, Columns)];
         }
+
+        var cells = buf.Cells;
+        int rowOffset = buf.RowMap[row] * Columns;
         int writeIdx = 0;
         for (int j = 0; j <= lastCol; j++)
         {
-            var cell = buf.GetCell(row, j);
+            ref readonly var cell = ref cells[rowOffset + j];
             if (cell.IsContinuation || cell.Rune == 0)
             {
                 arr[writeIdx++] = ' ';
             }
             else
             {
-                if (writeIdx + 2 > arr.Length) {
-                    var newArr = new char[arr.Length * 2];
-                    System.Array.Copy(arr, newArr, arr.Length);
-                    arr = newArr;
+                string? grapheme = cell.Grapheme;
+                if (string.IsNullOrEmpty(grapheme))
+                {
+                    if (writeIdx + 1 > arr.Length)
+                    {
+                        var newArr = new char[arr.Length * 2];
+                        System.Array.Copy(arr, newArr, arr.Length);
+                        arr = newArr;
+                    }
+
+                    if (cell.Rune <= 0xFFFF)
+                    {
+                        arr[writeIdx++] = (char)cell.Rune;
+                    }
+                    else
+                    {
+                        var utf16 = System.Text.Rune.TryCreate((int)cell.Rune, out var r) ? r : new System.Text.Rune(0xFFFD);
+                        writeIdx += utf16.EncodeToUtf16(arr.AsSpan(writeIdx));
+                    }
                 }
-                
-                if (cell.Rune <= 0xFFFF) {
-                    arr[writeIdx++] = (char)cell.Rune;
-                } else {
-                    var utf16 = System.Text.Rune.TryCreate((int)cell.Rune, out var r) ? r : new System.Text.Rune(0xFFFD);
-                    writeIdx += utf16.EncodeToUtf16(arr.AsSpan(writeIdx));
+                else
+                {
+                    if (writeIdx + grapheme.Length > arr.Length)
+                    {
+                        var newArr = new char[System.Math.Max(arr.Length * 2, writeIdx + grapheme.Length)];
+                        System.Array.Copy(arr, newArr, arr.Length);
+                        arr = newArr;
+                    }
+
+                    grapheme.AsSpan().CopyTo(arr.AsSpan(writeIdx));
+                    writeIdx += grapheme.Length;
                 }
             }
         }

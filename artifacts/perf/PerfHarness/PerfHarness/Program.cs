@@ -1,13 +1,15 @@
 using System;
 using System.Diagnostics;
 using System.Text;
+using BenchmarkDotNet.Running;
 using Dotty.Terminal.Parser;
 using Dotty.Terminal.Adapter;
 
 class Program {
     static void Main(string[] args) {
         if (args.Length > 0 && args[0] == "bench") {
-            BenchmarkDotNet.Running.BenchmarkRunner.Run<PerfHarness.FullStackBenchmarks>();
+            var benchmarkArgs = args.Length > 1 ? args[1..] : Array.Empty<string>();
+            BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(benchmarkArgs);
             return;
         }
 

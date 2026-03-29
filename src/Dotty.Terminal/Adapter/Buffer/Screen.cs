@@ -10,6 +10,31 @@ public class Screen
     public int[] RowMap => _rowMap;
     private int[] _rowMap;
 
+    // Cache for the last non-empty column in each row (avoids O(Columns) reverse scan)
+    public int[] RowMaxCol => _rowMaxCol;
+    private int[] _rowMaxCol;
+
+    public int GetRowMaxCol(int row)
+    {
+        if (row < 0 || row >= Rows) return -1;
+        return _rowMaxCol[row];
+    }
+
+    public void UpdateRowMaxCol(int row, int col)
+    {
+        if (row < 0 || row >= Rows) return;
+        if (col > _rowMaxCol[row])
+        {
+            _rowMaxCol[row] = col;
+        }
+    }
+
+    public void ResetRowMaxCol(int row)
+    {
+        if (row < 0 || row >= Rows) return;
+        _rowMaxCol[row] = -1;
+    }
+
     public void MarkRender()
     {
         // No per-render cache tracked anymore; method retained for compatibility.
@@ -24,6 +49,7 @@ public class Screen
         Columns = columns;
         _cells = new Cell[rows * columns];
         _rowMap = new int[rows];
+        _rowMaxCol = new int[rows];
         for (int i = 0; i < rows; i++) _rowMap[i] = i;
         Clear();
     }
@@ -110,6 +136,28 @@ public class Screen
     public void Clear()
     {
         Array.Clear(_cells, 0, _cells.Length);
+        Array.Fill(_rowMaxCol, -1);
+    }
+
+    /// <summary>
+    /// Recalculates the last non-empty column for a row by scanning backwards.
+    /// Called after clearing cells to maintain the cache.
+    /// </summary>
+    public void RecalculateRowMaxCol(int row)
+    {
+        if (row < 0 || row >= Rows) return;
+        int maxCol = -1;
+        int rowOffset = _rowMap[row] * Columns;
+        for (int j = Columns - 1; j >= 0; j--)
+        {
+            var cell = _cells[rowOffset + j];
+            if (!cell.IsContinuation && cell.Rune != 0 && cell.Rune != 32)
+            {
+                maxCol = j;
+                break;
+            }
+        }
+        _rowMaxCol[row] = maxCol;
     }
 
     // Expose internal cells array for tests. This is intentionally marked
@@ -175,6 +223,8 @@ public class Screen
             c++;
         }
 
+        // Update the row's max col cache since we cleared cells
+        RecalculateRowMaxCol(row);
     }
 
         public void ScrollUp(int lines)
@@ -190,6 +240,13 @@ public class Screen
             int offset = oldRow * Columns;
             Array.Clear(_cells, offset, Columns);
         }
+
+        // Shift the row max col cache
+        int[] newMaxCols = new int[Rows];
+        Array.Copy(_rowMaxCol, lines, newMaxCols, 0, Rows - lines);
+        for (int i = Rows - lines; i < Rows; i++)
+            newMaxCols[i] = -1;
+        _rowMaxCol = newMaxCols;
     }
 
     public void ScrollUpRegion(int top, int bottom, int lines)
@@ -217,6 +274,11 @@ public class Screen
             _rowMap.AsSpan(1, Rows - 1).CopyTo(_rowMap.AsSpan(0, Rows - 1));
             _rowMap[Rows - 1] = oldRow;
             Array.Clear(_cells, oldRow * Columns, Columns);
+            
+            // Shift the row max col cache
+            int firstMaxCol = _rowMaxCol[0];
+            Array.Copy(_rowMaxCol, 1, _rowMaxCol, 0, Rows - 1);
+            _rowMaxCol[Rows - 1] = -1;
             return;
         }
 
@@ -226,6 +288,11 @@ public class Screen
             Array.Copy(_rowMap, top + 1, _rowMap, top, regionHeight - 1);
             _rowMap[bottom] = oldRow;
             Array.Clear(_cells, oldRow * Columns, Columns);
+            
+            // Shift max col cache for the region
+            int firstMaxCol = _rowMaxCol[top];
+            Array.Copy(_rowMaxCol, top + 1, _rowMaxCol, top, regionHeight - 1);
+            _rowMaxCol[bottom] = -1;
             return;
         }
 
@@ -242,6 +309,7 @@ public class Screen
             int oldRow = oldRows[l];
             _rowMap[bottom - lines + 1 + l] = oldRow;
             Array.Clear(_cells, oldRow * Columns, Columns);
+            _rowMaxCol[bottom - lines + 1 + l] = -1;
         }
     }
 
@@ -258,6 +326,13 @@ public class Screen
             int offset = oldRow * Columns;
             Array.Clear(_cells, offset, Columns);
         }
+
+        // Shift the row max col cache down
+        int[] newMaxCols = new int[Rows];
+        Array.Copy(_rowMaxCol, 0, newMaxCols, lines, Rows - lines);
+        for (int i = 0; i < lines; i++)
+            newMaxCols[i] = -1;
+        _rowMaxCol = newMaxCols;
     }
 
     public void ScrollDownRegion(int top, int bottom, int lines)
@@ -274,6 +349,7 @@ public class Screen
             {
                 int offset = _rowMap[r] * Columns;
                 Array.Clear(_cells, offset, Columns);
+                _rowMaxCol[r] = -1;
             }
             return;
         }
@@ -315,6 +391,18 @@ public class Screen
                     cell.Reset();
                 }
             }
+        }
+
+        // Update the row max col cache: shift down and clear top rows
+        int[] savedMaxCols = new int[regionHeight];
+        Array.Copy(_rowMaxCol, top, savedMaxCols, 0, regionHeight);
+        for (int r = bottom; r >= top + lines; r--)
+        {
+            _rowMaxCol[r] = savedMaxCols[r - top - lines];
+        }
+        for (int r = top; r < top + lines; r++)
+        {
+            _rowMaxCol[r] = -1;
         }
 
         try
@@ -390,6 +478,12 @@ public class Screen
         {
             destination._cells[_rowMap[r] * Columns + c] = _cells[_rowMap[r] * Columns + c];
         }
+        // Copy the row max col cache (but cap at destination columns)
+        for (int r = 0; r < rows; r++)
+        {
+            int srcMax = _rowMaxCol[r];
+            destination._rowMaxCol[r] = srcMax < cols ? srcMax : cols - 1;
+        }
     }
 
     /// <summary>
@@ -406,6 +500,7 @@ public class Screen
         {
             ClearCell(row, c);
         }
+        // Row max col is recalculated by ClearCell calls
     }
 
 }

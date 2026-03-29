@@ -30,6 +30,7 @@ public class TerminalSession : IDisposable
     private CancellationTokenSource? _readCancellation;
     private string? _controlSocketPath;
     private Stream? _controlSocketStream;
+    private readonly bool _throughputMode;
 
     public ITerminalParser Parser { get; }
     public TerminalAdapter Adapter { get; }
@@ -40,6 +41,7 @@ public class TerminalSession : IDisposable
 
     public TerminalSession(int rows = 24, int columns = 80)
     {
+        _throughputMode = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_BENCH_THROUGHPUT"));
         Parser = new BasicAnsiParser();
         Adapter = new TerminalAdapter(rows: rows, columns: columns);
         Parser.Handler = Adapter;
@@ -98,14 +100,12 @@ public class TerminalSession : IDisposable
     {
         if (data == null || _childInputStream == null) return;
         
-        var copy = new byte[data.Length];
-        Array.Copy(data, copy, data.Length);
-
+        // Write directly without copying - data is not reused by caller
         Task.Run(async () =>
         {
             try
             {
-                await _childInputStream.WriteAsync(copy, 0, copy.Length).ConfigureAwait(false);
+                await _childInputStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
                 await _childInputStream.FlushAsync().ConfigureAwait(false);
             }
             catch { }
@@ -135,37 +135,72 @@ public class TerminalSession : IDisposable
     {
         Task.Run(async () =>
         {
+            byte[]? batchBuffer = null;
             try
             {
-                long nextRender = System.Diagnostics.Stopwatch.GetTimestamp() + System.Diagnostics.Stopwatch.Frequency / TargetFps;
+                batchBuffer = ArrayPool<byte>.Shared.Rent(65536);
+                int batchLength = 0;
+                int cyclesSinceRender = 0;
+
+                void FlushBatch()
+                {
+                    if (batchLength <= 0) return;
+                    try
+                    {
+                        Parser.Feed(batchBuffer.AsSpan(0, batchLength));
+                    }
+                    catch { }
+                    batchLength = 0;
+                }
+
                 while (await _ptyDataQueue.Reader.WaitToReadAsync(token))
                 {
+                    int drained = 0;
                     while (_ptyDataQueue.Reader.TryRead(out var chunk))
                     {
-                        try 
-                        { 
-                            lock (Adapter.Buffer.SyncRoot)
-                            {
-                                Parser.Feed(chunk.Data.AsSpan(0, chunk.Length)); 
-                            }
-                        } 
-                        catch { }
-                        System.Buffers.ArrayPool<byte>.Shared.Return(chunk.Data);
-                        
-                        long now = System.Diagnostics.Stopwatch.GetTimestamp();
-                        if (now >= nextRender)
+                        if (chunk.Length >= batchBuffer.Length)
                         {
-                            Adapter.RequestRenderExtern();
-                            
-                            await Task.Yield();
-                            nextRender = now + System.Diagnostics.Stopwatch.Frequency / TargetFps;
+                            FlushBatch();
+                            try
+                            {
+                                Parser.Feed(chunk.Data.AsSpan(0, chunk.Length));
+                            }
+                            catch { }
                         }
+                        else
+                        {
+                            if (batchLength + chunk.Length > batchBuffer.Length)
+                            {
+                                FlushBatch();
+                            }
+
+                            chunk.Data.AsSpan(0, chunk.Length).CopyTo(batchBuffer.AsSpan(batchLength));
+                            batchLength += chunk.Length;
+                        }
+
+                        System.Buffers.ArrayPool<byte>.Shared.Return(chunk.Data);
+                        drained++;
                     }
-                    Adapter.RequestRenderExtern();
-                            
+
+                    FlushBatch();
+
+                    // In throughput benchmark mode, flush render less frequently.
+                    cyclesSinceRender++;
+                    if (!_throughputMode || drained >= 8 || cyclesSinceRender >= 64)
+                    {
+                        Adapter.FlushRender();
+                        cyclesSinceRender = 0;
+                    }
                 }
             }
             catch { }
+            finally
+            {
+                if (batchBuffer != null)
+                {
+                    ArrayPool<byte>.Shared.Return(batchBuffer);
+                }
+            }
         }, token);
     }
 
@@ -173,10 +208,14 @@ public class TerminalSession : IDisposable
     {
         if (_childOutputStream == null) return;
 
+        byte[]? batch = null;
+        int batchLength = 0;
+
         try
         {
             var reader = _childOutputStream;
             byte[] buffer = new byte[131072];
+            batch = ArrayPool<byte>.Shared.Rent(65536);
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -185,14 +224,45 @@ public class TerminalSession : IDisposable
                     int bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
                     if (bytesRead > 0)
                     {
-                        var copy = ArrayPool<byte>.Shared.Rent(bytesRead);
-                        Array.Copy(buffer, 0, copy, 0, bytesRead);
-                        var chunk = new PtyChunk { Data = copy, Length = bytesRead };
-                        
-                        // Emit if anything cares about raw output
-                        RawInputReceived?.Invoke(buffer.AsSpan(0, bytesRead).ToArray());
-                        
-                        await _ptyDataQueue.Writer.WriteAsync(chunk, cancellationToken);
+                        if (RawInputReceived != null)
+                        {
+                            RawInputReceived.Invoke(buffer.AsSpan(0, bytesRead).ToArray());
+                        }
+
+                        bool smallInteractiveBurst = !_throughputMode && bytesRead < buffer.Length && batchLength < 1024;
+
+                        if (bytesRead >= batch.Length)
+                        {
+                            if (batchLength > 0)
+                            {
+                                await _ptyDataQueue.Writer.WriteAsync(new PtyChunk { Data = batch, Length = batchLength }, cancellationToken);
+                                batch = ArrayPool<byte>.Shared.Rent(65536);
+                                batchLength = 0;
+                            }
+
+                            var directCopy = ArrayPool<byte>.Shared.Rent(bytesRead);
+                            Array.Copy(buffer, 0, directCopy, 0, bytesRead);
+                            await _ptyDataQueue.Writer.WriteAsync(new PtyChunk { Data = directCopy, Length = bytesRead }, cancellationToken);
+                        }
+                        else
+                        {
+                            if (batchLength + bytesRead > batch.Length)
+                            {
+                                await _ptyDataQueue.Writer.WriteAsync(new PtyChunk { Data = batch, Length = batchLength }, cancellationToken);
+                                batch = ArrayPool<byte>.Shared.Rent(65536);
+                                batchLength = 0;
+                            }
+
+                            buffer.AsSpan(0, bytesRead).CopyTo(batch.AsSpan(batchLength));
+                            batchLength += bytesRead;
+
+                            if (batchLength >= 32768 || smallInteractiveBurst)
+                            {
+                                await _ptyDataQueue.Writer.WriteAsync(new PtyChunk { Data = batch, Length = batchLength }, cancellationToken);
+                                batch = ArrayPool<byte>.Shared.Rent(65536);
+                                batchLength = 0;
+                            }
+                        }
                     }
                     else
                     {
@@ -204,6 +274,24 @@ public class TerminalSession : IDisposable
             }
         }
         catch { }
+        finally
+        {
+            if (batch != null)
+            {
+                if (batchLength > 0)
+                {
+                    try
+                    {
+                        await _ptyDataQueue.Writer.WriteAsync(new PtyChunk { Data = batch, Length = batchLength }, cancellationToken);
+                    }
+                    catch { }
+                }
+                else
+                {
+                    ArrayPool<byte>.Shared.Return(batch);
+                }
+            }
+        }
     }
 
     private async Task ReadChildErrorAsync(CancellationToken cancellationToken)

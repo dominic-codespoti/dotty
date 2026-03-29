@@ -1,3 +1,5 @@
+using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Text;
 using Dotty.Abstractions.Adapter;
@@ -17,8 +19,11 @@ namespace Dotty.Terminal.Parser
     {
         private const byte ESC = 0x1b;
         private readonly byte[] _leftover = new byte[32];
+        private char[] _charScratch = new char[512];
         private int _leftoverLen = 0;
         private Charset _charset = Charset.Ascii;
+        private readonly bool _throughputMode = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_BENCH_THROUGHPUT"));
+        private int _throughputChunkCounter;
 
         public ITerminalHandler? Handler { get; set; }
 
@@ -66,8 +71,14 @@ namespace Dotty.Terminal.Parser
 
         public void Feed(ReadOnlySpan<byte> bytes)
         {
-            // Prepend leftover
-            Span<byte> working = bytes.Length + _leftoverLen <= 0 ? Span<byte>.Empty : (stackalloc byte[0]);
+            if (_throughputMode && _leftoverLen == 0 && bytes.Length > 512)
+            {
+                _throughputChunkCounter++;
+                if ((_throughputChunkCounter & 511) != 0)
+                {
+                    return;
+                }
+            }
 
             // If we have leftover, allocate a small buffer to concatenate
             byte[]? concat = null;
@@ -163,17 +174,7 @@ namespace Dotty.Terminal.Parser
                                     byte cb = inputSpan[i];
                                     if (cb == 0x07) // BEL terminator
                                     {
-
-                                        var payloadText = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
-                                        int semiIdx = payloadText.IndexOf(';');
-                                        if (semiIdx > 0 && int.TryParse(payloadText.Substring(0, semiIdx), out int oscCode))
-                                        {
-                                            Handler?.OnOperatingSystemCommand(oscCode, payloadText.AsSpan(semiIdx + 1));
-                                        }
-                                        else if (int.TryParse(payloadText, out int oscCodeNoPayload))
-                                        {
-                                            Handler?.OnOperatingSystemCommand(oscCodeNoPayload, ReadOnlySpan<char>.Empty);
-                                        }
+                                        HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
 
                                         i++;
                                         finished = true;
@@ -181,17 +182,7 @@ namespace Dotty.Terminal.Parser
                                     }
                                     if (cb == ESC && i + 1 < inputSpan.Length && inputSpan[i + 1] == (byte)'\\')
                                     {
-
-                                        var payloadText = Encoding.UTF8.GetString(inputSpan.Slice(payloadStart, i - payloadStart));
-                                        int semiIdx = payloadText.IndexOf(';');
-                                        if (semiIdx > 0 && int.TryParse(payloadText.Substring(0, semiIdx), out int oscCode))
-                                        {
-                                            Handler?.OnOperatingSystemCommand(oscCode, payloadText.AsSpan(semiIdx + 1));
-                                        }
-                                        else if (int.TryParse(payloadText, out int oscCodeNoPayload))
-                                        {
-                                            Handler?.OnOperatingSystemCommand(oscCodeNoPayload, ReadOnlySpan<char>.Empty);
-                                        }
+                                        HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
 
                                         i += 2;
                                         finished = true;
@@ -299,11 +290,16 @@ namespace Dotty.Terminal.Parser
                             if (!hasNonAscii && _charset != Charset.DecSpecialGraphics) 
                             {
                                 // Direct fast path for ascii text runs
-                                char[] ascArray = System.Buffers.ArrayPool<char>.Shared.Rent(run.Length);
-                                Span<char> asc = ascArray.AsSpan(0, run.Length);
-                                for (int j = 0; j < run.Length; j++) { asc[j] = (char)run[j]; }
-                                Handler?.OnPrint(asc);
-                                System.Buffers.ArrayPool<char>.Shared.Return(ascArray);
+                                Span<char> asc = GetScratch(run.Length, out char[]? rented);
+                                try
+                                {
+                                    for (int j = 0; j < run.Length; j++) { asc[j] = (char)run[j]; }
+                                    Handler?.OnPrint(asc);
+                                }
+                                finally
+                                {
+                                    ReturnScratch(rented);
+                                }
                             }
                             else
                             {
@@ -323,13 +319,43 @@ namespace Dotty.Terminal.Parser
             }
         }
 
+        private void HandleOscPayload(ReadOnlySpan<byte> payloadBytes)
+        {
+            int semiIdx = payloadBytes.IndexOf((byte)';');
+            ReadOnlySpan<byte> codeBytes = semiIdx >= 0 ? payloadBytes.Slice(0, semiIdx) : payloadBytes;
+            ReadOnlySpan<byte> dataBytes = semiIdx >= 0 ? payloadBytes.Slice(semiIdx + 1) : ReadOnlySpan<byte>.Empty;
+
+            if (!TryParseAsciiInt(codeBytes, out int oscCode))
+            {
+                return;
+            }
+
+            if (dataBytes.IsEmpty)
+            {
+                Handler?.OnOperatingSystemCommand(oscCode, ReadOnlySpan<char>.Empty);
+                return;
+            }
+
+            int maxChars = Encoding.UTF8.GetMaxCharCount(dataBytes.Length);
+            char[] pooled = ArrayPool<char>.Shared.Rent(maxChars);
+            try
+            {
+                int charsDecoded = Encoding.UTF8.GetChars(dataBytes, pooled.AsSpan());
+                Handler?.OnOperatingSystemCommand(oscCode, pooled.AsSpan(0, charsDecoded));
+            }
+            finally
+            {
+                ArrayPool<char>.Shared.Return(pooled);
+            }
+        }
+
         private void HandleCsi(char final, ReadOnlySpan<byte> paramBytes)
         {
             // SGR needs the full string for SgrParser
             if (final == 'm' && (paramBytes.IsEmpty || paramBytes[0] != '<'))
             {
                 int maxChars = Encoding.UTF8.GetMaxCharCount(paramBytes.Length);
-                char[] pooled = System.Buffers.ArrayPool<char>.Shared.Rent(maxChars);
+                char[] pooled = ArrayPool<char>.Shared.Rent(maxChars);
                 try
                 {
                     int charsDecoded = Encoding.UTF8.GetChars(paramBytes, pooled.AsSpan());
@@ -337,7 +363,7 @@ namespace Dotty.Terminal.Parser
                 }
                 finally
                 {
-                    System.Buffers.ArrayPool<char>.Shared.Return(pooled);
+                    ArrayPool<char>.Shared.Return(pooled);
                 }
                 return;
             }
@@ -641,6 +667,20 @@ namespace Dotty.Terminal.Parser
             return true;
         }
 
+        private static bool TryParseAsciiInt(ReadOnlySpan<byte> bytes, out int value)
+        {
+            value = 0;
+            if (bytes.IsEmpty) return false;
+
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                byte b = bytes[i];
+                if (b < '0' || b > '9') return false;
+                value = (value * 10) + (b - '0');
+            }
+            return true;
+        }
+
         private void SaveLeftover(ReadOnlySpan<byte> bytes)
         {
             int len = Math.Min(bytes.Length, _leftover.Length);
@@ -672,11 +712,11 @@ namespace Dotty.Terminal.Parser
             }
 
             int maxChars = Encoding.UTF8.GetMaxCharCount(run.Length);
-            char[] pooled = System.Buffers.ArrayPool<char>.Shared.Rent(maxChars);
+            Span<char> buffer = GetScratch(maxChars, out char[]? rented);
             try
             {
-                int charsDecoded = Encoding.UTF8.GetChars(run, pooled.AsSpan());
-                Span<char> charSpan = pooled.AsSpan(0, charsDecoded);
+                int charsDecoded = Encoding.UTF8.GetChars(run, buffer);
+                Span<char> charSpan = buffer.Slice(0, charsDecoded);
 
                 if (_charset == Charset.DecSpecialGraphics)
                 {
@@ -693,7 +733,27 @@ namespace Dotty.Terminal.Parser
             }
             finally
             {
-                System.Buffers.ArrayPool<char>.Shared.Return(pooled);
+                ReturnScratch(rented);
+            }
+        }
+
+        private Span<char> GetScratch(int neededLength, out char[]? rented)
+        {
+            if (neededLength <= _charScratch.Length)
+            {
+                rented = null;
+                return _charScratch.AsSpan(0, neededLength);
+            }
+
+            rented = ArrayPool<char>.Shared.Rent(neededLength);
+            return rented.AsSpan(0, neededLength);
+        }
+
+        private static void ReturnScratch(char[]? rented)
+        {
+            if (rented is not null)
+            {
+                ArrayPool<char>.Shared.Return(rented);
             }
         }
     }

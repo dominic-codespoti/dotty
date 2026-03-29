@@ -28,6 +28,7 @@ namespace Dotty.App.Views
         private Dotty.App.ViewModels.TerminalSession? _session;
         private Action<TimeSpan>? _fpsMeasurementCallback;
         private TimeSpan _lastFrameTime;
+        private bool _renderUpdatePending;
 
         public Dotty.App.ViewModels.TerminalSession? Session
         {
@@ -89,8 +90,11 @@ namespace Dotty.App.Views
 
         private void OnRenderScheduled()
         {
+            if (_renderUpdatePending) return;
+            _renderUpdatePending = true;
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
+                _renderUpdatePending = false;
                 if (_session?.Adapter != null)
                 {
                     KeypadApplicationMode = _session.Adapter.KeypadApplicationMode;

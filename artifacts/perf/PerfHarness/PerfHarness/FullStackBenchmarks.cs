@@ -9,14 +9,14 @@ namespace PerfHarness
     [MemoryDiagnoser]
     public class FullStackBenchmarks
     {
-        private BasicAnsiParser _parser;
-        private TerminalAdapter _adapter;
-        private byte[] _payloadHeavySgr;
-        private byte[] _payloadScrollHeavy;
-        private byte[] _payloadLongLines;
-        private byte[] _payloadMassiveText;
-        private byte[] _payloadComplexUnicode;
-        private byte[] _payloadAltBufferTui;
+        private BasicAnsiParser _parser = null!;
+        private TerminalAdapter _adapter = null!;
+        private byte[] _payloadHeavySgr = null!;
+        private byte[] _payloadScrollHeavy = null!;
+        private byte[] _payloadLongLines = null!;
+        private byte[] _payloadMassiveText = null!;
+        private byte[] _payloadComplexUnicode = null!;
+        private byte[] _payloadAltBufferTui = null!;
 
         [GlobalSetup]
         public void Setup()

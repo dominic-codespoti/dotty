@@ -517,7 +517,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
 	{
 		base.OnPropertyChanged(change);
-            if (change.Property == IsVisibleProperty && IsVisible) { var _ = 0; /* hack */ }
+            if (change.Property == IsVisibleProperty && IsVisible) { /* hack */ }
 
 		if (change.Property == FontFamilyProperty || change.Property == FontSizeProperty)
 		{

@@ -14,13 +14,13 @@ namespace Dotty.App.Controls.Canvas.Rendering;
 public unsafe class TerminalGlCanvas : OpenGlControlBase
 {
 
-    private float[]? _gridData;
-    private float[]? _uvData;
+    private float[] _gridData = null!;
+    private float[] _uvData = null!;
     private int _lastCols = -1;
     private int _lastRows = -1;
 
-    private Dotty.Terminal.Adapter.Cell[]? _cellsSnapshot;
-    private int[]? _rowMapSnapshot;
+    private Dotty.Terminal.Adapter.Cell[] _cellsSnapshot = null!;
+    private int[] _rowMapSnapshot = null!;
 
 
     private string _vertexShaderSource = @"
@@ -123,7 +123,7 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
     private glUniform2fDelegate? _glUniform2f;
     private glUniform1iDelegate? _glUniform1i;
 
-    private GlyphAtlas _atlas;
+    private GlyphAtlas _atlas = null!;
 
     public TerminalGlCanvas()
     {
@@ -234,8 +234,8 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
             _lastRows = rows;
         }
 
-        Array.Clear(_gridData, 0, requiredSize);
-        Array.Clear(_uvData, 0, requiredSize);
+        Array.Clear(_gridData!, 0, requiredSize);
+        Array.Clear(_uvData!, 0, requiredSize);
 
         if (Buffer != null)
         {
@@ -275,20 +275,20 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
                         var key = new GlyphKey(t, null, cell.Bold);
                         if (_atlas.TryGetGlyph(key, out var info))
                         {
-                            _uvData[idx] = info.X;
-                            _uvData[idx + 1] = info.Y;
-                            _uvData[idx + 2] = info.Width;
-                            _uvData[idx + 3] = info.Height;
+                            _uvData[idx] = info!.X;
+                            _uvData[idx + 1] = info!.Y;
+                            _uvData[idx + 2] = info!.Width;
+                            _uvData[idx + 3] = info!.Height;
                         }
                         else
                         {
                             _atlas.EnsureGlyph(key);
                             if (_atlas.TryGetGlyph(key, out info))
                             {
-                                _uvData[idx] = info.X;
-                                _uvData[idx + 1] = info.Y;
-                                _uvData[idx + 2] = info.Width;
-                                _uvData[idx + 3] = info.Height;
+                                _uvData[idx] = info!.X;
+                                _uvData[idx + 1] = info!.Y;
+                                _uvData[idx + 2] = info!.Width;
+                                _uvData[idx + 3] = info!.Height;
                             }
                         }
                     }

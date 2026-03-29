@@ -54,6 +54,7 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
         var canvas = lease.SkCanvas;
 
         canvas.Save();
+        canvas.DrawColor(SKColors.Transparent, SKBlendMode.Src);
 
         var buffer = s.Buffer;
         try
@@ -110,7 +111,6 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                 int sbEnd = Math.Min(-1, endVisibleRow);
                 if (sbStart <= sbEnd)
                 {
-                    var lines = buffer.GetScrollbackLines();
                     var paint = s.Paint;
                     paint.LcdRenderText = true;
                     paint.SubpixelText = true;
@@ -122,22 +122,13 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                     for (int r = sbStart; r <= sbEnd; r++)
                     {
                         int idx = r + sbCount;
-                        if (idx >= 0 && idx < lines.Count)
-                        {
-                            var lineStr = lines[idx].ToString();
-                            if (string.IsNullOrEmpty(lineStr)) continue;
-                            float y = (float)(r * s.CellHeight + baselineOffset);
-                            
-                            int col = 0;
-                            var enumerator = System.Globalization.StringInfo.GetTextElementEnumerator(lineStr);
-                            while (enumerator.MoveNext())
-                            {
-                                string g = enumerator.GetTextElement();
-                                float x = MathF.Round(col * s.CellWidth);
-                                canvas.DrawText(g, x, y, paint);
-                                col++;
-                            }
-                        }
+                        var line = buffer.GetScrollbackLine(idx);
+                        if (line.Length <= 0) continue;
+
+                        float y = (float)(r * s.CellHeight + baselineOffset);
+                        float x = 0;
+                        var text = line.Buffer == null ? string.Empty : new string(line.Buffer, 0, line.Length);
+                        canvas.DrawText(text, x, y, paint);
                     }
                 }
             }

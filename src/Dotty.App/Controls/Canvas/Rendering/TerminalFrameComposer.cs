@@ -130,6 +130,8 @@ public sealed class TerminalFrameComposer : IDisposable
         }
 
         FlushActiveRegions();
+
+        
     }
 
     private void BuildRowSpans(CellClass[] rowCells, int row)
@@ -419,6 +421,7 @@ public sealed class TerminalFrameComposer : IDisposable
             
             cc.HasBg = cell.Background != 0;
             cc.Bg = cell.Background != 0 ? new SKColor(cell.Background) : default;
+            if (cc.HasBg && cc.Bg.Alpha == 0) cc.Bg = cc.Bg.WithAlpha(255);
 
             
             cc.HasFg = cell.Foreground != 0;

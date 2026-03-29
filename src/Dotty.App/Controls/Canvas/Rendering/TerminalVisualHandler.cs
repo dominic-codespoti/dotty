@@ -45,6 +45,7 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
     {
         if (_state == null) return;
         var s = _state.Value;
+        
         if (s.Buffer == null || s.Paint == null) return;
 
         var leaseFeature = context.TryGetFeature<ISkiaSharpApiLeaseFeature>();
@@ -104,6 +105,7 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                 
                 if (composerStart <= composerEnd)
                 {
+                    composer.ResetCaches();
                     composer.RenderTo(canvas, buffer, s.Paint, s.CellWidth, s.CellHeight, composerStart, composerEnd);
                 }
 

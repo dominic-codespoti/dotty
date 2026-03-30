@@ -20,6 +20,7 @@ public sealed class TerminalFrameComposer : IDisposable
         Style = SKPaintStyle.Stroke,
         StrokeWidth = 1f
     };
+    private readonly SKPaint _linePaint = new() { Style = SKPaintStyle.Stroke, IsAntialias = true };
     private readonly SKPaint _glyphPaint = new()
     {
         IsAntialias = false,
@@ -36,6 +37,8 @@ public sealed class TerminalFrameComposer : IDisposable
     private readonly List<Region> _regions = new();
     private readonly List<RegionKey> _toRemove = new();
     private int _touchGen = 0;
+    private readonly Stack<ActiveRegion> _activeRegionPool = new();
+    private SynthCell[] _reusableSynthSpan = Array.Empty<SynthCell>();
 
     // --- cached cell info ---
     // Legacy `_cellInfos` removed in favor of a single `CellClass` pass.
@@ -53,6 +56,8 @@ public sealed class TerminalFrameComposer : IDisposable
         _backgroundFill.Dispose();
         _backgroundStroke.Dispose();
         _glyphPaint.Dispose();
+        _linePaint.Dispose();
+        _activeRegionPool.Clear();
     }
 
     // ============================================================
@@ -107,6 +112,11 @@ public sealed class TerminalFrameComposer : IDisposable
     public void ResetCaches()
     {
         _regions.Clear();
+        foreach (var region in _activeRegions.Values)
+        {
+            region.Color = default;
+            _activeRegionPool.Push(region);
+        }
         _activeRegions.Clear();
         _rowSpans.Clear();
     }
@@ -139,7 +149,8 @@ public sealed class TerminalFrameComposer : IDisposable
         _rowSpans.Clear();
 
         // Convert classification into synth cells and call the pure builder.
-        var synth = new SynthCell[rowCells.Length];
+        if (_reusableSynthSpan.Length < rowCells.Length) { _reusableSynthSpan = new SynthCell[rowCells.Length]; }
+        var synth = _reusableSynthSpan;
         for (int i = 0; i < rowCells.Length; i++)
         {
             var c = rowCells[i];
@@ -153,7 +164,7 @@ public sealed class TerminalFrameComposer : IDisposable
             };
         }
 
-        var spans = BackgroundSynth.BuildRowSpans(synth);
+        var spans = BackgroundSynth.BuildRowSpans(synth.AsSpan(0, rowCells.Length));
         foreach (var s in spans)
             _rowSpans.Add(new Span(s.X0, s.X1, s.Color));
     }
@@ -174,15 +185,13 @@ public sealed class TerminalFrameComposer : IDisposable
             }
             else
             {
-                region = new ActiveRegion
-                {
-                    X0 = span.X0,
-                    X1 = span.X1,
-                    TopRow = row,
-                    BottomRow = row + 1,
-                    Color = span.Color,
-                    LastTouchedGen = _touchGen
-                };
+                if (!_activeRegionPool.TryPop(out region)) { region = new ActiveRegion(); }
+                region.X0 = span.X0;
+                region.X1 = span.X1;
+                region.TopRow = row;
+                region.BottomRow = row + 1;
+                region.Color = span.Color;
+                region.LastTouchedGen = _touchGen;
                 _activeRegions[key] = region;
             }
         }
@@ -197,7 +206,10 @@ public sealed class TerminalFrameComposer : IDisposable
         }
 
         foreach (var k in _toRemove)
+        {
+            _activeRegionPool.Push(_activeRegions[k]);
             _activeRegions.Remove(k);
+        }
     }
 
     private void FlushActiveRegions()
@@ -205,6 +217,8 @@ public sealed class TerminalFrameComposer : IDisposable
         foreach (var r in _activeRegions.Values)
         {
             _regions.Add(new Region(r.X0, r.X1, r.TopRow, r.BottomRow, r.Color));
+            r.Color = default;
+            _activeRegionPool.Push(r);
         }
 
         _activeRegions.Clear();
@@ -289,12 +303,7 @@ public sealed class TerminalFrameComposer : IDisposable
         long ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         bool isBlinkVisible = (ms % 1000) < 500;
 
-        using var linePaint = new SKPaint
-        {
-            Style = SKPaintStyle.Stroke,
-            IsAntialias = true,
-            StrokeWidth = Math.Max(1f, cellH * 0.05f)
-        };
+        _linePaint.StrokeWidth = Math.Max(1f, cellH * 0.05f);
 
         for (int row = startRow; row <= endRow; row++)
         {
@@ -325,30 +334,30 @@ public sealed class TerminalFrameComposer : IDisposable
                 bool hasLine = raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline;
                 if (hasLine)
                 {
-                    linePaint.Color = ((raw.UnderlineColor != 0)) ? new SKColor(raw.UnderlineColor) : fgColor;
+                    _linePaint.Color = ((raw.UnderlineColor != 0)) ? new SKColor(raw.UnderlineColor) : fgColor;
                     float lineW = cellW * cc.Width;
                     
                     if (raw.Underline)
                     {
                         float y = baseline + fm.Descent * 0.5f;
-                        canvas.DrawLine(x, y, x + lineW, y, linePaint);
+                        canvas.DrawLine(x, y, x + lineW, y, _linePaint);
                     }
                     if (raw.DoubleUnderline)
                     {
                         float y1 = baseline + fm.Descent * 0.3f;
                         float y2 = baseline + fm.Descent * 0.8f;
-                        canvas.DrawLine(x, y1, x + lineW, y1, linePaint);
-                        canvas.DrawLine(x, y2, x + lineW, y2, linePaint);
+                        canvas.DrawLine(x, y1, x + lineW, y1, _linePaint);
+                        canvas.DrawLine(x, y2, x + lineW, y2, _linePaint);
                     }
                     if (raw.Strikethrough)
                     {
                         float y = baseline - (fm.Ascent * -0.3f);
-                        canvas.DrawLine(x, y, x + lineW, y, linePaint);
+                        canvas.DrawLine(x, y, x + lineW, y, _linePaint);
                     }
                     if (raw.Overline)
                     {
                         float y = baseline + fm.Ascent * 1.05f;
-                        canvas.DrawLine(x, y, x + lineW, y, linePaint);
+                        canvas.DrawLine(x, y, x + lineW, y, _linePaint);
                     }
                 }
             }

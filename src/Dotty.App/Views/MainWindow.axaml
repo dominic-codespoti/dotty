@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Dotty.App.ViewModels"
         xmlns:controls="using:Dotty.App.Views"
-        x:Class="Dotty.App.MainWindow"
+        x:Class="Dotty.App.Views.MainWindow"
         x:DataType="vm:MainViewModel"
         Width="1000" Height="700"
         Title="Dotty">
@@ -18,7 +18,7 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Margin" Value="0" />
-            <Setter Property="Padding" Value="12,8,12,10" /> <!-- Added bottom padding so the text stays away from the underline -->
+            <Setter Property="Padding" Value="12,8,12,10" />
             <Setter Property="CornerRadius" Value="6,6,0,0" />
             <Setter Property="VerticalAlignment" Value="Bottom" />
             <Setter Property="MinHeight" Value="36" />
@@ -46,7 +46,7 @@
             </Grid.ColumnDefinitions>
             
             <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled">
-                <TabStrip ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
+                <TabStrip Name="TabBar" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}">
                     <TabStrip.ItemTemplate>
                         <DataTemplate>
                             <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Background="Transparent" MinWidth="60" Margin="0,0,0,0">
@@ -59,7 +59,6 @@
                                         <MenuItem Header="Close Other Tabs" Click="OnCloseOtherTabsClick" />
                                     </ContextMenu>
                                 </StackPanel.ContextMenu>
-                                <!-- A small subtle dot to look terminal-esque -->
                                 <TextBlock Text="●" Foreground="#555555" FontSize="10" VerticalAlignment="Center" />
                                 <TextBlock Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding !IsEditingTitle}" />
                                 <TextBox Text="{Binding Title}" VerticalAlignment="Center" IsVisible="{Binding IsEditingTitle}" 
@@ -86,14 +85,10 @@
             </Button>
         </Grid>
 
-        <Carousel Name="PART_Carousel" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" ClipToBounds="True">
-             <Carousel.ItemTemplate>
-                 <DataTemplate DataType="vm:TabViewModel">
-                     <Border VerticalAlignment="Stretch" HorizontalAlignment="Stretch" ClipToBounds="True" Background="#1E1E1E" Padding="0">
-                         <controls:TerminalView DataContext="{Binding Session}" NewTabRequested="OnNewTabRequested" />
-                     </Border>
-                 </DataTemplate>
-             </Carousel.ItemTemplate>
-        </Carousel>
+        <!-- MANUAL CONTENT CONTAINER - No ContentControl, no DataTemplate binding -->
+        <!-- We manage this manually in code-behind for full control -->
+        <Grid Name="ContentContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#1E1E1E">
+            <!-- TerminalView instances will be added/removed here manually -->
+        </Grid>
     </DockPanel>
 </Window>

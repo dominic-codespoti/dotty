@@ -24,6 +24,12 @@ public enum TerminalCursorShape
 	Underline
 }
 
+/// <summary>
+/// TerminalCanvas with complete surface isolation.
+/// Each instance has its own dedicated composition surface that is
+/// destroyed when the control is detached and recreated when attached.
+/// This prevents content stacking when switching tabs.
+/// </summary>
 public class TerminalCanvas : Control, ILogicalScrollable
 {
 	public static readonly StyledProperty<TerminalBuffer?> BufferProperty =
@@ -121,8 +127,12 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private bool _lastBufferWasAlternate = false;
 	private double _renderScaling = 1.0;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
+	
+	// Surface isolation: Each TerminalCanvas instance has its own composition visual
+	// that is created on attach and destroyed on detach. Never reused.
 	private CompositionCustomVisual? _customVisual;
-    
+	private bool _isAttached = false;
+	
 	public SKPaint? SkPaint { get; private set; }
 	public double CellWidth => _cellWidth;
 	public double CellHeight => _cellHeight;
@@ -276,7 +286,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var bg = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
 		context.FillRectangle(bg, new Rect(Bounds.Size));
 
-		var padding = ContentPadding;
+		// Only render via composition visual if we're attached and visible
+		if (!_isAttached || !IsVisible) return;
 
 		var buffer = Buffer;
 		if (buffer == null) return;
@@ -295,6 +306,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
 		}
+
+		UpdateScrollState();
 
 		var state = new TerminalRenderState(
 			buffer,
@@ -334,29 +347,73 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	/// Request a single coalesced frame. Multiple calls before the dispatcher
 	/// runs will only cause a single InvalidateVisual.
 	/// </summary>
-	public void RequestFrame() { if (!IsVisible) return;
-		 ProcessGlyphDiscoverySlice();
-		 try
-		 {
-			 SendRenderState();
-		 }
-		 catch { }
+	public void RequestFrame() 
+	{ 
+		if (!IsVisible || !_isAttached) return;
+		ProcessGlyphDiscoverySlice();
+		try
+		{
+			SendRenderState();
+		}
+		catch { }
 	}
 
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnAttachedToVisualTree(e);
+		
+		_isAttached = true;
+		
+		// CRITICAL: Always create a fresh composition visual on attach.
+		// Never reuse an old visual - this ensures complete surface isolation.
+		CreateCompositionVisual();
+		
 		EnsureFrameTimer();
+		
+		// Force an initial render
+		InvalidateVisual();
+	}
 
+	/// <summary>
+	/// Creates a fresh composition visual with an isolated surface.
+	/// This method ensures no surface sharing between tab switches.
+	/// </summary>
+	private void CreateCompositionVisual()
+	{
+		// First, ensure any existing visual is completely destroyed
+		DestroyCompositionVisual();
+		
 		var compositor = ElementComposition.GetElementVisual(this)?.Compositor;
-		if (compositor != null && _customVisual == null)
+		if (compositor == null) return;
+		
+		// Create a fresh handler and visual
+		var handler = new TerminalVisualHandler();
+		_customVisual = compositor.CreateCustomVisual(handler);
+		_customVisual.Size = new Avalonia.Vector(Bounds.Width, Bounds.Height);
+		
+		// Set as child visual
+		ElementComposition.SetElementChildVisual(this, _customVisual);
+		
+		// Reset all caches for clean state
+		_frameComposer?.ResetCaches();
+		
+		Console.WriteLine($"[TerminalCanvas] Created fresh composition visual for {GetHashCode()}");
+	}
+
+	/// <summary>
+	/// Completely destroys the composition visual and releases all surface resources.
+	/// This is critical for preventing content stacking when switching tabs.
+	/// </summary>
+	private void DestroyCompositionVisual()
+	{
+		if (_customVisual != null)
 		{
-			var handler = new TerminalVisualHandler();
-			_customVisual = compositor.CreateCustomVisual(handler);
-			ElementComposition.SetElementChildVisual(this, _customVisual);
+			// Remove from element - this should release the surface
+			ElementComposition.SetElementChildVisual(this, null);
 			
-			// Optional: force an initial update
-			SendRenderState();
+			// The visual will be garbage collected. The handler's surface
+			// should be released when the visual is destroyed.
+			_customVisual = null;
 		}
 	}
 
@@ -386,7 +443,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 	private void SendRenderState()
 	{
-		if (_customVisual == null) return;
+		if (_customVisual == null || !_isAttached) return;
 
 		var buffer = Buffer;
 		if (buffer == null) return;
@@ -455,7 +512,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		if (!_metricsDirty && SkPaint != null) return;
 
-		SkPaint?.Dispose();
+		// Let the GC clean up the old SKPaint, because the render thread might still be drawing with it.
+		// Disposing it here can cause a segfault (access violation) if the render thread is mid-draw.
 		var fontSize = double.IsNaN(FontSize) || FontSize <= 0 ? 13.0 : FontSize;
 		var scale = Math.Max(0.1, _renderScaling);
 		var scaledFontSize = Math.Max(1f, (float)(fontSize * scale));
@@ -490,7 +548,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		// Recreate glyph atlas when metrics change (font family/size)
 		_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
-		_glyphAtlas?.Dispose();
+		// _glyphAtlas?.Dispose(); removed for safety
 		_glyphAtlas = new GlyphAtlas(SkPaint.Typeface, SkPaint.TextSize, _glyphRasterizationOptions);
 		_glyphAtlas.PreloadCommonGlyphs();
 		if (Buffer != null)
@@ -517,7 +575,27 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
 	{
 		base.OnPropertyChanged(change);
-            if (change.Property == IsVisibleProperty && IsVisible) { /* hack */ }
+
+		if (change.Property == IsVisibleProperty)
+		{
+			if (IsVisible && _isAttached)
+			{
+				// When becoming visible, ensure we have a fresh surface
+				// This handles the case where we were hidden and are now shown
+				if (_customVisual == null)
+				{
+					CreateCompositionVisual();
+				}
+				InvalidateVisual();
+				RequestFrame();
+			}
+			else if (!IsVisible)
+			{
+				// When becoming invisible, destroy the surface to free resources
+				// and ensure fresh start when we become visible again
+				DestroyCompositionVisual();
+			}
+		}
 
 		if (change.Property == FontFamilyProperty || change.Property == FontSizeProperty)
 		{
@@ -566,13 +644,17 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					_frameComposer.ResetCaches();
 				}
 				_lastBufferWasAlternate = buf.IsAlternateScreenActive;
+				
+				// Force re-render with new buffer
+				InvalidateVisual();
+				RequestFrame();
 			}
 			else
 			{
 				_glyphDiscovery = null;
-				_glyphAtlas?.Dispose();
+				// _glyphAtlas?.Dispose(); removed for safety
 				_glyphAtlas = null;
-				_frameComposer?.Dispose();
+				// _frameComposer?.Dispose(); removed for safety
 				_frameComposer = null;
 			}
 		}
@@ -581,14 +663,24 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnDetachedFromVisualTree(e);
+		
+		_isAttached = false;
+		
+		// CRITICAL: Completely destroy the composition visual when detaching.
+		// This ensures the surface is released and won't cause stacking.
+		DestroyCompositionVisual();
+		
+		// Reset frame composer caches
+		_frameComposer?.ResetCaches();
+		
 		if (_frameDebounceTimer != null)
 		{
 			_frameDebounceTimer.Stop();
 			_frameDebounceTimer.Tick -= FrameDebounceTick;
 			_frameDebounceTimer = null;
 		}
-		SkPaint?.Dispose();
-		SkPaint = null;
+		
+		Console.WriteLine($"[TerminalCanvas] Detached and destroyed composition visual for {GetHashCode()}");
 	}
 
 	private IBrush ResolveResourceBrush(IResourceDictionary? resources, string key, IBrush fallback)

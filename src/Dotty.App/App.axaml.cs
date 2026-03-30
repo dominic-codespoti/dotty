@@ -6,6 +6,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Dotty.App.Services;
+using Dotty.App.Views;
 
 namespace Dotty.App;
 

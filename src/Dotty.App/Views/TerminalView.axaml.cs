@@ -29,39 +29,56 @@ namespace Dotty.App.Views
         private Action<TimeSpan>? _fpsMeasurementCallback;
         private TimeSpan _lastFrameTime;
         private bool _renderUpdatePending;
+        private int _lastCols = -1;
+        private int _lastRows = -1;
 
+        
+        protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+        {
+            base.OnDetachedFromVisualTree(e);
+            if (_session != null)
+            {
+                _session.RenderScheduled -= OnRenderScheduled;
+                this.RawInput -= _session.WriteInput;
+            }
+            
+            // Remove input handlers to prevent accumulation
+            RemoveHandler(KeyDownEvent, TerminalView_KeyDown);
+            RemoveHandler(TextInputEvent, TerminalView_TextInput);
+            RemoveHandler(PointerPressedEvent, TerminalView_PointerPressed);
+            RemoveHandler(PointerMovedEvent, TerminalView_PointerMoved);
+            RemoveHandler(PointerReleasedEvent, TerminalView_PointerReleased);
+        }
+        
         public Dotty.App.ViewModels.TerminalSession? Session
         {
             get => _session;
             set
             {
+                // Only update if it's a different session
+                if (_session == value) 
+                {
+                    Console.WriteLine("[TerminalView] Session is the same, not updating");
+                    return;
+                }
+                
+                // Unsubscribe from old session if exists
                 if (_session != null)
                 {
                     _session.RenderScheduled -= OnRenderScheduled;
                     this.RawInput -= _session.WriteInput;
                 }
                 
+                Console.WriteLine($"[TerminalView] Session set to: {value != null}");
                 _session = value;
                 
                 if (_session != null)
                 {
+                    // Connect handlers but don't resize - resize happens via OnSizeChanged
                     _session.RenderScheduled += OnRenderScheduled;
-                    this.RawInput += _session.WriteInput;
-                    
-                    if (_session.Adapter?.Buffer is not null)
-                        SetBuffer(_session.Adapter.Buffer);
-                        
-                    _session.Start();
-                    
-                    UpdateSize();
-
-                    // Start measuring monitor refresh rate
-                    if (_fpsMeasurementCallback == null)
-                    {
-                        _fpsMeasurementCallback = OnMeasureRefreshRate;
-                        _lastFrameTime = TimeSpan.Zero;
-                        TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback);
-                    }
+                    Console.WriteLine("[TerminalView] Session handlers connected");
+                    // Don't call UpdateSize here - it triggers a resize signal
+                    // The initial resize will happen when the view is measured
                 }
             }
         }
@@ -115,7 +132,19 @@ namespace Dotty.App.Views
             {
                 int cols = (int)Math.Max(1, (bounds.Width - padding.Left - padding.Right) / cellWidth);
                 int rows = (int)Math.Max(1, (bounds.Height - padding.Top - padding.Bottom) / cellHeight);
-                _session.Resize(cols, rows);
+                
+                // Only resize if size actually changed - prevents shell prompt redraw
+                if (cols != _lastCols || rows != _lastRows)
+                {
+                    Console.WriteLine($"[TerminalView] Resizing terminal: {cols}x{rows} (was {_lastCols}x{_lastRows})");
+                    _lastCols = cols;
+                    _lastRows = rows;
+                    _session.Resize(cols, rows);
+                }
+                else
+                {
+                    Console.WriteLine($"[TerminalView] Size unchanged ({cols}x{rows}), skipping resize");
+                }
             }
         }
 
@@ -174,10 +203,8 @@ namespace Dotty.App.Views
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
         {
             base.OnPropertyChanged(change);
-            if (change.Property == BoundsProperty)
-            {
-                UpdateSize();
-            }
+            // Only handle DataContext changes here
+            // Size changes are handled by OnSizeChanged
             if (change.Property == DataContextProperty)
             {
                 if (DataContext is Dotty.App.ViewModels.TerminalSession session)
@@ -196,14 +223,48 @@ namespace Dotty.App.Views
 
         private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)
         {
+            Console.WriteLine($"[TerminalView] OnAttached called, Session={_session != null}");
+            
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
+            
+            Console.WriteLine($"[TerminalView] Grid found: {_grid != null}, Canvas found: {_canvas != null}");
 
+            if (_session != null)
+            {
+                Console.WriteLine($"[TerminalView] Setting up session, Buffer={_session.Adapter?.Buffer != null}");
+                if (_session.Adapter?.Buffer != null && _grid != null)
+                {
+                    SetBuffer(_session.Adapter.Buffer);
+                    Console.WriteLine("[TerminalView] Buffer set successfully");
+                }
+                
+                // Reconnect event handlers (they were disconnected in OnDetached)
+                _session.RenderScheduled += OnRenderScheduled;
+                this.RawInput += _session.WriteInput;
+                Console.WriteLine("[TerminalView] Input handlers reconnected");
+                
+                if (_fpsMeasurementCallback == null)
+                {
+                    _fpsMeasurementCallback = OnMeasureRefreshRate;
+                    _lastFrameTime = TimeSpan.Zero;
+                    TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback);
+                }
+            }
+            else
+            {
+                Console.WriteLine("[TerminalView] Warning: _session is null in OnAttached");
+            }
+            
+            // Always add input handlers
             AddHandler(KeyDownEvent, TerminalView_KeyDown, RoutingStrategies.Tunnel);
             AddHandler(TextInputEvent, TerminalView_TextInput, RoutingStrategies.Tunnel);
             AddHandler(PointerPressedEvent, TerminalView_PointerPressed, RoutingStrategies.Tunnel);
             AddHandler(PointerMovedEvent, TerminalView_PointerMoved, RoutingStrategies.Tunnel);
             AddHandler(PointerReleasedEvent, TerminalView_PointerReleased, RoutingStrategies.Tunnel);
+            
+            // Request focus so we can receive input
+            this.Focus();
         }
 
         private void TerminalView_PointerPressed(object? sender, PointerPressedEventArgs e)
@@ -292,6 +353,7 @@ namespace Dotty.App.Views
 
         private void TerminalView_KeyDown(object? sender, KeyEventArgs e)
         {
+            Console.WriteLine($"[TerminalView] KeyDown: {e.Key}, _suppressText before={_suppressText}");
             var modifiers = e.KeyModifiers;
             if (modifiers.HasFlag(KeyModifiers.Control) && modifiers.HasFlag(KeyModifiers.Shift))
             {
@@ -299,6 +361,8 @@ namespace Dotty.App.Views
                 {
                     _ = CopySelectionAsync();
                     e.Handled = true;
+                    _suppressText = false;
+                    Console.WriteLine("[TerminalView] KeyDown: Copy handled");
                     return;
                 }
 
@@ -306,6 +370,8 @@ namespace Dotty.App.Views
                 {
                     _ = PasteFromClipboardAsync();
                     e.Handled = true;
+                    _suppressText = false;
+                    Console.WriteLine("[TerminalView] KeyDown: Paste handled");
                     return;
                 }
             }
@@ -321,20 +387,28 @@ namespace Dotty.App.Views
                 }
                 e.Handled = true;
                 _suppressText = true;
+                Console.WriteLine("[TerminalView] KeyDown: Special key handled, _suppressText=true");
                 return;
             }
 
             _suppressText = false;
+            Console.WriteLine("[TerminalView] KeyDown: Regular key, _suppressText=false");
         }
 
         private void TerminalView_TextInput(object? sender, TextInputEventArgs e)
         {
+            Console.WriteLine($"[TerminalView] TextInput received: '{e.Text}', _suppressText={_suppressText}");
             if (e.Text == null) return;
-            if (_suppressText) return;
+            if (_suppressText) 
+            {
+                Console.WriteLine("[TerminalView] TextInput suppressed");
+                return;
+            }
 
             var bytes = Encoding.UTF8.GetBytes(e.Text);
             RawInput?.Invoke(bytes);
             _lineBuffer += e.Text;
+            Console.WriteLine($"[TerminalView] TextInput sent to RawInput, lineBuffer='{_lineBuffer}'");
         }
 
         public void SetBuffer(TerminalBuffer buffer)
@@ -488,7 +562,7 @@ namespace Dotty.App.Views
             return topLevel?.Clipboard;
         }
 
-        private void SendRawInput(string text)
+        public void SendRawInput(string text)
         {
             if (string.IsNullOrEmpty(text)) return;
             if (_suppressText) return;

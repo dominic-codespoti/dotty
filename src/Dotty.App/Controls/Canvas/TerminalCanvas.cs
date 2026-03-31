@@ -307,7 +307,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
 		}
 
-		UpdateScrollState();
+		// Defer the scroll invalidation to avoid "Visual was invalidated during render pass" exception
+		// This can happen when UpdateScrollState triggers ScrollInvalidated during the render phase
+		var scrollbackCount = buffer.ScrollbackCount;
+		Dispatcher.UIThread.Post(() => UpdateScrollState(scrollbackCount), DispatcherPriority.Background);
 
 		var state = new TerminalRenderState(
 			buffer,

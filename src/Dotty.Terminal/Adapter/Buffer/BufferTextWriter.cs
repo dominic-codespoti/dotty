@@ -417,8 +417,8 @@ internal sealed class BufferTextWriter
 
     private static void ApplyAttributes(ref Cell cell, in CellAttributes attributes)
     {
-        cell.Foreground = attributes.Foreground?.ToArgb() ?? 0;
-        cell.Background = attributes.Background?.ToArgb() ?? 0;
+        cell.Foreground = attributes.Foreground.IsEmpty ? 0 : attributes.Foreground.Argb;
+        cell.Background = attributes.Background.IsEmpty ? 0 : attributes.Background.Argb;
         cell.Bold = attributes.Bold;
         cell.Italic = attributes.Italic;
         cell.Underline = attributes.Underline;
@@ -429,7 +429,7 @@ internal sealed class BufferTextWriter
         cell.Overline = attributes.Overline;
         cell.Invisible = attributes.Invisible;
         cell.SlowBlink = attributes.SlowBlink;
-        cell.UnderlineColor = attributes.UnderlineColor?.ToArgb() ?? 0;
+        cell.UnderlineColor = attributes.UnderlineColor.IsEmpty ? 0 : attributes.UnderlineColor.Argb;
     }
 
     private static void ApplyAttributesFast(ref Cell cell, in CellAttributes attributes, bool attrsDefault)
@@ -448,9 +448,7 @@ internal sealed class BufferTextWriter
 
     private static bool IsDefaultAttributes(in CellAttributes attributes)
     {
-        return !attributes.Foreground.HasValue
-            && !attributes.Background.HasValue
-            && !attributes.UnderlineColor.HasValue
+        return attributes.IsDefaultColors
             && !attributes.Bold
             && !attributes.Italic
             && !attributes.Underline

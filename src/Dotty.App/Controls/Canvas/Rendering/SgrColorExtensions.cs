@@ -4,16 +4,21 @@ using SkiaSharp;
 namespace Dotty.App.Controls.Canvas.Rendering;
 
 /// <summary>
-/// Extension methods for SgrColor to convert to SkiaSharp colors.
-/// Eliminates duplication between TerminalFrameComposer and other color conversion logic.
+/// Extension methods for SgrColorArgb to convert to SkiaSharp colors.
 /// </summary>
 public static class SgrColorExtensions
 {
     /// <summary>
-    /// Converts an SgrColor to a SkiaSharp SKColor.
+    /// Converts an SgrColorArgb to a SkiaSharp SKColor.
     /// </summary>
-    public static SKColor ToSKColor(this SgrColor color)
+    public static SKColor ToSKColor(this SgrColorArgb color)
     {
-        return SKColor.Parse(color.Hex);
+        // ARGB uint to SKColor (R, G, B, A)
+        return new SKColor(
+            (byte)(color.Argb >> 16),  // R
+            (byte)(color.Argb >> 8),   // G
+            (byte)color.Argb,          // B
+            (byte)(color.Argb >> 24)   // A
+        );
     }
 }

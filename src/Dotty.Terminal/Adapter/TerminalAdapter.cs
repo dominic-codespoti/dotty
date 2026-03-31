@@ -265,7 +265,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnSetGraphicsRendition(ReadOnlySpan<char> parameters)
     {
-        _currentAttributes = SgrParser.Apply(parameters, _currentAttributes);
+        _currentAttributes = SgrParserArgb.Apply(parameters, _currentAttributes);
     }
 
     public void OnMoveCursor(int row, int col)

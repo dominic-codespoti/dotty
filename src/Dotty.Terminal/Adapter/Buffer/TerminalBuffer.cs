@@ -28,6 +28,7 @@ public class TerminalBuffer
 
     private int _scrollGeneration = 0;
     private List<string> _hyperlinks = new List<string> { string.Empty };
+    private Dictionary<string, ushort> _hyperlinkLookup = new Dictionary<string, ushort>();
 
     public TerminalBuffer(int rows = 24, int columns = 80)
     {
@@ -91,13 +92,16 @@ public class TerminalBuffer
         {
             return 0;
         }
-        int idx = _hyperlinks.IndexOf(uri);
-        if (idx < 0)
+        // O(1) lookup using dictionary
+        if (_hyperlinkLookup.TryGetValue(uri, out ushort id))
         {
-            idx = _hyperlinks.Count;
-            _hyperlinks.Add(uri);
+            return id;
         }
-        return (ushort)idx;
+        // Not found - add new entry
+        ushort idx = (ushort)_hyperlinks.Count;
+        _hyperlinks.Add(uri);
+        _hyperlinkLookup[uri] = idx;
+        return idx;
     }
 
     // Simple in-memory scrollback storage. Stores textual rows that have
@@ -561,18 +565,25 @@ public class TerminalBuffer
     {
         var attributes = new CellAttributes
         {
-            Foreground = ToColor(foreground),
-            Background = ToColor(background),
+            Foreground = HexToSgrColorArgb(foreground),
+            Background = HexToSgrColorArgb(background),
             Bold = bold,
         };
 
         WriteText(text, attributes);
     }
 
-    private static SgrColor? ToColor(string? hex)
+    private static SgrColorArgb HexToSgrColorArgb(string? hex)
     {
-        if (string.IsNullOrEmpty(hex)) return null;
-        return new SgrColor(hex);
+        if (string.IsNullOrEmpty(hex) || hex.Length < 7 || hex[0] != '#')
+            return default;
+        
+        // Parse hex color #RRGGBB
+        if (uint.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out uint rgb))
+        {
+            return new SgrColorArgb(0xFF000000u | rgb);
+        }
+        return default;
     }
 
     public void WriteText(ReadOnlySpan<char> text, in CellAttributes attributes)

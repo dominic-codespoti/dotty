@@ -364,9 +364,10 @@ public sealed class TerminalFrameComposer : IDisposable
         }
     }
 
-    private static SKColor ToSkColor(SgrColor sgrColor)
+    private static SKColor ToSkColor(uint argb)
     {
-        return SKColor.Parse(sgrColor.Hex);
+        // ARGB uint to SKColor - note SKColor takes RGBA in little-endian order
+        return new SKColor((byte)(argb >> 16), (byte)(argb >> 8), (byte)argb, (byte)(argb >> 24));
     }
 
     // ============================================================
@@ -429,14 +430,14 @@ public sealed class TerminalFrameComposer : IDisposable
 
             
             cc.HasBg = cell.Background != 0;
-            cc.Bg = cell.Background != 0 ? new SKColor(cell.Background) : default;
+            cc.Bg = cell.Background != 0 ? ToSkColor(cell.Background) : default;
             if (cc.HasBg && cc.Bg.Alpha == 0) cc.Bg = cc.Bg.WithAlpha(255);
 
             
             cc.HasFg = cell.Foreground != 0;
-            cc.Fg = cell.Foreground != 0 ? new SKColor(cell.Foreground) : default;
+            cc.Fg = cell.Foreground != 0 ? ToSkColor(cell.Foreground) : default;
 
-            cc.Grapheme = char.ConvertFromUtf32((int)cell.Rune);
+            cc.Grapheme = cell.Grapheme ?? string.Empty;
             cc.FirstRune = GetFirstRune(cc.Grapheme);
             cc.IsSeparatorGlyph = cc.FirstRune != -1 && IsLikelySeparatorRune(cc.FirstRune);
 

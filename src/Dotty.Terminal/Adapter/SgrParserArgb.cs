@@ -4,8 +4,9 @@ namespace Dotty.Terminal.Adapter;
 
 /// <summary>
 /// Parses SGR parameter lists and produces updated cell attributes.
+/// Uses zero-allocation ARGB colors.
 /// </summary>
-public static class SgrParser
+public static class SgrParserArgb
 {
     public static CellAttributes Apply(ReadOnlySpan<char> parameters, in CellAttributes current)
     {
@@ -100,11 +101,11 @@ public static class SgrParser
                     hasMore = enumerator.MoveNext();
                     break;
                 case 39:
-                    attributes.Foreground = null;
+                    attributes.Foreground = default;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 49:
-                    attributes.Background = null;
+                    attributes.Background = default;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 53:
@@ -116,14 +117,14 @@ public static class SgrParser
                     hasMore = enumerator.MoveNext();
                     break;
                 case 59:
-                    attributes.UnderlineColor = null;
+                    attributes.UnderlineColor = default;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 38:
                     hasMore = TryParseExtendedColor(ref enumerator, out var fg);
-                    if (hasMore || fg.HasValue)
+                    if (hasMore || !fg.IsEmpty)
                     {
-                        if (fg.HasValue) attributes.Foreground = fg;
+                        if (!fg.IsEmpty) attributes.Foreground = fg;
                     }
                     else
                     {
@@ -132,9 +133,9 @@ public static class SgrParser
                     break;
                 case 48:
                     hasMore = TryParseExtendedColor(ref enumerator, out var bg);
-                    if (hasMore || bg.HasValue)
+                    if (hasMore || !bg.IsEmpty)
                     {
-                        if (bg.HasValue) attributes.Background = bg;
+                        if (!bg.IsEmpty) attributes.Background = bg;
                     }
                     else
                     {
@@ -143,9 +144,9 @@ public static class SgrParser
                     break;
                 case 58:
                     hasMore = TryParseExtendedColor(ref enumerator, out var ul);
-                    if (hasMore || ul.HasValue)
+                    if (hasMore || !ul.IsEmpty)
                     {
-                        if (ul.HasValue) attributes.UnderlineColor = ul;
+                        if (!ul.IsEmpty) attributes.UnderlineColor = ul;
                     }
                     else
                     {
@@ -153,11 +154,12 @@ public static class SgrParser
                     }
                     break;
                 default:
-                    if (SgrColor.TryFromAnsiCode(code, out var fgColor))
+                    var fgColor = SgrColorArgb.FromAnsiCode(code);
+                    if (!fgColor.IsEmpty)
                     {
                         attributes.Foreground = fgColor;
                     }
-                    else if (SgrColor.TryFromBackgroundCode(code, out var bgColor))
+                    else if (SgrColorArgb.TryFromBackgroundCode(code, out var bgColor))
                     {
                         attributes.Background = bgColor;
                     }
@@ -169,9 +171,9 @@ public static class SgrParser
         return attributes;
     }
 
-    private static bool TryParseExtendedColor(ref ParametersEnumerator enumerator, out SgrColor? color)
+    private static bool TryParseExtendedColor(ref ParametersEnumerator enumerator, out SgrColorArgb color)
     {
-        color = null;
+        color = default;
         if (!enumerator.MoveNext()) return false;
 
         int mode = enumerator.Current;
@@ -186,7 +188,7 @@ public static class SgrParser
                     if (enumerator.MoveNext())
                     {
                         int b = enumerator.Current;
-                        color = SgrColor.FromRgb((byte)r, (byte)g, (byte)b);
+                        color = SgrColorArgb.FromRgb((byte)r, (byte)g, (byte)b);
                         return enumerator.MoveNext();
                     }
                 }
@@ -199,10 +201,7 @@ public static class SgrParser
             if (enumerator.MoveNext())
             {
                 int idx = enumerator.Current;
-                if (SgrColor.TryFrom256(idx, out var c))
-                {
-                    color = c;
-                }
+                color = SgrColorArgb.From256(idx);
                 return enumerator.MoveNext();
             }
             return false;

@@ -95,4 +95,9 @@ public interface IColorScheme
     /// ANSI Bright White (color 15) - ARGB format.
     /// </summary>
     uint AnsiBrightWhite { get; }
+
+    /// <summary>
+    /// Window background opacity (0-100, where 100 is fully opaque, 0 is fully transparent)
+    /// </summary>
+    byte Opacity { get; }
 }

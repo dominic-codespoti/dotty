@@ -46,6 +46,13 @@ public partial class MainWindow : Window
             Title = Generated.Config.WindowTitle;
             Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
             
+            // Apply window opacity if not fully opaque
+            var opacity = ConfigBridge.GetWindowOpacity();
+            if (opacity < 1.0)
+            {
+                this.Opacity = opacity;
+            }
+            
             KeyDown += OnWindowKeyDown;
             Closed += OnClosed;
             Opened += OnOpened;

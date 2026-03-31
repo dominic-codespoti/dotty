@@ -82,6 +82,14 @@ public static class ConfigBridge
     }
 
     /// <summary>
+    /// Gets the window opacity as a double (0.0-1.0) for Avalonia.
+    /// </summary>
+    public static double GetWindowOpacity()
+    {
+        return Generated.Config.Opacity / 100.0;
+    }
+
+    /// <summary>
     /// Gets the content padding as Avalonia Thickness.
     /// </summary>
     public static Thickness GetContentPadding()

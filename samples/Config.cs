@@ -61,6 +61,31 @@ public partial class MyDottyConfig : IDottyConfig
     //     foreground: 0xFFFFFFFF   // Pure white foreground
     // );
     
+    // Option 5: Create a translucent theme
+    // ----------------------------------------------------
+    // Use a built-in theme but make it partially transparent
+    // public IColorScheme? Colors => new TranslucentDarkTheme();
+    
+    // =========================================================================
+    // TRANSPARENCY / OPACITY
+    // =========================================================================
+    
+    // Window opacity can be controlled per theme by overriding the Opacity property.
+    // Opacity is 0-100 where 100 is fully opaque (default) and 0 is fully transparent.
+    // Recommended values for subtle effect: 85-95 (85% opaque = 15% transparent)
+    //
+    // Example: Translucent theme with 85% opacity
+    // public IColorScheme? Colors => new TranslucentDarkTheme();
+    //
+    // Example: Time-based opacity (more transparent at night)
+    // public IColorScheme? Colors => new TimeBasedOpacityTheme();
+    //
+    // Note: True "see-through" with blurred background requires platform-specific APIs:
+    //   - Windows: DWM blur
+    //   - macOS: NSVisualEffectView  
+    //   - Linux: Depends on compositor
+    // The basic opacity affects the entire window uniformly.
+    
     // =========================================================================
     // FONT SETTINGS
     // =========================================================================
@@ -212,6 +237,38 @@ public class ThemeOverride : ColorSchemeBase
         )
     {
     }
+}
+
+// =========================================================================
+// TRANSLUCENT THEME EXAMPLES
+// =========================================================================
+
+/// <summary>
+/// Example translucent dark theme with 85% opacity (15% transparent).
+/// This gives a subtle see-through effect without hurting readability.
+/// </summary>
+public class TranslucentDarkTheme : DarkPlusTheme
+{
+    public override byte Opacity => 85; // 85% opaque, 15% transparent
+}
+
+/// <summary>
+/// Example theme that changes opacity based on time of day.
+/// More transparent at night (90%), fully opaque during day.
+/// </summary>
+public class TimeBasedOpacityTheme : DarkPlusTheme
+{
+    public override byte Opacity => DateTime.Now.Hour is >= 20 or < 6 ? 90 : 100;
+}
+
+/// <summary>
+/// Example highly transparent theme (for advanced users).
+/// 70% opacity creates a strong see-through effect.
+/// </summary>
+public class HighlyTransparentTheme : DarkPlusTheme
+{
+    // Only recommended with strong background colors or for specific use cases
+    public override byte Opacity => 70;
 }
 
 // =========================================================================

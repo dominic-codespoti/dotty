@@ -106,6 +106,27 @@ Available actions:
 | `SelectionColor` | `uint?` | 0xA03385DB | Selection highlight color (ARGB) |
 | `TabBarBackgroundColor` | `uint?` | 0xFF1A1A1A | Tab bar background (ARGB) |
 
+### Window Opacity
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `Opacity` (on theme) | `byte` | 100 | Window opacity 0-100 (100 = fully opaque) |
+
+Window transparency is controlled through the color scheme's `Opacity` property:
+
+```csharp
+// Create a translucent theme
+public class TranslucentTheme : DarkPlusTheme
+{
+    public override byte Opacity => 85; // 85% opaque, 15% transparent
+}
+
+public partial class MyConfig : IDottyConfig
+{
+    public IColorScheme? Colors => new TranslucentTheme();
+}
+```
+
 ### Window Settings (IWindowDimensions)
 
 | Property | Type | Default | Description |
@@ -213,6 +234,16 @@ public class MyCustomTheme : ColorSchemeBase
     )
     {
     }
+    
+    // Optional: Override opacity (0-100, default is 100)
+    public override byte Opacity => 95; // 5% transparent
+}
+
+// Use it in your config
+public partial class MyConfig : IDottyConfig
+{
+    public IColorScheme? Colors => new MyCustomTheme();
+}
 }
 ```
 

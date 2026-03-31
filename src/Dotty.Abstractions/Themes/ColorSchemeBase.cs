@@ -70,6 +70,23 @@ public abstract class ColorSchemeBase : Config.IColorScheme
     public uint AnsiBrightWhite => _ansiColors[15];
 
     /// <summary>
+    /// Window background opacity (0-100, where 100 is fully opaque, 0 is fully transparent).
+    /// Default is 100 (fully opaque).
+    /// </summary>
+    public virtual byte Opacity => 100;
+
+    /// <summary>
+    /// Validates the opacity value.
+    /// </summary>
+    /// <param name="opacity">The opacity value to validate</param>
+    /// <exception cref="ArgumentOutOfRangeException">If opacity is > 100</exception>
+    protected static void ValidateOpacity(byte opacity)
+    {
+        if (opacity > 100)
+            throw new ArgumentOutOfRangeException(nameof(opacity), "Opacity must be between 0 and 100");
+    }
+
+    /// <summary>
     /// Gets the ANSI color at the specified index (0-15).
     /// </summary>
     /// <param name="index">ANSI color index (0-15)</param>

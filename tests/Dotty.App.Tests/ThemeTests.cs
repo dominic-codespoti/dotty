@@ -186,4 +186,129 @@ public class ThemeTests
         double sameContrast = ColorSchemeBase.CalculateContrastRatio(0xFF000000, 0xFF000000);
         Assert.Equal(1.0, sameContrast, precision: 2);
     }
+
+    [Fact]
+    public void AllThemes_HaveDefaultOpacityOf100()
+    {
+        foreach (var theme in BuiltInThemes.AllThemes)
+        {
+            Assert.Equal(100, theme.Opacity);
+        }
+    }
+
+    [Fact]
+    public void CustomTheme_CanOverrideOpacity()
+    {
+        // Create a custom theme with custom opacity
+        var customTheme = new CustomOpacityTheme(85);
+        Assert.Equal(85, customTheme.Opacity);
+    }
+
+    [Fact]
+    public void Opacity_ValidatesRange()
+    {
+        // Opacity of 100 is valid (maximum)
+        var theme100 = new CustomOpacityTheme(100);
+        Assert.Equal(100, theme100.Opacity);
+        
+        // Opacity of 0 is valid (minimum)
+        var theme0 = new CustomOpacityTheme(0);
+        Assert.Equal(0, theme0.Opacity);
+    }
+
+    [Fact]
+    public void TimeBasedOpacityTheme_CalculatesCorrectly()
+    {
+        // Night time test (8pm)
+        var themeNight = new TimeBasedOpacityTestTheme(20);
+        Assert.Equal(90, themeNight.Opacity); // Night = 90% opacity
+        
+        // Day time test (12pm)
+        var themeDay = new TimeBasedOpacityTestTheme(12);
+        Assert.Equal(100, themeDay.Opacity); // Day = 100% opacity
+        
+        // Early morning test (5am)
+        var themeMorning = new TimeBasedOpacityTestTheme(5);
+        Assert.Equal(90, themeMorning.Opacity); // Early morning = 90% opacity
+        
+        // Late night test (11pm)
+        var themeLate = new TimeBasedOpacityTestTheme(23);
+        Assert.Equal(90, themeLate.Opacity); // Late night = 90% opacity
+        
+        // Boundary test (6am)
+        var themeBoundary = new TimeBasedOpacityTestTheme(6);
+        Assert.Equal(100, themeBoundary.Opacity); // 6am = day = 100% opacity
+        
+        // Boundary test (8pm exactly)
+        var themeBoundary2 = new TimeBasedOpacityTestTheme(20);
+        Assert.Equal(90, themeBoundary2.Opacity); // 8pm = night = 90% opacity
+    }
+}
+
+// Test helper classes
+
+/// <summary>
+/// Test theme with custom opacity for testing purposes.
+/// </summary>
+public class CustomOpacityTheme : ColorSchemeBase
+{
+    private readonly byte _opacity;
+    
+    public CustomOpacityTheme(byte opacity) : base(
+        background: 0xFF1E1E1E,
+        foreground: 0xFFD4D4D4,
+        ansiBlack: 0xFF000000,
+        ansiRed: 0xFFCD3131,
+        ansiGreen: 0xFF0DBC79,
+        ansiYellow: 0xFFE5E510,
+        ansiBlue: 0xFF2472C8,
+        ansiMagenta: 0xFFBC3FBC,
+        ansiCyan: 0xFF11A8CD,
+        ansiWhite: 0xFFE5E5E5,
+        ansiBrightBlack: 0xFF666666,
+        ansiBrightRed: 0xFFF14C4C,
+        ansiBrightGreen: 0xFF23D18B,
+        ansiBrightYellow: 0xFFF5F543,
+        ansiBrightBlue: 0xFF3B8EEA,
+        ansiBrightMagenta: 0xFFD670D6,
+        ansiBrightCyan: 0xFF29B8DB,
+        ansiBrightWhite: 0xFFFFFFFF)
+    {
+        _opacity = opacity;
+    }
+    
+    public override byte Opacity => _opacity;
+}
+
+/// <summary>
+/// Test theme with time-based opacity for testing.
+/// </summary>
+public class TimeBasedOpacityTestTheme : ColorSchemeBase
+{
+    private readonly int _hour;
+    
+    public TimeBasedOpacityTestTheme(int hour) : base(
+        background: 0xFF1E1E1E,
+        foreground: 0xFFD4D4D4,
+        ansiBlack: 0xFF000000,
+        ansiRed: 0xFFCD3131,
+        ansiGreen: 0xFF0DBC79,
+        ansiYellow: 0xFFE5E510,
+        ansiBlue: 0xFF2472C8,
+        ansiMagenta: 0xFFBC3FBC,
+        ansiCyan: 0xFF11A8CD,
+        ansiWhite: 0xFFE5E5E5,
+        ansiBrightBlack: 0xFF666666,
+        ansiBrightRed: 0xFFF14C4C,
+        ansiBrightGreen: 0xFF23D18B,
+        ansiBrightYellow: 0xFFF5F543,
+        ansiBrightBlue: 0xFF3B8EEA,
+        ansiBrightMagenta: 0xFFD670D6,
+        ansiBrightCyan: 0xFF29B8DB,
+        ansiBrightWhite: 0xFFFFFFFF)
+    {
+        _hour = hour;
+    }
+    
+    public override byte Opacity => (byte)(_hour is >= 20 or < 6 ? 90 : 100);
 }

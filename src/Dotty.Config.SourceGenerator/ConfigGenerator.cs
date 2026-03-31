@@ -207,6 +207,10 @@ public class ConfigGenerator : IIncrementalGenerator
                         case "AnsiBrightWhite": values.AnsiColors[15] = u; break;
                     }
                 }
+                else if (val is int i && property.Name == "Opacity")
+                {
+                    values.Opacity = (byte)(i < 0 ? 0 : (i > 100 ? 100 : i));
+                }
             }
         }
     }
@@ -327,6 +331,7 @@ public class ConfigGenerator : IIncrementalGenerator
         sb.AppendLine($"    public static int InitialRows => {values.InitialRows};");
         sb.AppendLine($"    public static string WindowTitle => \"{EscapeString(values.WindowTitle)}\";");
         sb.AppendLine($"    public static bool StartFullscreen => {values.StartFullscreen.ToString().ToLowerInvariant()};");
+        sb.AppendLine($"    public static byte Opacity => {values.Opacity};");
         sb.AppendLine("    #endregion");
         sb.AppendLine();
 
@@ -562,6 +567,9 @@ internal class ConfigValues
     public int CursorBlinkIntervalMs { get; set; } = 500;
     public uint? CursorColor { get; set; } = null;  // null = use foreground
     public bool CursorShowUnfocused { get; set; } = false;
+
+    // Window opacity (0-100, where 100 is fully opaque)
+    public byte Opacity { get; set; } = 100;
 
     // ANSI colors (standard 16-color palette)
     public uint[] AnsiColors { get; set; } = new uint[]

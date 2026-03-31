@@ -20,7 +20,85 @@ public IColorScheme? Colors => BuiltInThemes.LightPlus;      // VS Code Light+
 public IColorScheme? Colors => BuiltInThemes.OneLight;       // Balanced light
 public IColorScheme? Colors => BuiltInThemes.GruvboxLight;   // Warm light
 public IColorScheme? Colors => BuiltInThemes.CatppuccinLatte; // Pastel light
-public IColorScheme? Colors => BuiltInThemes.SolarizedLight; // Low contrast
+    public IColorScheme? Colors => BuiltInThemes.SolarizedLight; // Low contrast
+```
+
+---
+
+## Transparency
+
+Dotty supports window transparency/opacity control through the theming system. This allows you to create translucent terminal windows that blend with the desktop background.
+
+### Opacity Range
+
+- **100** = Fully opaque (default)
+- **0** = Fully transparent
+- **Recommended values**: 85-95 for subtle effect
+
+### Creating a Translucent Theme
+
+```csharp
+using Dotty.Abstractions.Themes;
+
+/// <summary>
+/// Translucent dark theme with 85% opacity (15% transparent)
+/// </summary>
+public class TranslucentDarkTheme : DarkPlusTheme
+{
+    public override byte Opacity => 85;
+}
+
+// Use it in your config
+public partial class MyConfig : IDottyConfig
+{
+    public IColorScheme? Colors => new TranslucentDarkTheme();
+}
+```
+
+### Time-Based Opacity
+
+You can make the terminal automatically adjust opacity based on time of day:
+
+```csharp
+public class AdaptiveOpacityTheme : DarkPlusTheme
+{
+    // More transparent at night (90%), fully opaque during day
+    public override byte Opacity => DateTime.Now.Hour is >= 20 or < 6 ? 90 : 100;
+}
+```
+
+### Platform Support Notes
+
+The transparency feature uses Avalonia's `Window.Opacity` property, which affects the **entire window uniformly**. For true "see-through" effects with blurred background:
+
+| Platform | Support | Notes |
+|----------|---------|-------|
+| Windows | Partial | DWM blur requires platform-specific APIs |
+| macOS | Partial | NSVisualEffectView for blur effects |
+| Linux | Varies | Depends on compositor (KDE, GNOME, etc.) |
+
+### Accessibility Considerations
+
+- **Recommended range**: 85-95 opacity (5-15% transparent)
+- Lower values may hurt readability, especially with busy backgrounds
+- Consider using darker backgrounds with transparency for better contrast
+- Test your configuration with your typical desktop background
+
+### Built-in Themes with Transparency
+
+All built-in themes default to `Opacity = 100` (fully opaque). To use transparency, create a custom theme that overrides the `Opacity` property.
+
+```csharp
+// Example: Make any built-in theme translucent
+public class TranslucentDracula : DraculaTheme
+{
+    public override byte Opacity => 90; // 10% transparent
+}
+
+public class TranslucentLight : LightPlusTheme
+{
+    public override byte Opacity => 95; // 5% transparent
+}
 ```
 
 ---

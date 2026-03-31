@@ -354,7 +354,6 @@ namespace Dotty.App.Views
 
         private void TerminalView_KeyDown(object? sender, KeyEventArgs e)
         {
-            Console.WriteLine($"[TerminalView] KeyDown: {e.Key}, _suppressText before={_suppressText}");
             var modifiers = e.KeyModifiers;
             if (modifiers.HasFlag(KeyModifiers.Control) && modifiers.HasFlag(KeyModifiers.Shift))
             {
@@ -363,7 +362,6 @@ namespace Dotty.App.Views
                     _ = CopySelectionAsync();
                     e.Handled = true;
                     _suppressText = false;
-                    Console.WriteLine("[TerminalView] KeyDown: Copy handled");
                     return;
                 }
 
@@ -372,7 +370,6 @@ namespace Dotty.App.Views
                     _ = PasteFromClipboardAsync();
                     e.Handled = true;
                     _suppressText = false;
-                    Console.WriteLine("[TerminalView] KeyDown: Paste handled");
                     return;
                 }
             }
@@ -388,28 +385,23 @@ namespace Dotty.App.Views
                 }
                 e.Handled = true;
                 _suppressText = true;
-                Console.WriteLine("[TerminalView] KeyDown: Special key handled, _suppressText=true");
                 return;
             }
 
             _suppressText = false;
-            Console.WriteLine("[TerminalView] KeyDown: Regular key, _suppressText=false");
         }
 
         private void TerminalView_TextInput(object? sender, TextInputEventArgs e)
         {
-            Console.WriteLine($"[TerminalView] TextInput received: '{e.Text}', _suppressText={_suppressText}");
             if (e.Text == null) return;
             if (_suppressText) 
             {
-                Console.WriteLine("[TerminalView] TextInput suppressed");
                 return;
             }
 
             var bytes = Encoding.UTF8.GetBytes(e.Text);
             RawInput?.Invoke(bytes);
             _lineBuffer += e.Text;
-            Console.WriteLine($"[TerminalView] TextInput sent to RawInput, lineBuffer='{_lineBuffer}'");
         }
 
         public void SetBuffer(TerminalBuffer buffer)

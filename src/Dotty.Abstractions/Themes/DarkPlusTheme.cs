@@ -42,4 +42,9 @@ public sealed class DarkPlusTheme : ColorSchemeBase
     )
     {
     }
+
+    /// <summary>
+    /// Window background opacity (0-100). Default is 100 (fully opaque).
+    /// </summary>
+    public override byte Opacity => 100;
 }

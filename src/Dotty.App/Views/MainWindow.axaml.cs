@@ -7,12 +7,14 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Dotty.App.ViewModels;
 using Dotty.App.Controls.Canvas.Rendering;
@@ -27,6 +29,9 @@ public partial class MainWindow : Window
     
     // Manual content management: Keep track of TerminalView instances per tab
     private readonly Dictionary<TabViewModel, TerminalView> _terminalViews = new();
+    private readonly Dictionary<TabViewModel, DispatcherTimer> _inactiveTabTimers = new();
+    private readonly Dictionary<TabViewModel, WriteableBitmap> _tabSnapshots = new();
+    private const int InactiveTabDestroyDelayMs = 5000; // 5 seconds before destroying inactive tab visuals
     private Grid? _contentContainer;
     private Control? _tabBar;
 
@@ -56,25 +61,14 @@ public partial class MainWindow : Window
         _contentContainer = this.FindControl<Grid>("ContentContainer");
         _tabBar = this.FindControl<Control>("TabBar");
         
-        // Initialize the first tab's content
+        // Initialize the first tab's content (lazy - only create when needed)
         if (_viewModel.ActiveTab != null)
         {
-            // Ensure view exists for the active tab
-            if (!_terminalViews.ContainsKey(_viewModel.ActiveTab))
-            {
-                CreateTerminalView(_viewModel.ActiveTab);
-            }
+            // Active tab will be created on demand in ShowTab
             ShowTab(_viewModel.ActiveTab);
         }
         
-        // Create views for any existing tabs (from before we subscribed to CollectionChanged)
-        foreach (var tab in _viewModel.Tabs)
-        {
-            if (!_terminalViews.ContainsKey(tab))
-            {
-                CreateTerminalView(tab);
-            }
-        }
+        // Note: Views for other tabs are created lazily when they become active
         
         // Listen for tab changes
         _viewModel.ActiveTabChanged += OnActiveTabChanged;
@@ -85,17 +79,10 @@ public partial class MainWindow : Window
     
     private void OnTabsCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        // Handle new tabs - pre-create their views
-        if (e.NewItems != null)
-        {
-            foreach (TabViewModel tab in e.NewItems)
-            {
-                // Create the TerminalView for this tab (but don't show it yet)
-                CreateTerminalView(tab);
-            }
-        }
+        // Note: Views are created lazily when tabs become active, not immediately
+        // This saves memory when user has many background tabs
         
-        // Handle removed tabs - clean up their views
+        // Handle removed tabs - clean up their views immediately to free memory
         if (e.OldItems != null)
         {
             foreach (TabViewModel tab in e.OldItems)
@@ -124,11 +111,8 @@ public partial class MainWindow : Window
         
         _terminalViews[tab] = terminalView;
         
-        // If this is the active tab, show it immediately
-        if (_viewModel.ActiveTab == tab)
-        {
-            ShowTab(tab);
-        }
+        // Note: Caller is responsible for showing the tab via ShowTab()
+        // We don't call ShowTab here to avoid re-entrant calls
     }
     
     private void DestroyTerminalView(TabViewModel tab)
@@ -151,12 +135,199 @@ public partial class MainWindow : Window
         view.DataContext = null;
     }
     
+    /// <summary>
+    /// Starts a timer to destroy an inactive tab's composition visual after a delay.
+    /// Captures a snapshot immediately so fast tab switching shows instant feedback.
+    /// </summary>
+    private void StartInactiveTabTimer(TabViewModel tab)
+    {
+        // Cancel any existing timer for this tab
+        CancelInactiveTabTimer(tab);
+        
+        // CAPTURE SNAPSHOT IMMEDIATELY when leaving tab
+        // This ensures fast tab switching (click back within 5s) has a snapshot ready
+        if (_terminalViews.TryGetValue(tab, out var view) && view != null)
+        {
+            Console.WriteLine($"[MainWindow] Capturing snapshot immediately for: {tab.Title}");
+            CaptureTabSnapshot(tab);
+        }
+        
+        // Create a new timer that will destroy the view after delay
+        // The snapshot is already captured, so fast switching works instantly
+        var timer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(InactiveTabDestroyDelayMs)
+        };
+        
+        timer.Tick += (s, e) =>
+        {
+            timer.Stop();
+            _inactiveTabTimers.Remove(tab);
+            
+            // Only destroy if this tab is not currently active
+            if (_viewModel.ActiveTab != tab && _terminalViews.TryGetValue(tab, out var viewToDestroy))
+            {
+                Console.WriteLine($"[MainWindow] Auto-destroying view for inactive tab: {tab.Title}");
+                DestroyTerminalView(tab);
+            }
+        };
+        
+        _inactiveTabTimers[tab] = timer;
+        timer.Start();
+        Console.WriteLine($"[MainWindow] Started destruction timer for: {tab.Title} ({InactiveTabDestroyDelayMs}ms)");
+    }
+    
+    /// <summary>
+    /// Cancels the inactive tab timer if one exists for the given tab.
+    /// Call this when a tab becomes active again.
+    /// </summary>
+    private void CancelInactiveTabTimer(TabViewModel tab)
+    {
+        if (_inactiveTabTimers.TryGetValue(tab, out var timer))
+        {
+            timer.Stop();
+            _inactiveTabTimers.Remove(tab);
+            Console.WriteLine($"[MainWindow] Cancelled inactive timer for tab: {tab.Title}");
+        }
+    }
+    
+    /// <summary>
+    /// Captures a visual snapshot of the given tab's TerminalView.
+    /// This is used to show instant feedback when switching back to the tab.
+    /// Upserts (replaces) any existing snapshot for this tab.
+    /// </summary>
+    private void CaptureTabSnapshot(TabViewModel tab)
+    {
+        if (!_terminalViews.TryGetValue(tab, out var view)) return;
+        if (_contentContainer == null) return;
+        
+        // Only capture if this view is currently visible
+        if (!_contentContainer.Children.Contains(view)) return;
+        
+        try
+        {
+            var pixelSize = new PixelSize((int)view.Bounds.Width, (int)view.Bounds.Height);
+            if (pixelSize.Width <= 0 || pixelSize.Height <= 0) return;
+            
+            using var renderBitmap = new RenderTargetBitmap(pixelSize);
+            renderBitmap.Render(view);
+            
+            // Convert to WriteableBitmap for display
+            using var stream = new System.IO.MemoryStream();
+            renderBitmap.Save(stream);
+            stream.Position = 0;
+            
+            var snapshot = WriteableBitmap.Decode(stream);
+            
+            // UPSERT: Dispose old snapshot if exists, then store new one
+            if (_tabSnapshots.TryGetValue(tab, out var oldSnapshot))
+            {
+                oldSnapshot.Dispose();
+                _tabSnapshots.Remove(tab);
+                Console.WriteLine($"[MainWindow] Replaced existing snapshot for: {tab.Title}");
+            }
+            _tabSnapshots[tab] = snapshot;
+            
+            Console.WriteLine($"[MainWindow] Captured snapshot for tab: {tab.Title} ({pixelSize.Width}x{pixelSize.Height})");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[MainWindow] Failed to capture snapshot for {tab.Title}: {ex.Message}");
+        }
+    }
+    
+    /// <summary>
+    /// Displays a tab's snapshot as a placeholder while the real view loads.
+    /// Returns true if a snapshot was shown, false otherwise.
+    /// </summary>
+    private bool ShowTabSnapshot(TabViewModel tab)
+    {
+        if (!_tabSnapshots.TryGetValue(tab, out var snapshot)) return false;
+        if (_contentContainer == null) return false;
+        
+        try
+        {
+            var image = new Image
+            {
+                Source = snapshot,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
+            };
+            
+            // Tag it so we can identify and remove it later
+            image.Tag = "tab-snapshot";
+            
+            _contentContainer.Children.Add(image);
+            Console.WriteLine($"[MainWindow] Showing snapshot for tab: {tab.Title}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[MainWindow] Failed to show snapshot for {tab.Title}: {ex.Message}");
+            return false;
+        }
+    }
+    
+    /// <summary>
+    /// Removes the snapshot placeholder from the content container with a fade-out animation.
+    /// </summary>
+    private async void RemoveTabSnapshot()
+    {
+        if (_contentContainer == null) return;
+        
+        var snapshotImages = _contentContainer.Children.OfType<Image>().Where(i => i.Tag as string == "tab-snapshot").ToList();
+        foreach (var image in snapshotImages)
+        {
+            // Fade out over 100ms
+            var fadeAnimation = new Avalonia.Animation.Animation
+            {
+                Duration = TimeSpan.FromMilliseconds(100),
+                FillMode = Avalonia.Animation.FillMode.Forward,
+                Children =
+                {
+                    new Avalonia.Animation.KeyFrame
+                    {
+                        Setters = { new Setter(Avalonia.Visual.OpacityProperty, 1.0) },
+                        KeyTime = TimeSpan.FromMilliseconds(0)
+                    },
+                    new Avalonia.Animation.KeyFrame
+                    {
+                        Setters = { new Setter(Avalonia.Visual.OpacityProperty, 0.0) },
+                        KeyTime = TimeSpan.FromMilliseconds(100)
+                    }
+                }
+            };
+            
+            await fadeAnimation.RunAsync(image);
+            
+            _contentContainer.Children.Remove(image);
+            Console.WriteLine("[MainWindow] Removed snapshot placeholder with fade");
+        }
+    }
+    
+    /// <summary>
+    /// Clears the snapshot for a specific tab, freeing its memory.
+    /// </summary>
+    private void ClearTabSnapshot(TabViewModel tab)
+    {
+        if (_tabSnapshots.TryGetValue(tab, out var snapshot))
+        {
+            snapshot.Dispose();
+            _tabSnapshots.Remove(tab);
+            Console.WriteLine($"[MainWindow] Cleared snapshot for tab: {tab.Title}");
+        }
+    }
+    
     private void OnActiveTabChanged(object? sender, EventArgs e)
     {
         var activeTab = _viewModel.ActiveTab;
         if (activeTab == null) return;
         
-        // Ensure we have a view for this tab
+        // Cancel any pending destruction for the tab becoming active
+        CancelInactiveTabTimer(activeTab);
+        
+        // Ensure we have a view for this tab (will create lazily if destroyed)
         if (!_terminalViews.ContainsKey(activeTab))
         {
             CreateTerminalView(activeTab);
@@ -171,8 +342,10 @@ public partial class MainWindow : Window
     }
     
     /// <summary>
-    /// Shows a tab's content with complete visual tree isolation.
-    /// This method ensures the old content is fully removed before showing new content.
+    /// Shows a tab's content using snapshot-based instant switching.
+    /// 1. Shows snapshot instantly (if available)
+    /// 2. Loads real TerminalView
+    /// 3. Swaps snapshot for real view once ready
     /// </summary>
     private void ShowTab(TabViewModel tab)
     {
@@ -184,43 +357,65 @@ public partial class MainWindow : Window
             return;
         }
         
-        if (!_terminalViews.TryGetValue(tab, out var newView)) 
-        {
-            Console.WriteLine("[MainWindow] ShowTab: TerminalView not found in dictionary");
-            return;
-        }
-        
-        Console.WriteLine($"[MainWindow] ShowTab: Found TerminalView, Session={newView.Session != null}");
-        
-        // STEP 1: Get the current view (if any)
-        var oldView = _contentContainer.Children.OfType<TerminalView>().FirstOrDefault();
-        Console.WriteLine($"[MainWindow] ShowTab: Current view count: {_contentContainer.Children.Count}");
-        
-        // STEP 2: Clear the container completely
+        // Remove any existing views and snapshots
         _contentContainer.Children.Clear();
         
-        // STEP 3: Force layout update to ensure visual tree is detached
-        _contentContainer.InvalidateVisual();
-        _contentContainer.InvalidateMeasure();
-        _contentContainer.InvalidateArrange();
+        // STEP 1: Show snapshot instantly if available (instant feedback)
+        bool hasSnapshot = ShowTabSnapshot(tab);
         
-        // STEP 4: If there was an old view, we keep its DataContext
-        // Don't clear it - we want to preserve the session connection
-        // The TerminalCanvas handles IsVisible changes properly
+        // STEP 2: Ensure we have a TerminalView for this tab
+        if (!_terminalViews.TryGetValue(tab, out var newView)) 
+        {
+            Console.WriteLine("[MainWindow] ShowTab: Creating view lazily");
+            CreateTerminalView(tab);
+            
+            if (!_terminalViews.TryGetValue(tab, out newView))
+            {
+                Console.WriteLine("[MainWindow] ShowTab: Failed to create view");
+                // Even if we failed to create view, we might have a snapshot
+                return;
+            }
+        }
         
-        // STEP 5: Ensure the new view has the correct DataContext
+        Console.WriteLine($"[MainWindow] ShowTab: TerminalView ready, Session={newView.Session != null}");
+        
+        // Ensure the new view has the correct DataContext
         newView.DataContext = tab.Session;
         
-        // STEP 6: Add the new view
-        _contentContainer.Children.Add(newView);
-        Console.WriteLine("[MainWindow] ShowTab: Added new view to container");
+        // STEP 3: Add the real view on top (will cover snapshot or fill empty space)
+        // Check if view is already in container to avoid "already has visual parent" error
+        if (!_contentContainer.Children.Contains(newView))
+        {
+            _contentContainer.Children.Add(newView);
+            Console.WriteLine("[MainWindow] ShowTab: Added real view on top");
+        }
+        else
+        {
+            Console.WriteLine("[MainWindow] ShowTab: View already in container, skipping add");
+        }
         
-        // STEP 7: Force layout update for new content
+        // STEP 4: Force immediate render of the real view
+        newView.ForceImmediateRender();
+        
+        // Force layout and render
+        newView.InvalidateVisual();
+        newView.InvalidateMeasure();
+        newView.InvalidateArrange();
         _contentContainer.InvalidateVisual();
         _contentContainer.InvalidateMeasure();
         _contentContainer.InvalidateArrange();
         
-        // STEP 8: Ensure the session is started (critical for rendering)
+        // STEP 5: Remove the snapshot now that real view is rendered (or will be soon)
+        // We do this after a brief moment to ensure the view has started rendering
+        if (hasSnapshot)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                RemoveTabSnapshot();
+            }, DispatcherPriority.Render);
+        }
+        
+        // STEP 6: Start the session
         if (tab.Session != null)
         {
             Console.WriteLine("[MainWindow] ShowTab: Starting session");
@@ -438,6 +633,20 @@ public partial class MainWindow : Window
         _testCommandCts?.Cancel();
         try { _testCommandListener?.Stop(); } catch { }
         
+        // Cancel all inactive tab timers
+        foreach (var timer in _inactiveTabTimers.Values)
+        {
+            timer.Stop();
+        }
+        _inactiveTabTimers.Clear();
+        
+        // Dispose all snapshots
+        foreach (var snapshot in _tabSnapshots.Values)
+        {
+            snapshot.Dispose();
+        }
+        _tabSnapshots.Clear();
+        
         // Clean up all views
         foreach (var view in _terminalViews.Values)
         {
@@ -519,6 +728,12 @@ public partial class MainWindow : Window
 
     private void CloseTab(TabViewModel tab)
     {
+        // Cancel any pending destruction timer
+        CancelInactiveTabTimer(tab);
+        
+        // Clear snapshot to free memory
+        ClearTabSnapshot(tab);
+        
         DestroyTerminalView(tab);
         tab.Dispose();
         _viewModel.Tabs.Remove(tab);

@@ -547,10 +547,20 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		_cellHeight = Math.Max((float)fontSize, glyphHeight / (float)scale + (float)(padding * 2.0));
 
 		// Recreate glyph atlas when metrics change (font family/size)
+		// Use shared atlas service to reduce memory across tabs
 		_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
-		// _glyphAtlas?.Dispose(); removed for safety
-		_glyphAtlas = new GlyphAtlas(SkPaint.Typeface, SkPaint.TextSize, _glyphRasterizationOptions);
-		_glyphAtlas.PreloadCommonGlyphs();
+		
+		// Get or create a shared atlas for this font configuration
+		// Multiple tabs with same font will share the same atlas
+		var newAtlas = GlyphAtlasService.GetOrCreateAtlas(SkPaint.Typeface, SkPaint.TextSize, _glyphRasterizationOptions);
+		
+		// Only update our reference if it's a different atlas
+		if (_glyphAtlas != newAtlas)
+		{
+			_glyphAtlas = newAtlas;
+			Console.WriteLine($"[TerminalCanvas] Using shared glyph atlas (total service atlases: {GlyphAtlasService.AtlasCount})");
+		}
+		
 		if (Buffer != null)
 		{
 			_glyphDiscovery = new GlyphDiscovery(Buffer.Rows, _glyphAtlas);
@@ -610,16 +620,12 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			if (buf != null)
 			{
 				EnsureMetrics();
-				// Ensure glyph atlas exists for current metrics. Replace only if missing
+				// Ensure glyph atlas exists for current metrics using shared service
 				if (_glyphAtlas == null)
 				{
 					_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
-					_glyphAtlas = new GlyphAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f, _glyphRasterizationOptions);
-				}
-				else
-				{
-					// If metrics changed EnsureMetrics will have recreated SkPaint and caller
-					// might have updated the atlas there; keep existing atlas otherwise.
+					_glyphAtlas = GlyphAtlasService.GetOrCreateAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f, _glyphRasterizationOptions);
+					Console.WriteLine($"[TerminalCanvas] Using shared glyph atlas for new buffer (total service atlases: {GlyphAtlasService.AtlasCount})");
 				}
 				// Ensure discovery and composer are created only once so we preserve
 				// front-buffer and row caches across buffer swaps. If sizes differ,

@@ -21,6 +21,7 @@ namespace Dotty.App.Views
         private readonly SelectionController _selectionController = new();
         private readonly SelectionContextMenuBuilder _contextMenuBuilder;
         private readonly TerminalInputEncoder _inputEncoder = new();
+        private TerminalBuffer? _lastBuffer;
 
         public string? WorkingDirectory { get; set; }
         public bool KeypadApplicationMode { get; set; }
@@ -413,8 +414,28 @@ namespace Dotty.App.Views
 
         public void SetBuffer(TerminalBuffer buffer)
         {
+            _lastBuffer = buffer;
             _grid?.SetBuffer(buffer);
             ResetSelection();
+        }
+        
+        /// <summary>
+        /// Forces an immediate render of the current buffer.
+        /// Call this when the view becomes visible to avoid white flash.
+        /// </summary>
+        public void ForceImmediateRender()
+        {
+            // If we don't have a buffer yet but have a session with a buffer, set it now
+            if (_lastBuffer == null && _session?.Adapter?.Buffer != null)
+            {
+                SetBuffer(_session.Adapter.Buffer);
+                return; // SetBuffer will trigger the render
+            }
+            
+            if (_lastBuffer == null) return;
+            
+            // Force the grid to re-render
+            _grid?.SetBuffer(_lastBuffer);
         }
 
         public void SetPlainText(string text)

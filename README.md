@@ -1,79 +1,82 @@
-# Dotty (dotnet-term)
+# Dotty
 
-A small terminal emulator and related libraries for .NET, using Avalonia for the UI and a tiny native pty helper for POSIX platforms.
+A high-performance terminal emulator for .NET, built with Avalonia UI and optimized for speed and memory efficiency.
+
+[![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Overview
 
-- Dotty is composed of a UI application (`Dotty.App`), a terminal core library (`Dotty.Terminal`) and a small native helper to allocate pseudo-terminals (`Dotty.NativePty`).
-- The UI is built with Avalonia and provides a canvas-based terminal view. The terminal core handles parsing and rendering terminal sequences.
+Dotty is a modern terminal emulator composed of:
+- **Dotty.App** — Avalonia-based GUI application with hardware-accelerated rendering
+- **Dotty.Terminal** — High-performance terminal core with zero-allocation parsing
+- **Dotty.NativePty** — POSIX-native PTY helper for proper pseudo-terminal support
+- **Dotty.Abstractions** — Clean interfaces for extensibility
 
-## Repository layout
+### Key Features
 
-- `src/Dotty.App/` — Avalonia application; main UI and entrypoint.
-- `src/Dotty.Terminal/` — Terminal logic, parsers, buffer, adapter interfaces.
-- `src/Dotty.NativePty/` — Native pty helper (C) plus a `Makefile` to build `pty-helper`.
-- `tests/` — Unit tests (e.g. `tests/Dotty.App.Tests`).
-- `scripts/` — Utility scripts for development and running the app (e.g., `scripts/run.sh`).
+- Hardware-accelerated rendering via SkiaSharp
+- Optimized ANSI/VT parser with minimal allocations
+- Native PTY support on Linux/Unix systems
+- Efficient buffer management with scrollback support
 
-## Requirements
+## Quick Start
 
-- .NET SDK (recommended: .NET 10; the project also contains outputs for `net9.0`).
-- `make`, `gcc`/`clang` and typical Linux dev tools to build `Dotty.NativePty` (only required for running the native helper).
-- Tested on Linux; the native pty helper is POSIX-specific.
+### Prerequisites
 
-## Building
+- .NET 10 SDK (or .NET 9)
+- Linux/Unix system (for native PTY support)
+- `make`, `gcc`/`clang`
 
-1. Build the native pty helper (needed for proper pty support on Linux):
-
-```bash
-cd src/Dotty.NativePty
-make
-# result: src/Dotty.NativePty/bin/pty-helper
-```
-
-2. Build the .NET solution:
+### Build
 
 ```bash
-cd /home/dom/projects/dotnet-term
-dotnet build Dotty.sln --configuration Debug
+# Build native PTY helper
+cd src/Dotty.NativePty && make
+
+# Build solution
+cd ../..
+dotnet build Dotty.sln -c Release
 ```
 
-You can also build `Release`:
-
-```bash
-dotnet build Dotty.sln --configuration Release
-```
-
-## Running
-
-- Run from source (choose target framework if needed):
+### Run
 
 ```bash
 dotnet run --project src/Dotty.App
 ```
 
-- Or execute the built binary (example path for Debug/net10.0 on Linux):
-
-```bash
-./src/Dotty.App/bin/Debug/net10.0/linux-x64/Dotty.App
-```
-
-- Ensure the native helper is present and executable if you're running features that require a PTY:
-
-```bash
-ls -l src/Dotty.NativePty/bin/pty-helper
-# if needed: chmod +x src/Dotty.NativePty/bin/pty-helper
-```
-
-## Tests
-
-Run unit tests with:
+### Test
 
 ```bash
 dotnet test tests/Dotty.App.Tests
 ```
 
-## Troubleshooting
+## Repository Structure
 
-- If the app fails to allocate a PTY, confirm `pty-helper` was built and is executable.
-- If you see runtime/compatibility issues, ensure your installed .NET SDK version matches one of the targeted frameworks (the repo contains outputs for `net9.0` and `net10.0`).
+```
+src/
+  Dotty.App/         — Avalonia UI application
+  Dotty.Terminal/    — Terminal engine (parsers, buffers, adapters)
+  Dotty.NativePty/   — C-based POSIX PTY helper
+  Dotty.Abstractions/ — Shared interfaces
+tests/               — Unit tests
+docs/                — Architecture and implementation docs
+```
+
+## Documentation
+
+- [Architecture Overview](docs/architecture.md)
+- [Rendering System](docs/rendering.md)
+- [Parser Implementation](docs/parsing.md)
+- [Native PTY](docs/native-pty.md)
+- [Testing](docs/testing.md)
+- [Performance Analysis](docs/comparison-report.md)
+
+## License
+
+MIT License - See [LICENSE](LICENSE) for details.
+
+## Links
+
+- Repository: https://github.com/dominic-codespoti/dotty
+- Issues: https://github.com/dominic-codespoti/dotty/issues

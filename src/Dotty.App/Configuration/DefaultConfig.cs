@@ -11,11 +11,13 @@
 #nullable enable
 
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
 
 namespace Dotty.App.Configuration;
 
 /// <summary>
 /// Default Dotty configuration.
+/// Uses the DarkPlus theme (VS Code Dark+) as the default color scheme.
 /// </summary>
 public partial class DefaultDottyConfig : IDottyConfig
 {
@@ -25,8 +27,10 @@ public partial class DefaultDottyConfig : IDottyConfig
     public double? CellPadding => 1.5;
     public Thickness? ContentPadding => new Thickness(0.0);
 
-    // Color Scheme
-    public IColorScheme? Colors => new DefaultColorScheme();
+    // Color Scheme - using DarkPlus theme (VS Code Dark+)
+    // Available themes: DarkPlus, Dracula, OneDark, GruvboxDark, CatppuccinMocha, TokyoNight
+    // Light themes: LightPlus, OneLight, GruvboxLight, CatppuccinLatte, SolarizedLight
+    public IColorScheme? Colors => BuiltInThemes.DarkPlus;
 
     // Key Bindings - using defaults
     public IKeyBindings? KeyBindings => null;  // null = use generated defaults
@@ -44,36 +48,6 @@ public partial class DefaultDottyConfig : IDottyConfig
     // UI Colors
     public uint? SelectionColor => 0xA03385DB;  // Blue selection
     public uint? TabBarBackgroundColor => 0xFF1A1A1A;  // Dark gray
-}
-
-/// <summary>
-/// Default color scheme matching current hardcoded values.
-/// </summary>
-public class DefaultColorScheme : IColorScheme
-{
-    // Background: Near-black with alpha (#F2000000 -> ARGB)
-    public uint Background => 0xF2000000;
-    
-    // Foreground: Light gray (#D4D4D4)
-    public uint Foreground => 0xFFD4D4D4;
-
-    // Standard ANSI 16-color palette (from SgrColor.cs)
-    public uint AnsiBlack => 0xFF000000;
-    public uint AnsiRed => 0xFFAA0000;
-    public uint AnsiGreen => 0xFF00AA00;
-    public uint AnsiYellow => 0xFFAA5500;
-    public uint AnsiBlue => 0xFF0000AA;
-    public uint AnsiMagenta => 0xFFAA00AA;
-    public uint AnsiCyan => 0xFF00AAAA;
-    public uint AnsiWhite => 0xFFAAAAAA;
-    public uint AnsiBrightBlack => 0xFF555555;
-    public uint AnsiBrightRed => 0xFFFF5555;
-    public uint AnsiBrightGreen => 0xFF55FF55;
-    public uint AnsiBrightYellow => 0xFFFFFF55;
-    public uint AnsiBrightBlue => 0xFF5555FF;
-    public uint AnsiBrightMagenta => 0xFFFF55FF;
-    public uint AnsiBrightCyan => 0xFF55FFFF;
-    public uint AnsiBrightWhite => 0xFFFFFFFF;
 }
 
 /// <summary>

@@ -18,9 +18,7 @@ The configuration system consists of:
 If you don't provide a custom configuration, Dotty will use sensible defaults that match the current hardcoded values:
 
 - Font: JetBrains Mono, 15pt
-- Background: Near-black (#F2000000)
-- Foreground: Light gray (#D4D4D4)
-- ANSI colors: Standard 16-color palette
+- Theme: DarkPlus (VS Code Dark+)
 - Scrollback: 10000 lines
 
 ### 2. Creating a Custom Configuration
@@ -29,6 +27,7 @@ Create a C# file that implements `IDottyConfig`:
 
 ```csharp
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
 
 namespace MyDottyConfig;
 
@@ -38,21 +37,14 @@ public partial class MyConfig : IDottyConfig
     public string? FontFamily => "Fira Code, monospace";
     public double? FontSize => 14.0;
     
-    // Color scheme
-    public IColorScheme? Colors => new MyDarkTheme();
+    // Use a built-in theme
+    public IColorScheme? Colors => BuiltInThemes.Dracula;
     
     // Key bindings
     public IKeyBindings? KeyBindings => new MyKeyBindings();
     
     // Other settings...
     public int? ScrollbackLines => 50000;
-}
-
-public class MyDarkTheme : IColorScheme
-{
-    public uint Background => 0xFF181818;
-    public uint Foreground => 0xFFF8F8F2;
-    // ... ANSI colors
 }
 ```
 
@@ -135,6 +127,194 @@ Available actions:
 | `Color` | `uint?` | null | Cursor color (null = use foreground) |
 | `ShowUnfocused` | `bool` | false | Show cursor when terminal not focused |
 
+## Theming
+
+Dotty provides a comprehensive theming system with built-in popular themes and support for custom themes.
+
+### Using Built-in Themes
+
+The easiest way to customize colors is to use a built-in theme:
+
+```csharp
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
+
+public partial class MyConfig : IDottyConfig
+{
+    // Use a built-in theme
+    public IColorScheme? Colors => BuiltInThemes.Dracula;
+}
+```
+
+### Available Built-in Themes
+
+#### Dark Themes
+
+| Theme | Description |
+|-------|-------------|
+| `BuiltInThemes.DarkPlus` | VS Code Dark+ theme (default) - great readability, familiar to VS Code users |
+| `BuiltInThemes.Dracula` | Popular dark theme with vibrant, saturated colors |
+| `BuiltInThemes.OneDark` | Inspired by Atom editor - muted, professional appearance |
+| `BuiltInThemes.GruvboxDark` | Warm dark theme with earthy tones - easy on the eyes |
+| `BuiltInThemes.CatppuccinMocha` | Pastel dark theme with soft, soothing colors |
+| `BuiltInThemes.TokyoNight` | Modern theme with deep blues and purples |
+
+#### Light Themes
+
+| Theme | Description |
+|-------|-------------|
+| `BuiltInThemes.LightPlus` | VS Code Light+ theme - clean and bright |
+| `BuiltInThemes.OneLight` | Balanced light theme - refined alternative to plain white |
+| `BuiltInThemes.GruvboxLight` | Warm light variant of Gruvbox |
+| `BuiltInThemes.CatppuccinLatte` | Light counterpart to Catppuccin Mocha |
+| `BuiltInThemes.SolarizedLight` | Low-contrast theme designed to reduce eye strain |
+
+### Dynamic Theme Switching
+
+Since Dotty uses AOT compilation, runtime theme switching is limited but possible using compile-time expressions:
+
+```csharp
+// Time-based theme switching (day/night)
+public IColorScheme? Colors => DateTime.Now.Hour is >= 6 and < 18 
+    ? BuiltInThemes.LightPlus 
+    : BuiltInThemes.DarkPlus;
+
+// You can also use environment variables or other compile-time conditions
+```
+
+### Creating Custom Themes
+
+#### Option 1: Inherit from ColorSchemeBase (Recommended)
+
+```csharp
+using Dotty.Abstractions.Themes;
+
+public class MyCustomTheme : ColorSchemeBase
+{
+    public MyCustomTheme() : base(
+        background: 0xFF1A1A1A,        // Dark gray
+        foreground: 0xFFF0F0F0,        // Light gray
+        ansiBlack: 0xFF000000,
+        ansiRed: 0xFFFF0000,
+        ansiGreen: 0xFF00FF00,
+        ansiYellow: 0xFFFFFF00,
+        ansiBlue: 0xFF0000FF,
+        ansiMagenta: 0xFFFF00FF,
+        ansiCyan: 0xFF00FFFF,
+        ansiWhite: 0xFFFFFFFF,
+        ansiBrightBlack: 0xFF555555,
+        ansiBrightRed: 0xFFFF5555,
+        ansiBrightGreen: 0xFF55FF55,
+        ansiBrightYellow: 0xFFFFFF55,
+        ansiBrightBlue: 0xFF5555FF,
+        ansiBrightMagenta: 0xFFFF55FF,
+        ansiBrightCyan: 0xFF55FFFF,
+        ansiBrightWhite: 0xFFFFFFFF
+    )
+    {
+    }
+}
+```
+
+#### Option 2: Implement IColorScheme Directly
+
+```csharp
+using Dotty.Abstractions.Config;
+
+public class MySimpleTheme : IColorScheme
+{
+    public uint Background => 0xFF1A1A1A;
+    public uint Foreground => 0xFFF0F0F0;
+    
+    public uint AnsiBlack => 0xFF000000;
+    public uint AnsiRed => 0xFFFF0000;
+    // ... implement all 16 ANSI colors
+}
+```
+
+#### Option 3: Override Specific Colors from Base Theme
+
+```csharp
+using Dotty.Abstractions.Themes;
+
+public partial class MyConfig : IDottyConfig
+{
+    // Use Dracula but with a pure black background
+    public IColorScheme? Colors => new ThemeOverride(
+        baseTheme: BuiltInThemes.Dracula,
+        background: 0xFF000000,
+        foreground: 0xFFFFFFFF
+    );
+}
+
+// ThemeOverride helper class (from samples/Config.cs)
+public class ThemeOverride : ColorSchemeBase
+{
+    public ThemeOverride(
+        IColorScheme baseTheme,
+        uint? background = null,
+        uint? foreground = null,
+        /* ... other color overrides ... */)
+        : base(
+            background ?? baseTheme.Background,
+            foreground ?? baseTheme.Foreground,
+            // ... pass through other colors with fallbacks
+        )
+    {
+    }
+}
+```
+
+### Color Format
+
+Colors are specified in ARGB format (Alpha, Red, Green, Blue) as unsigned 32-bit integers:
+
+```csharp
+// Format: 0xAARRGGBB
+uint color = 0xFFFF0000;      // Pure red (opaque)
+uint color = 0xFF00FF00;      // Pure green (opaque)
+uint color = 0xFF0000FF;      // Pure blue (opaque)
+uint color = 0xFF1E1E1E;      // Dark gray (VS Code Dark+ background)
+uint color = 0xFFD4D4D4;      // Light gray (VS Code Dark+ foreground)
+```
+
+For fully opaque colors, the alpha component (first byte) should be `0xFF`.
+
+### Helper Methods
+
+The `ColorSchemeBase` class provides utility methods:
+
+```csharp
+// Convert from hex string
+uint color = ColorSchemeBase.FromHex("#FF5733");     // Returns 0xFFFF5733
+uint color = ColorSchemeBase.FromHex("#80FF5733");   // Returns 0x80FF5733 (with alpha)
+
+// Convert to hex string
+string hex = ColorSchemeBase.ToHex(0xFFFF5733);      // Returns "#FFFF5733"
+
+// Create from RGB components
+uint color = ColorSchemeBase.FromRgb(255, 87, 51);   // Returns 0xFFFF5733
+uint color = ColorSchemeBase.FromRgb(255, 87, 51, 128); // With alpha
+
+// Calculate contrast ratio (for accessibility)
+double contrast = ColorSchemeBase.CalculateContrastRatio(foreground, background);
+// WCAG AA requires at least 4.5:1 for normal text
+```
+
+### Getting Themes by Name
+
+```csharp
+// Get theme by name (case-insensitive, with variants)
+var theme = BuiltInThemes.GetByName("dracula");     // Returns Dracula theme
+var theme = BuiltInThemes.GetByName("dark-plus");   // Returns DarkPlus theme
+var theme = BuiltInThemes.GetByName("unknown");     // Returns DarkPlus (default)
+
+// Access theme arrays
+var allDarkThemes = BuiltInThemes.DarkThemes;       // All dark themes
+var allLightThemes = BuiltInThemes.LightThemes;     // All light themes
+var allThemes = BuiltInThemes.AllThemes;            // All themes
+```
+
 ## Using Generated Configuration
 
 The source generator creates a static `Config` class in the `Dotty.Generated` namespace:
@@ -151,6 +331,10 @@ using Dotty.App.Configuration;
 FontFamily family = ConfigBridge.GetFontFamily();
 IBrush backgroundBrush = ConfigBridge.GetBackgroundBrush();
 Color bgColor = ConfigBridge.GetBackgroundColor();
+
+// Get ANSI colors
+IBrush redBrush = ConfigBridge.GetAnsiColorBrush(1);   // ANSI Red
+IBrush blueBrush = ConfigBridge.GetAnsiColorBrush(4);  // ANSI Blue
 
 // Key bindings
 TerminalAction? action = Dotty.Generated.Config.GetActionForKey(
@@ -185,8 +369,10 @@ public static class Config
 {
     public static string FontFamily => "JetBrains Mono";
     public static double FontSize => 15.0;
-    public static uint Background => 0xF2000000;
+    public static uint Background => 0xFF1E1E1E;  // From selected theme
     // ... more properties
+    
+    public static ColorScheme Colors => ColorScheme.Default;
     
     public static TerminalAction? GetActionForKey(Key key, KeyModifiers modifiers)
     {
@@ -203,8 +389,10 @@ public static class Config
 ## Sample Configurations
 
 See `/home/dom/projects/dotnet-term/samples/Config.cs` for complete examples:
-- Dark theme (Monokai-inspired)
-- Light theme
+- Using built-in themes
+- Time-based theme switching
+- Creating custom themes
+- Overriding theme colors
 - Custom key bindings
 - Cursor settings
 
@@ -224,71 +412,16 @@ The generated code will have IntelliSense after the first successful build. The 
 
 Ensure you're using constant values (literals) in your config class. The source generator needs to be able to extract these values at build time.
 
----
+### Theme colors look wrong
 
-## Advanced Features (Coming Soon)
-
-The Dotty configuration system is built on a **Source Generator architecture** that enables powerful future enhancements while maintaining AOT compatibility. While the current system provides all essential features for customizing your terminal, several advanced capabilities are planned for future releases.
-
-### Future Possibilities
-
-**Conditional & Context-Aware Configs:**
-- Environment variable-based configuration values
-- Time-based theme switching (automatic day/night modes)
-- OS-specific defaults (macOS vs Linux font preferences)
-- Per-host configurations for different machines
-
-**Advanced Keybindings:**
-- Conditional bindings that adapt when running under tmux/screen
-- Chord/key sequences (leader key style like tmux or vim)
-- Mode-based bindings (vim-style normal/insert modes)
-- Application-specific keymaps
-
-**Config Composition & Inheritance:**
-- Inherit from preset configurations (Dark Modern, Light Modern, etc.)
-- Mix multiple configuration sources together
-- Profile-based configs (dev, server, presentation modes)
-- Shell-specific profiles (zsh, fish, bash optimizations)
-
-**Validation & Safety:**
-- Compile-time validation attributes
-- Range checking for numeric values
-- Font existence validation at build time
-- Color format validation
-- Custom validation rules
-
-**Advanced Font Handling:**
-- Font chains with specific Unicode range fallbacks
-- Emoji and CJK-specific font handling
-- Dynamic ligature detection
-- OpenType feature toggles (ss01, calt, etc.)
-
-**Smart Defaults:**
-- Auto-detecting optimal font size based on screen DPI
-- Shell integration profiles with automatic detection
-- Conditional GPU acceleration based on environment
-- Dynamic scrollback sizing based on available RAM
-
-### Documentation
-
-For detailed information about these future enhancements:
-
-- **[Configuration Advanced](CONFIGURATION_ADVANCED.md)** - Comprehensive documentation of all potential future features with code examples
-- **[Configuration Roadmap](CONFIGURATION_ROADMAP.md)** - Prioritized roadmap with implementation timelines and complexity assessments
-
-### Important Notes
-
-> **Current System is Production-Ready**: The existing configuration system is stable, fully supported, and will remain compatible with all future enhancements. These advanced features are additive - you can start simple and gradually adopt new capabilities.
-
-> **AOT Compatibility Maintained**: All proposed features are designed to work with Ahead-of-Time (AOT) compilation. The Source Generator evaluates expressions at build time to produce efficient, trimmable code.
-
-> **No Timeline Commitments**: The roadmap documents possibilities, not commitments. Features will be added based on user needs and architectural readiness.
-
-> **Simple Config is Stable**: Even as advanced features are added, the simple property-based configuration style you're using today will continue to work exactly as it does now.
+- Make sure colors are in ARGB format (0xAARRGGBB)
+- For fully opaque colors, use 0xFF as the alpha component
+- Check that your theme implements all 18 color properties (Background, Foreground, 16 ANSI colors)
 
 ---
 
 ## See Also
 
+- [Themes Guide](THEMES.md) - Detailed theme documentation with color swatches
 - [Architecture Overview](architecture.md) - Dotty's technical architecture
 - [Sample Configurations](/home/dom/projects/dotnet-term/samples/Config.cs) - Complete configuration examples

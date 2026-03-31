@@ -7,6 +7,7 @@
 // Place this file in: ~/.config/dotty/Config.cs or in your project root
 
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
 
 namespace Dotty.UserConfig;
 
@@ -16,40 +17,88 @@ namespace Dotty.UserConfig;
 /// </summary>
 public partial class MyDottyConfig : IDottyConfig
 {
-    // Font Settings
-    // =============
+    // =========================================================================
+    // THEMING EXAMPLES - Choose one of the following approaches:
+    // =========================================================================
+    
+    // Option 1: Use a built-in theme (recommended for most users)
+    // -------------------------------------------------------------
+    // Built-in dark themes:
+    //   - DarkPlus (VS Code Dark+) - default, great readability
+    //   - Dracula - vibrant colors, popular choice
+    //   - OneDark (Atom) - muted, professional
+    //   - GruvboxDark - warm, easy on eyes
+    //   - CatppuccinMocha - pastel colors
+    //   - TokyoNight - deep blues and purples
+    //
+    // Built-in light themes:
+    //   - LightPlus (VS Code Light+) - clean, bright
+    //   - OneLight - balanced light theme
+    //   - GruvboxLight - warm light variant
+    //   - CatppuccinLatte - pastel light variant
+    //   - SolarizedLight - low contrast, eye-friendly
+    //
+    public IColorScheme? Colors => BuiltInThemes.DarkPlus;
+    
+    // Option 2: Time-based automatic theme switching
+    // ----------------------------------------------
+    // Uncomment to use light theme during day (6am-6pm), dark theme at night
+    // public IColorScheme? Colors => DateTime.Now.Hour is >= 6 and < 18 
+    //     ? BuiltInThemes.LightPlus 
+    //     : BuiltInThemes.DarkPlus;
+    
+    // Option 3: Create a custom theme
+    // ------------------------------
+    // Uncomment to define your own color scheme
+    // public IColorScheme? Colors => new MyCustomTheme();
+    
+    // Option 4: Override specific colors from a base theme
+    // ----------------------------------------------------
+    // Use a built-in theme but override specific colors
+    // public IColorScheme? Colors => new ThemeOverride(
+    //     baseTheme: BuiltInThemes.DarkPlus,
+    //     background: 0xFF000000,  // Pure black background
+    //     foreground: 0xFFFFFFFF   // Pure white foreground
+    // );
+    
+    // =========================================================================
+    // FONT SETTINGS
+    // =========================================================================
+    
     // Font family stack - comma-separated list with fallbacks
+    // The order matters: first available font is used
     // public string? FontFamily => "Fira Code, JetBrains Mono, Cascadia Code, monospace";
     
-    // Font size in points
+    // Font size in points (default: 15.0)
     // public double? FontSize => 13.0;
     
-    // Cell padding in pixels
+    // Cell padding in pixels (default: 1.5)
     // public double? CellPadding => 2.0;
     
     // Content padding around terminal area (Left, Top, Right, Bottom)
     // public Thickness? ContentPadding => new Thickness(4.0, 8.0, 4.0, 8.0);
 
-    // Color Scheme
-    // ============
-    // Uncomment to use a custom color scheme
-    // public IColorScheme? Colors => new DarkTheme();
+    // =========================================================================
+    // KEY BINDINGS
+    // =========================================================================
     
-    // Key Bindings
-    // ============
     // Uncomment to use custom key bindings
     // public IKeyBindings? KeyBindings => new CustomKeyBindings();
 
-    // Terminal Settings
-    // =================
-    // Number of scrollback lines to keep in memory
+    // =========================================================================
+    // TERMINAL SETTINGS
+    // =========================================================================
+    
+    // Number of scrollback lines to keep in memory (default: 10000)
     // public int? ScrollbackLines => 50000;
     
-    // Time before inactive tab visuals are destroyed (ms)
+    // Time before inactive tab visuals are destroyed (default: 5000ms)
     // public int? InactiveTabDestroyDelayMs => 10000;
 
-    // Window Settings
-    // ===============
+    // =========================================================================
+    // WINDOW SETTINGS
+    // =========================================================================
+    
     // Initial terminal dimensions
     // public IWindowDimensions? InitialDimensions => new WindowDimensions
     // {
@@ -58,8 +107,10 @@ public partial class MyDottyConfig : IDottyConfig
     //     Title = "My Terminal"
     // };
 
-    // Cursor Settings
-    // ===============
+    // =========================================================================
+    // CURSOR SETTINGS
+    // =========================================================================
+    
     // public ICursorSettings? Cursor => new CursorSettings
     // {
     //     Shape = CursorShape.Beam,
@@ -69,15 +120,106 @@ public partial class MyDottyConfig : IDottyConfig
     //     ShowUnfocused = true
     // };
 
-    // Selection Color (ARGB format)
+    // =========================================================================
+    // UI COLORS
+    // =========================================================================
+    
+    // Selection highlight color (ARGB format)
     // public uint? SelectionColor => 0xA03385DB;
     
-    // Tab Bar Background Color (ARGB format)
+    // Tab bar background color (ARGB format)
     // public uint? TabBarBackgroundColor => 0xFF1A1A1A;
 }
 
+// =========================================================================
+// CUSTOM THEME EXAMPLE
+// =========================================================================
+
 /// <summary>
-/// Example dark theme color scheme.
+/// Example custom theme implementation.
+/// Inherit from ColorSchemeBase to get validation and helper methods.
+/// </summary>
+public class MyCustomTheme : ColorSchemeBase
+{
+    public MyCustomTheme() : base(
+        background: 0xFF1A1B26,      // Deep blue-gray
+        foreground: 0xFFABB2BF,       // Soft white
+        ansiBlack: 0xFF282C34,        // Dark gray
+        ansiRed: 0xFFE06C75,          // Coral red
+        ansiGreen: 0xFF98C379,        // Sage green
+        ansiYellow: 0xFFE5C07B,       // Soft yellow
+        ansiBlue: 0xFF61AFEF,         // Sky blue
+        ansiMagenta: 0xFFC678DD,      // Soft purple
+        ansiCyan: 0xFF56B6C2,         // Teal
+        ansiWhite: 0xFFABB2BF,        // Light gray
+        ansiBrightBlack: 0xFF5C6370,  // Medium gray
+        ansiBrightRed: 0xFFFF7A85,    // Bright coral
+        ansiBrightGreen: 0xFFB5E090,  // Light sage
+        ansiBrightYellow: 0xFFFFD580,   // Light yellow
+        ansiBrightBlue: 0xFF8CCBFF,   // Light sky blue
+        ansiBrightMagenta: 0xFFE599FF,// Light purple
+        ansiBrightCyan: 0xFF89DDFF,   // Light teal
+        ansiBrightWhite: 0xFFFFFFFF   // Pure white
+    )
+    {
+    }
+}
+
+/// <summary>
+/// Theme override helper - allows overriding specific colors from a base theme.
+/// </summary>
+public class ThemeOverride : ColorSchemeBase
+{
+    public ThemeOverride(
+        IColorScheme baseTheme,
+        uint? background = null,
+        uint? foreground = null,
+        uint? ansiBlack = null,
+        uint? ansiRed = null,
+        uint? ansiGreen = null,
+        uint? ansiYellow = null,
+        uint? ansiBlue = null,
+        uint? ansiMagenta = null,
+        uint? ansiCyan = null,
+        uint? ansiWhite = null,
+        uint? ansiBrightBlack = null,
+        uint? ansiBrightRed = null,
+        uint? ansiBrightGreen = null,
+        uint? ansiBrightYellow = null,
+        uint? ansiBrightBlue = null,
+        uint? ansiBrightMagenta = null,
+        uint? ansiBrightCyan = null,
+        uint? ansiBrightWhite = null)
+        : base(
+            background ?? baseTheme.Background,
+            foreground ?? baseTheme.Foreground,
+            ansiBlack ?? baseTheme.AnsiBlack,
+            ansiRed ?? baseTheme.AnsiRed,
+            ansiGreen ?? baseTheme.AnsiGreen,
+            ansiYellow ?? baseTheme.AnsiYellow,
+            ansiBlue ?? baseTheme.AnsiBlue,
+            ansiMagenta ?? baseTheme.AnsiMagenta,
+            ansiCyan ?? baseTheme.AnsiCyan,
+            ansiWhite ?? baseTheme.AnsiWhite,
+            ansiBrightBlack ?? baseTheme.AnsiBrightBlack,
+            ansiBrightRed ?? baseTheme.AnsiBrightRed,
+            ansiBrightGreen ?? baseTheme.AnsiBrightGreen,
+            ansiBrightYellow ?? baseTheme.AnsiBrightYellow,
+            ansiBrightBlue ?? baseTheme.AnsiBrightBlue,
+            ansiBrightMagenta ?? baseTheme.AnsiBrightMagenta,
+            ansiBrightCyan ?? baseTheme.AnsiBrightCyan,
+            ansiBrightWhite ?? baseTheme.AnsiBrightWhite
+        )
+    {
+    }
+}
+
+// =========================================================================
+// LEGACY EXAMPLES (for reference)
+// =========================================================================
+
+/// <summary>
+/// Example dark theme color scheme (Monokai-inspired).
 /// </summary>
 public class DarkTheme : IColorScheme
 {
@@ -137,13 +279,13 @@ public class LightTheme : IColorScheme
 /// </summary>
 public class CustomKeyBindings : IKeyBindings
 {
-    public TerminalAction? GetAction(Key key, KeyModifiers modifiers)
+    public TerminalAction? GetAction(Avalonia.Input.Key key, Avalonia.Input.KeyModifiers modifiers)
     {
         // Example: Custom key bindings
         // Return null to use the default bindings
         
         // Uncomment to add custom bindings:
-        // if (key == Key.F12 && modifiers == KeyModifiers.None)
+        // if (key == Avalonia.Input.Key.F12 && modifiers == Avalonia.Input.KeyModifiers.None)
         //     return TerminalAction.ToggleFullscreen;
         
         return null;  // Use defaults

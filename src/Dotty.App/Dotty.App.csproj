@@ -28,6 +28,12 @@
   <ItemGroup>
     <ProjectReference Include="..\Dotty.Terminal\Dotty.Terminal.csproj" />
     <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
+    
+    <!-- Source Generator for configuration -->
+    <ProjectReference Include="..\Dotty.Config.SourceGenerator\Dotty.Config.SourceGenerator.csproj">
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <OutputItemType>Analyzer</OutputItemType>
+    </ProjectReference>
   </ItemGroup>
   
   <!-- Ensure Avalonia XAML files are embedded as Avalonia resources so

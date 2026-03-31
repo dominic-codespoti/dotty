@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Dotty.Terminal.Adapter;
+using Dotty.App.Configuration;
 
 namespace Dotty.App.Controls
 {
@@ -14,13 +15,18 @@ namespace Dotty.App.Controls
         private DispatcherTimer? _blinkTimer;
 
         public static readonly StyledProperty<Thickness> CanvasPaddingProperty =
-            AvaloniaProperty.Register<TerminalGrid, Thickness>(nameof(CanvasPadding), new Thickness(16, 24, 16, 16));
+            AvaloniaProperty.Register<TerminalGrid, Thickness>(nameof(CanvasPadding), new Thickness(
+                Generated.Config.ContentPaddingLeft + 16,
+                Generated.Config.ContentPaddingTop + 24,
+                Generated.Config.ContentPaddingRight + 16,
+                Generated.Config.ContentPaddingBottom + 16));
 
         public static readonly StyledProperty<TerminalCursorShape> CursorShapeProperty =
             AvaloniaProperty.Register<TerminalGrid, TerminalCursorShape>(nameof(CursorShape), TerminalCursorShape.Block);
 
         public static readonly StyledProperty<TimeSpan> CursorBlinkIntervalProperty =
-            AvaloniaProperty.Register<TerminalGrid, TimeSpan>(nameof(CursorBlinkInterval), TimeSpan.FromMilliseconds(600));
+            AvaloniaProperty.Register<TerminalGrid, TimeSpan>(nameof(CursorBlinkInterval), 
+                TimeSpan.FromMilliseconds(Generated.Config.CursorBlinkIntervalMs));
 
         public Thickness CanvasPadding
         {

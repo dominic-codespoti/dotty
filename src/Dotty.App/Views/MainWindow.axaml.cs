@@ -18,6 +18,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using Dotty.App.ViewModels;
 using Dotty.App.Controls.Canvas.Rendering;
+using Dotty.App.Configuration;
 
 namespace Dotty.App.Views;
 
@@ -27,31 +28,31 @@ public partial class MainWindow : Window
     private TcpListener? _testCommandListener;
     private CancellationTokenSource? _testCommandCts;
     
-    // Manual content management: Keep track of TerminalView instances per tab
-    private readonly Dictionary<TabViewModel, TerminalView> _terminalViews = new();
-    private readonly Dictionary<TabViewModel, DispatcherTimer> _inactiveTabTimers = new();
-    private readonly Dictionary<TabViewModel, WriteableBitmap> _tabSnapshots = new();
-    private const int InactiveTabDestroyDelayMs = 5000; // 5 seconds before destroying inactive tab visuals
-    private Grid? _contentContainer;
-    private Control? _tabBar;
+        // Manual content management: Keep track of TerminalView instances per tab
+        private readonly Dictionary<TabViewModel, TerminalView> _terminalViews = new();
+        private readonly Dictionary<TabViewModel, DispatcherTimer> _inactiveTabTimers = new();
+        private readonly Dictionary<TabViewModel, WriteableBitmap> _tabSnapshots = new();
+        private int InactiveTabDestroyDelayMs => Generated.Config.InactiveTabDestroyDelayMs;
+        private Grid? _contentContainer;
+        private Control? _tabBar;
 
-    public MainWindow()
-    {
-        InitializeComponent();
-        
-        _viewModel = new MainViewModel();
-        DataContext = _viewModel;
-        
-        Title = "Dotty";
-        Background = new SolidColorBrush(Color.Parse(Services.Defaults.DefaultBackground));
-        
-        KeyDown += OnWindowKeyDown;
-        Closed += OnClosed;
-        Opened += OnOpened;
-        
-        // Start test command listener for automated testing
-        StartTestCommandListener();
-    }
+        public MainWindow()
+        {
+            InitializeComponent();
+            
+            _viewModel = new MainViewModel();
+            DataContext = _viewModel;
+            
+            Title = Generated.Config.WindowTitle;
+            Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+            
+            KeyDown += OnWindowKeyDown;
+            Closed += OnClosed;
+            Opened += OnOpened;
+            
+            // Start test command listener for automated testing
+            StartTestCommandListener();
+        }
     
     protected override void OnLoaded(RoutedEventArgs e)
     {

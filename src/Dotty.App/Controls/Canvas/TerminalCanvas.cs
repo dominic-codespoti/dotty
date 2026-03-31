@@ -6,13 +6,14 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Rendering.Composition;
+using Avalonia.Threading;
 using Dotty.App.Controls.Canvas;
 using Dotty.App.Controls.Canvas.Rendering;
-using Avalonia.Threading;
-using Dotty.Terminal.Adapter;
 using Dotty.App.Rendering;
 using Dotty.App.Discovery;
 using Dotty.App.Services;
+using Dotty.App.Configuration;
+using Dotty.Terminal.Adapter;
 using SkiaSharp;
 
 namespace Dotty.App.Controls;
@@ -36,13 +37,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		AvaloniaProperty.Register<TerminalCanvas, TerminalBuffer?>(nameof(Buffer));
 
 	public static readonly StyledProperty<FontFamily> FontFamilyProperty =
-		AvaloniaProperty.Register<TerminalCanvas, FontFamily>(nameof(FontFamily), new FontFamily("monospace"));
+		AvaloniaProperty.Register<TerminalCanvas, FontFamily>(nameof(FontFamily), new FontFamily(Generated.Config.FontFamily));
 
 	public static readonly StyledProperty<double> FontSizeProperty =
-		AvaloniaProperty.Register<TerminalCanvas, double>(nameof(FontSize), 14d);
+		AvaloniaProperty.Register<TerminalCanvas, double>(nameof(FontSize), Generated.Config.FontSize);
 
 	public static readonly StyledProperty<double> CellPaddingProperty =
-		AvaloniaProperty.Register<TerminalCanvas, double>(nameof(CellPadding), 1.5d);
+		AvaloniaProperty.Register<TerminalCanvas, double>(nameof(CellPadding), Generated.Config.CellPadding);
 
 	public TerminalBuffer? Buffer
 	{
@@ -51,11 +52,15 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	}
 
 	public static readonly StyledProperty<Thickness> ContentPaddingProperty =
-		AvaloniaProperty.Register<TerminalCanvas, Thickness>(nameof(ContentPadding), new Thickness(0.0));
+		AvaloniaProperty.Register<TerminalCanvas, Thickness>(nameof(ContentPadding), new Thickness(
+			Generated.Config.ContentPaddingLeft,
+			Generated.Config.ContentPaddingTop,
+			Generated.Config.ContentPaddingRight,
+			Generated.Config.ContentPaddingBottom));
 
 	public static readonly StyledProperty<IBrush> SelectionBrushProperty =
 		AvaloniaProperty.Register<TerminalCanvas, IBrush>(nameof(SelectionBrush),
-			new SolidColorBrush(Color.FromArgb(0xA0, 0x33, 0x85, 0xDB)));
+			new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.SelectionColor)));
 
 	public Thickness ContentPadding
 	{

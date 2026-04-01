@@ -37,6 +37,7 @@ public partial class MainWindow : Window
         private int InactiveTabDestroyDelayMs => Generated.Config.InactiveTabDestroyDelayMs;
         private Grid? _contentContainer;
         private Control? _tabBar;
+        private bool _needsTransparentContentContainer = false;
 
         public MainWindow()
         {
@@ -75,6 +76,9 @@ public partial class MainWindow : Window
                 // User has configured a specific opacity level (less than 100%)
                 this.Opacity = windowOpacity;
                 Console.WriteLine("[MainWindow] Applied window opacity: " + this.Opacity);
+                
+                // Mark that we need transparent ContentContainer
+                _needsTransparentContentContainer = true;
                 
                 // On Wayland with opacity, use background alpha workaround (compositor handles window opacity poorly)
                 // On other platforms with opacity, use transparent background
@@ -235,6 +239,13 @@ public partial class MainWindow : Window
         // Get references to our manual container and tab bar
         _contentContainer = this.FindControl<Grid>("ContentContainer");
         _tabBar = this.FindControl<Control>("TabBar");
+        
+        // If opacity is enabled, make ContentContainer transparent so window background shows through
+        if (_needsTransparentContentContainer && _contentContainer != null)
+        {
+            _contentContainer.Background = Brushes.Transparent;
+            Console.WriteLine("[MainWindow] Set ContentContainer to transparent for opacity effect");
+        }
         
         // Initialize the first tab's content (lazy - only create when needed)
         if (_viewModel.ActiveTab != null)

@@ -53,26 +53,28 @@ dotnet test tests/Dotty.App.Tests
 
 ## Configuration
 
-Dotty automatically creates a configuration file on first run:
+Dotty automatically creates a configuration project on first run:
 
-- **Linux/macOS**: `~/.config/dotty/Config.cs`
-- **Windows**: `%APPDATA%/dotty/Config.cs`
+- **Linux/macOS**: `~/.config/dotty/Dotty.UserConfig/`
+- **Windows**: `%APPDATA%/dotty/Dotty.UserConfig/`
 
-The generated config includes:
-- Sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
+The generated project includes:
+- A `Config.cs` file with sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
+- A `.csproj` with NuGet reference to `Dotty.Abstractions` for full IntelliSense
 - Helpful comments explaining all options
-- Uncomment examples for easy customization
+- Open in your IDE for LSP support (VS Code, Rider, etc.)
 
 **To customize:**
-1. Edit `~/.config/dotty/Config.cs`
-2. Rebuild: `dotnet build`
+1. Open the config folder in your IDE: `code ~/.config/dotty/Dotty.UserConfig/`
+2. Edit `Config.cs`
+3. Rebuild dotty: `dotnet build`
 
 **To regenerate:**
 ```bash
 dotty --generate-config  # ⚠️ Overwrites existing config
 ```
 
-See [Configuration Guide](docs/CONFIGURATION.md) for full details.
+The `Dotty.Abstractions` NuGet package provides full IntelliSense and LSP support for your configuration. See [Configuration Guide](docs/CONFIGURATION.md) for full details.
 
 ## Repository Structure
 

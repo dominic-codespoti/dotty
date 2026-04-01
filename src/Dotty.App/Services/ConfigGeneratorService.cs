@@ -4,32 +4,48 @@ using System.IO;
 namespace Dotty.App.Services;
 
 /// <summary>
-/// Service responsible for generating a default user configuration file
-/// on first run of Dotty terminal.
+/// Service responsible for generating a default user configuration project
+/// on first run of Dotty terminal. Creates a full .csproj with NuGet reference
+/// for full LSP support and IntelliSense.
 /// </summary>
 public static class ConfigGeneratorService
 {
-    private static readonly string ConfigDir = 
+    private static readonly string BaseConfigDir = 
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dotty");
-    private static readonly string ConfigPath = Path.Combine(ConfigDir, "Config.cs");
+    
+    /// <summary>
+    /// The project directory where user config lives.
+    /// </summary>
+    public static readonly string ProjectDir = Path.Combine(BaseConfigDir, "Dotty.UserConfig");
+    
+    /// <summary>
+    /// The main config file path.
+    /// </summary>
+    public static readonly string ConfigPath = Path.Combine(ProjectDir, "Config.cs");
+    
+    /// <summary>
+    /// The project file path.
+    /// </summary>
+    public static readonly string ProjectPath = Path.Combine(ProjectDir, "Dotty.UserConfig.csproj");
 
     /// <summary>
     /// Checks common configuration file locations and returns the path if found.
     /// </summary>
     public static string? GetExistingConfigPath()
     {
-        // Check common locations in order of preference
-        var paths = new[]
+        // Check new project structure first
+        if (File.Exists(ConfigPath))
+            return ConfigPath;
+        
+        // Check legacy locations
+        var legacyPaths = new[]
         {
-            // User profile ApplicationData (Windows standard, cross-platform)
-            ConfigPath,
-            // XDG Base Directory spec on Linux/macOS
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dotty", "Config.cs"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "dotty", "Config.cs"),
-            // Legacy/simple location
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "dotty", "Config.cs"),
         };
         
-        foreach (var path in paths)
+        foreach (var path in legacyPaths)
         {
             if (File.Exists(path))
                 return path;
@@ -39,7 +55,7 @@ public static class ConfigGeneratorService
     }
 
     /// <summary>
-    /// Ensures a configuration file exists for the user.
+    /// Ensures a configuration project exists for the user.
     /// If no config exists, creates one with sensible defaults.
     /// </summary>
     /// <param name="force">If true, overwrites existing config (use with caution)</param>
@@ -51,16 +67,44 @@ public static class ConfigGeneratorService
         
         try
         {
-            Directory.CreateDirectory(ConfigDir);
+            // Create project directory
+            Directory.CreateDirectory(ProjectDir);
+            
+            // Write Config.cs
             File.WriteAllText(ConfigPath, GenerateDefaultConfig());
+            
+            // Write .csproj with NuGet reference
+            File.WriteAllText(ProjectPath, GenerateProjectFile());
+            
             return true;
         }
         catch (Exception ex)
         {
             // Log error but don't crash the app
-            Console.Error.WriteLine($"Failed to create config file: {ex.Message}");
+            Console.Error.WriteLine($"Failed to create config: {ex.Message}");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Generates the .csproj file with NuGet package reference.
+    /// </summary>
+    private static string GenerateProjectFile()
+    {
+        return "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+               "\n" +
+               "  <PropertyGroup>\n" +
+               "    <TargetFramework>net10.0</TargetFramework>\n" +
+               "    <Nullable>enable</Nullable>\n" +
+               "    <ImplicitUsings>enable</ImplicitUsings>\n" +
+               "    <LangVersion>latest</LangVersion>\n" +
+               "  </PropertyGroup>\n" +
+               "\n" +
+               "  <ItemGroup>\n" +
+               "    <PackageReference Include=\"Dotty.Abstractions\" Version=\"0.1.0\" />\n" +
+               "  </ItemGroup>\n" +
+               "\n" +
+               "</Project>";
     }
 
     /// <summary>
@@ -80,9 +124,12 @@ public static class ConfigGeneratorService
         return $"// Dotty Terminal Configuration\n" +
                $"// ===========================\n" +
                $"// This file was auto-generated on first run ({date}).\n" +
-               $"// Edit these values and rebuild Dotty to see changes.\n" +
+               $"// Edit these values and restart Dotty to see changes.\n" +
                $"//\n" +
-               $"// Location: {ConfigPath}\n" +
+               $"// Full IntelliSense available when you open this folder in VS Code or Rider!\n" +
+               $"// The Dotty.Abstractions package provides all types and themes.\n" +
+               $"//\n" +
+               $"// Project: {ProjectPath}\n" +
                $"// Documentation: https://github.com/dominic-codespoti/dotty/blob/main/docs/CONFIGURATION.md\n" +
                $"\n" +
                $"using Dotty.Abstractions.Config;\n" +
@@ -195,17 +242,17 @@ public static class ConfigGeneratorService
                $"//     public bool ShowUnfocused {{ get; init; }} = false;\n" +
                $"// }}\n" +
                $"\n" +
-                $"// =========================================================================\n" +
-                $"// EXAMPLE: Custom Key Bindings\n" +
-                $"// =========================================================================\n" +
-                $"// public class CustomKeyBindings : IKeyBindings\n" +
-                $"// {{\n" +
-                $"//     public TerminalAction? GetAction(Avalonia.Input.Key key, Avalonia.Input.KeyModifiers modifiers)\n" +
-                $"//     {{\n" +
-                $"//         // Add your custom key bindings here\n" +
-                $"//         // Return null to use default bindings for unhandled keys\n" +
-                $"//         return null;\n" +
-                $"//     }}\n" +
-                $"// }}\n";
+               $"// =========================================================================\n" +
+               $"// EXAMPLE: Custom Key Bindings\n" +
+               $"// =========================================================================\n" +
+               $"// public class CustomKeyBindings : IKeyBindings\n" +
+               $"// {{\n" +
+               $"//     public TerminalAction? GetAction(Avalonia.Input.Key key, Avalonia.Input.KeyModifiers modifiers)\n" +
+               $"//     {{\n" +
+               $"//         // Add your custom key bindings here\n" +
+               $"//         // Return null to use default bindings for unhandled keys\n" +
+               $"//         return null;\n" +
+               $"//     }}\n" +
+               $"// }}\n";
     }
 }

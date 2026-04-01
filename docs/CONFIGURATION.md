@@ -13,28 +13,72 @@ The configuration system consists of:
 
 ## Quick Start
 
+### NuGet Package
+
+Dotty.Abstractions is available on NuGet.org, providing full IntelliSense and LSP support for your configuration:
+
+**Package:** [Dotty.Abstractions 0.1.0](https://www.nuget.org/packages/Dotty.Abstractions/)
+
+```bash
+dotnet add package Dotty.Abstractions --version 0.1.0
+```
+
 ### 1. First Run (Automatic Config Generation)
 
-On first startup, Dotty automatically creates a default configuration file:
+On first startup, Dotty automatically creates a default configuration project:
 
-- **Linux/macOS**: `~/.config/dotty/Config.cs` (XDG Base Directory)
-- **Windows**: `%APPDATA%/dotty/Config.cs`
+- **Linux/macOS**: `~/.config/dotty/Dotty.UserConfig/` (XDG Base Directory)
+- **Windows**: `%APPDATA%/dotty/Dotty.UserConfig/`
+
+The project structure includes:
+```
+~/.config/dotty/Dotty.UserConfig/
+├── Dotty.UserConfig.csproj    # Project file with NuGet reference
+├── Config.cs                  # Your configuration file
+└── obj/                       # Build artifacts
+```
 
 You'll see a message:
 ```
-✓ Created default config: /home/username/.config/dotty/Config.cs
-  Edit this file to customize your terminal, then rebuild to apply changes.
+✓ Created default config project: /home/username/.config/dotty/Dotty.UserConfig/
+
+Open in your IDE for IntelliSense support:
+  code ~/.config/dotty/Dotty.UserConfig/     # VS Code
+  rider ~/.config/dotty/Dotty.UserConfig/    # JetBrains Rider
+
+Then edit Config.cs and rebuild dotty to apply changes.
 ```
 
 The generated file contains:
 - Sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
 - Helpful comments explaining all options
 - Uncomment examples for easy customization
+- Full IntelliSense via the NuGet package reference
 - Exact current defaults (never out of sync with code)
 
-### 2. Customizing Your Configuration
+### 2. Open in Your IDE (Recommended)
 
-Edit the generated `Config.cs` file:
+For the best experience with IntelliSense, syntax highlighting, and LSP support:
+
+```bash
+# VS Code
+code ~/.config/dotty/Dotty.UserConfig/
+
+# JetBrains Rider
+rider ~/.config/dotty/Dotty.UserConfig/
+
+# Or any editor that supports C# LSP
+```
+
+The `.csproj` file includes the `Dotty.Abstractions` NuGet package, giving you:
+- Full IntelliSense for all configuration options
+- Real-time error detection
+- Go-to-definition for types and themes
+- Theme preview in tooltips
+
+### 3. Customizing Your Configuration
+
+Edit the `Config.cs` file in your IDE:
 
 ```csharp
 // Change the theme
@@ -47,9 +91,9 @@ public double? FontSize => 14.0;
 public int? ScrollbackLines => 50000;
 ```
 
-### 3. Rebuilding to Apply Changes
+### 4. Rebuilding to Apply Changes
 
-After editing, rebuild Dotty:
+After editing, rebuild Dotty to apply your configuration changes:
 
 ```bash
 dotnet build
@@ -59,9 +103,11 @@ dotnet build -c Release
 
 The Source Generator will pick up your changes and generate a new static `Config` class.
 
-### 4. Regenerating Config (Optional)
+> **Note:** You only need to rebuild the main Dotty application. The configuration project (`Dotty.UserConfig`) is compiled automatically as part of the build process.
 
-To regenerate a fresh config file:
+### 5. Regenerating Config (Optional)
+
+To regenerate a fresh config project:
 
 ```bash
 dotty --generate-config
@@ -451,7 +497,16 @@ See `/home/dom/projects/dotnet-term/samples/Config.cs` for complete examples:
 
 ### IntelliSense not working
 
-The generated code will have IntelliSense after the first successful build. The source generator runs at compile-time and the generated files are included in the compilation.
+The generated code will have IntelliSense after the first successful build. For full LSP support:
+
+1. Open the `~/.config/dotty/Dotty.UserConfig/` folder in your IDE (not just the single file)
+2. Ensure the `Dotty.Abstractions` NuGet package is restored: `dotnet restore`
+3. The source generator runs at compile-time and the generated files are included in the compilation
+
+If IntelliSense is still not working:
+- Check that your IDE supports C# LSP (VS Code with C# extension, Rider, etc.)
+- Verify the `.csproj` file has the NuGet package reference
+- Try running `dotnet build` once from the `Dotty.UserConfig` directory
 
 ### AOT build errors
 

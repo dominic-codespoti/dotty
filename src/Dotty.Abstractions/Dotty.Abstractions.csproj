@@ -4,5 +4,18 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    
+    <!-- NuGet Package Metadata -->
+    <PackageId>Dotty.Abstractions</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Dominic Codespoti</Authors>
+    <Description>Configuration abstractions and themes for Dotty terminal emulator</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/dominic-codespoti/dotty</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/dominic-codespoti/dotty</PackageProjectUrl>
+    <PackageTags>terminal;console;cli;config;themes;dotty</PackageTags>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 </Project>

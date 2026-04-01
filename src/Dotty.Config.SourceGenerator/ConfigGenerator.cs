@@ -188,6 +188,46 @@ public class ConfigGenerator : IIncrementalGenerator
     {
         if (colorsType is not INamedTypeSymbol namedType) return;
 
+        // Check if this is a built-in theme by name and use hardcoded values
+        var themeName = namedType.Name;
+        switch (themeName)
+        {
+            case "CatppuccinLatteTheme":
+                SetCatppuccinLatteColors(values);
+                return;
+            case "DarkPlusTheme":
+                SetDarkPlusColors(values);
+                return;
+            case "DraculaTheme":
+                SetDraculaColors(values);
+                return;
+            case "OneDarkTheme":
+                SetOneDarkColors(values);
+                return;
+            case "GruvboxDarkTheme":
+                SetGruvboxDarkColors(values);
+                return;
+            case "GruvboxLightTheme":
+                SetGruvboxLightColors(values);
+                return;
+            case "CatppuccinMochaTheme":
+                SetCatppuccinMochaColors(values);
+                return;
+            case "TokyoNightTheme":
+                SetTokyoNightColors(values);
+                return;
+            case "LightPlusTheme":
+                SetLightPlusColors(values);
+                return;
+            case "OneLightTheme":
+                SetOneLightColors(values);
+                return;
+            case "SolarizedLightTheme":
+                SetSolarizedLightColors(values);
+                return;
+        }
+
+        // For custom themes, try to extract from the type's properties
         foreach (var member in namedType.GetMembers())
         {
             if (member is IPropertySymbol property)
@@ -223,6 +263,248 @@ public class ConfigGenerator : IIncrementalGenerator
                 }
             }
         }
+    }
+
+    private static void SetCatppuccinLatteColors(ConfigValues values)
+    {
+        values.Background = 0xFFEff1F5;
+        values.Foreground = 0xFF4C4F69;
+        values.AnsiColors[0] = 0xFF5C5F77;   // Black
+        values.AnsiColors[1] = 0xFFD20F39;   // Red
+        values.AnsiColors[2] = 0xFF40A02B;   // Green
+        values.AnsiColors[3] = 0xFFDF8E1D;   // Yellow
+        values.AnsiColors[4] = 0xFF1E66F5;   // Blue
+        values.AnsiColors[5] = 0xFF8839EF;   // Magenta
+        values.AnsiColors[6] = 0xFF179299;   // Cyan
+        values.AnsiColors[7] = 0xFFACB0BE;   // White
+        values.AnsiColors[8] = 0xFF6C6F85;   // Bright Black
+        values.AnsiColors[9] = 0xFFD20F39;   // Bright Red
+        values.AnsiColors[10] = 0xFF40A02B;  // Bright Green
+        values.AnsiColors[11] = 0xFFDF8E1D; // Bright Yellow
+        values.AnsiColors[12] = 0xFF1E66F5;  // Bright Blue
+        values.AnsiColors[13] = 0xFF8839EF;  // Bright Magenta
+        values.AnsiColors[14] = 0xFF179299;   // Bright Cyan
+        values.AnsiColors[15] = 0xFFBCC0CC;   // Bright White
+    }
+
+    private static void SetDarkPlusColors(ConfigValues values)
+    {
+        values.Background = 0xFF1E1E1E;
+        values.Foreground = 0xFFD4D4D4;
+        values.AnsiColors[0] = 0xFF000000;
+        values.AnsiColors[1] = 0xFFCD3131;
+        values.AnsiColors[2] = 0xFF0DBC79;
+        values.AnsiColors[3] = 0xFFE5E510;
+        values.AnsiColors[4] = 0xFF2472C8;
+        values.AnsiColors[5] = 0xFFBC3FBC;
+        values.AnsiColors[6] = 0xFF11A8CD;
+        values.AnsiColors[7] = 0xFFE5E5E5;
+        values.AnsiColors[8] = 0xFF666666;
+        values.AnsiColors[9] = 0xFFF14C4C;
+        values.AnsiColors[10] = 0xFF23D18B;
+        values.AnsiColors[11] = 0xFFF5F543;
+        values.AnsiColors[12] = 0xFF3B8EEA;
+        values.AnsiColors[13] = 0xFFD670D6;
+        values.AnsiColors[14] = 0xFF29B8DB;
+        values.AnsiColors[15] = 0xFFFFFFFF;
+    }
+
+    private static void SetDraculaColors(ConfigValues values)
+    {
+        values.Background = 0xFF282A36;
+        values.Foreground = 0xFFF8F8F2;
+        values.AnsiColors[0] = 0xFF21222C;
+        values.AnsiColors[1] = 0xFFFF5555;
+        values.AnsiColors[2] = 0xFF50FA7B;
+        values.AnsiColors[3] = 0xFFF1FA8C;
+        values.AnsiColors[4] = 0xFFBD93F9;
+        values.AnsiColors[5] = 0xFFFF79C6;
+        values.AnsiColors[6] = 0xFF8BE9FD;
+        values.AnsiColors[7] = 0xFFF8F8F2;
+        values.AnsiColors[8] = 0xFF6272A4;
+        values.AnsiColors[9] = 0xFFFF6E6E;
+        values.AnsiColors[10] = 0xFF69FF94;
+        values.AnsiColors[11] = 0xFFFFFFA5;
+        values.AnsiColors[12] = 0xFFD6ACFF;
+        values.AnsiColors[13] = 0xFFFF92DF;
+        values.AnsiColors[14] = 0xFFA4FFFF;
+        values.AnsiColors[15] = 0xFFFFFFFF;
+    }
+
+    private static void SetOneDarkColors(ConfigValues values)
+    {
+        values.Background = 0xFF282C34;
+        values.Foreground = 0xFFABB2BF;
+        values.AnsiColors[0] = 0xFF282C34;
+        values.AnsiColors[1] = 0xFFE06C75;
+        values.AnsiColors[2] = 0xFF98C379;
+        values.AnsiColors[3] = 0xFFE5C07B;
+        values.AnsiColors[4] = 0xFF61AFEF;
+        values.AnsiColors[5] = 0xFFC678DD;
+        values.AnsiColors[6] = 0xFF56B6C2;
+        values.AnsiColors[7] = 0xFFABB2BF;
+        values.AnsiColors[8] = 0xFF5C6370;
+        values.AnsiColors[9] = 0xFFE06C75;
+        values.AnsiColors[10] = 0xFF98C379;
+        values.AnsiColors[11] = 0xFFE5C07B;
+        values.AnsiColors[12] = 0xFF61AFEF;
+        values.AnsiColors[13] = 0xFFC678DD;
+        values.AnsiColors[14] = 0xFF56B6C2;
+        values.AnsiColors[15] = 0xFFFFFFFF;
+    }
+
+    private static void SetGruvboxDarkColors(ConfigValues values)
+    {
+        values.Background = 0xFF282828;
+        values.Foreground = 0xFFEBDBB2;
+        values.AnsiColors[0] = 0xFF282828;
+        values.AnsiColors[1] = 0xFFCC241D;
+        values.AnsiColors[2] = 0xFF98971A;
+        values.AnsiColors[3] = 0xFFD79921;
+        values.AnsiColors[4] = 0xFF458588;
+        values.AnsiColors[5] = 0xFFB16286;
+        values.AnsiColors[6] = 0xFF689D6A;
+        values.AnsiColors[7] = 0xFFA89984;
+        values.AnsiColors[8] = 0xFF928374;
+        values.AnsiColors[9] = 0xFFFB4934;
+        values.AnsiColors[10] = 0xFFB8BB26;
+        values.AnsiColors[11] = 0xFFFABD2F;
+        values.AnsiColors[12] = 0xFF83A598;
+        values.AnsiColors[13] = 0xFFD3869B;
+        values.AnsiColors[14] = 0xFF8EC07C;
+        values.AnsiColors[15] = 0xFFEBDBB2;
+    }
+
+    private static void SetGruvboxLightColors(ConfigValues values)
+    {
+        values.Background = 0xFFFBF1C7;
+        values.Foreground = 0xFF3C3836;
+        values.AnsiColors[0] = 0xFFFBF1C7;
+        values.AnsiColors[1] = 0xFFCC241D;
+        values.AnsiColors[2] = 0xFF98971A;
+        values.AnsiColors[3] = 0xFFD79921;
+        values.AnsiColors[4] = 0xFF458588;
+        values.AnsiColors[5] = 0xFFB16286;
+        values.AnsiColors[6] = 0xFF689D6A;
+        values.AnsiColors[7] = 0xFF7C6F64;
+        values.AnsiColors[8] = 0xFF928374;
+        values.AnsiColors[9] = 0xFF9D0006;
+        values.AnsiColors[10] = 0xFF79740E;
+        values.AnsiColors[11] = 0xFFB57614;
+        values.AnsiColors[12] = 0xFF076678;
+        values.AnsiColors[13] = 0xFF8F3F71;
+        values.AnsiColors[14] = 0xFF427B58;
+        values.AnsiColors[15] = 0xFF3C3836;
+    }
+
+    private static void SetCatppuccinMochaColors(ConfigValues values)
+    {
+        values.Background = 0xFF1E1E2E;
+        values.Foreground = 0xFFCDD6F4;
+        values.AnsiColors[0] = 0xFF45475A;
+        values.AnsiColors[1] = 0xFFF38BA8;
+        values.AnsiColors[2] = 0xFFA6E3A1;
+        values.AnsiColors[3] = 0xFFF9E2AF;
+        values.AnsiColors[4] = 0xFF89B4FA;
+        values.AnsiColors[5] = 0xFFF5C2E7;
+        values.AnsiColors[6] = 0xFF94E2D5;
+        values.AnsiColors[7] = 0xFFBAC2DE;
+        values.AnsiColors[8] = 0xFF585B70;
+        values.AnsiColors[9] = 0xFFF38BA8;
+        values.AnsiColors[10] = 0xFFA6E3A1;
+        values.AnsiColors[11] = 0xFFF9E2AF;
+        values.AnsiColors[12] = 0xFF89B4FA;
+        values.AnsiColors[13] = 0xFFF5C2E7;
+        values.AnsiColors[14] = 0xFF94E2D5;
+        values.AnsiColors[15] = 0xFFA6ADC8;
+    }
+
+    private static void SetTokyoNightColors(ConfigValues values)
+    {
+        values.Background = 0xFF1A1B26;
+        values.Foreground = 0xFFA9B1D6;
+        values.AnsiColors[0] = 0xFF15161E;
+        values.AnsiColors[1] = 0xFFF7768E;
+        values.AnsiColors[2] = 0xFF9ECE6A;
+        values.AnsiColors[3] = 0xFFE0AF68;
+        values.AnsiColors[4] = 0xFF7AA2F7;
+        values.AnsiColors[5] = 0xFFBB9AF7;
+        values.AnsiColors[6] = 0xFF7DCFFF;
+        values.AnsiColors[7] = 0xFF787C99;
+        values.AnsiColors[8] = 0xFF414868;
+        values.AnsiColors[9] = 0xFFF7768E;
+        values.AnsiColors[10] = 0xFF9ECE6A;
+        values.AnsiColors[11] = 0xFFE0AF68;
+        values.AnsiColors[12] = 0xFF7AA2F7;
+        values.AnsiColors[13] = 0xFFBB9AF7;
+        values.AnsiColors[14] = 0xFF7DCFFF;
+        values.AnsiColors[15] = 0xFFC0CAF5;
+    }
+
+    private static void SetLightPlusColors(ConfigValues values)
+    {
+        values.Background = 0xFFFFFFFF;
+        values.Foreground = 0xFF000000;
+        values.AnsiColors[0] = 0xFF000000;
+        values.AnsiColors[1] = 0xFFCD3131;
+        values.AnsiColors[2] = 0xFF00BC00;
+        values.AnsiColors[3] = 0xFFE5E510;
+        values.AnsiColors[4] = 0xFF0000EE;
+        values.AnsiColors[5] = 0xFFCD00CD;
+        values.AnsiColors[6] = 0xFF00CDCD;
+        values.AnsiColors[7] = 0xFFE5E5E5;
+        values.AnsiColors[8] = 0xFF666666;
+        values.AnsiColors[9] = 0xFFFF0000;
+        values.AnsiColors[10] = 0xFF00FF00;
+        values.AnsiColors[11] = 0xFFFFFF00;
+        values.AnsiColors[12] = 0xFF5C5CFF;
+        values.AnsiColors[13] = 0xFFFF00FF;
+        values.AnsiColors[14] = 0xFF00FFFF;
+        values.AnsiColors[15] = 0xFFFFFFFF;
+    }
+
+    private static void SetOneLightColors(ConfigValues values)
+    {
+        values.Background = 0xFFFAFAFA;
+        values.Foreground = 0xFF383A42;
+        values.AnsiColors[0] = 0xFF383A42;
+        values.AnsiColors[1] = 0xFFE45649;
+        values.AnsiColors[2] = 0xFF50A14F;
+        values.AnsiColors[3] = 0xFF986801;
+        values.AnsiColors[4] = 0xFF4078F2;
+        values.AnsiColors[5] = 0xFFA626A4;
+        values.AnsiColors[6] = 0xFF0184BC;
+        values.AnsiColors[7] = 0xFFA0A1A7;
+        values.AnsiColors[8] = 0xFF4F525D;
+        values.AnsiColors[9] = 0xFFE45649;
+        values.AnsiColors[10] = 0xFF50A14F;
+        values.AnsiColors[11] = 0xFF986801;
+        values.AnsiColors[12] = 0xFF4078F2;
+        values.AnsiColors[13] = 0xFFA626A4;
+        values.AnsiColors[14] = 0xFF0184BC;
+        values.AnsiColors[15] = 0xFFFFFFFF;
+    }
+
+    private static void SetSolarizedLightColors(ConfigValues values)
+    {
+        values.Background = 0xFFFDF6E3;
+        values.Foreground = 0xFF657B83;
+        values.AnsiColors[0] = 0xFF073642;
+        values.AnsiColors[1] = 0xFFDC322F;
+        values.AnsiColors[2] = 0xFF859900;
+        values.AnsiColors[3] = 0xFFB58900;
+        values.AnsiColors[4] = 0xFF268BD2;
+        values.AnsiColors[5] = 0xFFD33682;
+        values.AnsiColors[6] = 0xFF2AA198;
+        values.AnsiColors[7] = 0xFFEEE8D5;
+        values.AnsiColors[8] = 0xFF002B36;
+        values.AnsiColors[9] = 0xFFCB4B16;
+        values.AnsiColors[10] = 0xFF586E75;
+        values.AnsiColors[11] = 0xFF657B83;
+        values.AnsiColors[12] = 0xFF839496;
+        values.AnsiColors[13] = 0xFF6C71C4;
+        values.AnsiColors[14] = 0xFF93A1A1;
+        values.AnsiColors[15] = 0xFFFDF6E3;
     }
 
     private static void ExtractKeyBindings(ITypeSymbol keyBindingsType, List<KeyBinding> bindings)

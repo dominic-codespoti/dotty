@@ -58,7 +58,7 @@ public class ConfigGenerator : IIncrementalGenerator
         return null;
     }
 
-    private static void Execute(SourceProductionContext context, Compilation compilation, ImmutableArray<ClassDeclarationSyntax> configClasses)
+    private static void Execute(SourceProductionContext context, Compilation compilation, ImmutableArray<ClassDeclarationSyntax?> configClasses)
     {
         var configValues = new ConfigValues();
         var keyBindings = new List<KeyBinding>();
@@ -68,14 +68,17 @@ public class ConfigGenerator : IIncrementalGenerator
 
         if (hasUserConfig)
         {
-            // Use the first config class found
-            var configClass = configClasses[0];
-            var semanticModel = compilation.GetSemanticModel(configClass.SyntaxTree);
-            var classSymbol = semanticModel.GetDeclaredSymbol(configClass);
-
-            if (classSymbol != null)
+            // Use the first config class found (skip null entries)
+            var configClass = configClasses.FirstOrDefault(c => c != null);
+            if (configClass != null)
             {
-                ExtractConfigValues(classSymbol, configValues, keyBindings);
+                var semanticModel = compilation.GetSemanticModel(configClass.SyntaxTree);
+                var classSymbol = semanticModel.GetDeclaredSymbol(configClass);
+
+                if (classSymbol != null)
+                {
+                    ExtractConfigValues(classSymbol, configValues, keyBindings);
+                }
             }
         }
 

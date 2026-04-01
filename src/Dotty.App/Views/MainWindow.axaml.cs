@@ -104,16 +104,12 @@ public partial class MainWindow : Window
     {
         if (_terminalViews.ContainsKey(tab)) return;
         
-        Console.WriteLine($"[MainWindow] Creating TerminalView for tab: {tab.Title}");
-        
         var terminalView = new TerminalView
         {
             DataContext = tab.Session,
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
         };
-        
-        Console.WriteLine($"[MainWindow] TerminalView created, Session={tab.Session != null}");
         
         terminalView.NewTabRequested += OnNewTabRequested;
         
@@ -156,7 +152,6 @@ public partial class MainWindow : Window
         // This ensures fast tab switching (click back within 5s) has a snapshot ready
         if (_terminalViews.TryGetValue(tab, out var view) && view != null)
         {
-            Console.WriteLine($"[MainWindow] Capturing snapshot immediately for: {tab.Title}");
             CaptureTabSnapshot(tab);
         }
         
@@ -175,14 +170,12 @@ public partial class MainWindow : Window
             // Only destroy if this tab is not currently active
             if (_viewModel.ActiveTab != tab && _terminalViews.TryGetValue(tab, out var viewToDestroy))
             {
-                Console.WriteLine($"[MainWindow] Auto-destroying view for inactive tab: {tab.Title}");
                 DestroyTerminalView(tab);
             }
         };
         
         _inactiveTabTimers[tab] = timer;
         timer.Start();
-        Console.WriteLine($"[MainWindow] Started destruction timer for: {tab.Title} ({InactiveTabDestroyDelayMs}ms)");
     }
     
     /// <summary>
@@ -195,7 +188,6 @@ public partial class MainWindow : Window
         {
             timer.Stop();
             _inactiveTabTimers.Remove(tab);
-            Console.WriteLine($"[MainWindow] Cancelled inactive timer for tab: {tab.Title}");
         }
     }
     
@@ -232,15 +224,12 @@ public partial class MainWindow : Window
             {
                 oldSnapshot.Dispose();
                 _tabSnapshots.Remove(tab);
-                Console.WriteLine($"[MainWindow] Replaced existing snapshot for: {tab.Title}");
             }
             _tabSnapshots[tab] = snapshot;
-            
-            Console.WriteLine($"[MainWindow] Captured snapshot for tab: {tab.Title} ({pixelSize.Width}x{pixelSize.Height})");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"[MainWindow] Failed to capture snapshot for {tab.Title}: {ex.Message}");
+            // Snapshot capture failed, continue without it
         }
     }
     
@@ -267,12 +256,10 @@ public partial class MainWindow : Window
             image.Tag = "tab-snapshot";
             
             _contentContainer.Children.Add(image);
-            Console.WriteLine($"[MainWindow] Showing snapshot for tab: {tab.Title}");
             return true;
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"[MainWindow] Failed to show snapshot for {tab.Title}: {ex.Message}");
             return false;
         }
     }
@@ -310,7 +297,6 @@ public partial class MainWindow : Window
             await fadeAnimation.RunAsync(image);
             
             _contentContainer.Children.Remove(image);
-            Console.WriteLine("[MainWindow] Removed snapshot placeholder with fade");
         }
     }
     
@@ -323,7 +309,6 @@ public partial class MainWindow : Window
         {
             snapshot.Dispose();
             _tabSnapshots.Remove(tab);
-            Console.WriteLine($"[MainWindow] Cleared snapshot for tab: {tab.Title}");
         }
     }
     
@@ -357,13 +342,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void ShowTab(TabViewModel tab)
     {
-        Console.WriteLine($"[MainWindow] ShowTab called for: {tab.Title}");
-        
-        if (_contentContainer == null) 
-        {
-            Console.WriteLine("[MainWindow] ShowTab: ContentContainer is null");
-            return;
-        }
+        if (_contentContainer == null) return;
         
         // Remove any existing views and snapshots
         _contentContainer.Children.Clear();
@@ -374,18 +353,14 @@ public partial class MainWindow : Window
         // STEP 2: Ensure we have a TerminalView for this tab
         if (!_terminalViews.TryGetValue(tab, out var newView)) 
         {
-            Console.WriteLine("[MainWindow] ShowTab: Creating view lazily");
             CreateTerminalView(tab);
             
             if (!_terminalViews.TryGetValue(tab, out newView))
             {
-                Console.WriteLine("[MainWindow] ShowTab: Failed to create view");
                 // Even if we failed to create view, we might have a snapshot
                 return;
             }
         }
-        
-        Console.WriteLine($"[MainWindow] ShowTab: TerminalView ready, Session={newView.Session != null}");
         
         // Ensure the new view has the correct DataContext
         newView.DataContext = tab.Session;
@@ -395,11 +370,6 @@ public partial class MainWindow : Window
         if (!_contentContainer.Children.Contains(newView))
         {
             _contentContainer.Children.Add(newView);
-            Console.WriteLine("[MainWindow] ShowTab: Added real view on top");
-        }
-        else
-        {
-            Console.WriteLine("[MainWindow] ShowTab: View already in container, skipping add");
         }
         
         // STEP 4: Force immediate render of the real view
@@ -424,13 +394,7 @@ public partial class MainWindow : Window
         }
         
         // STEP 6: Start the session
-        if (tab.Session != null)
-        {
-            Console.WriteLine("[MainWindow] ShowTab: Starting session");
-            tab.Session.Start();
-        }
-        
-        Console.WriteLine($"[MainWindow] Switched to tab: {tab.Title}");
+        tab.Session?.Start();
     }
     
     private void OnOpened(object? sender, EventArgs e)
@@ -462,7 +426,6 @@ public partial class MainWindow : Window
                 view.FocusInput();
                 // Send the text to the terminal
                 view.SendRawInput(text);
-                Console.WriteLine($"[Test] Typed text: {text}");
             }
         });
     }
@@ -483,17 +446,15 @@ public partial class MainWindow : Window
                 _testCommandListener = new TcpListener(IPAddress.Loopback, port);
                 _testCommandListener.Start();
                 
-                Console.WriteLine($"[Test] Command listener started on port {port}");
-                
                 while (!_testCommandCts.Token.IsCancellationRequested)
                 {
                     var client = await _testCommandListener.AcceptTcpClientAsync();
                     _ = Task.Run(() => HandleTestClient(client));
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine($"[Test] Listener error: {ex.Message}");
+                // Test listener error, ignore
             }
         });
     }
@@ -507,8 +468,6 @@ public partial class MainWindow : Window
             
             var command = await reader.ReadLineAsync();
             if (string.IsNullOrEmpty(command)) return;
-            
-            Console.WriteLine($"[Test] Received command: {command}");
             
             Dispatcher.UIThread.Post(() =>
             {
@@ -550,18 +509,18 @@ public partial class MainWindow : Window
                             break;
                     }
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    Console.WriteLine($"[Test] Command error: {ex.Message}");
+                    // Command error, ignore
                 }
             });
             
             var response = Encoding.UTF8.GetBytes("OK\n");
             await stream.WriteAsync(response, 0, response.Length);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"[Test] Client handler error: {ex.Message}");
+            // Client handler error, ignore
         }
         finally
         {
@@ -588,11 +547,10 @@ public partial class MainWindow : Window
         try
         {
             TerminalVisualHandler.EnableAutoCapture(frameCount);
-            Console.WriteLine($"[Test] Auto-capture enabled for {frameCount} frames");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"[Test] Auto-capture enable error: {ex.Message}");
+            // Auto-capture enable error, ignore
         }
     }
 
@@ -601,11 +559,10 @@ public partial class MainWindow : Window
         try
         {
             TerminalVisualHandler.CaptureScreenshot();
-            Console.WriteLine("[Test] Canvas screenshot capture triggered - will capture next frame");
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"[Test] Canvas screenshot trigger error: {ex.Message}");
+            // Canvas screenshot trigger error, ignore
         }
     }
 
@@ -625,12 +582,10 @@ public partial class MainWindow : Window
                 
                 using var stream = System.IO.File.OpenWrite(filename);
                 renderBitmap.Save(stream);
-                
-                Console.WriteLine($"[Test] Screenshot saved to: {filename}");
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine($"[Test] Screenshot error: {ex.Message}");
+                // Screenshot error, ignore
             }
         });
     }

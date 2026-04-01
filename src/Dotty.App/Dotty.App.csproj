@@ -11,7 +11,6 @@
   <!-- Enable Native AOT publishing by default. You can override/pin per publish command. -->
   <PropertyGroup>
     <PublishAot>true</PublishAot>
-    <SelfContained>true</SelfContained>
   </PropertyGroup>
 
   <ItemGroup>

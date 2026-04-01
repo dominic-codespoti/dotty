@@ -55,11 +55,7 @@ public class TerminalSession : IDisposable
     public void Start()
     {
         // Prevent double-starting the session
-        if (_isStarted)
-        {
-            Console.WriteLine("[TerminalSession] Already started, ignoring duplicate Start() call");
-            return;
-        }
+        if (_isStarted) return;
         _isStarted = true;
         
         string projectPath = FindPtyTestsProjectPath();
@@ -133,7 +129,6 @@ public class TerminalSession : IDisposable
         // informing it of the actual terminal size - not a change from previous
         if (!_hasReceivedInitialResize)
         {
-            Console.WriteLine($"[TerminalSession] Initial resize to {cols}x{rows} - storing as baseline, not signaling shell");
             _hasReceivedInitialResize = true;
             _initialCols = cols;
             _initialRows = rows;
@@ -144,12 +139,7 @@ public class TerminalSession : IDisposable
         // Only send resize if size actually changed from initial
         if (cols != _initialCols || rows != _initialRows)
         {
-            Console.WriteLine($"[TerminalSession] Size changed to {cols}x{rows} (from {_initialCols}x{_initialRows}) - signaling shell");
             _ = SendResizeMessageAsync(cols, rows);
-        }
-        else
-        {
-            Console.WriteLine($"[TerminalSession] Size matches initial ({cols}x{rows}) - no signal needed");
         }
     }
 

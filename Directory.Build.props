@@ -2,10 +2,15 @@
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(OutputType)' != 'Library'">
-    <PublishAot>true</PublishAot>
-    <SelfContained>true</SelfContained>
+  <!-- AOT and trimming analysis for executable projects targeting net8.0+ -->
+  <PropertyGroup Condition="'$(OutputType)' != 'Library' AND $([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">
     <EnableAotAnalyzer>true</EnableAotAnalyzer>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
+  <!-- Only set PublishAot and SelfContained when actually publishing, not during build -->
+  <PropertyGroup Condition="'$(OutputType)' != 'Library' AND $([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0')) AND '$(RuntimeIdentifier)' != ''">
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <IsTrimmable>true</IsTrimmable>
   </PropertyGroup>
 </Project>

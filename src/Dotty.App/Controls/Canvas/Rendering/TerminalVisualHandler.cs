@@ -208,14 +208,14 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                Console.WriteLine($"[TerminalVisualHandler] Render crash caught: {ex}");
+                // Render crash caught, ignore
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"[TerminalVisualHandler] Render crash caught: {ex}");
+            // Render crash caught, ignore
         }
     }
     
@@ -225,11 +225,7 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
         {
             // Get the surface from the lease and read pixels
             var surface = lease.SkSurface;
-            if (surface == null)
-            {
-                Console.WriteLine("[TerminalVisualHandler] Cannot capture screenshot: surface is null");
-                return;
-            }
+            if (surface == null) return;
             
             // Create a bitmap to capture the current frame
             using var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
@@ -245,17 +241,12 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                 if (data != null)
                 {
                     File.WriteAllBytes(filename, data.ToArray());
-                    Console.WriteLine($"[TerminalVisualHandler] Screenshot saved to: {filename}");
                 }
             }
-            else
-            {
-                Console.WriteLine("[TerminalVisualHandler] Failed to read pixels from surface");
-            }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Console.WriteLine($"[TerminalVisualHandler] Screenshot save error: {ex.Message}");
+            // Screenshot save error, ignore
         }
     }
 

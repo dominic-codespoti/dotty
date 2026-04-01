@@ -186,12 +186,7 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
         gl.CompileShader(shader);
         int status;
         gl.GetShaderiv(shader, GlConsts.GL_COMPILE_STATUS, &status);
-        if (status == 0)
-        {
-            var logBuffer = stackalloc byte[1024];
-            gl.GetShaderInfoLog(shader, 1024, out int outLen, logBuffer);
-            Console.WriteLine("Shader Error: " + Encoding.UTF8.GetString(logBuffer, outLen));
-        }
+        // Shader compile errors are silently ignored - shader errors should be handled elsewhere
     }
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)

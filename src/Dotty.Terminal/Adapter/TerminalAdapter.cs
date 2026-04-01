@@ -51,7 +51,9 @@ public class TerminalAdapter : ITerminalHandler
     public event Action<string>? RenderRequested;
     public event Action<string>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
+#pragma warning disable CS0067 // Event is never used, but required by interface
     public event Action<string>? LinkOpened;
+#pragma warning restore CS0067
 
     public void OnHyperlink(string uri) { _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri); }
 

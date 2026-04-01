@@ -57,11 +57,7 @@ namespace Dotty.App.Views
             set
             {
                 // Only update if it's a different session
-                if (_session == value) 
-                {
-                    Console.WriteLine("[TerminalView] Session is the same, not updating");
-                    return;
-                }
+                if (_session == value) return;
                 
                 // Unsubscribe from old session if exists
                 if (_session != null)
@@ -70,14 +66,12 @@ namespace Dotty.App.Views
                     this.RawInput -= _session.WriteInput;
                 }
                 
-                Console.WriteLine($"[TerminalView] Session set to: {value != null}");
                 _session = value;
                 
                 if (_session != null)
                 {
                     // Connect handlers but don't resize - resize happens via OnSizeChanged
                     _session.RenderScheduled += OnRenderScheduled;
-                    Console.WriteLine("[TerminalView] Session handlers connected");
                     // Don't call UpdateSize here - it triggers a resize signal
                     // The initial resize will happen when the view is measured
                 }
@@ -137,14 +131,9 @@ namespace Dotty.App.Views
                 // Only resize if size actually changed - prevents shell prompt redraw
                 if (cols != _lastCols || rows != _lastRows)
                 {
-                    Console.WriteLine($"[TerminalView] Resizing terminal: {cols}x{rows} (was {_lastCols}x{_lastRows})");
                     _lastCols = cols;
                     _lastRows = rows;
                     _session.Resize(cols, rows);
-                }
-                else
-                {
-                    Console.WriteLine($"[TerminalView] Size unchanged ({cols}x{rows}), skipping resize");
                 }
             }
         }
@@ -224,26 +213,19 @@ namespace Dotty.App.Views
 
         private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)
         {
-            Console.WriteLine($"[TerminalView] OnAttached called, Session={_session != null}");
-            
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
-            
-            Console.WriteLine($"[TerminalView] Grid found: {_grid != null}, Canvas found: {_canvas != null}");
 
             if (_session != null)
             {
-                Console.WriteLine($"[TerminalView] Setting up session, Buffer={_session.Adapter?.Buffer != null}");
                 if (_session.Adapter?.Buffer != null && _grid != null)
                 {
                     SetBuffer(_session.Adapter.Buffer);
-                    Console.WriteLine("[TerminalView] Buffer set successfully");
                 }
                 
                 // Reconnect event handlers (they were disconnected in OnDetached)
                 _session.RenderScheduled += OnRenderScheduled;
                 this.RawInput += _session.WriteInput;
-                Console.WriteLine("[TerminalView] Input handlers reconnected");
                 
                 if (_fpsMeasurementCallback == null)
                 {
@@ -251,10 +233,6 @@ namespace Dotty.App.Views
                     _lastFrameTime = TimeSpan.Zero;
                     TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback);
                 }
-            }
-            else
-            {
-                Console.WriteLine("[TerminalView] Warning: _session is null in OnAttached");
             }
             
             // Always add input handlers

@@ -404,8 +404,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		
 		// Reset all caches for clean state
 		_frameComposer?.ResetCaches();
-		
-		Console.WriteLine($"[TerminalCanvas] Created fresh composition visual for {GetHashCode()}");
 	}
 
 	/// <summary>
@@ -566,7 +564,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		if (_glyphAtlas != newAtlas)
 		{
 			_glyphAtlas = newAtlas;
-			Console.WriteLine($"[TerminalCanvas] Using shared glyph atlas (total service atlases: {GlyphAtlasService.AtlasCount})");
 		}
 		
 		if (Buffer != null)
@@ -633,7 +630,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				{
 					_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
 					_glyphAtlas = GlyphAtlasService.GetOrCreateAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f, _glyphRasterizationOptions);
-					Console.WriteLine($"[TerminalCanvas] Using shared glyph atlas for new buffer (total service atlases: {GlyphAtlasService.AtlasCount})");
 				}
 				// Ensure discovery and composer are created only once so we preserve
 				// front-buffer and row caches across buffer swaps. If sizes differ,
@@ -693,8 +689,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			_frameDebounceTimer.Tick -= FrameDebounceTick;
 			_frameDebounceTimer = null;
 		}
-		
-		Console.WriteLine($"[TerminalCanvas] Detached and destroyed composition visual for {GetHashCode()}");
 	}
 
 	private IBrush ResolveResourceBrush(IResourceDictionary? resources, string key, IBrush fallback)

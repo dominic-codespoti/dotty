@@ -32,7 +32,6 @@ public static class GlyphAtlasService
                 atlas = new GlyphAtlas(typeface, textSize, options);
                 atlas.PreloadCommonGlyphs();
                 _atlases[key] = atlas;
-                Console.WriteLine($"[GlyphAtlasService] Created new shared atlas for {typeface?.FamilyName ?? "Default"}@{textSize:F1}px ({_atlases.Count} total atlases)");
             }
             
             return atlas;
@@ -52,7 +51,6 @@ public static class GlyphAtlasService
                 try { atlas.Dispose(); } catch { }
             }
             _atlases.Clear();
-            Console.WriteLine("[GlyphAtlasService] Cleared all shared atlases");
         }
     }
     

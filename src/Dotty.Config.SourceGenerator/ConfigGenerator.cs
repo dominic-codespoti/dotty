@@ -85,7 +85,7 @@ public class ConfigGenerator : IIncrementalGenerator
 
             if (classSymbol != null)
             {
-                ExtractConfigValues(classSymbol, configValues, keyBindings);
+                ExtractConfigValues(classSymbol, semanticModel, configValues, keyBindings);
             }
         }
 
@@ -102,7 +102,7 @@ public class ConfigGenerator : IIncrementalGenerator
         context.AddSource("Dotty.Generated.KeyBindings.g.cs", keyBindingSource);
     }
 
-    private static void ExtractConfigValues(INamedTypeSymbol classSymbol, ConfigValues values, List<KeyBinding> keyBindings)
+    private static void ExtractConfigValues(INamedTypeSymbol classSymbol, SemanticModel semanticModel, ConfigValues values, List<KeyBinding> keyBindings)
     {
         // Extract property values from the config class
         foreach (var member in classSymbol.GetMembers())
@@ -148,7 +148,19 @@ public class ConfigGenerator : IIncrementalGenerator
         var colorsProperty = classSymbol.GetMembers("Colors").OfType<IPropertySymbol>().FirstOrDefault();
         if (colorsProperty != null)
         {
-            ExtractColorScheme(colorsProperty.Type, values);
+            // Get the syntax reference to parse the expression
+            var colorsSyntax = colorsProperty.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            if (colorsSyntax is PropertyDeclarationSyntax propertyDecl && propertyDecl.ExpressionBody != null)
+            {
+                // Parse the expression to extract the theme name
+                var themeName = ExtractThemeNameFromExpression(propertyDecl.ExpressionBody.Expression, semanticModel);
+                ExtractColorSchemeByName(themeName, values);
+            }
+            else
+            {
+                // Fallback to type-based extraction
+                ExtractColorScheme(colorsProperty.Type, values);
+            }
         }
 
         // Look for KeyBindings property
@@ -182,6 +194,108 @@ public class ConfigGenerator : IIncrementalGenerator
             // For now, return null and rely on defaults
         }
         return null;
+    }
+
+    /// <summary>
+    /// Extracts the theme name from an expression like "BuiltInThemes.DarkPlus" or "new CustomTheme()"
+    /// </summary>
+    private static string ExtractThemeNameFromExpression(ExpressionSyntax expression, SemanticModel semanticModel)
+    {
+        // Handle member access: BuiltInThemes.DarkPlus
+        if (expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            // Get the member name (e.g., "DarkPlus")
+            return memberAccess.Name.Identifier.ValueText;
+        }
+        
+        // Handle object creation: new DarkPlusTheme()
+        if (expression is ObjectCreationExpressionSyntax objectCreation)
+        {
+            // Get the type name (e.g., "DarkPlusTheme")
+            if (objectCreation.Type is IdentifierNameSyntax identifier)
+            {
+                return identifier.Identifier.ValueText;
+            }
+        }
+        
+        // Try to resolve the symbol for more complex expressions
+        var symbolInfo = semanticModel.GetSymbolInfo(expression);
+        if (symbolInfo.Symbol is IPropertySymbol prop)
+        {
+            // If it's a property, try to get its type
+            if (prop.Type is INamedTypeSymbol typeSymbol)
+            {
+                return typeSymbol.Name;
+            }
+        }
+        else if (symbolInfo.Symbol is IMethodSymbol method && method.MethodKind == MethodKind.Constructor)
+        {
+            // Object creation expression
+            return method.ContainingType.Name;
+        }
+        
+        return string.Empty;
+    }
+
+    /// <summary>
+    /// Extracts color scheme based on the theme name from the expression.
+    /// </summary>
+    private static void ExtractColorSchemeByName(string themeName, ConfigValues values)
+    {
+        // Map the theme name (e.g., "CatppuccinLatte" or "CatppuccinLatteTheme") to colors
+        var normalizedName = themeName.Replace("Theme", "");
+        
+        switch (normalizedName)
+        {
+            case "CatppuccinLatte":
+            case "CatppuccinLatteTheme":
+                SetCatppuccinLatteColors(values);
+                break;
+            case "DarkPlus":
+            case "DarkPlusTheme":
+                SetDarkPlusColors(values);
+                break;
+            case "Dracula":
+            case "DraculaTheme":
+                SetDraculaColors(values);
+                break;
+            case "OneDark":
+            case "OneDarkTheme":
+                SetOneDarkColors(values);
+                break;
+            case "GruvboxDark":
+            case "GruvboxDarkTheme":
+                SetGruvboxDarkColors(values);
+                break;
+            case "GruvboxLight":
+            case "GruvboxLightTheme":
+                SetGruvboxLightColors(values);
+                break;
+            case "CatppuccinMocha":
+            case "CatppuccinMochaTheme":
+                SetCatppuccinMochaColors(values);
+                break;
+            case "TokyoNight":
+            case "TokyoNightTheme":
+                SetTokyoNightColors(values);
+                break;
+            case "LightPlus":
+            case "LightPlusTheme":
+                SetLightPlusColors(values);
+                break;
+            case "OneLight":
+            case "OneLightTheme":
+                SetOneLightColors(values);
+                break;
+            case "SolarizedLight":
+            case "SolarizedLightTheme":
+                SetSolarizedLightColors(values);
+                break;
+            default:
+                // Unknown theme, use defaults (DarkPlus)
+                SetDarkPlusColors(values);
+                break;
+        }
     }
 
     private static void ExtractColorScheme(ITypeSymbol colorsType, ConfigValues values)

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.RegularExpressions;
 
 namespace Dotty.App.Services;
 
@@ -29,6 +30,12 @@ public static class ConfigGeneratorService
     public static readonly string ProjectPath = Path.Combine(ProjectDir, "Dotty.UserConfig.csproj");
 
     /// <summary>
+    /// The current/latest version of Dotty.Abstractions package.
+    /// This should match the version in Dotty.Abstractions.csproj
+    /// </summary>
+    public const string LatestPackageVersion = "0.2.0";
+
+    /// <summary>
     /// Checks common configuration file locations and returns the path if found.
     /// </summary>
     public static string? GetExistingConfigPath()
@@ -52,6 +59,70 @@ public static class ConfigGeneratorService
         }
         
         return null;
+    }
+
+    /// <summary>
+    /// Checks if the user's config project is using an outdated NuGet package version
+    /// and updates it if necessary.
+    /// </summary>
+    /// <returns>True if an update was performed, false otherwise</returns>
+    public static bool UpdatePackageVersionIfNeeded()
+    {
+        try
+        {
+            // Check if project file exists
+            if (!File.Exists(ProjectPath))
+                return false;
+            
+            var csprojContent = File.ReadAllText(ProjectPath);
+            
+            // Check if Dotty.Abstractions is referenced
+            if (!csprojContent.Contains("Dotty.Abstractions"))
+                return false;
+            
+            // Extract current version using regex
+            var versionMatch = Regex.Match(
+                csprojContent, 
+                @"<PackageReference Include=""Dotty.Abstractions"" Version=""(\d+\.\d+\.\d+)""");
+            
+            if (!versionMatch.Success)
+            {
+                // Package reference exists but we can't parse version
+                // Might be an older format, suggest manual update
+                Console.WriteLine("⚠ Your config project uses an outdated format.");
+                Console.WriteLine("  Consider running with --update-config to regenerate.");
+                return false;
+            }
+            
+            var currentVersion = versionMatch.Groups[1].Value;
+            
+            // Compare versions
+            if (Version.TryParse(currentVersion, out var current) && 
+                Version.TryParse(LatestPackageVersion, out var latest))
+            {
+                if (current < latest)
+                {
+                    // Update the version in the csproj
+                    var updatedContent = Regex.Replace(
+                        csprojContent,
+                        @"(<PackageReference Include=""Dotty.Abstractions"" Version="")(\d+\.\d+\.\d+)("")",
+                        "${1}" + LatestPackageVersion + "${3}");
+                    
+                    File.WriteAllText(ProjectPath, updatedContent);
+                    
+                    Console.WriteLine($"✓ Updated Dotty.Abstractions from {currentVersion} to {LatestPackageVersion}");
+                    Console.WriteLine("  Run 'dotnet restore' in your config folder to apply changes.");
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"⚠ Could not check for package updates: {ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -91,7 +162,7 @@ public static class ConfigGeneratorService
     /// </summary>
     private static string GenerateProjectFile()
     {
-        return "<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+        return $"<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
                "\n" +
                "  <PropertyGroup>\n" +
                "    <TargetFramework>net10.0</TargetFramework>\n" +
@@ -102,7 +173,7 @@ public static class ConfigGeneratorService
                "  </PropertyGroup>\n" +
                "\n" +
                "  <ItemGroup>\n" +
-               "    <PackageReference Include=\"Dotty.Abstractions\" Version=\"0.1.0\" />\n" +
+               $"    <PackageReference Include=\"Dotty.Abstractions\" Version=\"{LatestPackageVersion}\" />\n" +
                "  </ItemGroup>\n" +
                "\n" +
                "</Project>";

@@ -15,6 +15,20 @@ static class Program
         // DOTTY_DISABLE_LOGGING=1 in your environment to enable this.
         // Environment-driven global silencing removed; keep Console as-is.
 
+        // Handle --check-updates flag
+        if (args.Contains("--check-updates"))
+        {
+            if (ConfigGeneratorService.UpdatePackageVersionIfNeeded())
+            {
+                Console.WriteLine("\nUpdate complete! Run 'dotnet restore' to apply changes.");
+            }
+            else
+            {
+                Console.WriteLine("✓ Your config is up to date.");
+            }
+            return;
+        }
+
         // Generate default config on first run
         HandleFirstRunConfig();
 
@@ -50,7 +64,7 @@ static class Program
             Console.WriteLine($"    1. Open {ConfigGeneratorService.ProjectDir}/ in your IDE");
             Console.WriteLine("       (VS Code, Rider, or any C# editor)");
             Console.WriteLine("    2. Edit Config.cs with full IntelliSense support");
-            Console.WriteLine("    3. The Dotty.Abstractions package (v0.1.0) from NuGet.org");
+            Console.WriteLine($"    3. The Dotty.Abstractions package (v{ConfigGeneratorService.LatestPackageVersion}) from NuGet.org");
             Console.WriteLine("       provides all themes, types, and documentation");
             Console.WriteLine("    4. Restart Dotty to apply changes");
             Console.WriteLine();
@@ -61,6 +75,11 @@ static class Program
         {
             Console.WriteLine($"✓ Regenerated config at: {ConfigGeneratorService.ConfigPath}");
             Console.WriteLine($"  Project: {ConfigGeneratorService.ProjectPath}");
+        }
+        else
+        {
+            // Check for package updates on existing configs
+            ConfigGeneratorService.UpdatePackageVersionIfNeeded();
         }
     }
 

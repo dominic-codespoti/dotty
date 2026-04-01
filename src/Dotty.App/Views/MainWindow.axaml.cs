@@ -35,9 +35,9 @@ public partial class MainWindow : Window
         private readonly Dictionary<TabViewModel, DispatcherTimer> _inactiveTabTimers = new();
         private readonly Dictionary<TabViewModel, WriteableBitmap> _tabSnapshots = new();
         private int InactiveTabDestroyDelayMs => Generated.Config.InactiveTabDestroyDelayMs;
-        private Grid? _contentContainer;
-        private Control? _tabBar;
-        private bool _needsTransparentContentContainer = false;
+    private Grid? _contentContainer;
+    private Control? _tabBar;
+    private SolidColorBrush? _semiTransparentBrush;
 
         public MainWindow()
         {
@@ -77,9 +77,6 @@ public partial class MainWindow : Window
                 this.Opacity = windowOpacity;
                 Console.WriteLine("[MainWindow] Applied window opacity: " + this.Opacity);
                 
-                // Mark that we need transparent ContentContainer
-                _needsTransparentContentContainer = true;
-                
                 // On Wayland with opacity, use background alpha workaround (compositor handles window opacity poorly)
                 // On other platforms with opacity, use transparent background
                 if (isWayland)
@@ -89,7 +86,8 @@ public partial class MainWindow : Window
                     // Calculate alpha: 0.5 opacity = 128 alpha (0.5 * 255)
                     byte alpha = (byte)(windowOpacity * 255);
                     var transparentColor = new Color(alpha, baseColor.R, baseColor.G, baseColor.B);
-                    Background = new SolidColorBrush(transparentColor);
+                    _semiTransparentBrush = new SolidColorBrush(transparentColor);
+                    Background = _semiTransparentBrush;
                     
                     Console.WriteLine("[MainWindow] Wayland workaround: background alpha = " + alpha);
                     Console.WriteLine("[MainWindow] Background color ARGB: 0x" + ((alpha << 24) | (baseColor.R << 16) | (baseColor.G << 8) | baseColor.B).ToString("X8"));
@@ -240,11 +238,11 @@ public partial class MainWindow : Window
         _contentContainer = this.FindControl<Grid>("ContentContainer");
         _tabBar = this.FindControl<Control>("TabBar");
         
-        // If opacity is enabled, make ContentContainer transparent so window background shows through
-        if (_needsTransparentContentContainer && _contentContainer != null)
+        // If opacity is enabled, make ContentContainer use the same semi-transparent brush as the window
+        if (_semiTransparentBrush != null && _contentContainer != null)
         {
-            _contentContainer.Background = Brushes.Transparent;
-            Console.WriteLine("[MainWindow] Set ContentContainer to transparent for opacity effect");
+            _contentContainer.Background = _semiTransparentBrush;
+            Console.WriteLine("[MainWindow] Set ContentContainer to semi-transparent");
         }
         
         // Initialize the first tab's content (lazy - only create when needed)

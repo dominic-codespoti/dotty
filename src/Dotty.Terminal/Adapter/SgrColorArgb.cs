@@ -86,12 +86,26 @@ public readonly record struct SgrColorArgb(uint Argb)
     {
         var palette = new SgrColorArgb[256];
         
-        // First 16 colors are ANSI
-        for (int i = 0; i < 16; i++)
-        {
-            int code = i < 8 ? 30 + i : 90 + (i - 8);
-            palette[i] = FromAnsiCode(code);
-        }
+        // First 16 colors are standard ANSI (will be overridden by SetAnsiPalette if theme is set)
+        // Normal colors (indices 0-7)
+        palette[0] = new SgrColorArgb(0xFF000000u);  // Black
+        palette[1] = new SgrColorArgb(0xFFAA0000u);  // Red
+        palette[2] = new SgrColorArgb(0xFF00AA00u);  // Green
+        palette[3] = new SgrColorArgb(0xFFAA5500u);  // Yellow
+        palette[4] = new SgrColorArgb(0xFF0000AAu);  // Blue
+        palette[5] = new SgrColorArgb(0xFFAA00AAu);  // Magenta
+        palette[6] = new SgrColorArgb(0xFF00AAAAu);  // Cyan
+        palette[7] = new SgrColorArgb(0xFFAAAAAAu);  // White
+
+        // Bright colors (indices 8-15)
+        palette[8] = new SgrColorArgb(0xFF555555u);   // Bright Black
+        palette[9] = new SgrColorArgb(0xFFFF5555u);   // Bright Red
+        palette[10] = new SgrColorArgb(0xFF55FF55u); // Bright Green
+        palette[11] = new SgrColorArgb(0xFFFFFF55u); // Bright Yellow
+        palette[12] = new SgrColorArgb(0xFF5555FFu); // Bright Blue
+        palette[13] = new SgrColorArgb(0xFFFF55FFu); // Bright Magenta
+        palette[14] = new SgrColorArgb(0xFF55FFFFu); // Bright Cyan
+        palette[15] = new SgrColorArgb(0xFFFFFFFFu); // Bright White
 
         // 16-231: 6x6x6 color cube
         for (int idx = 16; idx <= 231; idx++)

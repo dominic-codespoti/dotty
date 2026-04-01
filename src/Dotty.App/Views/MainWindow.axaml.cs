@@ -46,7 +46,19 @@ public partial class MainWindow : Window
             DataContext = _viewModel;
             
             Title = Generated.Config.WindowTitle;
-            Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+            
+            // Only set solid background if transparency is disabled
+            // For transparent/acrylic/blur windows, use transparent background so the desktop shows through
+            var transparency = global::Dotty.Generated.Config.Transparency;
+            if (transparency == TransparencyLevel.None)
+            {
+                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+            }
+            else
+            {
+                // Transparent/acrylic/blur - let the compositor handle transparency
+                Background = Brushes.Transparent;
+            }
             
             // Apply window opacity if not fully opaque
             var opacity = ConfigBridge.GetWindowOpacity();

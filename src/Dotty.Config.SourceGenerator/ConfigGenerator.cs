@@ -63,22 +63,29 @@ public class ConfigGenerator : IIncrementalGenerator
         var configValues = new ConfigValues();
         var keyBindings = new List<KeyBinding>();
 
-        // Check if we found any user config implementations
-        bool hasUserConfig = configClasses.Length > 0;
-
-        if (hasUserConfig)
-        {
-            // Use the first config class found (skip null entries)
-            var configClass = configClasses.FirstOrDefault(c => c != null);
-            if (configClass != null)
+        // Filter out null entries and order to prefer user configs over DefaultConfig
+        var validConfigs = configClasses
+            .Where(c => c != null)
+            .OrderBy(c => 
             {
-                var semanticModel = compilation.GetSemanticModel(configClass.SyntaxTree);
-                var classSymbol = semanticModel.GetDeclaredSymbol(configClass);
+                // Prefer user configs (not named DefaultConfig) over built-in defaults
+                var name = c!.Identifier.ValueText;
+                if (name == "DefaultConfig") return 1; // Put DefaultConfig last
+                if (name.Contains("Config")) return 0; // User configs first
+                return 0;
+            })
+            .ToList();
 
-                if (classSymbol != null)
-                {
-                    ExtractConfigValues(classSymbol, configValues, keyBindings);
-                }
+        // Use the first (highest priority) config class
+        var configClass = validConfigs.FirstOrDefault();
+        if (configClass != null)
+        {
+            var semanticModel = compilation.GetSemanticModel(configClass.SyntaxTree);
+            var classSymbol = semanticModel.GetDeclaredSymbol(configClass);
+
+            if (classSymbol != null)
+            {
+                ExtractConfigValues(classSymbol, configValues, keyBindings);
             }
         }
 

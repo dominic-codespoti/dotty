@@ -35,6 +35,17 @@
     </ProjectReference>
   </ItemGroup>
   
+  <!-- Include user config from ~/.config/dotty/Dotty.UserConfig/ if it exists -->
+  <!-- This allows the Source Generator to pick up user customizations -->
+  <PropertyGroup>
+    <UserConfigPath>$(HOME)/.config/dotty/Dotty.UserConfig/Config.cs</UserConfigPath>
+    <UserConfigPath Condition="'$(USERPROFILE)' != ''">$(USERPROFILE)/.config/dotty/Dotty.UserConfig/Config.cs</UserConfigPath>
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <Compile Include="$(UserConfigPath)" Condition="Exists('$(UserConfigPath)')" />
+  </ItemGroup>
+  
   <!-- Ensure Avalonia XAML files are embedded as Avalonia resources so
        runtime XAML loading or precompiled XAML lookup succeeds when
        running locally. This helps avoid "No precompiled XAML found" errors. -->

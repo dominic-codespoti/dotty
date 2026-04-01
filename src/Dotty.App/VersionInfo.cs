@@ -10,27 +10,27 @@ public static class VersionInfo
     /// <summary>
     /// The current version of Dotty Terminal (e.g., "0.2.0")
     /// </summary>
-    public const string Version = "0.2.0";
+    public const string Version = "0.3.0";
     
     /// <summary>
     /// The NuGet package version for Dotty.Abstractions (should match Version)
     /// </summary>
-    public const string NuGetPackageVersion = "0.2.0";
+    public const string NuGetPackageVersion = "0.3.0";
     
     /// <summary>
     /// The assembly version (4-part version number)
     /// </summary>
-    public const string AssemblyVersion = "0.2.0.0";
+    public const string AssemblyVersion = "0.3.0.0";
     
     /// <summary>
     /// The file version (4-part version number)
     /// </summary>
-    public const string FileVersion = "0.2.0.0";
+    public const string FileVersion = "0.3.0.0";
     
     /// <summary>
     /// The informational version (can include build metadata)
     /// </summary>
-    public const string InformationalVersion = "0.2.0";
+    public const string InformationalVersion = "0.3.0";
     
     /// <summary>
     /// Gets the full version string including name.

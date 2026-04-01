@@ -705,7 +705,7 @@ public class ConfigGenerator : IIncrementalGenerator
         values.AnsiColors[7] = 0xFFACB0BE;   // White
         values.AnsiColors[8] = 0xFF6C6F85;   // Bright Black
         values.AnsiColors[9] = 0xFFD20F39;   // Bright Red
-        values.AnsiColors[10] = 0xFF40A02B;  // Bright Green
+        values.AnsiColors[10] = 0xFF56C150;  // Bright Green (lighter than normal green)
         values.AnsiColors[11] = 0xFFDF8E1D; // Bright Yellow
         values.AnsiColors[12] = 0xFF1E66F5;  // Bright Blue
         values.AnsiColors[13] = 0xFF8839EF;  // Bright Magenta

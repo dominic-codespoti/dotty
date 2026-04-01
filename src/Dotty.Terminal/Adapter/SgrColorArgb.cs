@@ -25,22 +25,22 @@ public readonly record struct SgrColorArgb(uint Argb)
     {
         return code switch
         {
-            30 => new(0xFF000000u), // Black
-            31 => new(0xFFAA0000u), // Red
-            32 => new(0xFF00AA00u), // Green
-            33 => new(0xFFAA5500u), // Yellow
-            34 => new(0xFF0000AAu), // Blue
-            35 => new(0xFFAA00AAu), // Magenta
-            36 => new(0xFF00AAAAu), // Cyan
-            37 => new(0xFFAAAAAAu), // White
-            90 => new(0xFF555555u), // Bright Black
-            91 => new(0xFFFF5555u), // Bright Red
-            92 => new(0xFF55FF55u), // Bright Green
-            93 => new(0xFFFFFF55u), // Bright Yellow
-            94 => new(0xFF5555FFu), // Bright Blue
-            95 => new(0xFFFF55FFu), // Bright Magenta
-            96 => new(0xFF55FFFFu), // Bright Cyan
-            97 => new(0xFFFFFFFFu), // Bright White
+            30 => _palette256[0],   // Black - uses theme!
+            31 => _palette256[1],    // Red
+            32 => _palette256[2],    // Green
+            33 => _palette256[3],    // Yellow
+            34 => _palette256[4],    // Blue
+            35 => _palette256[5],    // Magenta
+            36 => _palette256[6],    // Cyan
+            37 => _palette256[7],    // White
+            90 => _palette256[8],    // Bright Black
+            91 => _palette256[9],    // Bright Red
+            92 => _palette256[10],   // Bright Green - uses theme!
+            93 => _palette256[11],   // Bright Yellow
+            94 => _palette256[12],   // Bright Blue
+            95 => _palette256[13],   // Bright Magenta
+            96 => _palette256[14],   // Bright Cyan
+            97 => _palette256[15],   // Bright White
             _ => default,
         };
     }

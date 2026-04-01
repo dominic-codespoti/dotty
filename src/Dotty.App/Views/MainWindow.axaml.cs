@@ -24,12 +24,12 @@ using Dotty.App.Configuration;
 
 namespace Dotty.App.Views;
 
-public partial class MainWindow : Window
-{
-    private MainViewModel _viewModel;
-    private TcpListener? _testCommandListener;
-    private CancellationTokenSource? _testCommandCts;
-    
+    public partial class MainWindow : Window
+    {
+        private MainViewModel _viewModel;
+        private TcpListener? _testCommandListener;
+        private CancellationTokenSource? _testCommandCts;
+        
         // Manual content management: Keep track of TerminalView instances per tab
         private readonly Dictionary<TabViewModel, TerminalView> _terminalViews = new();
         private readonly Dictionary<TabViewModel, DispatcherTimer> _inactiveTabTimers = new();
@@ -38,17 +38,10 @@ public partial class MainWindow : Window
     private Grid? _contentContainer;
     private Control? _tabBar;
     private SolidColorBrush? _semiTransparentBrush;
+    private bool _isHyprland = false;
 
         public MainWindow()
         {
-            // DEBUG: Raw config values at the very start
-            Console.WriteLine("=== RAW CONFIG VALUES ===");
-            Console.WriteLine("Raw WindowOpacity: " + global::Dotty.Generated.Config.WindowOpacity);
-            Console.WriteLine("Raw Transparency: " + global::Dotty.Generated.Config.Transparency);
-            Console.WriteLine("Calculated windowOpacity: " + (global::Dotty.Generated.Config.WindowOpacity / 100.0));
-            Console.WriteLine("Is windowOpacity < 1.0? " + ((global::Dotty.Generated.Config.WindowOpacity / 100.0) < 1.0));
-            Console.WriteLine("========================");
-            
             InitializeComponent();
             
             _viewModel = new MainViewModel();
@@ -56,91 +49,8 @@ public partial class MainWindow : Window
             
             Title = Generated.Config.WindowTitle;
             
-            // DEBUG: Log transparency configuration
-            var transparency = global::Dotty.Generated.Config.Transparency;
-            var windowOpacity = global::Dotty.Generated.Config.WindowOpacity / 100.0;
-            var isWayland = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") == "wayland";
-            
-            Console.WriteLine("=== TRANSPARENCY DEBUG ===");
-            Console.WriteLine("[MainWindow] Platform: " + RuntimeInformation.OSDescription);
-            Console.WriteLine("[MainWindow] IsLinux: " + RuntimeInformation.IsOSPlatform(OSPlatform.Linux));
-            Console.WriteLine("[MainWindow] IsWayland: " + isWayland);
-            Console.WriteLine("[MainWindow] Transparency config value: " + transparency);
-            Console.WriteLine("[MainWindow] Window opacity config value: " + windowOpacity);
-            Console.WriteLine("[MainWindow] Avalonia version: " + typeof(Window).Assembly.GetName().Version);
-            
-            // Handle transparency and opacity based on platform
-            // Check windowOpacity FIRST so it works independently of TransparencyLevel
-            if (windowOpacity < 1.0)
-            {
-                // User has configured a specific opacity level (less than 100%)
-                Console.WriteLine("[MainWindow] Window opacity configured: " + windowOpacity);
-                
-                // On Wayland with opacity, use ONLY background alpha (compositor handles window opacity poorly)
-                // On other platforms with opacity, use window opacity + transparent background
-                if (isWayland)
-                {
-                    // Wayland: Use ONLY background alpha, do NOT set this.Opacity
-                    // Setting both causes double opacity application resulting in full transparency
-                    var baseColor = ConfigBridge.ToColor(Generated.Config.Background);
-                    // Calculate alpha: 0.5 opacity = 128 alpha (0.5 * 255)
-                    byte alpha = (byte)(windowOpacity * 255);
-                    var transparentColor = new Color(alpha, baseColor.R, baseColor.G, baseColor.B);
-                    _semiTransparentBrush = new SolidColorBrush(transparentColor);
-                    Background = _semiTransparentBrush;
-                    
-                    // DO NOT set this.Opacity here - let brush alpha handle all transparency
-                    Console.WriteLine("[MainWindow] Wayland: using brush alpha=" + alpha + " (NO window opacity)");
-                    Console.WriteLine("[MainWindow] Background color ARGB: 0x" + ((alpha << 24) | (baseColor.R << 16) | (baseColor.G << 8) | baseColor.B).ToString("X8"));
-                }
-                else
-                {
-                    // Non-Wayland: Use window-level opacity
-                    this.Opacity = windowOpacity;
-                    Background = Brushes.Transparent;
-                    Console.WriteLine("[MainWindow] Non-Wayland + opacity: window opacity=" + this.Opacity + ", transparent background");
-                }
-            }
-            else if (transparency != TransparencyLevel.None)
-            {
-                // Full transparency mode without specific opacity (< 100)
-                Background = Brushes.Transparent;
-                this.Opacity = 0.95; // Default semi-transparent
-                Console.WriteLine("[MainWindow] Transparency mode: default opacity 0.95");
-                
-                if (!isWayland)
-                {
-                    ApplyTransparencyLevel(); // For blur/acrylic effects
-                }
-            }
-            else
-            {
-                // Solid, fully opaque window (default)
-                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
-                Console.WriteLine("[MainWindow] Solid background (no transparency/opacity)");
-            }
-            
-            // Skip TransparencyLevelHint on Wayland for blur effects (handled by compositor)
-            // BUT: Set Transparent hint when using opacity so Avalonia knows the window can be translucent
-            if (isWayland)
-            {
-                if (windowOpacity < 1.0)
-                {
-                    // Even on Wayland, set Transparent hint so Avalonia treats window as translucent
-                    TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
-                    Console.WriteLine("[MainWindow] Wayland + opacity: Set Transparent hint for proper opacity handling");
-                }
-                else
-                {
-                    Console.WriteLine("[MainWindow] Skipping TransparencyLevelHint on Wayland (solid window)");
-                }
-            }
-            
-            // DEBUG: Log final state after transparency setup
-            Console.WriteLine("[MainWindow] Final Background: " + (Background?.GetType().Name ?? "null"));
-            Console.WriteLine("[MainWindow] Final Opacity: " + this.Opacity);
-            Console.WriteLine("[MainWindow] Final TransparencyLevelHint: " + TransparencyLevelHint);
-            Console.WriteLine("==========================");
+            // Configure window transparency based on platform and user settings
+            ConfigureTransparency();
             
             KeyDown += OnWindowKeyDown;
             Closed += OnClosed;
@@ -151,86 +61,127 @@ public partial class MainWindow : Window
         }
         
         /// <summary>
-        /// Applies the configured transparency level for acrylic/glass effects.
+        /// Configures window transparency based on platform detection and user settings.
+        /// 
+        /// TRANSPARENCY STRATEGY:
+        /// ======================
+        /// 
+        /// 1. Hyprland (Wayland compositor):
+        ///    - Use compositor-level transparency via windowrulev2
+        ///    - Set solid background, let Hyprland handle opacity
+        ///    - Most reliable method for this compositor
+        /// 
+        /// 2. Other Wayland + WindowOpacity (< 100):
+        ///    - Avalonia's Opacity property doesn't work reliably on most Wayland compositors
+        ///    - Use brush alpha with semi-transparent background color
+        ///    - Set Transparent hint so Avalonia treats window as translucent
+        /// 
+        /// 3. X11/Windows/macOS + WindowOpacity (< 100):
+        ///    - Use window.Opacity property (Avalonia handles this correctly)
+        ///    - Set transparent background brush
+        /// 
+        /// 4. Full transparency modes (Blur/Acrylic/Transparent):
+        ///    - Use Avalonia's TransparencyLevelHint system
+        ///    - Enables native blur/acrylic effects where supported
+        /// 
+        /// 5. Default (no transparency):
+        ///    - Solid background color from user config
         /// </summary>
-        private void ApplyTransparencyLevel()
+        private void ConfigureTransparency()
         {
+            var windowOpacity = global::Dotty.Generated.Config.WindowOpacity / 100.0;
+            var isWayland = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") == "wayland";
             var transparency = global::Dotty.Generated.Config.Transparency;
             
-            Console.WriteLine($"[ApplyTransparencyLevel] Processing level: {transparency}");
+            // Case 1: Hyprland - use compositor transparency
+            if (DetectHyprland())
+            {
+                _isHyprland = true;
+                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+                Console.WriteLine("[MainWindow] Hyprland detected - using compositor transparency (add windowrulev2 to hyprland.conf)");
+                return;
+            }
             
+            // Case 2: Other Wayland + opacity - use brush alpha
+            if (windowOpacity < 1.0 && isWayland)
+            {
+                var baseColor = ConfigBridge.ToColor(Generated.Config.Background);
+                byte alpha = (byte)(windowOpacity * 255);
+                var transparentColor = new Color(alpha, baseColor.R, baseColor.G, baseColor.B);
+                _semiTransparentBrush = new SolidColorBrush(transparentColor);
+                Background = _semiTransparentBrush;
+                
+                // Set Transparent hint so Avalonia treats window as translucent
+                TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
+                return;
+            }
+            
+            // Case 3: X11/Windows/macOS + opacity - use window.Opacity
+            if (windowOpacity < 1.0)
+            {
+                this.Opacity = windowOpacity;
+                Background = Brushes.Transparent;
+                return;
+            }
+            
+            // Case 4: Full transparency modes - use Avalonia hints
+            if (transparency != TransparencyLevel.None)
+            {
+                ApplyAvaloniaTransparency(transparency);
+                return;
+            }
+            
+            // Case 5: Default - solid background
+            Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+        }
+        
+        /// <summary>
+        /// Detects if running on Hyprland compositor.
+        /// Returns true if Hyprland was detected.
+        /// </summary>
+        private bool DetectHyprland()
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                return false;
+                
+            var desktop = Environment.GetEnvironmentVariable("XDG_CURRENT_DESKTOP");
+            var hyprlandSig = Environment.GetEnvironmentVariable("HYPRLAND_INSTANCE_SIGNATURE");
+            
+            if (desktop?.Contains("Hyprland") == true || hyprlandSig != null)
+            {
+                Console.WriteLine("[Compositor] Hyprland detected - configure opacity in ~/.config/hypr/hyprland.conf:");
+                Console.WriteLine("[Compositor]   windowrulev2 = opacity 0.5,class:^Dotty$");
+                return true;
+            }
+            
+            return false;
+        }
+        
+        /// <summary>
+        /// Applies Avalonia's transparency settings for full transparency modes (Blur/Acrylic/Transparent).
+        /// </summary>
+        private void ApplyAvaloniaTransparency(TransparencyLevel transparency)
+        {
             switch (transparency)
             {
                 case TransparencyLevel.Blur:
                 case TransparencyLevel.Acrylic:
-                    // Set Avalonia's blur hint - this works on supported platforms
+                    Background = Brushes.Transparent;
+                    this.Opacity = 0.95;
                     TransparencyLevelHint = new[] { WindowTransparencyLevel.AcrylicBlur, WindowTransparencyLevel.Blur };
-                    Console.WriteLine($"[ApplyTransparencyLevel] Set hints to: AcrylicBlur, Blur");
-                    
-                    // Platform-specific additional effects
-                    EnablePlatformBlurEffect(transparency);
                     break;
                     
                 case TransparencyLevel.Transparent:
+                    Background = Brushes.Transparent;
+                    this.Opacity = 0.95;
                     TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
-                    Console.WriteLine($"[ApplyTransparencyLevel] Set hints to: Transparent");
                     break;
                     
                 case TransparencyLevel.None:
                 default:
-                    // Solid background - no transparency
-                    TransparencyLevelHint = new[] { WindowTransparencyLevel.None };
-                    Console.WriteLine($"[ApplyTransparencyLevel] Set hints to: None");
+                    Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
                     break;
             }
-            
-            Console.WriteLine($"[ApplyTransparencyLevel] TransparencyLevelHint applied: {TransparencyLevelHint}");
-        }
-        
-        /// <summary>
-        /// Enables platform-specific blur effects for Linux (KDE/GNOME) and other platforms.
-        /// </summary>
-        private void EnablePlatformBlurEffect(TransparencyLevel level)
-        {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            {
-                try
-                {
-                    // Set X11 properties for blur effects on supported compositors
-                    // _KDE_NET_WM_BLUR_BEHIND_REGION for KDE Plasma
-                    // _GNOME_WM_ACTION_BLUR for GNOME (if supported)
-                    SetLinuxBlurHint(level == TransparencyLevel.Acrylic);
-                }
-                catch (Exception)
-                {
-                    // Platform blur hint failed, but Avalonia's transparency will still work
-                }
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                // Windows acrylic is handled by Avalonia's TransparencyLevelHint
-                // Additional DWM effects could be enabled here if needed
-            }
-            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-            {
-                // macOS vibrancy is handled by Avalonia's TransparencyLevelHint
-            }
-        }
-        
-        /// <summary>
-        /// Sets Linux-specific blur hints for compositors that support it.
-        /// </summary>
-        private void SetLinuxBlurHint(bool useAcrylic)
-        {
-            // This method would require platform-specific interop to set X11 properties
-            // For now, Avalonia's built-in blur support handles most modern compositors
-            // Full implementation would require:
-            // 1. Access to the X11 display connection
-            // 2. Setting _KDE_NET_WM_BLUR_BEHIND_REGION atom for KDE
-            // 3. Setting _GNOME_WM_ACTION_BLUR for GNOME
-            // 
-            // These are left as a placeholder for future enhancement with
-            // proper X11/Wayland interop libraries
         }
     
     protected override void OnLoaded(RoutedEventArgs e)
@@ -241,21 +192,26 @@ public partial class MainWindow : Window
         _contentContainer = this.FindControl<Grid>("ContentContainer");
         _tabBar = this.FindControl<Control>("TabBar");
         
-        // If opacity is enabled, make ContentContainer use the same semi-transparent brush as the window
-        if (_semiTransparentBrush != null && _contentContainer != null)
+        // Sync ContentContainer background with window transparency settings
+        // On Hyprland, ContentContainer stays solid (compositor handles transparency)
+        // On other platforms with opacity, ContentContainer matches window background
+        if (_contentContainer != null && !_isHyprland)
         {
-            _contentContainer.Background = _semiTransparentBrush;
-            Console.WriteLine("[MainWindow] Set ContentContainer to semi-transparent");
+            if (_semiTransparentBrush != null)
+            {
+                _contentContainer.Background = _semiTransparentBrush;
+            }
+            else if (Background is SolidColorBrush solidBrush)
+            {
+                _contentContainer.Background = solidBrush;
+            }
         }
         
         // Initialize the first tab's content (lazy - only create when needed)
         if (_viewModel.ActiveTab != null)
         {
-            // Active tab will be created on demand in ShowTab
             ShowTab(_viewModel.ActiveTab);
         }
-        
-        // Note: Views for other tabs are created lazily when they become active
         
         // Listen for tab changes
         _viewModel.ActiveTabChanged += OnActiveTabChanged;

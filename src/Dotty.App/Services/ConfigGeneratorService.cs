@@ -251,30 +251,49 @@ public static class ConfigGeneratorService
                $"    // Time before inactive tab visuals are destroyed (milliseconds)\n" +
                $"    public int? InactiveTabDestroyDelayMs => null;  // Default: {defaultInactiveTabDelay}\n" +
                $"    \n" +
-               $"    // =========================================================================\n" +
-               $"    // UI COLORS (Optional - null uses defaults)\n" +
-               $"    // ARGB format: 0xAARRGGBB\n" +
-               $"    // =========================================================================\n" +
-               $"    // Selection highlight color\n" +
-               $"    public uint? SelectionColor => null;  // Default: 0x{defaultSelectionColor:X8}\n" +
-               $"    \n" +
-               $"    // Tab bar background color\n" +
-               $"    public uint? TabBarBackgroundColor => null;  // Default: 0x{{defaultTabBarBgColor:X8}}\n" +
-               $"    \n" +
-               $"    // Window transparency level\n" +
-               $"    // Options: None (solid), Transparent (simple transparency),\n" +
-               $"    //          Blur (blurred background), Acrylic (full acrylic with noise)\n" +
-               $"    public TransparencyLevel? Transparency => null;  // Default: None\n" +
-               $"    \n" +
-               $"    // Window opacity (0-100, where 100 is fully opaque, 0 is fully transparent)\n" +
-               $"    // Use this to make the entire terminal window semi-transparent\n" +
-               $"    // public byte? WindowOpacity => 50;  // 50% opaque, 50% transparent\n" +
-               $"    \n" +
-               $"    // =========================================================================\n" +
-               $"    // WINDOW SETTINGS (Optional - null uses defaults)\n" +
-               $"    // =========================================================================\n" +
-               $"    // Initial window dimensions\n" +
-               $"    public IWindowDimensions? InitialDimensions => null;\n" +
+                $"    // =========================================================================\n" +
+                $"    // TRANSPARENCY SETTINGS (Optional - null uses defaults)\n" +
+                $"    // =========================================================================\n" +
+                $"    // There are two ways to achieve transparency:\n" +
+                $"    //\n" +
+                $"    // 1. WindowOpacity (0-100): Makes the entire window semi-transparent\n" +
+                $"    //    - 100 = fully opaque, 0 = fully transparent\n" +
+                $"    //    - Works on all platforms, but behavior varies:\n" +
+                $"    //      * X11/Windows/macOS: Uses Avalonia's Opacity property\n" +
+                $"    //      * Wayland (except Hyprland): Uses brush alpha\n" +
+                $"    //      * Hyprland: Use windowrulev2 in hyprland.conf instead\n" +
+                $"    //\n" +
+                $"    // 2. Transparency (Blur/Acrylic/Transparent): Enables native blur effects\n" +
+                $"    //    - Uses Avalonia's TransparencyLevelHint system\n" +
+                $"    //    - Platform support varies (best on Windows, limited on Linux)\n" +
+                $"    //\n" +
+                $"    // For Hyprland users:\n" +
+                $"    //   Add to ~/.config/hypr/hyprland.conf:\n" +
+                $"    //   windowrulev2 = opacity 0.5,class:^Dotty$\n" +
+                $"    //\n" +
+                $"    // Window opacity level (0-100). Set to null for fully opaque.\n" +
+                $"    // public byte? WindowOpacity => 85;  // 85% opaque\n" +
+                $"    \n" +
+                $"    // Transparency level for native blur effects\n" +
+                $"    // Options: None, Transparent, Blur, Acrylic\n" +
+                $"    public TransparencyLevel? Transparency => null;  // Default: None\n" +
+                $"    \n" +
+                $"    // =========================================================================\n" +
+                $"    // UI COLORS (Optional - null uses defaults)\n" +
+                $"    // =========================================================================\n" +
+                $"    // ARGB format: 0xAARRGGBB\n" +
+                $"    \n" +
+                $"    // Selection highlight color\n" +
+                $"    public uint? SelectionColor => null;  // Default: 0x{defaultSelectionColor:X8}\n" +
+                $"    \n" +
+                $"    // Tab bar background color\n" +
+                $"    public uint? TabBarBackgroundColor => null;\n" +
+                $"    \n" +
+                $"    // =========================================================================\n" +
+                $"    // WINDOW SETTINGS (Optional - null uses defaults)\n" +
+                $"    // =========================================================================\n" +
+                $"    // Initial window dimensions\n" +
+                $"    public IWindowDimensions? InitialDimensions => null;\n" +
                $"    \n" +
                $"    // =========================================================================\n" +
                $"    // CURSOR SETTINGS (Optional - null uses defaults)\n" +

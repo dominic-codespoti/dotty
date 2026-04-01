@@ -64,8 +64,6 @@ public partial class App : Application
         var windowOpacity = global::Dotty.Generated.Config.WindowOpacity;
         var hasOpacity = windowOpacity < 100;
         var isTransparent = transparency != TransparencyLevel.None || hasOpacity;
-        
-        Console.WriteLine($"[App] Setting up resources with transparency={transparency}, windowOpacity={windowOpacity}, isTransparent={isTransparent}");
 
         // Set terminal background - transparent if transparency or opacity enabled
         if (isTransparent)
@@ -73,14 +71,12 @@ public partial class App : Application
             // Use transparent background so window transparency shows through
             resources["TerminalBackground"] = Brushes.Transparent;
             resources["TerminalBackgroundTransparent"] = Brushes.Transparent;
-            Console.WriteLine("[App] Set TerminalBackground to Transparent (transparency or opacity enabled)");
         }
         else
         {
             // Solid background for fully opaque mode
             try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
             try { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
-            Console.WriteLine("[App] Set TerminalBackground to solid (no transparency/opacity)");
         }
         
         try { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultForeground)); } catch { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse("#D4D4D4")); }

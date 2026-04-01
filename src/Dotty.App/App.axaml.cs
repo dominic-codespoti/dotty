@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -7,6 +8,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Dotty.App.Services;
 using Dotty.App.Views;
+using Dotty.Terminal.Adapter;
 
 namespace Dotty.App;
 
@@ -57,6 +59,41 @@ public partial class App : Application
 
         try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
         try { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultForeground)); } catch { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse("#D4D4D4")); }
+        
+        // Apply the user's color theme to the terminal's ANSI palette
+        ApplyAnsiColorPalette();
+    }
+    
+    private static void ApplyAnsiColorPalette()
+    {
+        try
+        {
+            var colors = Generated.Config.Colors;
+            var ansiPalette = new uint[]
+            {
+                colors.AnsiBlack,
+                colors.AnsiRed,
+                colors.AnsiGreen,
+                colors.AnsiYellow,
+                colors.AnsiBlue,
+                colors.AnsiMagenta,
+                colors.AnsiCyan,
+                colors.AnsiWhite,
+                colors.AnsiBrightBlack,
+                colors.AnsiBrightRed,
+                colors.AnsiBrightGreen,
+                colors.AnsiBrightYellow,
+                colors.AnsiBrightBlue,
+                colors.AnsiBrightMagenta,
+                colors.AnsiBrightCyan,
+                colors.AnsiBrightWhite
+            };
+            SgrColorArgb.SetAnsiPalette(ansiPalette);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Failed to apply ANSI color palette: {ex.Message}");
+        }
     }
 
     private static void OnTerminalFontResolved(FontFamily family)

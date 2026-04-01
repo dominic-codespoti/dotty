@@ -62,8 +62,25 @@ public readonly record struct SgrColorArgb(uint Argb)
         return false;
     }
 
-    // 256-color palette cache - lazily initialized
-    private static readonly SgrColorArgb[] _palette256 = InitializePalette256();
+    // 256-color palette cache - lazily initialized, but first 16 can be overridden with theme colors
+    private static SgrColorArgb[] _palette256 = InitializePalette256();
+
+    /// <summary>
+    /// Sets the first 16 ANSI colors (indices 0-15) from a theme palette.
+    /// Call this during app startup to apply the user's color theme.
+    /// </summary>
+    /// <param name="ansiColors">Array of 16 ARGB colors: 0-7 normal, 8-15 bright</param>
+    public static void SetAnsiPalette(uint[] ansiColors)
+    {
+        if (ansiColors?.Length != 16)
+            throw new ArgumentException("ANSI palette must have exactly 16 colors", nameof(ansiColors));
+        
+        // Update the first 16 entries with theme colors
+        for (int i = 0; i < 16; i++)
+        {
+            _palette256[i] = new SgrColorArgb(ansiColors[i]);
+        }
+    }
 
     private static SgrColorArgb[] InitializePalette256()
     {

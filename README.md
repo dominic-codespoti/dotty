@@ -51,6 +51,29 @@ dotnet run --project src/Dotty.App
 dotnet test tests/Dotty.App.Tests
 ```
 
+## Configuration
+
+Dotty automatically creates a configuration file on first run:
+
+- **Linux/macOS**: `~/.config/dotty/Config.cs`
+- **Windows**: `%APPDATA%/dotty/Config.cs`
+
+The generated config includes:
+- Sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
+- Helpful comments explaining all options
+- Uncomment examples for easy customization
+
+**To customize:**
+1. Edit `~/.config/dotty/Config.cs`
+2. Rebuild: `dotnet build`
+
+**To regenerate:**
+```bash
+dotty --generate-config  # ⚠️ Overwrites existing config
+```
+
+See [Configuration Guide](docs/CONFIGURATION.md) for full details.
+
 ## Repository Structure
 
 ```

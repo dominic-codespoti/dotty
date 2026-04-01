@@ -13,47 +13,61 @@ The configuration system consists of:
 
 ## Quick Start
 
-### 1. Using Default Configuration
+### 1. First Run (Automatic Config Generation)
 
-If you don't provide a custom configuration, Dotty will use sensible defaults that match the current hardcoded values:
+On first startup, Dotty automatically creates a default configuration file:
 
-- Font: JetBrains Mono, 15pt
-- Theme: DarkPlus (VS Code Dark+)
-- Scrollback: 10000 lines
+- **Linux/macOS**: `~/.config/dotty/Config.cs` (XDG Base Directory)
+- **Windows**: `%APPDATA%/dotty/Config.cs`
 
-### 2. Creating a Custom Configuration
-
-Create a C# file that implements `IDottyConfig`:
-
-```csharp
-using Dotty.Abstractions.Config;
-using Dotty.Abstractions.Themes;
-
-namespace MyDottyConfig;
-
-public partial class MyConfig : IDottyConfig
-{
-    // Font settings
-    public string? FontFamily => "Fira Code, monospace";
-    public double? FontSize => 14.0;
-    
-    // Use a built-in theme
-    public IColorScheme? Colors => BuiltInThemes.Dracula;
-    
-    // Key bindings
-    public IKeyBindings? KeyBindings => new MyKeyBindings();
-    
-    // Other settings...
-    public int? ScrollbackLines => 50000;
-}
+You'll see a message:
+```
+✓ Created default config: /home/username/.config/dotty/Config.cs
+  Edit this file to customize your terminal, then rebuild to apply changes.
 ```
 
-### 3. Configuration Locations
+The generated file contains:
+- Sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
+- Helpful comments explaining all options
+- Uncomment examples for easy customization
+- Exact current defaults (never out of sync with code)
 
-The source generator will scan for IDottyConfig implementations in:
-- Your project directory
-- `~/.config/dotty/Config.cs` (user config directory)
-- Any C# file in the compilation that implements IDottyConfig
+### 2. Customizing Your Configuration
+
+Edit the generated `Config.cs` file:
+
+```csharp
+// Change the theme
+public IColorScheme? Colors => BuiltInThemes.Dracula;
+
+// Adjust font size
+public double? FontSize => 14.0;
+
+// Increase scrollback
+public int? ScrollbackLines => 50000;
+```
+
+### 3. Rebuilding to Apply Changes
+
+After editing, rebuild Dotty:
+
+```bash
+dotnet build
+# or
+dotnet build -c Release
+```
+
+The Source Generator will pick up your changes and generate a new static `Config` class.
+
+### 4. Regenerating Config (Optional)
+
+To regenerate a fresh config file:
+
+```bash
+dotty --generate-config
+```
+
+⚠️ This will overwrite your existing config! Back up first.
 
 ## Configuration Options
 

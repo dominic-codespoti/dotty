@@ -56,4 +56,19 @@ namespace Dotty.App.Services
             return Generated.Config.InactiveTabDestroyDelayMs;
         }
     }
+
+    /// <summary>
+    /// Public constants representing default values used by the config generator.
+    /// These should match the DefaultDottyConfig values in Configuration/DefaultConfig.cs
+    /// </summary>
+    public static class DefaultConstants
+    {
+        public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols, Cascadia Code, Liberation Mono, Noto Sans Mono, monospace";
+        public const double FontSize = 15.0;
+        public const double CellPadding = 1.5;
+        public const int ScrollbackLines = 10000;
+        public const int InactiveTabDestroyDelayMs = 5000;
+        public const uint SelectionColor = 0xA03385DB;
+        public const uint TabBarBackgroundColor = 0xFF1A1A1A;
+    }
 }

@@ -110,41 +110,53 @@ public class ConfigGenerator : IIncrementalGenerator
             if (member is IPropertySymbol property)
             {
                 var propertyName = property.Name;
-                var constantValue = GetConstantValue(property);
-
-                switch (propertyName)
+                
+                // Get syntax and evaluate the expression
+                var syntax = property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+                if (syntax is PropertyDeclarationSyntax propertyDecl && propertyDecl.ExpressionBody != null)
                 {
-                    case "FontFamily":
-                        values.FontFamily = constantValue as string ?? values.FontFamily;
-                        break;
-                    case "FontSize":
-                        if (constantValue is double d) values.FontSize = d;
-                        else if (constantValue is int i) values.FontSize = i;
-                        break;
-                    case "CellPadding":
-                        if (constantValue is double cp) values.CellPadding = cp;
-                        else if (constantValue is int cpi) values.CellPadding = cpi;
-                        break;
-                    case "ContentPadding":
-                        // Handle Thickness - simplified for now
-                        break;
-                    case "ScrollbackLines":
-                        if (constantValue is int sl) values.ScrollbackLines = sl;
-                        break;
-                    case "SelectionColor":
-                        if (constantValue is uint sc) values.SelectionColor = sc;
-                        break;
-                    case "TabBarBackgroundColor":
-                        if (constantValue is uint tb) values.TabBarBackgroundColor = tb;
-                        break;
-                    case "InactiveTabDestroyDelayMs":
-                        if (constantValue is int itd) values.InactiveTabDestroyDelayMs = itd;
-                        break;
+                    var evaluatedValue = EvaluateExpression(propertyDecl.ExpressionBody.Expression, semanticModel);
+                    
+                    switch (propertyName)
+                    {
+                        case "FontFamily":
+                            if (evaluatedValue is string s) values.FontFamily = s;
+                            break;
+                        case "FontSize":
+                            if (evaluatedValue is double d) values.FontSize = d;
+                            else if (evaluatedValue is int i) values.FontSize = i;
+                            break;
+                        case "CellPadding":
+                            if (evaluatedValue is double cpd) values.CellPadding = cpd;
+                            else if (evaluatedValue is int cpi) values.CellPadding = cpi;
+                            break;
+                        case "ContentPadding":
+                            if (evaluatedValue is Thickness t)
+                            {
+                                values.ContentPaddingLeft = t.Left;
+                                values.ContentPaddingTop = t.Top;
+                                values.ContentPaddingRight = t.Right;
+                                values.ContentPaddingBottom = t.Bottom;
+                            }
+                            break;
+                        case "ScrollbackLines":
+                            if (evaluatedValue is int sl) values.ScrollbackLines = sl;
+                            break;
+                        case "SelectionColor":
+                            if (evaluatedValue is uint sc) values.SelectionColor = sc;
+                            break;
+                        case "TabBarBackgroundColor":
+                            if (evaluatedValue is uint tb) values.TabBarBackgroundColor = tb;
+                            break;
+                        case "InactiveTabDestroyDelayMs":
+                            if (evaluatedValue is int itd) values.InactiveTabDestroyDelayMs = itd;
+                            break;
+                    }
                 }
             }
         }
 
-        // Look for Colors property
+        // Look for Colors property (with special theme handling)
         var colorsProperty = classSymbol.GetMembers("Colors").OfType<IPropertySymbol>().FirstOrDefault();
         if (colorsProperty != null)
         {
@@ -174,26 +186,56 @@ public class ConfigGenerator : IIncrementalGenerator
         var cursorProperty = classSymbol.GetMembers("Cursor").OfType<IPropertySymbol>().FirstOrDefault();
         if (cursorProperty != null)
         {
-            ExtractCursorSettings(cursorProperty.Type, values);
+            // Try to evaluate cursor expression first
+            var cursorSyntax = cursorProperty.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            if (cursorSyntax is PropertyDeclarationSyntax cursorDecl && cursorDecl.ExpressionBody != null)
+            {
+                var cursorValue = EvaluateExpression(cursorDecl.ExpressionBody.Expression, semanticModel);
+                if (cursorValue is CursorSettings cs)
+                {
+                    values.CursorShape = cs.Shape;
+                    values.CursorBlink = cs.Blink;
+                    values.CursorBlinkIntervalMs = cs.BlinkIntervalMs;
+                    values.CursorColor = cs.Color;
+                    values.CursorShowUnfocused = cs.ShowUnfocused;
+                }
+                else
+                {
+                    ExtractCursorSettings(cursorProperty.Type, values);
+                }
+            }
+            else
+            {
+                ExtractCursorSettings(cursorProperty.Type, values);
+            }
         }
 
         // Look for InitialDimensions property
         var dimensionsProperty = classSymbol.GetMembers("InitialDimensions").OfType<IPropertySymbol>().FirstOrDefault();
         if (dimensionsProperty != null)
         {
-            ExtractWindowDimensions(dimensionsProperty.Type, values);
+            // Try to evaluate dimensions expression first
+            var dimsSyntax = dimensionsProperty.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            if (dimsSyntax is PropertyDeclarationSyntax dimsDecl && dimsDecl.ExpressionBody != null)
+            {
+                var dimsValue = EvaluateExpression(dimsDecl.ExpressionBody.Expression, semanticModel);
+                if (dimsValue is WindowDimensions wd)
+                {
+                    values.InitialColumns = wd.Columns;
+                    values.InitialRows = wd.Rows;
+                    values.WindowTitle = wd.Title ?? "Dotty";
+                    values.StartFullscreen = wd.StartFullscreen;
+                }
+                else
+                {
+                    ExtractWindowDimensions(dimensionsProperty.Type, values);
+                }
+            }
+            else
+            {
+                ExtractWindowDimensions(dimensionsProperty.Type, values);
+            }
         }
-    }
-
-    private static object? GetConstantValue(IPropertySymbol property)
-    {
-        // Try to get the constant value from the property
-        if (property.IsReadOnly && property.GetMethod != null)
-        {
-            // For expression-bodied properties, we'd need more complex analysis
-            // For now, return null and rely on defaults
-        }
-        return null;
     }
 
     /// <summary>
@@ -235,6 +277,276 @@ public class ConfigGenerator : IIncrementalGenerator
         }
         
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Fallback method for extracting constant values from properties.
+    /// Returns null for expression-bodied properties (use EvaluateExpression instead).
+    /// </summary>
+    private static object? GetConstantValue(IPropertySymbol property)
+    {
+        // For expression-bodied properties, return null - caller should use EvaluateExpression
+        // This is used as a fallback when we don't have access to syntax
+        return null;
+    }
+
+    /// <summary>
+    /// Evaluates any expression and extracts its constant value.
+    /// Handles literals, member access, object creation, and simple arithmetic.
+    /// </summary>
+    private static object? EvaluateExpression(ExpressionSyntax expression, SemanticModel semanticModel)
+    {
+        // Handle literal expressions
+        if (expression is LiteralExpressionSyntax literal)
+        {
+            return literal.Token.Value;
+        }
+        
+        // Handle member access: BuiltInThemes.DarkPlus or SomeClass.Property
+        if (expression is MemberAccessExpressionSyntax memberAccess)
+        {
+            // Try to get the symbol and evaluate
+            var symbolInfo = semanticModel.GetSymbolInfo(memberAccess);
+            if (symbolInfo.Symbol is IPropertySymbol property)
+            {
+                // For properties returning built-in types, check the type
+                var typeName = property.Type.Name;
+                if (typeName.EndsWith("Theme"))
+                {
+                    // Return theme name for special handling
+                    return typeName;
+                }
+            }
+            else if (symbolInfo.Symbol is IFieldSymbol field && field.IsConst)
+            {
+                return field.ConstantValue;
+            }
+            
+            // If we can't resolve, return the member name for downstream processing
+            return memberAccess.Name.Identifier.ValueText;
+        }
+        
+        // Handle object creation: new Thickness(10) or new CursorSettings { ... }
+        if (expression is ObjectCreationExpressionSyntax objectCreation)
+        {
+            var typeName = objectCreation.Type.ToString();
+            
+            // Handle Thickness
+            if (typeName == "Thickness")
+            {
+                var argsList = objectCreation.ArgumentList;
+                if (argsList != null && argsList.Arguments.Count > 0)
+                {
+                    var args = argsList.Arguments;
+                    var argValues = new List<object?>();
+                    foreach (var arg in args)
+                    {
+                        argValues.Add(EvaluateExpression(arg.Expression, semanticModel));
+                    }
+                    
+                    if (argValues.Count == 1 && argValues[0] is double uniform)
+                        return new Thickness(uniform);
+                    if (argValues.Count == 2 && argValues[0] is double h && argValues[1] is double v)
+                        return new Thickness(h, v);
+                    if (argValues.Count == 4 && argValues[0] is double l && argValues[1] is double t && argValues[2] is double r && argValues[3] is double b)
+                        return new Thickness(l, t, r, b);
+                }
+            }
+            
+            // Handle CursorSettings
+            if (typeName == "CursorSettings")
+            {
+                var cursor = new CursorSettings();
+                
+                // Handle initializer if present
+                if (objectCreation.Initializer != null)
+                {
+                    foreach (var init in objectCreation.Initializer.Expressions)
+                    {
+                        if (init is AssignmentExpressionSyntax assignment)
+                        {
+                            var propName = assignment.Left.ToString();
+                            var propValue = EvaluateExpression(assignment.Right, semanticModel);
+                            
+                            switch (propName)
+                            {
+                                case "Shape":
+                                    if (propValue?.ToString() == "Beam") cursor.Shape = "Beam";
+                                    else if (propValue?.ToString() == "Underline") cursor.Shape = "Underline";
+                                    else cursor.Shape = "Block";
+                                    break;
+                                case "Blink":
+                                    cursor.Blink = propValue is true;
+                                    break;
+                                case "BlinkIntervalMs":
+                                    if (propValue is int bi) cursor.BlinkIntervalMs = bi;
+                                    break;
+                                case "Color":
+                                    if (propValue is uint cc) cursor.Color = cc;
+                                    break;
+                                case "ShowUnfocused":
+                                    cursor.ShowUnfocused = propValue is true;
+                                    break;
+                            }
+                        }
+                    }
+                }
+                
+                return cursor;
+            }
+            
+            // Handle WindowDimensions
+            if (typeName == "WindowDimensions")
+            {
+                var dims = new WindowDimensions { Title = "Dotty" };
+                
+                // Handle initializer if present
+                if (objectCreation.Initializer != null)
+                {
+                    foreach (var init in objectCreation.Initializer.Expressions)
+                    {
+                        if (init is AssignmentExpressionSyntax assignment)
+                        {
+                            var propName = assignment.Left.ToString();
+                            var propValue = EvaluateExpression(assignment.Right, semanticModel);
+                            
+                            switch (propName)
+                            {
+                                case "Columns":
+                                    if (propValue is int c) dims.Columns = c;
+                                    break;
+                                case "Rows":
+                                    if (propValue is int r) dims.Rows = r;
+                                    break;
+                                case "Title":
+                                    if (propValue is string t) dims.Title = t;
+                                    break;
+                                case "StartFullscreen":
+                                    dims.StartFullscreen = propValue is true;
+                                    break;
+                            }
+                        }
+                    }
+                }
+                
+                return dims;
+            }
+            
+            return typeName;
+        }
+        
+        // Handle binary expressions (simple arithmetic)
+        if (expression is BinaryExpressionSyntax binary)
+        {
+            var left = EvaluateExpression(binary.Left, semanticModel);
+            var right = EvaluateExpression(binary.Right, semanticModel);
+            
+            if (left is double ld && right is double rd)
+            {
+                return binary.OperatorToken.ValueText switch
+                {
+                    "+" => ld + rd,
+                    "-" => ld - rd,
+                    "*" => ld * rd,
+                    "/" => rd != 0 ? ld / rd : 0,
+                    _ => null
+                };
+            }
+            
+            if (left is int li && right is int ri)
+            {
+                return binary.OperatorToken.ValueText switch
+                {
+                    "+" => li + ri,
+                    "-" => li - ri,
+                    "*" => li * ri,
+                    "/" => ri != 0 ? li / ri : 0,
+                    _ => null
+                };
+            }
+        }
+        
+        // Handle cast expressions
+        if (expression is CastExpressionSyntax cast)
+        {
+            var innerValue = EvaluateExpression(cast.Expression, semanticModel);
+            var targetType = cast.Type.ToString();
+            
+            if (innerValue is int i)
+            {
+                return targetType switch
+                {
+                    "uint" => (uint)i,
+                    "double" => (double)i,
+                    "byte" => (byte)i,
+                    _ => innerValue
+                };
+            }
+        }
+        
+        // Try to get constant value through semantic model
+        var constantValue = semanticModel.GetConstantValue(expression);
+        if (constantValue.HasValue)
+        {
+            return constantValue.Value;
+        }
+        
+        // For identifier names, try to resolve
+        if (expression is IdentifierNameSyntax identifier)
+        {
+            var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+            if (symbol is IFieldSymbol field && field.IsConst)
+                return field.ConstantValue;
+            if (symbol is ILocalSymbol local && local.HasConstantValue)
+                return local.ConstantValue;
+        }
+        
+        return null;
+    }
+
+    /// <summary>
+    /// Helper class for thickness values.
+    /// </summary>
+    private class Thickness
+    {
+        public double Left { get; }
+        public double Top { get; }
+        public double Right { get; }
+        public double Bottom { get; }
+        
+        public Thickness(double left, double top, double right, double bottom)
+        {
+            Left = left;
+            Top = top;
+            Right = right;
+            Bottom = bottom;
+        }
+        
+        public Thickness(double uniform) : this(uniform, uniform, uniform, uniform) { }
+        public Thickness(double horizontal, double vertical) : this(horizontal, vertical, horizontal, vertical) { }
+    }
+
+    /// <summary>
+    /// Helper class for cursor settings.
+    /// </summary>
+    private class CursorSettings
+    {
+        public string Shape { get; set; } = "Block";
+        public bool Blink { get; set; } = true;
+        public int BlinkIntervalMs { get; set; } = 500;
+        public uint? Color { get; set; } = null;
+        public bool ShowUnfocused { get; set; } = false;
+    }
+
+    /// <summary>
+    /// Helper class for window dimensions.
+    /// </summary>
+    private class WindowDimensions
+    {
+        public int Columns { get; set; } = 80;
+        public int Rows { get; set; } = 24;
+        public string Title { get; set; } = "Dotty";
+        public bool StartFullscreen { get; set; } = false;
     }
 
     /// <summary>

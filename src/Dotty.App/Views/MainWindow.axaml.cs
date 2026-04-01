@@ -74,14 +74,14 @@ public partial class MainWindow : Window
             if (windowOpacity < 1.0)
             {
                 // User has configured a specific opacity level (less than 100%)
-                this.Opacity = windowOpacity;
-                Console.WriteLine("[MainWindow] Applied window opacity: " + this.Opacity);
+                Console.WriteLine("[MainWindow] Window opacity configured: " + windowOpacity);
                 
-                // On Wayland with opacity, use background alpha workaround (compositor handles window opacity poorly)
-                // On other platforms with opacity, use transparent background
+                // On Wayland with opacity, use ONLY background alpha (compositor handles window opacity poorly)
+                // On other platforms with opacity, use window opacity + transparent background
                 if (isWayland)
                 {
-                    // Wayland workaround: Use background color with alpha instead of window opacity
+                    // Wayland: Use ONLY background alpha, do NOT set this.Opacity
+                    // Setting both causes double opacity application resulting in full transparency
                     var baseColor = ConfigBridge.ToColor(Generated.Config.Background);
                     // Calculate alpha: 0.5 opacity = 128 alpha (0.5 * 255)
                     byte alpha = (byte)(windowOpacity * 255);
@@ -89,13 +89,16 @@ public partial class MainWindow : Window
                     _semiTransparentBrush = new SolidColorBrush(transparentColor);
                     Background = _semiTransparentBrush;
                     
-                    Console.WriteLine("[MainWindow] Wayland workaround: background alpha = " + alpha);
+                    // DO NOT set this.Opacity here - let brush alpha handle all transparency
+                    Console.WriteLine("[MainWindow] Wayland: using brush alpha=" + alpha + " (NO window opacity)");
                     Console.WriteLine("[MainWindow] Background color ARGB: 0x" + ((alpha << 24) | (baseColor.R << 16) | (baseColor.G << 8) | baseColor.B).ToString("X8"));
                 }
                 else
                 {
+                    // Non-Wayland: Use window-level opacity
+                    this.Opacity = windowOpacity;
                     Background = Brushes.Transparent;
-                    Console.WriteLine("[MainWindow] Non-Wayland + opacity: transparent background");
+                    Console.WriteLine("[MainWindow] Non-Wayland + opacity: window opacity=" + this.Opacity + ", transparent background");
                 }
             }
             else if (transparency != TransparencyLevel.None)

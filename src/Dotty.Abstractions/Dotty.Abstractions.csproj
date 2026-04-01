@@ -7,7 +7,7 @@
     
     <!-- NuGet Package Metadata -->
     <PackageId>Dotty.Abstractions</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>Dominic Codespoti</Authors>
     <Description>Configuration abstractions and themes for Dotty terminal emulator</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

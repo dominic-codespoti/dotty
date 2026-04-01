@@ -1,13 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- Multi-target for use in applications (net10.0) and build tools (netstandard2.0) -->
+    <TargetFrameworks>net10.0;netstandard2.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <LangVersion>12.0</LangVersion>
     
     <!-- NuGet Package Metadata -->
     <PackageId>Dotty.Abstractions</PackageId>
-    <Version>0.2.0</Version>
+    <!-- Version is set in Directory.Build.props -->
     <Authors>Dominic Codespoti</Authors>
     <Description>Configuration abstractions and themes for Dotty terminal emulator</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -18,4 +20,10 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+  
+  <!-- Polyfills for netstandard2.0 compatibility -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="System.Memory" Version="4.6.3" />
+    <PackageReference Include="IsExternalInit" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
 </Project>

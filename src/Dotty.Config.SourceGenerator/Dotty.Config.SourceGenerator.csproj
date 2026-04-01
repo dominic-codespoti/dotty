@@ -16,7 +16,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Dotty.Abstractions" Version="0.2.0" />
+    <!-- Project reference to local Dotty.Abstractions (must multi-target netstandard2.0) -->
+    <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" 
+                      PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
   </ItemGroup>

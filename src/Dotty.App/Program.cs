@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Avalonia;
 using Dotty.App.Services;
 
@@ -14,6 +15,13 @@ static class Program
         // terminal when debugging/logging is still present in code. Set
         // DOTTY_DISABLE_LOGGING=1 in your environment to enable this.
         // Environment-driven global silencing removed; keep Console as-is.
+
+        // Handle --version flag
+        if (args.Contains("--version") || args.Contains("-v"))
+        {
+            Console.WriteLine(Dotty.VersionInfo.GetDetailedVersionString());
+            return;
+        }
 
         // Handle --check-updates flag
         if (args.Contains("--check-updates"))

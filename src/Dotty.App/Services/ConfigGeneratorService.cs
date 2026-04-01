@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Text.RegularExpressions;
 
 namespace Dotty.App.Services;
@@ -31,9 +32,9 @@ public static class ConfigGeneratorService
 
     /// <summary>
     /// The current/latest version of Dotty.Abstractions package.
-    /// This should match the version in Dotty.Abstractions.csproj
+    /// Always matches the running Dotty binary version.
     /// </summary>
-    public const string LatestPackageVersion = "0.2.0";
+    public static readonly string LatestPackageVersion = Dotty.VersionInfo.NuGetPackageVersion;
 
     /// <summary>
     /// Checks common configuration file locations and returns the path if found.

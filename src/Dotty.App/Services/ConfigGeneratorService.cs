@@ -266,6 +266,10 @@ public static class ConfigGeneratorService
                $"    //          Blur (blurred background), Acrylic (full acrylic with noise)\n" +
                $"    public TransparencyLevel? Transparency => null;  // Default: None\n" +
                $"    \n" +
+               $"    // Window opacity (0-100, where 100 is fully opaque, 0 is fully transparent)\n" +
+               $"    // Use this to make the entire terminal window semi-transparent\n" +
+               $"    // public byte? WindowOpacity => 50;  // 50% opaque, 50% transparent\n" +
+               $"    \n" +
                $"    // =========================================================================\n" +
                $"    // WINDOW SETTINGS (Optional - null uses defaults)\n" +
                $"    // =========================================================================\n" +

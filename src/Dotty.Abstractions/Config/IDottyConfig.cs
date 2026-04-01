@@ -68,6 +68,13 @@ public interface IDottyConfig
     TransparencyLevel? Transparency { get; }
 
     /// <summary>
+    /// Window opacity (0-100, where 100 is fully opaque, 0 is fully transparent).
+    /// Use this to make the entire terminal window semi-transparent.
+    /// Works independently of Transparency level.
+    /// </summary>
+    byte? WindowOpacity { get; }
+
+    /// <summary>
     /// Inactive tab destroy delay in milliseconds.
     /// Controls how quickly inactive tab visuals are destroyed to save memory.
     /// </summary>

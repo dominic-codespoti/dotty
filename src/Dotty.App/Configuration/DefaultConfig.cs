@@ -51,6 +51,7 @@ public partial class DefaultDottyConfig : IDottyConfig
     
     // Transparency
     public TransparencyLevel? Transparency => TransparencyLevel.None;  // Solid background
+    public byte? WindowOpacity => 100;  // Default: fully opaque
 }
 
 /// <summary>

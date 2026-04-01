@@ -159,6 +159,10 @@ public class ConfigGenerator : IIncrementalGenerator
                                     values.Transparency = enumStr;
                             }
                             break;
+                        case "WindowOpacity":
+                            if (evaluatedValue is int wo) 
+                                values.WindowOpacity = (byte)(wo < 0 ? 0 : (wo > 100 ? 100 : wo));
+                            break;
                         case "InactiveTabDestroyDelayMs":
                             if (evaluatedValue is int itd) values.InactiveTabDestroyDelayMs = itd;
                             break;
@@ -1070,6 +1074,7 @@ public class ConfigGenerator : IIncrementalGenerator
         sb.AppendLine($"    public static string WindowTitle => \"{EscapeString(values.WindowTitle)}\";");
         sb.AppendLine($"    public static bool StartFullscreen => {values.StartFullscreen.ToString().ToLowerInvariant()};");
         sb.AppendLine($"    public static byte Opacity => {values.Opacity};");
+        sb.AppendLine($"    public static byte WindowOpacity => {values.WindowOpacity};");
         sb.AppendLine($"    public static global::Dotty.Abstractions.Config.TransparencyLevel Transparency => global::Dotty.Abstractions.Config.TransparencyLevel.{values.Transparency};");
         sb.AppendLine("    #endregion");
         sb.AppendLine();
@@ -1309,6 +1314,9 @@ internal class ConfigValues
 
     // Window opacity (0-100, where 100 is fully opaque)
     public byte Opacity { get; set; } = 100;
+
+    // Window opacity for the entire window (0-100, independent from Transparency)
+    public byte WindowOpacity { get; set; } = 100;
 
     // Transparency level for acrylic/glass effects
     public string Transparency { get; set; } = "None";

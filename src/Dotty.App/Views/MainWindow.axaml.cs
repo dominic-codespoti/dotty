@@ -47,28 +47,70 @@ public partial class MainWindow : Window
             
             Title = Generated.Config.WindowTitle;
             
-            // Only set solid background if transparency is disabled
-            // For transparent/acrylic/blur windows, use transparent background so the desktop shows through
+            // DEBUG: Log transparency configuration
             var transparency = global::Dotty.Generated.Config.Transparency;
+            var windowOpacity = global::Dotty.Generated.Config.WindowOpacity / 100.0;
+            var isWayland = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") == "wayland";
+            
+            Console.WriteLine("=== TRANSPARENCY DEBUG ===");
+            Console.WriteLine("[MainWindow] Platform: " + RuntimeInformation.OSDescription);
+            Console.WriteLine("[MainWindow] IsLinux: " + RuntimeInformation.IsOSPlatform(OSPlatform.Linux));
+            Console.WriteLine("[MainWindow] IsWayland: " + isWayland);
+            Console.WriteLine("[MainWindow] Transparency config value: " + transparency);
+            Console.WriteLine("[MainWindow] Window opacity config value: " + windowOpacity);
+            Console.WriteLine("[MainWindow] Avalonia version: " + typeof(Window).Assembly.GetName().Version);
+            
+            // Handle transparency based on platform
             if (transparency == TransparencyLevel.None)
             {
+                // Solid background - no transparency
                 Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+                Console.WriteLine("[MainWindow] Set solid background: " + Background);
+            }
+            else if (isWayland)
+            {
+                // WAYLAND: Use window opacity instead of true transparency
+                // Most Wayland compositors handle window opacity better than TransparencyLevelHint
+                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+                // Set opacity from config (default 100 = fully opaque)
+                this.Opacity = windowOpacity;
+                Console.WriteLine("[MainWindow] Wayland detected - using window opacity: " + this.Opacity);
             }
             else
             {
-                // Transparent/acrylic/blur - let the compositor handle transparency
+                // X11/Windows/macOS: Use true transparency with transparent background
                 Background = Brushes.Transparent;
+                Console.WriteLine("[MainWindow] Set transparent background");
             }
             
-            // Apply window opacity if not fully opaque
-            var opacity = ConfigBridge.GetWindowOpacity();
-            if (opacity < 1.0)
+            // Apply additional window opacity if configured (for all platforms)
+            if (windowOpacity < 1.0 && !isWayland)
             {
-                this.Opacity = opacity;
+                this.Opacity = windowOpacity;
+                Console.WriteLine("[MainWindow] Applied configured opacity: " + this.Opacity);
+            }
+            else if (!isWayland && transparency != TransparencyLevel.None)
+            {
+                // Default semi-transparent opacity for transparent mode
+                this.Opacity = 0.95;
+                Console.WriteLine("[MainWindow] Applied default transparent opacity: " + this.Opacity);
             }
             
-            // Apply transparency level for acrylic/blur effects
-            ApplyTransparencyLevel();
+            // Apply transparency level for acrylic/blur effects (only on supported platforms)
+            if (!isWayland)
+            {
+                ApplyTransparencyLevel();
+            }
+            else
+            {
+                Console.WriteLine("[MainWindow] Skipping TransparencyLevelHint on Wayland");
+            }
+            
+            // DEBUG: Log final state after transparency setup
+            Console.WriteLine("[MainWindow] Final Background: " + (Background?.GetType().Name ?? "null"));
+            Console.WriteLine("[MainWindow] Final Opacity: " + this.Opacity);
+            Console.WriteLine("[MainWindow] Final TransparencyLevelHint: " + TransparencyLevelHint);
+            Console.WriteLine("==========================");
             
             KeyDown += OnWindowKeyDown;
             Closed += OnClosed;
@@ -85,12 +127,15 @@ public partial class MainWindow : Window
         {
             var transparency = global::Dotty.Generated.Config.Transparency;
             
+            Console.WriteLine($"[ApplyTransparencyLevel] Processing level: {transparency}");
+            
             switch (transparency)
             {
                 case TransparencyLevel.Blur:
                 case TransparencyLevel.Acrylic:
                     // Set Avalonia's blur hint - this works on supported platforms
                     TransparencyLevelHint = new[] { WindowTransparencyLevel.AcrylicBlur, WindowTransparencyLevel.Blur };
+                    Console.WriteLine($"[ApplyTransparencyLevel] Set hints to: AcrylicBlur, Blur");
                     
                     // Platform-specific additional effects
                     EnablePlatformBlurEffect(transparency);
@@ -98,14 +143,18 @@ public partial class MainWindow : Window
                     
                 case TransparencyLevel.Transparent:
                     TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
+                    Console.WriteLine($"[ApplyTransparencyLevel] Set hints to: Transparent");
                     break;
                     
                 case TransparencyLevel.None:
                 default:
                     // Solid background - no transparency
                     TransparencyLevelHint = new[] { WindowTransparencyLevel.None };
+                    Console.WriteLine($"[ApplyTransparencyLevel] Set hints to: None");
                     break;
             }
+            
+            Console.WriteLine($"[ApplyTransparencyLevel] TransparencyLevelHint applied: {TransparencyLevelHint}");
         }
         
         /// <summary>

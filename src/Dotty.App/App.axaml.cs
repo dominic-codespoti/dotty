@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Dotty.Abstractions.Config;
 using Dotty.App.Services;
 using Dotty.App.Views;
 using Dotty.App.Configuration;
@@ -58,7 +59,28 @@ public partial class App : Application
         resources["TerminalFontFamily"] = FontResolver.ResolveFontFamily(Defaults.DefaultFontStack);
         resources["TerminalFontSize"] = Defaults.GetInitialFontSize();
 
-        try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
+        // Check if transparency is enabled
+        var transparency = global::Dotty.Generated.Config.Transparency;
+        var isTransparent = transparency != TransparencyLevel.None;
+        
+        Console.WriteLine($"[App] Setting up resources with transparency={transparency}, isTransparent={isTransparent}");
+
+        // Set terminal background - transparent if transparency enabled, solid otherwise
+        if (isTransparent)
+        {
+            // Use transparent background so window transparency shows through
+            resources["TerminalBackground"] = Brushes.Transparent;
+            resources["TerminalBackgroundTransparent"] = Brushes.Transparent;
+            Console.WriteLine("[App] Set TerminalBackground to Transparent");
+        }
+        else
+        {
+            // Solid background for non-transparent mode
+            try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
+            try { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
+            Console.WriteLine("[App] Set TerminalBackground to solid color");
+        }
+        
         try { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultForeground)); } catch { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse("#D4D4D4")); }
         
         // Add tab bar background and foreground resources from theme

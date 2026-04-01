@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Dotty.Abstractions.Config;
 using Dotty.App.ViewModels;
 using Dotty.App.Controls.Canvas.Rendering;
 using Dotty.App.Configuration;
@@ -53,12 +55,91 @@ public partial class MainWindow : Window
                 this.Opacity = opacity;
             }
             
+            // Apply transparency level for acrylic/blur effects
+            ApplyTransparencyLevel();
+            
             KeyDown += OnWindowKeyDown;
             Closed += OnClosed;
             Opened += OnOpened;
             
             // Start test command listener for automated testing
             StartTestCommandListener();
+        }
+        
+        /// <summary>
+        /// Applies the configured transparency level for acrylic/glass effects.
+        /// </summary>
+        private void ApplyTransparencyLevel()
+        {
+            var transparency = global::Dotty.Generated.Config.Transparency;
+            
+            switch (transparency)
+            {
+                case TransparencyLevel.Blur:
+                case TransparencyLevel.Acrylic:
+                    // Set Avalonia's blur hint - this works on supported platforms
+                    TransparencyLevelHint = new[] { WindowTransparencyLevel.AcrylicBlur, WindowTransparencyLevel.Blur };
+                    
+                    // Platform-specific additional effects
+                    EnablePlatformBlurEffect(transparency);
+                    break;
+                    
+                case TransparencyLevel.Transparent:
+                    TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
+                    break;
+                    
+                case TransparencyLevel.None:
+                default:
+                    // Solid background - no transparency
+                    TransparencyLevelHint = new[] { WindowTransparencyLevel.None };
+                    break;
+            }
+        }
+        
+        /// <summary>
+        /// Enables platform-specific blur effects for Linux (KDE/GNOME) and other platforms.
+        /// </summary>
+        private void EnablePlatformBlurEffect(TransparencyLevel level)
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                try
+                {
+                    // Set X11 properties for blur effects on supported compositors
+                    // _KDE_NET_WM_BLUR_BEHIND_REGION for KDE Plasma
+                    // _GNOME_WM_ACTION_BLUR for GNOME (if supported)
+                    SetLinuxBlurHint(level == TransparencyLevel.Acrylic);
+                }
+                catch (Exception)
+                {
+                    // Platform blur hint failed, but Avalonia's transparency will still work
+                }
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                // Windows acrylic is handled by Avalonia's TransparencyLevelHint
+                // Additional DWM effects could be enabled here if needed
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                // macOS vibrancy is handled by Avalonia's TransparencyLevelHint
+            }
+        }
+        
+        /// <summary>
+        /// Sets Linux-specific blur hints for compositors that support it.
+        /// </summary>
+        private void SetLinuxBlurHint(bool useAcrylic)
+        {
+            // This method would require platform-specific interop to set X11 properties
+            // For now, Avalonia's built-in blur support handles most modern compositors
+            // Full implementation would require:
+            // 1. Access to the X11 display connection
+            // 2. Setting _KDE_NET_WM_BLUR_BEHIND_REGION atom for KDE
+            // 3. Setting _GNOME_WM_ACTION_BLUR for GNOME
+            // 
+            // These are left as a placeholder for future enhancement with
+            // proper X11/Wayland interop libraries
         }
     
     protected override void OnLoaded(RoutedEventArgs e)
@@ -630,7 +711,7 @@ public partial class MainWindow : Window
 
     private void OnRenameTextBoxKeyUp(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter || e.Key == Key.Escape)
+        if (e.Key == Avalonia.Input.Key.Enter || e.Key == Avalonia.Input.Key.Escape)
         {
             if (sender is TextBox tb && tb.DataContext is TabViewModel tvm)
                 tvm.IsEditingTitle = false;
@@ -718,15 +799,15 @@ public partial class MainWindow : Window
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        if (e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control) && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift))
         {
-            if (e.Key == Key.T)
+            if (e.Key == Avalonia.Input.Key.T)
             {
                 _viewModel.AddNewTab();
                 e.Handled = true;
                 return;
             }
-            else if (e.Key == Key.W)
+            else if (e.Key == Avalonia.Input.Key.W)
             {
                 if (_viewModel.ActiveTab != null)
                 {
@@ -737,12 +818,12 @@ public partial class MainWindow : Window
             }
         }
         
-        if (e.KeyModifiers.HasFlag(KeyModifiers.Control) && e.Key == Key.Tab)
+        if (e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control) && e.Key == Avalonia.Input.Key.Tab)
         {
             if (_viewModel.Tabs.Count > 1)
             {
                 var currentIndex = _viewModel.Tabs.IndexOf(_viewModel.ActiveTab!);
-                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                if (e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift))
                 {
                     currentIndex--;
                     if (currentIndex < 0) currentIndex = _viewModel.Tabs.Count - 1;

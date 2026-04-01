@@ -120,7 +120,6 @@ public static class ConfigGeneratorService
         var defaultScrollbackLines = DefaultConstants.ScrollbackLines;
         var defaultInactiveTabDelay = DefaultConstants.InactiveTabDestroyDelayMs;
         var defaultSelectionColor = DefaultConstants.SelectionColor;
-        var defaultTabBarBgColor = DefaultConstants.TabBarBackgroundColor;
         
         return $"// Dotty Terminal Configuration\n" +
                $"// ===========================\n" +
@@ -188,7 +187,12 @@ public static class ConfigGeneratorService
                $"    public uint? SelectionColor => null;  // Default: 0x{defaultSelectionColor:X8}\n" +
                $"    \n" +
                $"    // Tab bar background color\n" +
-               $"    public uint? TabBarBackgroundColor => null;  // Default: 0x{defaultTabBarBgColor:X8}\n" +
+               $"    public uint? TabBarBackgroundColor => null;  // Default: 0x{{defaultTabBarBgColor:X8}}\n" +
+               $"    \n" +
+               $"    // Window transparency level\n" +
+               $"    // Options: None (solid), Transparent (simple transparency),\n" +
+               $"    //          Blur (blurred background), Acrylic (full acrylic with noise)\n" +
+               $"    public TransparencyLevel? Transparency => null;  // Default: None\n" +
                $"    \n" +
                $"    // =========================================================================\n" +
                $"    // WINDOW SETTINGS (Optional - null uses defaults)\n" +

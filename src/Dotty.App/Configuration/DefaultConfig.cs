@@ -48,6 +48,9 @@ public partial class DefaultDottyConfig : IDottyConfig
     // UI Colors
     public uint? SelectionColor => 0xA03385DB;  // Blue selection
     public uint? TabBarBackgroundColor => 0xFF1A1A1A;  // Dark gray
+    
+    // Transparency
+    public TransparencyLevel? Transparency => TransparencyLevel.None;  // Solid background
 }
 
 /// <summary>

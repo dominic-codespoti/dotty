@@ -68,9 +68,9 @@ public class ConfigGenerator : IIncrementalGenerator
             .Where(c => c != null)
             .OrderBy(c => 
             {
-                // Prefer user configs (not named DefaultConfig) over built-in defaults
+                // Prefer user configs (not named DefaultConfig or DefaultDottyConfig) over built-in defaults
                 var name = c!.Identifier.ValueText;
-                if (name == "DefaultConfig") return 1; // Put DefaultConfig last
+                if (name == "DefaultConfig" || name == "DefaultDottyConfig") return 1; // Put defaults last
                 if (name.Contains("Config")) return 0; // User configs first
                 return 0;
             })
@@ -147,6 +147,17 @@ public class ConfigGenerator : IIncrementalGenerator
                             break;
                         case "TabBarBackgroundColor":
                             if (evaluatedValue is uint tb) values.TabBarBackgroundColor = tb;
+                            break;
+                        case "Transparency":
+                            if (evaluatedValue is string trans) 
+                                values.Transparency = trans;
+                            else if (evaluatedValue != null)
+                            {
+                                // Handle enum value - convert to string
+                                var enumStr = evaluatedValue.ToString();
+                                if (!string.IsNullOrEmpty(enumStr) && enumStr != "null")
+                                    values.Transparency = enumStr;
+                            }
                             break;
                         case "InactiveTabDestroyDelayMs":
                             if (evaluatedValue is int itd) values.InactiveTabDestroyDelayMs = itd;
@@ -1050,6 +1061,7 @@ public class ConfigGenerator : IIncrementalGenerator
         sb.AppendLine($"    public static string WindowTitle => \"{EscapeString(values.WindowTitle)}\";");
         sb.AppendLine($"    public static bool StartFullscreen => {values.StartFullscreen.ToString().ToLowerInvariant()};");
         sb.AppendLine($"    public static byte Opacity => {values.Opacity};");
+        sb.AppendLine($"    public static global::Dotty.Abstractions.Config.TransparencyLevel Transparency => global::Dotty.Abstractions.Config.TransparencyLevel.{values.Transparency};");
         sb.AppendLine("    #endregion");
         sb.AppendLine();
 
@@ -1288,6 +1300,9 @@ internal class ConfigValues
 
     // Window opacity (0-100, where 100 is fully opaque)
     public byte Opacity { get; set; } = 100;
+
+    // Transparency level for acrylic/glass effects
+    public string Transparency { get; set; } = "None";
 
     // ANSI colors (standard 16-color palette)
     public uint[] AnsiColors { get; set; } = new uint[]

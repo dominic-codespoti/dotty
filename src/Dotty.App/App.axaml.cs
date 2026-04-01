@@ -8,6 +8,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Dotty.App.Services;
 using Dotty.App.Views;
+using Dotty.App.Configuration;
 using Dotty.Terminal.Adapter;
 
 namespace Dotty.App;
@@ -59,6 +60,10 @@ public partial class App : Application
 
         try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
         try { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultForeground)); } catch { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse("#D4D4D4")); }
+        
+        // Add tab bar background and foreground resources from theme
+        resources["TabBarBackground"] = new SolidColorBrush(ConfigBridge.ToColor(global::Dotty.Generated.Config.TabBarBackgroundColor));
+        resources["TabBarForeground"] = new SolidColorBrush(ConfigBridge.ToColor(global::Dotty.Generated.Config.Foreground));
         
         // Apply the user's color theme to the terminal's ANSI palette
         ApplyAnsiColorPalette();

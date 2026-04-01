@@ -75,10 +75,40 @@ public static class ConfigBridge
 
     /// <summary>
     /// Gets the tab bar background brush from the generated configuration.
+    /// Falls back to theme's background color if TabBarBackgroundColor is the default.
     /// </summary>
     public static IBrush GetTabBarBackgroundBrush()
     {
-        return new SolidColorBrush(ToColor(Generated.Config.TabBarBackgroundColor));
+        var tabBarColor = global::Dotty.Generated.Config.TabBarBackgroundColor;
+        
+        // If the tab bar color is the default dark gray (0xFF1A1A1A), 
+        // use a darkened version of the theme's background for better integration
+        if (tabBarColor == 0xFF1A1A1A)
+        {
+            var themeBg = global::Dotty.Generated.Config.Background;
+            // Darken the theme background slightly for the tab bar
+            var darkened = DarkenColor(themeBg, 0.9);
+            return new SolidColorBrush(ToColor(darkened));
+        }
+        
+        return new SolidColorBrush(ToColor(tabBarColor));
+    }
+    
+    /// <summary>
+    /// Darkens a color by the given factor (0.0-1.0, where lower is darker).
+    /// </summary>
+    private static uint DarkenColor(uint argb, double factor)
+    {
+        var a = (byte)((argb >> 24) & 0xFF);
+        var r = (byte)((argb >> 16) & 0xFF);
+        var g = (byte)((argb >> 8) & 0xFF);
+        var b = (byte)(argb & 0xFF);
+        
+        r = (byte)(r * factor);
+        g = (byte)(g * factor);
+        b = (byte)(b * factor);
+        
+        return (uint)((a << 24) | (r << 16) | (g << 8) | b);
     }
 
     /// <summary>

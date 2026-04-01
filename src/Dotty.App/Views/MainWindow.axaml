@@ -9,12 +9,12 @@
 
     <Window.Styles>
         <Style Selector="TabStrip">
-            <Setter Property="Background" Value="#181818" />
+            <Setter Property="Background" Value="{DynamicResource TabBarBackground}" />
             <Setter Property="Padding" Value="4,4,4,0" />
             <Setter Property="MinHeight" Value="36" />
         </Style>
         <Style Selector="TabStripItem">
-            <Setter Property="Foreground" Value="#999999" />
+            <Setter Property="Foreground" Value="{DynamicResource TabBarForeground}" />
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Margin" Value="0" />
@@ -29,7 +29,7 @@
             <Setter Property="Foreground" Value="#DDDDDD" />
         </Style>
         <Style Selector="TabStripItem:selected">
-            <Setter Property="Background" Value="#1E1E1E" />
+            <Setter Property="Background" Value="{DynamicResource TerminalBackground}" />
             <Setter Property="Foreground" Value="#FFFFFF" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
@@ -39,7 +39,7 @@
     </Window.Styles>
 
     <DockPanel>
-        <Grid DockPanel.Dock="Top" Background="#181818">
+        <Grid DockPanel.Dock="Top" Background="{DynamicResource TabBarBackground}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -87,7 +87,7 @@
 
         <!-- MANUAL CONTENT CONTAINER - No ContentControl, no DataTemplate binding -->
         <!-- We manage this manually in code-behind for full control -->
-        <Grid Name="ContentContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#1E1E1E">
+        <Grid Name="ContentContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="{DynamicResource TerminalBackground}">
             <!-- TerminalView instances will be added/removed here manually -->
         </Grid>
     </DockPanel>

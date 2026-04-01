@@ -63,6 +63,11 @@ public interface IDottyConfig
     uint? TabBarBackgroundColor { get; }
 
     /// <summary>
+    /// Window transparency level. None, Transparent, Blur, or Acrylic.
+    /// </summary>
+    TransparencyLevel? Transparency { get; }
+
+    /// <summary>
     /// Inactive tab destroy delay in milliseconds.
     /// Controls how quickly inactive tab visuals are destroyed to save memory.
     /// </summary>

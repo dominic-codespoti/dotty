@@ -40,6 +40,14 @@ public partial class MainWindow : Window
 
         public MainWindow()
         {
+            // DEBUG: Raw config values at the very start
+            Console.WriteLine("=== RAW CONFIG VALUES ===");
+            Console.WriteLine("Raw WindowOpacity: " + global::Dotty.Generated.Config.WindowOpacity);
+            Console.WriteLine("Raw Transparency: " + global::Dotty.Generated.Config.Transparency);
+            Console.WriteLine("Calculated windowOpacity: " + (global::Dotty.Generated.Config.WindowOpacity / 100.0));
+            Console.WriteLine("Is windowOpacity < 1.0? " + ((global::Dotty.Generated.Config.WindowOpacity / 100.0) < 1.0));
+            Console.WriteLine("========================");
+            
             InitializeComponent();
             
             _viewModel = new MainViewModel();
@@ -68,12 +76,19 @@ public partial class MainWindow : Window
                 this.Opacity = windowOpacity;
                 Console.WriteLine("[MainWindow] Applied window opacity: " + this.Opacity);
                 
-                // On Wayland with opacity, keep solid background (compositor handles it)
+                // On Wayland with opacity, use background alpha workaround (compositor handles window opacity poorly)
                 // On other platforms with opacity, use transparent background
                 if (isWayland)
                 {
-                    Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
-                    Console.WriteLine("[MainWindow] Wayland + opacity: solid background");
+                    // Wayland workaround: Use background color with alpha instead of window opacity
+                    var baseColor = ConfigBridge.ToColor(Generated.Config.Background);
+                    // Calculate alpha: 0.5 opacity = 128 alpha (0.5 * 255)
+                    byte alpha = (byte)(windowOpacity * 255);
+                    var transparentColor = new Color(alpha, baseColor.R, baseColor.G, baseColor.B);
+                    Background = new SolidColorBrush(transparentColor);
+                    
+                    Console.WriteLine("[MainWindow] Wayland workaround: background alpha = " + alpha);
+                    Console.WriteLine("[MainWindow] Background color ARGB: 0x" + ((alpha << 24) | (baseColor.R << 16) | (baseColor.G << 8) | baseColor.B).ToString("X8"));
                 }
                 else
                 {
@@ -100,10 +115,20 @@ public partial class MainWindow : Window
                 Console.WriteLine("[MainWindow] Solid background (no transparency/opacity)");
             }
             
-            // Skip TransparencyLevelHint on Wayland (handled by compositor)
+            // Skip TransparencyLevelHint on Wayland for blur effects (handled by compositor)
+            // BUT: Set Transparent hint when using opacity so Avalonia knows the window can be translucent
             if (isWayland)
             {
-                Console.WriteLine("[MainWindow] Skipping TransparencyLevelHint on Wayland");
+                if (windowOpacity < 1.0)
+                {
+                    // Even on Wayland, set Transparent hint so Avalonia treats window as translucent
+                    TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
+                    Console.WriteLine("[MainWindow] Wayland + opacity: Set Transparent hint for proper opacity handling");
+                }
+                else
+                {
+                    Console.WriteLine("[MainWindow] Skipping TransparencyLevelHint on Wayland (solid window)");
+                }
             }
             
             // DEBUG: Log final state after transparency setup

@@ -318,6 +318,15 @@ public class ConfigGenerator : IIncrementalGenerator
         {
             // Try to get the symbol and evaluate
             var symbolInfo = semanticModel.GetSymbolInfo(memberAccess);
+            
+            // For enum members, return the member name (e.g., "None", "Blur")
+            // This must be checked before the const field check because enum members are const fields
+            if (symbolInfo.Symbol is IFieldSymbol field && 
+                field.ContainingType?.TypeKind == TypeKind.Enum)
+            {
+                return field.Name;  // Returns "None", not 0
+            }
+            
             if (symbolInfo.Symbol is IPropertySymbol property)
             {
                 // For properties returning built-in types, check the type
@@ -328,9 +337,9 @@ public class ConfigGenerator : IIncrementalGenerator
                     return typeName;
                 }
             }
-            else if (symbolInfo.Symbol is IFieldSymbol field && field.IsConst)
+            else if (symbolInfo.Symbol is IFieldSymbol constField && constField.IsConst)
             {
-                return field.ConstantValue;
+                return constField.ConstantValue;
             }
             
             // If we can't resolve, return the member name for downstream processing

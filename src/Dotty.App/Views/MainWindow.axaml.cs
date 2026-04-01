@@ -98,7 +98,6 @@ namespace Dotty.App.Views;
             {
                 _isHyprland = true;
                 Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
-                Console.WriteLine("[MainWindow] Hyprland detected - using compositor transparency (add windowrulev2 to hyprland.conf)");
                 return;
             }
             
@@ -149,8 +148,6 @@ namespace Dotty.App.Views;
             
             if (desktop?.Contains("Hyprland") == true || hyprlandSig != null)
             {
-                Console.WriteLine("[Compositor] Hyprland detected - configure opacity in ~/.config/hypr/hyprland.conf:");
-                Console.WriteLine("[Compositor]   windowrulev2 = opacity 0.5,class:^Dotty$");
                 return true;
             }
             

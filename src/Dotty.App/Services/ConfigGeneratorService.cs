@@ -140,12 +140,13 @@ public static class ConfigGeneratorService
                $"\n" +
                $"/// <summary>\n" +
                $"/// Your custom Dotty terminal configuration.\n" +
-               $"/// All properties are optional - uncomment to override defaults.\n" +
+               $"/// All properties implement IDottyConfig interface.\n" +
+               $"/// Return null to use Dotty's built-in defaults.\n" +
                $"/// </summary>\n" +
                $"public partial class MyDottyConfig : IDottyConfig\n" +
                $"{{\n" +
                $"    // =========================================================================\n" +
-               $"    // THEME\n" +
+               $"    // THEME (Required - must specify a theme)\n" +
                $"    // =========================================================================\n" +
                $"    // Choose from: DarkPlus, Dracula, OneDark, GruvboxDark, CatppuccinMocha,\n" +
                $"    //              TokyoNight, LightPlus, OneLight, GruvboxLight,\n" +
@@ -154,106 +155,119 @@ public static class ConfigGeneratorService
                $"    public IColorScheme? Colors => BuiltInThemes.DarkPlus;\n" +
                $"    \n" +
                $"    // =========================================================================\n" +
-               $"    // FONT SETTINGS\n" +
+               $"    // FONT SETTINGS (Optional - null uses defaults)\n" +
                $"    // =========================================================================\n" +
                $"    // Font family stack - comma-separated list with fallbacks.\n" +
                $"    // First available font is used.\n" +
-               $"    // public string? FontFamily => \"{defaultFontFamily}\";\n" +
+               $"    // Example: \"Fira Code, JetBrains Mono, Cascadia Code, monospace\"\n" +
+               $"    public string? FontFamily => null;  // Default: {defaultFontFamily}\n" +
                $"    \n" +
-               $"    // Font size in points (default: {defaultFontSize})\n" +
-               $"    // public double? FontSize => {defaultFontSize};\n" +
+               $"    // Font size in points\n" +
+               $"    public double? FontSize => null;  // Default: {defaultFontSize}\n" +
                $"    \n" +
-               $"    // Cell padding in pixels (default: {defaultCellPadding})\n" +
-               $"    // public double? CellPadding => {defaultCellPadding};\n" +
+               $"    // Cell padding in pixels\n" +
+               $"    public double? CellPadding => null;  // Default: {defaultCellPadding}\n" +
                $"    \n" +
-               $"    // Content padding around terminal area (default: 0,0,0,0)\n" +
-               $"    // public Thickness? ContentPadding => new Thickness(0.0);\n" +
+               $"    // Content padding around terminal area (Left, Top, Right, Bottom)\n" +
+               $"    public Thickness? ContentPadding => null;  // Default: 0,0,0,0\n" +
                $"    \n" +
                $"    // =========================================================================\n" +
-               $"    // TERMINAL SETTINGS\n" +
+               $"    // TERMINAL SETTINGS (Optional - null uses defaults)\n" +
                $"    // =========================================================================\n" +
                $"    // Scrollback buffer size - number of lines to keep in memory\n" +
-               $"    // (default: {defaultScrollbackLines})\n" +
-               $"    // public int? ScrollbackLines => {defaultScrollbackLines};\n" +
+               $"    public int? ScrollbackLines => null;  // Default: {defaultScrollbackLines}\n" +
                $"    \n" +
-               $"    // Time before inactive tab visuals are destroyed (default: {defaultInactiveTabDelay}ms)\n" +
-               $"    // public int? InactiveTabDestroyDelayMs => {defaultInactiveTabDelay};\n" +
-               $"    \n" +
-               $"    // =========================================================================\n" +
-               $"    // UI COLORS (ARGB format: 0xAARRGGBB)\n" +
-               $"    // =========================================================================\n" +
-               $"    // Selection highlight color (default: 0x{defaultSelectionColor:X8})\n" +
-               $"    // public uint? SelectionColor => 0x{defaultSelectionColor:X8};\n" +
-               $"    \n" +
-               $"    // Tab bar background color (default: 0x{defaultTabBarBgColor:X8})\n" +
-               $"    // public uint? TabBarBackgroundColor => 0x{defaultTabBarBgColor:X8};\n" +
+               $"    // Time before inactive tab visuals are destroyed (milliseconds)\n" +
+               $"    public int? InactiveTabDestroyDelayMs => null;  // Default: {defaultInactiveTabDelay}\n" +
                $"    \n" +
                $"    // =========================================================================\n" +
-               $"    // WINDOW SETTINGS\n" +
+               $"    // UI COLORS (Optional - null uses defaults)\n" +
+               $"    // ARGB format: 0xAARRGGBB\n" +
+               $"    // =========================================================================\n" +
+               $"    // Selection highlight color\n" +
+               $"    public uint? SelectionColor => null;  // Default: 0x{defaultSelectionColor:X8}\n" +
+               $"    \n" +
+               $"    // Tab bar background color\n" +
+               $"    public uint? TabBarBackgroundColor => null;  // Default: 0x{defaultTabBarBgColor:X8}\n" +
+               $"    \n" +
+               $"    // =========================================================================\n" +
+               $"    // WINDOW SETTINGS (Optional - null uses defaults)\n" +
                $"    // =========================================================================\n" +
                $"    // Initial window dimensions\n" +
-               $"    // public IWindowDimensions? InitialDimensions => new WindowDimensions\n" +
-               $"    // {{\n" +
-               $"    //     Columns = 80,\n" +
-               $"    //     Rows = 24,\n" +
-               $"    //     Title = \"Dotty\"\n" +
-               $"    // }};\n" +
+               $"    public IWindowDimensions? InitialDimensions => null;\n" +
                $"    \n" +
                $"    // =========================================================================\n" +
-               $"    // CURSOR SETTINGS\n" +
+               $"    // CURSOR SETTINGS (Optional - null uses defaults)\n" +
                $"    // =========================================================================\n" +
-               $"    // public ICursorSettings? Cursor => new CursorSettings\n" +
-               $"    // {{\n" +
-               $"    //     Shape = CursorShape.Block,\n" +
-               $"    //     Blink = true,\n" +
-               $"    //     BlinkIntervalMs = 500,\n" +
-               $"    //     Color = null,  // null = use foreground color\n" +
-               $"    //     ShowUnfocused = false\n" +
-               $"    // }};\n" +
+               $"    public ICursorSettings? Cursor => null;\n" +
                $"    \n" +
                $"    // =========================================================================\n" +
-               $"    // KEY BINDINGS\n" +
+               $"    // KEY BINDINGS (Optional - null uses defaults)\n" +
                $"    // =========================================================================\n" +
-               $"    // Uncomment to use custom key bindings instead of defaults\n" +
-               $"    // public IKeyBindings? KeyBindings => new CustomKeyBindings();\n" +
+               $"    // Uncomment and implement CustomKeyBindings class below to customize\n" +
+               $"    public IKeyBindings? KeyBindings => null;\n" +
                $"}}\n" +
-               $"\n" +
-               $"// =========================================================================\n" +
-               $"// EXAMPLE: Custom Window Dimensions\n" +
-               $"// =========================================================================\n" +
-               $"// public class WindowDimensions : IWindowDimensions\n" +
-               $"// {{\n" +
-               $"//     public int Columns {{ get; init; }} = 120;\n" +
-               $"//     public int Rows {{ get; init; }} = 40;\n" +
-               $"//     public int? WidthPixels {{ get; init; }} = null;\n" +
-               $"//     public int? HeightPixels {{ get; init; }} = null;\n" +
-               $"//     public bool StartFullscreen {{ get; init; }} = false;\n" +
-               $"//     public string? Title {{ get; init; }} = \"Dotty\";\n" +
-               $"// }}\n" +
-               $"\n" +
-               $"// =========================================================================\n" +
-               $"// EXAMPLE: Custom Cursor Settings\n" +
-               $"// =========================================================================\n" +
-               $"// public class CursorSettings : ICursorSettings\n" +
-               $"// {{\n" +
-               $"//     public CursorShape Shape {{ get; init; }} = CursorShape.Block;\n" +
-               $"//     public bool Blink {{ get; init; }} = true;\n" +
-               $"//     public int BlinkIntervalMs {{ get; init; }} = 500;\n" +
-               $"//     public uint? Color {{ get; init; }} = null;\n" +
-               $"//     public bool ShowUnfocused {{ get; init; }} = false;\n" +
-               $"// }}\n" +
                $"\n" +
                $"// =========================================================================\n" +
                $"// EXAMPLE: Custom Key Bindings\n" +
                $"// =========================================================================\n" +
-               $"// public class CustomKeyBindings : IKeyBindings\n" +
-               $"// {{\n" +
-               $"//     public TerminalAction? GetAction(Avalonia.Input.Key key, Avalonia.Input.KeyModifiers modifiers)\n" +
-               $"//     {{\n" +
-               $"//         // Add your custom key bindings here\n" +
-               $"//         // Return null to use default bindings for unhandled keys\n" +
-               $"//         return null;\n" +
-               $"//     }}\n" +
-               $"// }}\n";
+               $"// Uncomment and customize this class, then set:\n" +
+               $"//   public IKeyBindings? KeyBindings => new CustomKeyBindings();\n" +
+               $"/*\n" +
+               $"public class CustomKeyBindings : IKeyBindings\n" +
+               $"{{\n" +
+               $"    public TerminalAction? GetAction(Avalonia.Input.Key key, Avalonia.Input.KeyModifiers modifiers)\n" +
+               $"    {{\n" +
+               $"        // Example: Map F12 to toggle fullscreen\n" +
+               $"        // if (key == Avalonia.Input.Key.F12)\n" +
+               $"        //     return TerminalAction.ToggleFullscreen;\n" +
+               $"        \n" +
+               $"        return null;  // Use default bindings\n" +
+               $"    }}\n" +
+               $"}}\n" +
+               $"*/\n" +
+               $"\n" +
+               $"// =========================================================================\n" +
+               $"// EXAMPLE: Custom Window Dimensions\n" +
+               $"// =========================================================================\n" +
+               $"/*\n" +
+               $"public class WindowDimensions : IWindowDimensions\n" +
+               $"{{\n" +
+               $"    public int Columns {{ get; init; }} = 120;\n" +
+               $"    public int Rows {{ get; init; }} = 40;\n" +
+               $"    public int? WidthPixels {{ get; init; }} = null;\n" +
+               $"    public int? HeightPixels {{ get; init; }} = null;\n" +
+               $"    public bool StartFullscreen {{ get; init; }} = false;\n" +
+               $"    public string? Title {{ get; init; }} = \"Dotty\";\n" +
+               $"}}\n" +
+               $"*/\n" +
+               $"\n" +
+               $"// =========================================================================\n" +
+               $"// EXAMPLE: Custom Cursor Settings\n" +
+               $"// =========================================================================\n" +
+               $"/*\n" +
+               $"public class CursorSettings : ICursorSettings\n" +
+               $"{{\n" +
+               $"    public CursorShape Shape {{ get; init; }} = CursorShape.Block;\n" +
+               $"    public bool Blink {{ get; init; }} = true;\n" +
+               $"    public int BlinkIntervalMs {{ get; init; }} = 500;\n" +
+               $"    public uint? Color {{ get; init; }} = null;  // null = use foreground\n" +
+               $"    public bool ShowUnfocused {{ get; init; }} = false;\n" +
+               $"}}\n" +
+               $"*/\n" +
+               $"\n" +
+               $"// =========================================================================\n" +
+               $"// EXAMPLE: Custom Theme with Opacity\n" +
+               $"// =========================================================================\n" +
+               $"/*\n" +
+               $"public class TranslucentDracula : DraculaTheme\n" +
+               $"{{\n" +
+               $"    // 85 = 85% opaque, 15% transparent\n" +
+               $"    public override byte Opacity => 85;\n" +
+               $"}}\n" +
+               $"\n" +
+               $"// Then use it:\n" +
+               $"// public IColorScheme? Colors => new TranslucentDracula();\n" +
+               $"*/\n";
     }
 }

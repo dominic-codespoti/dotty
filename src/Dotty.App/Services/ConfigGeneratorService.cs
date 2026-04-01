@@ -98,6 +98,7 @@ public static class ConfigGeneratorService
                "    <Nullable>enable</Nullable>\n" +
                "    <ImplicitUsings>enable</ImplicitUsings>\n" +
                "    <LangVersion>latest</LangVersion>\n" +
+               "    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>\n" +
                "  </PropertyGroup>\n" +
                "\n" +
                "  <ItemGroup>\n" +

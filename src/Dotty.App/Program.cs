@@ -40,6 +40,12 @@ static class Program
             Console.WriteLine($"    • Config.cs - Your configuration (edit this!)");
             Console.WriteLine($"    • Dotty.UserConfig.csproj - Project file with NuGet reference");
             Console.WriteLine();
+            
+            // Run dotnet restore to download the NuGet package for immediate IntelliSense
+            Console.WriteLine("  Restoring NuGet packages for IntelliSense support...");
+            RestoreConfigProject();
+            
+            Console.WriteLine();
             Console.WriteLine("  To customize your terminal:");
             Console.WriteLine($"    1. Open {ConfigGeneratorService.ProjectDir}/ in your IDE");
             Console.WriteLine("       (VS Code, Rider, or any C# editor)");
@@ -55,6 +61,49 @@ static class Program
         {
             Console.WriteLine($"✓ Regenerated config at: {ConfigGeneratorService.ConfigPath}");
             Console.WriteLine($"  Project: {ConfigGeneratorService.ProjectPath}");
+        }
+    }
+
+    /// <summary>
+    /// Runs dotnet restore on the config project to download NuGet packages.
+    /// </summary>
+    private static void RestoreConfigProject()
+    {
+        try
+        {
+            var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "dotnet",
+                    Arguments = $"restore \"{ConfigGeneratorService.ProjectPath}\"",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            
+            process.Start();
+            process.WaitForExit(30000); // 30 second timeout
+            
+            if (process.ExitCode == 0)
+            {
+                Console.WriteLine("  ✓ NuGet packages restored successfully");
+            }
+            else
+            {
+                Console.WriteLine("  ⚠ NuGet restore had issues, but you can run it manually:");
+                Console.WriteLine($"    cd {ConfigGeneratorService.ProjectDir}");
+                Console.WriteLine("    dotnet restore");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  ⚠ Could not auto-restore packages: {ex.Message}");
+            Console.WriteLine("  You can restore manually by running:");
+            Console.WriteLine($"    cd {ConfigGeneratorService.ProjectDir}");
+            Console.WriteLine("    dotnet restore");
         }
     }
 

@@ -60,48 +60,48 @@ public partial class MainWindow : Window
             Console.WriteLine("[MainWindow] Window opacity config value: " + windowOpacity);
             Console.WriteLine("[MainWindow] Avalonia version: " + typeof(Window).Assembly.GetName().Version);
             
-            // Handle transparency based on platform
-            if (transparency == TransparencyLevel.None)
+            // Handle transparency and opacity based on platform
+            // Check windowOpacity FIRST so it works independently of TransparencyLevel
+            if (windowOpacity < 1.0)
             {
-                // Solid background - no transparency
-                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
-                Console.WriteLine("[MainWindow] Set solid background: " + Background);
-            }
-            else if (isWayland)
-            {
-                // WAYLAND: Use window opacity instead of true transparency
-                // Most Wayland compositors handle window opacity better than TransparencyLevelHint
-                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
-                // Set opacity from config (default 100 = fully opaque)
+                // User has configured a specific opacity level (less than 100%)
                 this.Opacity = windowOpacity;
-                Console.WriteLine("[MainWindow] Wayland detected - using window opacity: " + this.Opacity);
+                Console.WriteLine("[MainWindow] Applied window opacity: " + this.Opacity);
+                
+                // On Wayland with opacity, keep solid background (compositor handles it)
+                // On other platforms with opacity, use transparent background
+                if (isWayland)
+                {
+                    Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+                    Console.WriteLine("[MainWindow] Wayland + opacity: solid background");
+                }
+                else
+                {
+                    Background = Brushes.Transparent;
+                    Console.WriteLine("[MainWindow] Non-Wayland + opacity: transparent background");
+                }
             }
-            else
+            else if (transparency != TransparencyLevel.None)
             {
-                // X11/Windows/macOS: Use true transparency with transparent background
+                // Full transparency mode without specific opacity (< 100)
                 Background = Brushes.Transparent;
-                Console.WriteLine("[MainWindow] Set transparent background");
-            }
-            
-            // Apply additional window opacity if configured (for all platforms)
-            if (windowOpacity < 1.0 && !isWayland)
-            {
-                this.Opacity = windowOpacity;
-                Console.WriteLine("[MainWindow] Applied configured opacity: " + this.Opacity);
-            }
-            else if (!isWayland && transparency != TransparencyLevel.None)
-            {
-                // Default semi-transparent opacity for transparent mode
-                this.Opacity = 0.95;
-                Console.WriteLine("[MainWindow] Applied default transparent opacity: " + this.Opacity);
-            }
-            
-            // Apply transparency level for acrylic/blur effects (only on supported platforms)
-            if (!isWayland)
-            {
-                ApplyTransparencyLevel();
+                this.Opacity = 0.95; // Default semi-transparent
+                Console.WriteLine("[MainWindow] Transparency mode: default opacity 0.95");
+                
+                if (!isWayland)
+                {
+                    ApplyTransparencyLevel(); // For blur/acrylic effects
+                }
             }
             else
+            {
+                // Solid, fully opaque window (default)
+                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+                Console.WriteLine("[MainWindow] Solid background (no transparency/opacity)");
+            }
+            
+            // Skip TransparencyLevelHint on Wayland (handled by compositor)
+            if (isWayland)
             {
                 Console.WriteLine("[MainWindow] Skipping TransparencyLevelHint on Wayland");
             }

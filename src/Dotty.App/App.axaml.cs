@@ -16,6 +16,13 @@ namespace Dotty.App;
 
 public partial class App : Application
 {
+    private static ThemeManager? _themeManager;
+    
+    /// <summary>
+    /// Gets the global ThemeManager instance for runtime theme management.
+    /// </summary>
+    public static ThemeManager ThemeManager => _themeManager ??= new ThemeManager();
+
     public override void Initialize()
     {
         AvaloniaXamlLoader.Load(this);
@@ -25,6 +32,11 @@ public partial class App : Application
     {
         try
         {
+            // Initialize theme manager (loads built-in + user themes)
+            _themeManager = new ThemeManager();
+            _themeManager.ThemeChanged += OnThemeChanged;
+            Console.WriteLine($"[App] ThemeManager initialized with {_themeManager.AvailableThemes.Count} themes");
+            
             ApplyDefaultsToResources();
         }
         catch (Exception ex)
@@ -38,6 +50,29 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+    
+    /// <summary>
+    /// Handles theme changes - updates application resources.
+    /// </summary>
+    private static void OnThemeChanged(object? sender, ThemeChangedEventArgs e)
+    {
+        if (Current == null)
+            return;
+            
+        var theme = e.NewTheme;
+        var resources = Current.Resources;
+        
+        // Update background and foreground brushes
+        resources["TerminalBackground"] = new SolidColorBrush(ConfigBridge.ToColor(theme.Background));
+        resources["TerminalForeground"] = new SolidColorBrush(ConfigBridge.ToColor(theme.Foreground));
+        resources["TerminalBackgroundTransparent"] = new SolidColorBrush(ConfigBridge.ToColor(theme.Background));
+        resources["TabBarForeground"] = new SolidColorBrush(ConfigBridge.ToColor(theme.Foreground));
+        
+        // Re-apply ANSI palette with new theme colors
+        ApplyAnsiColorPalette(theme);
+        
+        Console.WriteLine($"[App] Theme changed to background 0x{theme.Background:X8}");
     }
 
     private static readonly bool ShouldLogFontResolution =
@@ -89,30 +124,60 @@ public partial class App : Application
         ApplyAnsiColorPalette();
     }
     
-    private static void ApplyAnsiColorPalette()
+    private static void ApplyAnsiColorPalette(IColorScheme? theme = null)
     {
         try
         {
-            var colors = Generated.Config.Colors;
-            var ansiPalette = new uint[]
+            uint[] ansiPalette;
+            
+            if (theme != null)
             {
-                colors.AnsiBlack,
-                colors.AnsiRed,
-                colors.AnsiGreen,
-                colors.AnsiYellow,
-                colors.AnsiBlue,
-                colors.AnsiMagenta,
-                colors.AnsiCyan,
-                colors.AnsiWhite,
-                colors.AnsiBrightBlack,
-                colors.AnsiBrightRed,
-                colors.AnsiBrightGreen,
-                colors.AnsiBrightYellow,
-                colors.AnsiBrightBlue,
-                colors.AnsiBrightMagenta,
-                colors.AnsiBrightCyan,
-                colors.AnsiBrightWhite
-            };
+                // Use provided theme
+                ansiPalette = new uint[]
+                {
+                    theme.AnsiBlack,
+                    theme.AnsiRed,
+                    theme.AnsiGreen,
+                    theme.AnsiYellow,
+                    theme.AnsiBlue,
+                    theme.AnsiMagenta,
+                    theme.AnsiCyan,
+                    theme.AnsiWhite,
+                    theme.AnsiBrightBlack,
+                    theme.AnsiBrightRed,
+                    theme.AnsiBrightGreen,
+                    theme.AnsiBrightYellow,
+                    theme.AnsiBrightBlue,
+                    theme.AnsiBrightMagenta,
+                    theme.AnsiBrightCyan,
+                    theme.AnsiBrightWhite
+                };
+            }
+            else
+            {
+                // Fall back to generated config
+                var colors = Generated.Config.Colors;
+                ansiPalette = new uint[]
+                {
+                    colors.AnsiBlack,
+                    colors.AnsiRed,
+                    colors.AnsiGreen,
+                    colors.AnsiYellow,
+                    colors.AnsiBlue,
+                    colors.AnsiMagenta,
+                    colors.AnsiCyan,
+                    colors.AnsiWhite,
+                    colors.AnsiBrightBlack,
+                    colors.AnsiBrightRed,
+                    colors.AnsiBrightGreen,
+                    colors.AnsiBrightYellow,
+                    colors.AnsiBrightBlue,
+                    colors.AnsiBrightMagenta,
+                    colors.AnsiBrightCyan,
+                    colors.AnsiBrightWhite
+                };
+            }
+            
             SgrColorArgb.SetAnsiPalette(ansiPalette);
         }
         catch (Exception ex)

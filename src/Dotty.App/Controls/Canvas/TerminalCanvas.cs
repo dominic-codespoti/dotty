@@ -675,20 +675,42 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		base.OnDetachedFromVisualTree(e);
 		
 		_isAttached = false;
+		_framePending = false;
 		
 		// CRITICAL: Completely destroy the composition visual when detaching.
 		// This ensures the surface is released and won't cause stacking.
 		DestroyCompositionVisual();
 		
-		// Reset frame composer caches
-		_frameComposer?.ResetCaches();
+		// Win 3: Clear inactive tab caches - aggressively clean up render state
+		// Clear glyph discovery to free memory
+		_glyphDiscovery = null;
 		
+		// Release per-view render state now that this canvas is leaving the tree.
+		try { _frameComposer?.Dispose(); } catch { }
+		_frameComposer = null;
+		
+		// Clear glyph atlas reference (atlas itself is shared via service)
+		_glyphAtlas = null;
+		
+		// Release Skia paint resources
+		if (SkPaint != null)
+		{
+			try { SkPaint.Dispose(); } catch { }
+			SkPaint = null;
+		}
+		
+		// Stop and clean up frame timer
 		if (_frameDebounceTimer != null)
 		{
 			_frameDebounceTimer.Stop();
 			_frameDebounceTimer.Tick -= FrameDebounceTick;
 			_frameDebounceTimer = null;
 		}
+		
+		// Reset metrics to ensure fresh calculation on reattach
+		_metricsDirty = true;
+		_cellWidth = 8;
+		_cellHeight = 16;
 	}
 
 	private IBrush ResolveResourceBrush(IResourceDictionary? resources, string key, IBrush fallback)

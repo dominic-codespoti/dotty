@@ -211,7 +211,39 @@ public class TerminalBuffer
     public void ClearScrollback()
     {
         // Clear the preserved history but do not modify the visible screen.
-        _scrollbackCount = 0; _scrollbackHead = 0;
+        // Also release the scrollback ring array to free memory (not just reset count)
+        _scrollbackCount = 0;
+        _scrollbackHead = 0;
+        _scrollbackRing = System.Array.Empty<ScrollbackLine>();
+        BumpScrollGeneration();
+    }
+
+    /// <summary>
+    /// Aggressively reduces scrollback to a smaller size while keeping the session running.
+    /// This is used when a tab becomes inactive to free memory while preserving some context.
+    /// </summary>
+    /// <param name="maxLines">Maximum number of scrollback lines to keep (default 100)</param>
+    public void TrimScrollback(int maxLines)
+    {
+        if (maxLines < 0) maxLines = 0;
+        if (_scrollbackCount <= maxLines) return; // Nothing to trim
+
+        int linesToKeep = System.Math.Min(maxLines, _scrollbackCount);
+        int linesToRemove = _scrollbackCount - linesToKeep;
+
+        if (linesToKeep == 0)
+        {
+            // Trim to zero - same as ClearScrollback but without full array release
+            _scrollbackCount = 0;
+            _scrollbackHead = 0;
+        }
+        else
+        {
+            // Move head forward by linesToRemove (discarding oldest lines)
+            _scrollbackHead = (_scrollbackHead + linesToRemove) % _scrollbackRing.Length;
+            _scrollbackCount = linesToKeep;
+        }
+
         BumpScrollGeneration();
     }
 

@@ -1,0 +1,214 @@
+using Xunit;
+using FluentAssertions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Testing;
+using Microsoft.CodeAnalysis.Testing;
+using Microsoft.CodeAnalysis.Testing.Verifiers;
+using System.Collections.Immutable;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace Dotty.Config.SourceGenerator.Tests;
+
+/// <summary>
+/// Integration tests for the ConfigGenerator source generator.
+/// Verifies end-to-end functionality with actual compilation.
+/// </summary>
+public class IntegrationTests
+{
+    #region Theme Integration Tests
+
+    /// <summary>
+    /// Verifies that the generator produces correct background color for Dark+ theme.
+    /// </summary>
+    [Fact]
+    public async Task Generator_WithDarkPlus_ProducesCorrectBackground()
+    {
+        // Arrange
+        const string source = @"
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
+
+public class TestConfig : IDottyConfig
+{
+    public IColorScheme? Colors => BuiltInThemes.DarkPlus;
+    public string? FontFamily => ""Test Font"";
+    public double? FontSize => 14.0;
+}
+";
+
+        // Act
+        var (compilation, generatedSources) = await RunGeneratorAsync(source);
+
+        // Assert
+        compilation.GetDiagnostics().Should().NotContain(d => d.Severity == DiagnosticSeverity.Error);
+        generatedSources.Should().Contain(s => s.HintName.Contains("Config.g.cs"));
+        
+        var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
+        var configCode = configSource.SourceText.ToString();
+        
+        // DarkPlus background is 0xFF1E1E1E
+        configCode.Should().Contain("0xFF1E1E1E");
+    }
+
+    /// <summary>
+    /// Verifies that the generator produces correct background color for Dracula theme.
+    /// </summary>
+    [Fact]
+    public async Task Generator_WithDracula_ProducesCorrectBackground()
+    {
+        // Arrange
+        const string source = @"
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
+
+public class TestConfig : IDottyConfig
+{
+    public IColorScheme? Colors => BuiltInThemes.Dracula;
+    public string? FontFamily => ""JetBrains Mono"";
+    public double? FontSize => 16.0;
+}
+";
+
+        // Act
+        var (compilation, generatedSources) = await RunGeneratorAsync(source);
+
+        // Assert
+        compilation.GetDiagnostics().Should().NotContain(d => d.Severity == DiagnosticSeverity.Error);
+        
+        var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
+        var configCode = configSource.SourceText.ToString();
+        
+        // Dracula background is 0xFF282A36
+        configCode.Should().Contain("0xFF282A36");
+    }
+
+    /// <summary>
+    /// Verifies that the generator produces correct font family from config.
+    /// </summary>
+    [Fact]
+    public async Task Generator_WithCustomFont_ProducesCorrectFont()
+    {
+        // Arrange
+        const string source = @"
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
+
+public class TestConfig : IDottyConfig
+{
+    public IColorScheme? Colors => BuiltInThemes.DarkPlus;
+    public string? FontFamily => ""Fira Code"";
+    public double? FontSize => 12.0;
+}
+";
+
+        // Act
+        var (compilation, generatedSources) = await RunGeneratorAsync(source);
+
+        // Assert
+        var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
+        var configCode = configSource.SourceText.ToString();
+        
+        configCode.Should().Contain("FontFamily => \"Fira Code\"");
+        configCode.Should().Contain("FontSize => 12");
+    }
+
+    /// <summary>
+    /// Verifies that the generator uses default values when no config class is present.
+    /// </summary>
+    [Fact]
+    public async Task Generator_WithNoConfig_UsesDefaults()
+    {
+        // Arrange - source without IDottyConfig implementation
+        const string source = @"
+public class SomeOtherClass
+{
+    public string Name => ""Test"";
+}
+";
+
+        // Act
+        var (compilation, generatedSources) = await RunGeneratorAsync(source);
+
+        // Assert
+        // Generator should still run and produce default config
+        generatedSources.Should().Contain(s => s.HintName.Contains("Config.g.cs"));
+        
+        var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
+        var configCode = configSource.SourceText.ToString();
+        
+        // Should contain default values
+        configCode.Should().Contain("FontFamily");
+        configCode.Should().Contain("FontSize");
+        configCode.Should().Contain("Background");
+    }
+
+    /// <summary>
+    /// Verifies that the generator falls back to Dark+ for invalid/unknown themes.
+    /// </summary>
+    [Fact]
+    public async Task Generator_WithInvalidTheme_FallsBackToDarkPlus()
+    {
+        // Arrange - note: null Colors should fall back to default (DarkPlus)
+        const string source = @"
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
+
+public class TestConfig : IDottyConfig
+{
+    public IColorScheme? Colors => null;
+    public string? FontFamily => ""Test"";
+}
+";
+
+        // Act
+        var (compilation, generatedSources) = await RunGeneratorAsync(source);
+
+        // Assert
+        var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
+        var configCode = configSource.SourceText.ToString();
+        
+        // Should have DarkPlus background as fallback
+        configCode.Should().Contain("0xFF1E1E1E");
+    }
+
+    #endregion
+
+    #region Test Helpers
+
+    /// <summary>
+    /// Runs the generator against the provided source code and returns the compilation result.
+    /// </summary>
+    private static async Task<(Compilation Compilation, ImmutableArray<GeneratedSourceResult> GeneratedSources)> RunGeneratorAsync(string source)
+    {
+        var syntaxTree = CSharpSyntaxTree.ParseText(source);
+        
+        var references = new[]
+        {
+            MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
+            MetadataReference.CreateFromFile(typeof(Dotty.Abstractions.Config.IDottyConfig).Assembly.Location)
+        };
+
+        var inputCompilation = CSharpCompilation.Create(
+            "TestInputAssembly",
+            new[] { syntaxTree },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+
+        // Run the generator (IIncrementalGenerator API)
+        var generator = new ConfigGenerator();
+        GeneratorDriver driver = CSharpGeneratorDriver.Create(generator);
+        driver = driver.RunGeneratorsAndUpdateCompilation(inputCompilation, out var outputCompilation, out var diagnostics);
+
+        // Get generated sources
+        var runResult = driver.GetRunResult();
+        var generatedSources = runResult.Results
+            .SelectMany(r => r.GeneratedSources)
+            .ToImmutableArray();
+
+        return (outputCompilation, generatedSources);
+    }
+
+    #endregion
+}

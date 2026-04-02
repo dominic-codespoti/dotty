@@ -17,7 +17,7 @@ public abstract class ViewModelBase : INotifyPropertyChanged
 public class TabViewModel : ViewModelBase, IDisposable
 {
     private string _title = "Terminal";
-    private TerminalSession _session;
+    private TerminalSession? _session;
 
     private bool _isActive;
     public bool IsActive
@@ -33,11 +33,6 @@ public class TabViewModel : ViewModelBase, IDisposable
         set { _isEditingTitle = value; RaisePropertyChanged(); }
     }
 
-    public TabViewModel()
-    {
-        _session = new TerminalSession();
-    }
-
     public string Title
     {
         get => _title;
@@ -46,13 +41,16 @@ public class TabViewModel : ViewModelBase, IDisposable
 
     public TerminalSession Session
     {
-        get => _session;
+        get => _session ??= new TerminalSession();
         set { _session = value; RaisePropertyChanged(); }
     }
 
+    public bool HasSession => _session != null;
+    public bool IsSessionStarted => _session?.IsStarted == true;
+
     public void Dispose()
     {
-        _session.Dispose();
+        _session?.Dispose();
     }
 }
 
@@ -84,10 +82,13 @@ public class MainViewModel : ViewModelBase
         ActiveTab = initialTab;
     }
 
-    public void AddNewTab()
+    public void AddNewTab(bool activate = true)
     {
         var newTab = new TabViewModel();
         Tabs.Add(newTab);
-        ActiveTab = newTab;
+        if (activate)
+        {
+            ActiveTab = newTab;
+        }
     }
 }

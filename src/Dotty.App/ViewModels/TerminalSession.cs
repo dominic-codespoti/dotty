@@ -38,6 +38,7 @@ public class TerminalSession : IDisposable
 
     public ITerminalParser Parser { get; }
     public TerminalAdapter Adapter { get; }
+    public bool IsStarted => _isStarted;
 
     public event Action<byte[]>? RawInputReceived;
     public event Action? RenderScheduled;

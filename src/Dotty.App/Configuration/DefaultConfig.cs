@@ -18,14 +18,15 @@ namespace Dotty.App.Configuration;
 /// <summary>
 /// Default Dotty configuration.
 /// Uses the DarkPlus theme (VS Code Dark+) as the default color scheme.
+/// All default values are sourced from DottyDefaults for single source of truth.
 /// </summary>
 public partial class DefaultDottyConfig : IDottyConfig
 {
-    // Font Settings
-    public string? FontFamily => "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols, Cascadia Code, Liberation Mono, Noto Sans Mono, monospace";
-    public double? FontSize => 15.0;
-    public double? CellPadding => 1.5;
-    public Thickness? ContentPadding => new Thickness(0.0);
+    // Font Settings - using DottyDefaults
+    public string? FontFamily => DottyDefaults.FontFamily;
+    public double? FontSize => DottyDefaults.FontSize;
+    public double? CellPadding => DottyDefaults.CellPadding;
+    public Thickness? ContentPadding => DottyDefaults.ContentPadding;
 
     // Color Scheme - using DarkPlus theme (VS Code Dark+)
     // Available themes: DarkPlus, Dracula, OneDark, GruvboxDark, CatppuccinMocha, TokyoNight
@@ -35,46 +36,21 @@ public partial class DefaultDottyConfig : IDottyConfig
     // Key Bindings - using defaults
     public IKeyBindings? KeyBindings => null;  // null = use generated defaults
 
-    // Terminal Settings
-    public int? ScrollbackLines => 10000;
-    public int? InactiveTabDestroyDelayMs => 5000;
+    // Terminal Settings - using DottyDefaults
+    public int? ScrollbackLines => DottyDefaults.ScrollbackLines;
+    public int? InactiveTabDestroyDelayMs => DottyDefaults.InactiveTabDestroyDelayMs;
 
-    // Window Settings
-    public IWindowDimensions? InitialDimensions => new DefaultWindowDimensions();
+    // Window Settings - using DottyDefaults
+    public IWindowDimensions? InitialDimensions => DottyDefaults.GetDefaultWindowDimensions();
 
-    // Cursor Settings
-    public ICursorSettings? Cursor => new DefaultCursorSettings();
+    // Cursor Settings - using DottyDefaults
+    public ICursorSettings? Cursor => DottyDefaults.GetDefaultCursorSettings();
 
-    // UI Colors
-    public uint? SelectionColor => 0xA03385DB;  // Blue selection
-    public uint? TabBarBackgroundColor => 0xFF1A1A1A;  // Dark gray
+    // UI Colors - using DottyDefaults
+    public uint? SelectionColor => DottyDefaults.SelectionColor;
+    public uint? TabBarBackgroundColor => DottyDefaults.TabBarBackgroundColor;
     
-    // Transparency
-    public TransparencyLevel? Transparency => TransparencyLevel.None;  // Solid background
-    public byte? WindowOpacity => 100;  // Default: fully opaque
-}
-
-/// <summary>
-/// Default window dimensions.
-/// </summary>
-public class DefaultWindowDimensions : IWindowDimensions
-{
-    public int Columns => 80;
-    public int Rows => 24;
-    public int? WidthPixels => null;
-    public int? HeightPixels => null;
-    public bool StartFullscreen => false;
-    public string? Title => "Dotty";
-}
-
-/// <summary>
-/// Default cursor settings.
-/// </summary>
-public class DefaultCursorSettings : ICursorSettings
-{
-    public CursorShape Shape => CursorShape.Block;
-    public bool Blink => true;
-    public int BlinkIntervalMs => 500;
-    public uint? Color => null;  // null = use foreground color
-    public bool ShowUnfocused => false;
+    // Transparency - using DottyDefaults
+    public TransparencyLevel? Transparency => DottyDefaults.Transparency;
+    public byte? WindowOpacity => DottyDefaults.WindowOpacity;
 }

@@ -53,28 +53,89 @@ dotnet test tests/Dotty.App.Tests
 
 ## Configuration
 
+Dotty uses a **compile-time configuration system** that delivers type-safe, high-performance settings with zero runtime overhead. Instead of parsing JSON at startup, Dotty generates optimized code from your C# configuration class during build.
+
+### Quick Start
+
 Dotty automatically creates a configuration project on first run:
 
 - **Linux/macOS**: `~/.config/dotty/Dotty.UserConfig/`
 - **Windows**: `%APPDATA%/dotty/Dotty.UserConfig/`
 
 The generated project includes:
-- A `Config.cs` file with sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
-- A `.csproj` with NuGet reference to `Dotty.Abstractions` for full IntelliSense
-- Helpful comments explaining all options
-- Open in your IDE for LSP support (VS Code, Rider, etc.)
+- `Config.cs` with sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
+- `.csproj` with NuGet reference to `Dotty.Abstractions` for full IntelliSense
+- Helpful comments explaining all available options
 
 **To customize:**
-1. Open the config folder in your IDE: `code ~/.config/dotty/Dotty.UserConfig/`
-2. Edit `Config.cs`
-3. Rebuild dotty: `dotnet build`
+```bash
+# 1. Open the config folder in your IDE
+code ~/.config/dotty/Dotty.UserConfig/
 
-**To regenerate:**
+# 2. Edit Config.cs (see example below)
+
+# 3. Rebuild dotty to apply changes
+dotnet build
+```
+
+**Quick Example:**
+```csharp
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
+
+namespace Dotty.UserConfig;
+
+public partial class MyDottyConfig : IDottyConfig
+{
+    // Font: JetBrains Mono at 14pt
+    public string? FontFamily => "JetBrains Mono, Fira Code, monospace";
+    public double? FontSize => 14.0;
+    
+    // Theme: Dracula
+    public IColorScheme? Colors => BuiltInThemes.Dracula;
+    
+    // Cursor: Blinking beam
+    public ICursorSettings? Cursor => new CursorSettings
+    {
+        Shape = CursorShape.Beam,
+        Blink = true
+    };
+}
+```
+
+### Key Features
+
+| Feature | Benefit |
+|---------|---------|
+| **Type-safe** | Compile-time validation catches config errors before runtime |
+| **Zero reflection** | All values resolved at compile time—no startup overhead |
+| **AOT compatible** | Works with .NET Native AOT publishing |
+| **Full IntelliSense** | IDE autocomplete and error checking via NuGet package |
+| **11 built-in themes** | DarkPlus, Dracula, TokyoNight, Catppuccin, Gruvbox, and more |
+| **Custom themes** | Create your own color schemes by extending `ColorSchemeBase` |
+| **Transparency support** | Window opacity, blur, and acrylic effects |
+
+### Default Settings
+
+| Setting | Default Value |
+|---------|-----------------|
+| **Theme** | DarkPlus (VS Code: Dark+) |
+| **Font** | JetBrains Mono, 15pt |
+| **Cursor** | Block shape, blinking |
+| **Scrollback** | 10,000 lines |
+| **Window** | 80 columns × 24 rows |
+
+### Documentation
+
+- **[Configuration Guide](docs/guides/configuration.md)** — Complete user guide with examples and troubleshooting
+- **[Architecture](docs/architecture/config-source-generator.md)** — How the source generator works
+- **[Advanced Topics](docs/CONFIGURATION_ADVANCED.md)** — Custom themes, transparency, and more
+
+### Regenerate Config
+
 ```bash
 dotty --generate-config  # ⚠️ Overwrites existing config
 ```
-
-The `Dotty.Abstractions` NuGet package provides full IntelliSense and LSP support for your configuration. See [Configuration Guide](docs/CONFIGURATION.md) for full details.
 
 ## Repository Structure
 
@@ -95,6 +156,7 @@ docs/                — Architecture and implementation docs
 - [Parser Implementation](docs/parsing.md)
 - [Native PTY](docs/native-pty.md)
 - [Testing](docs/testing.md)
+- [GUI Harness Benchmarking](docs/gui-harness-benchmarking.md)
 - [Performance Analysis](docs/comparison-report.md)
 
 ## License

@@ -1,35 +1,42 @@
 using System;
 using Dotty.App.Configuration;
+using Dotty.Abstractions.Config;
 
 namespace Dotty.App.Services
 {
     /// <summary>
     /// Default values for Dotty terminal emulator.
-    /// These values are now primarily defined in the generated Config class.
-    /// This class provides backward compatibility and runtime fallbacks.
+    /// This class now delegates to DottyDefaults from Dotty.Abstractions.Config
+    /// for the single source of truth, maintaining backward compatibility.
     /// </summary>
     public static class Defaults
     {
-        // Use generated config values as the source of truth
-        public static string DefaultFontStack => Generated.Config.FontFamily;
-        public static double DefaultFontSize => Generated.Config.FontSize;
-        public static string DefaultBackground => ConfigBridge.ToHex(Generated.Config.Background);
-        public static string DefaultForeground => ConfigBridge.ToHex(Generated.Config.Foreground);
+        /// <summary>
+        /// Default font stack.
+        /// </summary>
+        public static string DefaultFontStack => DottyDefaults.FontFamily;
+
+        /// <summary>
+        /// Default font size.
+        /// </summary>
+        public static double DefaultFontSize => DottyDefaults.FontSize;
+
+        /// <summary>
+        /// Default background color in hex format.
+        /// </summary>
+        public static string DefaultBackground => ConfigBridge.ToHex(DottyDefaults.TabBarBackgroundColor);
+
+        /// <summary>
+        /// Default foreground color in hex format.
+        /// </summary>
+        public static string DefaultForeground => ConfigBridge.ToHex(DottyDefaults.SelectionColor);
 
         /// <summary>
         /// Gets the initial font size, checking environment variable override first.
         /// </summary>
         public static double GetInitialFontSize()
         {
-            var env = Environment.GetEnvironmentVariable("DOTTY_FONT_SIZE");
-            if (!string.IsNullOrWhiteSpace(env) &&
-                double.TryParse(env, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
-                parsed > 0)
-            {
-                return parsed;
-            }
-
-            return DefaultFontSize;
+            return DottyDefaults.GetInitialFontSize();
         }
 
         /// <summary>
@@ -37,7 +44,7 @@ namespace Dotty.App.Services
         /// </summary>
         public static double GetCellPadding()
         {
-            return Generated.Config.CellPadding;
+            return DottyDefaults.CellPadding;
         }
 
         /// <summary>
@@ -45,7 +52,7 @@ namespace Dotty.App.Services
         /// </summary>
         public static int GetScrollbackLines()
         {
-            return Generated.Config.ScrollbackLines;
+            return DottyDefaults.ScrollbackLines;
         }
 
         /// <summary>
@@ -53,22 +60,22 @@ namespace Dotty.App.Services
         /// </summary>
         public static int GetInactiveTabDestroyDelayMs()
         {
-            return Generated.Config.InactiveTabDestroyDelayMs;
+            return DottyDefaults.InactiveTabDestroyDelayMs;
         }
     }
 
     /// <summary>
     /// Public constants representing default values used by the config generator.
-    /// These should match the DefaultDottyConfig values in Configuration/DefaultConfig.cs
+    /// These delegate to DottyDefaults for the single source of truth.
     /// </summary>
     public static class DefaultConstants
     {
-        public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols, Cascadia Code, Liberation Mono, Noto Sans Mono, monospace";
-        public const double FontSize = 15.0;
-        public const double CellPadding = 1.5;
-        public const int ScrollbackLines = 10000;
-        public const int InactiveTabDestroyDelayMs = 5000;
-        public const uint SelectionColor = 0xA03385DB;
-        public const uint TabBarBackgroundColor = 0xFF1A1A1A;
+        public const string FontFamily = DottyDefaults.FontFamily;
+        public const double FontSize = DottyDefaults.FontSize;
+        public const double CellPadding = DottyDefaults.CellPadding;
+        public const int ScrollbackLines = DottyDefaults.ScrollbackLines;
+        public const int InactiveTabDestroyDelayMs = DottyDefaults.InactiveTabDestroyDelayMs;
+        public const uint SelectionColor = DottyDefaults.SelectionColor;
+        public const uint TabBarBackgroundColor = DottyDefaults.TabBarBackgroundColor;
     }
 }

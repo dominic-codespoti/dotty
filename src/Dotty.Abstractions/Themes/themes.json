@@ -1,0 +1,335 @@
+{
+  "version": 1,
+  "themes": [
+    {
+      "canonicalName": "DarkPlus",
+      "displayName": "Dark Plus",
+      "description": "VS Code: Dark+ theme - the default theme for Dotty. A balanced dark theme with good contrast and readability.",
+      "isDark": true,
+      "aliases": ["dark-plus", "vscode-dark", "dark+"],
+      "colors": {
+        "background": "#1E1E1E",
+        "foreground": "#D4D4D4",
+        "opacity": 1.0,
+        "ansi": [
+          "#000000",
+          "#CD3131",
+          "#0DBC79",
+          "#E5E510",
+          "#2472C8",
+          "#BC3FBC",
+          "#11A8CD",
+          "#E5E5E5",
+          "#666666",
+          "#F14C4C",
+          "#23D18B",
+          "#F5F543",
+          "#3B8EEA",
+          "#D670D6",
+          "#29B8DB",
+          "#FFFFFF"
+        ]
+      }
+    },
+    {
+      "canonicalName": "Dracula",
+      "displayName": "Dracula",
+      "description": "Dracula theme - popular dark theme with vibrant colors. Features a dark purple background with bright, saturated colors.",
+      "isDark": true,
+      "aliases": ["dracula-dark"],
+      "colors": {
+        "background": "#282A36",
+        "foreground": "#F8F8F2",
+        "opacity": 1.0,
+        "ansi": [
+          "#21222C",
+          "#FF5555",
+          "#50FA7B",
+          "#F1FA8C",
+          "#BD93F9",
+          "#FF79C6",
+          "#8BE9FD",
+          "#F8F8F2",
+          "#6272A4",
+          "#FF6E6E",
+          "#69FF94",
+          "#FFFFA5",
+          "#D6ACFF",
+          "#FF92DF",
+          "#A4FFFF",
+          "#FFFFFF"
+        ]
+      }
+    },
+    {
+      "canonicalName": "OneDark",
+      "displayName": "One Dark",
+      "description": "One Dark theme - inspired by Atom editor. A subtle dark theme with muted colors.",
+      "isDark": true,
+      "aliases": ["one-dark", "atom-dark", "onedark"],
+      "colors": {
+        "background": "#282C34",
+        "foreground": "#ABB2BF",
+        "opacity": 1.0,
+        "ansi": [
+          "#282C34",
+          "#E06C75",
+          "#98C379",
+          "#E5C07B",
+          "#61AFEF",
+          "#C678DD",
+          "#56B6C2",
+          "#ABB2BF",
+          "#5C6370",
+          "#FF7A85",
+          "#B5E090",
+          "#FFD58F",
+          "#8CCBFF",
+          "#E599FF",
+          "#89DDFF",
+          "#FFFFFF"
+        ]
+      }
+    },
+    {
+      "canonicalName": "GruvboxDark",
+      "displayName": "Gruvbox Dark",
+      "description": "Gruvbox Dark theme - warm dark theme with earthy tones. Easy on the eyes for long coding sessions.",
+      "isDark": true,
+      "aliases": ["gruvbox-dark", "gruvboxdark"],
+      "colors": {
+        "background": "#282828",
+        "foreground": "#EBDBB2",
+        "opacity": 1.0,
+        "ansi": [
+          "#282828",
+          "#CC241D",
+          "#98971A",
+          "#D79921",
+          "#458588",
+          "#B16286",
+          "#689D6A",
+          "#A89984",
+          "#928374",
+          "#FB4934",
+          "#B8BB26",
+          "#FABD2F",
+          "#83A598",
+          "#D3869B",
+          "#8EC07C",
+          "#FBF1C7"
+        ]
+      }
+    },
+    {
+      "canonicalName": "CatppuccinMocha",
+      "displayName": "Catppuccin Mocha",
+      "description": "Catppuccin Mocha theme - soothing dark theme with pastel colors.",
+      "isDark": true,
+      "aliases": ["catppuccin-mocha", "catppuccinmocha", "mocha"],
+      "colors": {
+        "background": "#1E1E2E",
+        "foreground": "#CDD6F4",
+        "opacity": 1.0,
+        "ansi": [
+          "#45475A",
+          "#F38BA8",
+          "#A6E3A1",
+          "#F9E2AF",
+          "#89B4FA",
+          "#F5C2E7",
+          "#94E2D5",
+          "#BAC2DE",
+          "#585B70",
+          "#FFA1C1",
+          "#B9F0B4",
+          "#FFEFA1",
+          "#A3C9FF",
+          "#FFDBF7",
+          "#AAEFDE",
+          "#FFFFFF"
+        ]
+      }
+    },
+    {
+      "canonicalName": "TokyoNight",
+      "displayName": "Tokyo Night",
+      "description": "Tokyo Night theme - modern dark theme with deep blues and purples.",
+      "isDark": true,
+      "aliases": ["tokyo-night", "tokyonight", "tokyo"],
+      "colors": {
+        "background": "#1A1B26",
+        "foreground": "#A9B1D6",
+        "opacity": 1.0,
+        "ansi": [
+          "#414868",
+          "#F7768E",
+          "#73DACA",
+          "#E0AF68",
+          "#7AA2F7",
+          "#BB9AF7",
+          "#7DCFFF",
+          "#787C99",
+          "#565F89",
+          "#FF8EA0",
+          "#8BECC8",
+          "#FFD88A",
+          "#9AB8FF",
+          "#D4BFFF",
+          "#9ED7FF",
+          "#C0CAF5"
+        ]
+      }
+    },
+    {
+      "canonicalName": "LightPlus",
+      "displayName": "Light Plus",
+      "description": "VS Code: Light+ theme - a clean, bright theme. Good for well-lit environments.",
+      "isDark": false,
+      "aliases": ["light-plus", "vscode-light", "light+"],
+      "colors": {
+        "background": "#FFFFFF",
+        "foreground": "#000000",
+        "opacity": 1.0,
+        "ansi": [
+          "#000000",
+          "#CD3131",
+          "#00BC00",
+          "#949800",
+          "#0451A5",
+          "#BC05BC",
+          "#0598BC",
+          "#555555",
+          "#666666",
+          "#F14C4C",
+          "#16C60C",
+          "#B5BA00",
+          "#0A6BC8",
+          "#BC05BC",
+          "#0598BC",
+          "#A5A5A5"
+        ]
+      }
+    },
+    {
+      "canonicalName": "OneLight",
+      "displayName": "One Light",
+      "description": "One Light theme - the light counterpart to One Dark.",
+      "isDark": false,
+      "aliases": ["one-light", "onelight"],
+      "colors": {
+        "background": "#FAFAFA",
+        "foreground": "#383A42",
+        "opacity": 1.0,
+        "ansi": [
+          "#383A42",
+          "#E45649",
+          "#50A14F",
+          "#C18401",
+          "#4078F2",
+          "#A626A4",
+          "#0184BC",
+          "#A0A1A7",
+          "#4F525D",
+          "#FF6E66",
+          "#6BC468",
+          "#D9940F",
+          "#6394FF",
+          "#C053BE",
+          "#38B7F0",
+          "#FFFFFF"
+        ]
+      }
+    },
+    {
+      "canonicalName": "GruvboxLight",
+      "displayName": "Gruvbox Light",
+      "description": "Gruvbox Light theme - warm light theme.",
+      "isDark": false,
+      "aliases": ["gruvbox-light", "gruvboxlight"],
+      "colors": {
+        "background": "#FBF1C7",
+        "foreground": "#3C3836",
+        "opacity": 1.0,
+        "ansi": [
+          "#3C3836",
+          "#CC241D",
+          "#98971A",
+          "#D79921",
+          "#458588",
+          "#B16286",
+          "#689D6A",
+          "#7C6F64",
+          "#928374",
+          "#9D0006",
+          "#79740E",
+          "#B57614",
+          "#076678",
+          "#8F3F71",
+          "#427B58",
+          "#282828"
+        ]
+      }
+    },
+    {
+      "canonicalName": "CatppuccinLatte",
+      "displayName": "Catppuccin Latte",
+      "description": "Catppuccin Latte theme - light counterpart to Catppuccin Mocha.",
+      "isDark": false,
+      "aliases": ["catppuccin-latte", "catppuccinlatte", "latte"],
+      "colors": {
+        "background": "#EFF1F5",
+        "foreground": "#4C4F69",
+        "opacity": 1.0,
+        "ansi": [
+          "#5C5F77",
+          "#D20F39",
+          "#40A02B",
+          "#DF8E1D",
+          "#1E66F5",
+          "#EA76CB",
+          "#179299",
+          "#ACB0BE",
+          "#6C6F85",
+          "#EE324C",
+          "#56C150",
+          "#F0AB39",
+          "#4C89FF",
+          "#F495DA",
+          "#2AB6B2",
+          "#CCD0DA"
+        ]
+      }
+    },
+    {
+      "canonicalName": "SolarizedLight",
+      "displayName": "Solarized Light",
+      "description": "Solarized Light theme - carefully selected low-contrast colors. Designed to reduce eye strain.",
+      "isDark": false,
+      "aliases": ["solarized-light", "solarizedlight", "solarized"],
+      "colors": {
+        "background": "#FDF6E3",
+        "foreground": "#657B83",
+        "opacity": 1.0,
+        "ansi": [
+          "#073642",
+          "#DC322F",
+          "#859900",
+          "#B58900",
+          "#268BD2",
+          "#D33682",
+          "#2AA198",
+          "#EEE8D5",
+          "#002B36",
+          "#CB4B16",
+          "#586E75",
+          "#657B83",
+          "#839496",
+          "#6C71C4",
+          "#93A1A1",
+          "#FDF6E3"
+        ]
+      }
+    }
+  ]
+}

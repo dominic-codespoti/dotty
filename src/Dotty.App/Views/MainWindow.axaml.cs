@@ -34,6 +34,7 @@ namespace Dotty.App.Views;
         private readonly Dictionary<TabViewModel, TerminalView> _terminalViews = new();
         private readonly Dictionary<TabViewModel, DispatcherTimer> _inactiveTabTimers = new();
         private readonly Dictionary<TabViewModel, WriteableBitmap> _tabSnapshots = new();
+        private TabViewModel? _lastActiveTab;
         private int InactiveTabDestroyDelayMs => Generated.Config.InactiveTabDestroyDelayMs;
     private Grid? _contentContainer;
     private Control? _tabBar;
@@ -208,6 +209,7 @@ namespace Dotty.App.Views;
         if (_viewModel.ActiveTab != null)
         {
             ShowTab(_viewModel.ActiveTab);
+            _lastActiveTab = _viewModel.ActiveTab;
         }
         
         // Listen for tab changes
@@ -227,7 +229,14 @@ namespace Dotty.App.Views;
         {
             foreach (TabViewModel tab in e.OldItems)
             {
+                CancelInactiveTabTimer(tab);
+                ClearTabSnapshot(tab);
                 DestroyTerminalView(tab);
+
+                if (ReferenceEquals(_lastActiveTab, tab))
+                {
+                    _lastActiveTab = null;
+                }
             }
         }
     }
@@ -273,22 +282,15 @@ namespace Dotty.App.Views;
     
     /// <summary>
     /// Starts a timer to destroy an inactive tab's composition visual after a delay.
-    /// Captures a snapshot immediately so fast tab switching shows instant feedback.
+    /// We intentionally avoid snapshotting on every switch because the mounted view
+    /// already gives us fast reactivation during the grace period.
     /// </summary>
     private void StartInactiveTabTimer(TabViewModel tab)
     {
         // Cancel any existing timer for this tab
         CancelInactiveTabTimer(tab);
-        
-        // CAPTURE SNAPSHOT IMMEDIATELY when leaving tab
-        // This ensures fast tab switching (click back within 5s) has a snapshot ready
-        if (_terminalViews.TryGetValue(tab, out var view) && view != null)
-        {
-            CaptureTabSnapshot(tab);
-        }
-        
+
         // Create a new timer that will destroy the view after delay
-        // The snapshot is already captured, so fast switching works instantly
         var timer = new DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(InactiveTabDestroyDelayMs)
@@ -302,6 +304,18 @@ namespace Dotty.App.Views;
             // Only destroy if this tab is not currently active
             if (_viewModel.ActiveTab != tab && _terminalViews.TryGetValue(tab, out var viewToDestroy))
             {
+                // Win 3: Clear inactive tab caches - aggressively free memory while keeping session running
+                // Clear scrollback buffer to free memory (this is the biggest win)
+                try
+                {
+                    if (tab.Session?.Adapter?.Buffer is { } buffer)
+                    {
+                        buffer.TrimScrollback(100); // Keep only last 100 lines instead of full scrollback
+                    }
+                }
+                catch { /* ignore scrollback clear errors */ }
+                
+                ClearTabSnapshot(tab);
                 DestroyTerminalView(tab);
             }
         };
@@ -431,6 +445,21 @@ namespace Dotty.App.Views;
             _contentContainer.Children.Remove(image);
         }
     }
+
+    private void RemoveTabSnapshotImmediate()
+    {
+        if (_contentContainer == null) return;
+
+        var snapshotImages = _contentContainer.Children
+            .OfType<Image>()
+            .Where(i => i.Tag as string == "tab-snapshot")
+            .ToList();
+
+        foreach (var image in snapshotImages)
+        {
+            _contentContainer.Children.Remove(image);
+        }
+    }
     
     /// <summary>
     /// Clears the snapshot for a specific tab, freeing its memory.
@@ -448,6 +477,14 @@ namespace Dotty.App.Views;
     {
         var activeTab = _viewModel.ActiveTab;
         if (activeTab == null) return;
+
+        var previousTab = _lastActiveTab;
+        _lastActiveTab = activeTab;
+
+        if (previousTab != null && !ReferenceEquals(previousTab, activeTab))
+        {
+            StartInactiveTabTimer(previousTab);
+        }
         
         // Cancel any pending destruction for the tab becoming active
         CancelInactiveTabTimer(activeTab);
@@ -475,13 +512,7 @@ namespace Dotty.App.Views;
     private void ShowTab(TabViewModel tab)
     {
         if (_contentContainer == null) return;
-        
-        // Remove any existing views and snapshots
-        _contentContainer.Children.Clear();
-        
-        // STEP 1: Show snapshot instantly if available (instant feedback)
-        bool hasSnapshot = ShowTabSnapshot(tab);
-        
+
         // STEP 2: Ensure we have a TerminalView for this tab
         if (!_terminalViews.TryGetValue(tab, out var newView)) 
         {
@@ -496,24 +527,42 @@ namespace Dotty.App.Views;
         
         // Ensure the new view has the correct DataContext
         newView.DataContext = tab.Session;
+
+        // Remove any previous snapshot overlays before deciding whether we need a new one.
+        RemoveTabSnapshotImmediate();
+
+        // STEP 1: Show snapshot instantly only when the target view is not already mounted.
+        bool hasSnapshot = !_contentContainer.Children.Contains(newView) && ShowTabSnapshot(tab);
+
+        foreach (var existingView in _terminalViews.Values)
+        {
+            if (_contentContainer.Children.Contains(existingView))
+            {
+                existingView.IsVisible = ReferenceEquals(existingView, newView);
+            }
+        }
         
         // STEP 3: Add the real view on top (will cover snapshot or fill empty space)
-        // Check if view is already in container to avoid "already has visual parent" error
+        // Keep views mounted once added so tab switches do not need to rebuild the tree.
+        bool addedView = false;
         if (!_contentContainer.Children.Contains(newView))
         {
             _contentContainer.Children.Add(newView);
+            addedView = true;
         }
+        newView.IsVisible = true;
         
         // STEP 4: Force immediate render of the real view
         newView.ForceImmediateRender();
         
-        // Force layout and render
+        // A full measure/arrange invalidation on every tab switch is expensive.
+        // We only request a visual refresh, and only nudge the container when a new
+        // view was actually inserted into the tree.
         newView.InvalidateVisual();
-        newView.InvalidateMeasure();
-        newView.InvalidateArrange();
-        _contentContainer.InvalidateVisual();
-        _contentContainer.InvalidateMeasure();
-        _contentContainer.InvalidateArrange();
+        if (addedView)
+        {
+            _contentContainer.InvalidateVisual();
+        }
         
         // STEP 5: Remove the snapshot now that real view is rendered (or will be soon)
         // We do this after a brief moment to ensure the view has started rendering
@@ -561,6 +610,20 @@ namespace Dotty.App.Views;
             }
         });
     }
+
+    private string GetHarnessStatsJson()
+    {
+        int activeTabIndex = _viewModel.ActiveTab == null ? -1 : _viewModel.Tabs.IndexOf(_viewModel.ActiveTab);
+        return "{" +
+            $"\"totalTabs\":{_viewModel.Tabs.Count}," +
+            $"\"sessionsCreated\":{_viewModel.Tabs.Count(tab => tab.HasSession)}," +
+            $"\"sessionsStarted\":{_viewModel.Tabs.Count(tab => tab.IsSessionStarted)}," +
+            $"\"mountedViews\":{_terminalViews.Count}," +
+            $"\"inactiveTimers\":{_inactiveTabTimers.Count}," +
+            $"\"snapshots\":{_tabSnapshots.Count}," +
+            $"\"activeTabIndex\":{activeTabIndex}" +
+            "}";
+    }
     
     private void StartTestCommandListener()
     {
@@ -600,6 +663,14 @@ namespace Dotty.App.Views;
             
             var command = await reader.ReadLineAsync();
             if (string.IsNullOrEmpty(command)) return;
+
+            if (string.Equals(command.Trim(), "STATS", StringComparison.OrdinalIgnoreCase))
+            {
+                var statsJson = await Dispatcher.UIThread.InvokeAsync(GetHarnessStatsJson);
+                var responseBytes = Encoding.UTF8.GetBytes(statsJson + "\n");
+                await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
+                return;
+            }
             
             Dispatcher.UIThread.Post(() =>
             {
@@ -609,6 +680,10 @@ namespace Dotty.App.Views;
                     {
                         case "NEW_TAB":
                             _viewModel.AddNewTab();
+                            break;
+                        case "NEW_TAB_BG":
+                        case "NEW_TAB_BACKGROUND":
+                            _viewModel.AddNewTab(activate: false);
                             break;
                         case "NEXT_TAB":
                             SwitchTab(1);

@@ -8,7 +8,7 @@ public record ConfigModel
     // Font Settings
     public string FontFamily { get; init; } = DottyDefaults.FontFamily;
     public double FontSize { get; init; } = DottyDefaults.FontSize;
-    public double CellPadding { get; init; } = DottyDefaults.CellPadding;
+    public double CellPadding { get; init; } = 0.0;
     public ThicknessModel ContentPadding { get; init; } = new(0, 0, 0, 0);
 
     // Terminal Settings
@@ -45,7 +45,7 @@ internal static class DottyDefaults
 {
     public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols, Cascadia Code, Liberation Mono, Noto Sans Mono, monospace";
     public const double FontSize = 15.0;
-    public const double CellPadding = 1.5;
+    public const double CellPadding = 0.0;
     public const int ScrollbackLines = 5000;
     public const int InactiveTabDestroyDelayMs = 5000;
     public const uint SelectionColor = 0xA03385DB;

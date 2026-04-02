@@ -44,7 +44,7 @@ namespace Dotty.App.Services
         /// </summary>
         public static double GetCellPadding()
         {
-            return DottyDefaults.CellPadding;
+            return 0.0;
         }
 
         /// <summary>
@@ -72,7 +72,7 @@ namespace Dotty.App.Services
     {
         public const string FontFamily = DottyDefaults.FontFamily;
         public const double FontSize = DottyDefaults.FontSize;
-        public const double CellPadding = DottyDefaults.CellPadding;
+        public const double CellPadding = 0.0;
         public const int ScrollbackLines = DottyDefaults.ScrollbackLines;
         public const int InactiveTabDestroyDelayMs = DottyDefaults.InactiveTabDestroyDelayMs;
         public const uint SelectionColor = DottyDefaults.SelectionColor;

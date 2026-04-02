@@ -25,7 +25,7 @@ public partial class DefaultDottyConfig : IDottyConfig
     // Font Settings - using DottyDefaults
     public string? FontFamily => DottyDefaults.FontFamily;
     public double? FontSize => DottyDefaults.FontSize;
-    public double? CellPadding => DottyDefaults.CellPadding;
+    public double? CellPadding => 0.0;
     public Thickness? ContentPadding => DottyDefaults.ContentPadding;
 
     // Color Scheme - using DarkPlus theme (VS Code Dark+)

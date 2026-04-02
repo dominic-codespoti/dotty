@@ -92,7 +92,7 @@ public static class ThemeResolver
             // Add by canonical name
             if (!string.IsNullOrEmpty(theme.CanonicalName))
             {
-                themes[theme.CanonicalName] = model;
+                themes[theme.CanonicalName!] = model;
             }
 
             // Add by aliases

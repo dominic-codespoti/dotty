@@ -98,4 +98,12 @@ public static class ConfigDiscovery
 
         return 50; // Medium priority for others
     }
+
+    /// <summary>
+    /// Counts the number of user-defined config classes (excluding default configs with priority >= 100).
+    /// </summary>
+    public static int CountUserConfigs(ClassDeclarationSyntax[] configClasses)
+    {
+        return configClasses.Count(c => GetPriorityScore(c) < 100);
+    }
 }

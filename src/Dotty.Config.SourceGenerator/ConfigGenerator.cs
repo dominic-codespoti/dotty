@@ -66,7 +66,7 @@ public class ConfigGenerator : IIncrementalGenerator
         var selectedConfig = ConfigDiscovery.SelectConfigClass(validConfigs);
 
         // Report diagnostics
-        if (validConfigs.Length > 1 && selectedConfig != null)
+        if (ConfigDiscovery.CountUserConfigs(validConfigs) > 1 && selectedConfig != null)
         {
             var location = selectedConfig.GetLocation();
             context.ReportDiagnostic(GeneratorDiagnostics.CreateMultipleConfigsFound(location, validConfigs.Length, selectedConfig.Identifier.ValueText));

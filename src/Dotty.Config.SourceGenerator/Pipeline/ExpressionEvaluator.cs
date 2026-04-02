@@ -162,12 +162,12 @@ public static class ExpressionEvaluator
             argValues.Add(val is double d ? d : (val is int i ? (double)i : null));
         }
 
-        if (argValues.Count == 1 && argValues[0].HasValue)
-            return new ThicknessModel(argValues[0].Value);
-        if (argValues.Count == 2 && argValues[0].HasValue && argValues[1].HasValue)
-            return new ThicknessModel(argValues[0].Value, argValues[1].Value);
-        if (argValues.Count == 4 && argValues[0].HasValue && argValues[1].HasValue && argValues[2].HasValue && argValues[3].HasValue)
-            return new ThicknessModel(argValues[0].Value, argValues[1].Value, argValues[2].Value, argValues[3].Value);
+        if (argValues.Count == 1 && argValues[0] is double v0)
+            return new ThicknessModel(v0);
+        if (argValues.Count == 2 && argValues[0] is double v1 && argValues[1] is double v2)
+            return new ThicknessModel(v1, v2);
+        if (argValues.Count == 4 && argValues[0] is double v3 && argValues[1] is double v4 && argValues[2] is double v5 && argValues[3] is double v6)
+            return new ThicknessModel(v3, v4, v5, v6);
 
         return new ThicknessModel(0, 0, 0, 0);
     }

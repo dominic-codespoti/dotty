@@ -23,4 +23,9 @@
     <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
     <PackageReference Include="IsExternalInit" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
 </Project>

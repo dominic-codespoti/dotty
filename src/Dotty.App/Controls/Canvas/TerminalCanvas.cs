@@ -549,8 +549,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 
 		var padding = Math.Max(0.0, CellPadding);
-		_cellWidth = Math.Max(4, glyphAdvance / (float)scale + (float)(padding * 2.0));
-		_cellHeight = Math.Max((float)fontSize, glyphHeight / (float)scale + (float)(padding * 2.0));
+		_cellWidth = (float)Math.Round(Math.Max(4, glyphAdvance / (float)scale + (float)(padding * 2.0)));
+		_cellHeight = (float)Math.Round(Math.Max((float)fontSize, glyphHeight / (float)scale + (float)(padding * 2.0)));
 
 		// Recreate glyph atlas when metrics change (font family/size)
 		// Use shared atlas service to reduce memory across tabs
@@ -733,11 +733,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		return new GlyphRasterizationOptions
 		{
-			IsAntialias = paint?.IsAntialias ?? true,
-			IsLinearText = paint?.IsLinearText ?? true,
-			SubpixelText = paint?.SubpixelText ?? true,
-			IsAutohinted = paint?.IsAutohinted ?? true,
-			LcdRenderText = paint?.LcdRenderText ?? true,
+			IsAntialias = false,
+			IsLinearText = false,
+			SubpixelText = false,
+			IsAutohinted = false,
+			LcdRenderText = false,
 		};
 	}
 }

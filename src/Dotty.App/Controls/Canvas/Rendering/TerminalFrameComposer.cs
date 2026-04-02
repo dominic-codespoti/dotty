@@ -25,10 +25,10 @@ public sealed class TerminalFrameComposer : IDisposable
     {
         IsAntialias = false,
         FilterQuality = SKFilterQuality.None,
-        IsLinearText = true,
-        IsAutohinted = true,
-        SubpixelText = true,
-        LcdRenderText = true
+        IsLinearText = false,
+        IsAutohinted = false,
+        SubpixelText = false,
+        LcdRenderText = false
     };
 
     // --- background synthesis state ---

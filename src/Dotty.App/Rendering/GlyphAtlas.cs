@@ -28,7 +28,7 @@ public class GlyphAtlas : IDisposable
     private int _nextX = 0;
     private int _nextY = 0;
     private int _rowHeight = 0;
-    private readonly int _padding = 2;
+    private readonly int _padding = 0;
 
     // The paint used to rasterise glyphs. Caller should pass a Typeface and size.
     private SKTypeface _typeface;

@@ -1,7 +1,20 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Dotty.Abstractions.Themes;
+
+/// <summary>
+/// JSON source generation context for theme deserialization.
+/// Required for AOT compatibility - avoids reflection-based serialization.
+/// </summary>
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(ThemeRoot))]
+[JsonSerializable(typeof(ThemeDefinition))]
+[JsonSerializable(typeof(ThemeColors))]
+internal partial class ThemeJsonContext : JsonSerializerContext
+{
+}
 
 /// <summary>
 /// Registry that loads and provides access to built-in themes from embedded resources.
@@ -82,12 +95,8 @@ public static class BuiltInThemeRegistry
         using var reader = new StreamReader(stream);
         var json = reader.ReadToEnd();
 
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        };
-
-        var root = JsonSerializer.Deserialize<ThemeRoot>(json, options);
+        // Use source-generated deserializer for AOT compatibility
+        var root = JsonSerializer.Deserialize(json, ThemeJsonContext.Default.ThemeRoot);
         
         if (root?.Themes == null || root.Themes.Length == 0)
         {

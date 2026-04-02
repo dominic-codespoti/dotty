@@ -14,8 +14,6 @@ namespace Dotty.App.Services;
 /// </summary>
 public sealed class ThemeValidator
 {
-    private readonly JsonSerializerOptions _jsonOptions;
-
     // Maximum file size: 10KB
     private const long MaxFileSizeBytes = 10 * 1024;
 
@@ -32,12 +30,6 @@ public sealed class ThemeValidator
     /// </summary>
     public ThemeValidator()
     {
-        _jsonOptions = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true
-        };
     }
 
     /// <summary>
@@ -87,14 +79,14 @@ public sealed class ThemeValidator
         ThemeDefinition? definition;
         try
         {
-            definition = JsonSerializer.Deserialize<ThemeDefinition>(json, _jsonOptions);
+            definition = JsonSerializer.Deserialize<ThemeDefinition>(json, ThemeJsonContext.Default.ThemeDefinition);
         }
         catch (JsonException ex)
         {
             // Try ThemeRoot format
             try
             {
-                var root = JsonSerializer.Deserialize<ThemeRoot>(json, _jsonOptions);
+                var root = JsonSerializer.Deserialize<ThemeRoot>(json, ThemeJsonContext.Default.ThemeRoot);
                 if (root?.Themes?.Length > 0)
                 {
                     definition = root.Themes[0];

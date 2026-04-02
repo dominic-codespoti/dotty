@@ -10,6 +10,7 @@ namespace Dotty.App.Services;
 /// <summary>
 /// Loads user-defined themes from the ~/.config/dotty/themes/ directory.
 /// Handles JSON deserialization and graceful error handling for invalid files.
+/// Uses source-generated JSON serialization for AOT compatibility.
 /// </summary>
 public sealed class UserThemeLoader
 {
@@ -19,7 +20,6 @@ public sealed class UserThemeLoader
     public static string DefaultThemesDirectory => GetDefaultThemesDirectory();
 
     private readonly string _themesDirectory;
-    private readonly JsonSerializerOptions _jsonOptions;
 
     /// <summary>
     /// Creates a new UserThemeLoader with the default themes directory.
@@ -36,12 +36,6 @@ public sealed class UserThemeLoader
     public UserThemeLoader(string themesDirectory)
     {
         _themesDirectory = themesDirectory ?? throw new ArgumentNullException(nameof(themesDirectory));
-        _jsonOptions = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            AllowTrailingCommas = true
-        };
     }
 
     /// <summary>
@@ -121,12 +115,13 @@ public sealed class UserThemeLoader
 
     /// <summary>
     /// Attempts to deserialize a single ThemeDefinition from JSON.
+    /// Uses source-generated serialization for AOT compatibility.
     /// </summary>
     private ThemeDefinition? TryDeserializeSingleTheme(string json)
     {
         try
         {
-            return JsonSerializer.Deserialize<ThemeDefinition>(json, _jsonOptions);
+            return JsonSerializer.Deserialize(json, ThemeJsonContext.Default.ThemeDefinition);
         }
         catch
         {
@@ -136,12 +131,13 @@ public sealed class UserThemeLoader
 
     /// <summary>
     /// Attempts to deserialize a ThemeRoot (file with themes array) from JSON.
+    /// Uses source-generated serialization for AOT compatibility.
     /// </summary>
     private ThemeRoot? TryDeserializeThemeRoot(string json)
     {
         try
         {
-            return JsonSerializer.Deserialize<ThemeRoot>(json, _jsonOptions);
+            return JsonSerializer.Deserialize(json, ThemeJsonContext.Default.ThemeRoot);
         }
         catch
         {

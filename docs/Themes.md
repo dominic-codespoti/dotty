@@ -600,5 +600,5 @@ If you'd like to contribute a new built-in theme:
 
 ## See Also
 
-- [Configuration Guide](CONFIGURATION.md) - Full configuration documentation
+- [Configuration Guide](Configuration.md) - Full configuration documentation
 - [Sample Config](../samples/Config.cs) - Complete examples

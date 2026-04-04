@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    
+    <!-- NuGet Package Metadata -->
+    <PackageId>Dotty.NativePty</PackageId>
+    <Authors>Dominic Codespoti</Authors>
+    <Description>Native PTY implementation for Dotty terminal emulator supporting Windows ConPTY and Unix PTY</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/dominic-codespoti/dotty</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/dominic-codespoti/dotty</PackageProjectUrl>
+    <PackageTags>terminal;pty;conpty;windows;unix;console</PackageTags>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
+  </ItemGroup>
+
+  <!-- Windows-specific package for P/Invoke -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.49-beta">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/instructions/**'
+  pull_request:
+    branches: [main, master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/instructions/**'
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  SOLUTION_PATH: 'Dotty.sln'
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            build-native: true
+          - os: windows-latest
+            rid: win-x64
+            build-native: false
+          - os: macos-latest
+            rid: osx-x64
+            build-native: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ matrix.os }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ matrix.os }}-
+            nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+      - name: Build native pty-helper (Unix only)
+        if: matrix.build-native
+        working-directory: src/Dotty.NativePty
+        run: make
+
+      - name: Build solution
+        run: dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
+
+      - name: Run tests (with filtering)
+        run: |
+          # Run all tests with platform-specific filtering
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            # Skip Unix-specific tests on Windows
+            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build --filter "FullyQualifiedName!~Unix"
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            # Run all tests on Linux
+            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build
+          else
+            # Run all tests on macOS
+            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build
+          fi
+        shell: bash
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}
+          path: |
+            src/Dotty.App/bin/Release/
+            src/Dotty.NativePty/bin/
+          retention-days: 5
+          if-no-files-found: ignore
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.os }}
+          path: |
+            **/TestResults/*.trx
+            **/test-results.trx
+          retention-days: 5
+          if-no-files-found: ignore
+
+  # Job to check code formatting and static analysis
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+      - name: Check formatting
+        run: |
+          dotnet tool restore || true
+          dotnet format --verify-no-changes --verbosity detailed ${{ env.SOLUTION_PATH }} || echo "Formatting check completed"
+        continue-on-error: true
+
+  # Summary job that depends on all others
+  ci-summary:
+    name: CI Summary
+    needs: [build-and-test, code-quality]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check build status
+        run: |
+          if [ "${{ needs.build-and-test.result }}" = "failure" ]; then
+            echo "Build or tests failed!"
+            exit 1
+          fi
+          echo "All CI checks passed!"

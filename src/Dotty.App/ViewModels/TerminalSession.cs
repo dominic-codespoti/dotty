@@ -2,17 +2,20 @@ using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Diagnostics;
 using System.IO;
-using System.Net.Sockets;
 using System.Buffers;
 using Dotty.Abstractions.Adapter;
 using Dotty.Abstractions.Parser;
+using Dotty.Abstractions.Pty;
+using Dotty.NativePty;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
 
 namespace Dotty.App.ViewModels;
 
+/// <summary>
+/// Manages a terminal session including PTY lifecycle, I/O handling, and terminal state.
+/// </summary>
 public class TerminalSession : IDisposable
 {
     private struct PtyChunk
@@ -23,27 +26,49 @@ public class TerminalSession : IDisposable
 
     private readonly System.Threading.Channels.Channel<PtyChunk> _ptyDataQueue = System.Threading.Channels.Channel.CreateBounded<PtyChunk>(new System.Threading.Channels.BoundedChannelOptions(50) { SingleReader = true, SingleWriter = true, FullMode = System.Threading.Channels.BoundedChannelFullMode.Wait });
 
-    private Process? _childProcess;
-    private Stream? _childOutputStream;
-    private Stream? _childErrorStream;
-    private Stream? _childInputStream;
+    private IPty? _pty;
     private CancellationTokenSource? _readCancellation;
-    private string? _controlSocketPath;
-    private Stream? _controlSocketStream;
     private readonly bool _throughputMode;
     private bool _hasReceivedInitialResize = false;
     private int _initialCols = 0;
     private int _initialRows = 0;
     private bool _isStarted = false;
 
+    /// <summary>
+    /// Gets the terminal parser for processing ANSI escape sequences.
+    /// </summary>
     public ITerminalParser Parser { get; }
+    
+    /// <summary>
+    /// Gets the terminal adapter for managing terminal buffer state.
+    /// </summary>
     public TerminalAdapter Adapter { get; }
+    
+    /// <summary>
+    /// Gets a value indicating whether the session has been started.
+    /// </summary>
     public bool IsStarted => _isStarted;
 
+    /// <summary>
+    /// Event raised when raw input data is received from the PTY.
+    /// </summary>
     public event Action<byte[]>? RawInputReceived;
+    
+    /// <summary>
+    /// Event raised when a render should be scheduled.
+    /// </summary>
     public event Action? RenderScheduled;
+    
+    /// <summary>
+    /// Gets or sets the target frames per second for rendering.
+    /// </summary>
     public int TargetFps { get; set; } = 144;
 
+    /// <summary>
+    /// Creates a new terminal session with the specified initial size.
+    /// </summary>
+    /// <param name="rows">Initial number of rows.</param>
+    /// <param name="columns">Initial number of columns.</param>
     public TerminalSession(int rows = 24, int columns = 80)
     {
         _throughputMode = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_BENCH_THROUGHPUT"));
@@ -53,74 +78,102 @@ public class TerminalSession : IDisposable
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
     }
 
+    /// <summary>
+    /// Starts the terminal session by creating and starting a PTY with the default shell.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown if the session is already started.</exception>
+    /// <exception cref="PtyException">Thrown if PTY creation fails.</exception>
     public void Start()
     {
         // Prevent double-starting the session
         if (_isStarted) return;
         _isStarted = true;
+
+        // Check if PTY is supported
+        if (!PtyFactory.IsSupported)
+        {
+            var reason = PtyFactory.GetUnsupportedReason();
+            throw new PtyException(reason ?? "PTY is not supported on this platform.");
+        }
+
+        // Create and start the PTY
+        _pty = PtyFactory.Create();
+        _pty.ProcessExited += OnPtyProcessExited;
         
-        string projectPath = FindPtyTestsProjectPath();
-        string? helperExe = null;
-        var candidate = Path.Combine(projectPath, "Dotty.NativePty", "bin", "pty-helper");
-        if (File.Exists(candidate)) helperExe = Path.GetFullPath(candidate);
+        var shell = Environment.GetEnvironmentVariable("DOTTY_SHELL") 
+            ?? Environment.GetEnvironmentVariable("SHELL");
+        
+        _pty.Start(
+            shell: shell,
+            columns: Adapter.Buffer?.Columns ?? 80,
+            rows: Adapter.Buffer?.Rows ?? 24);
 
-        if (string.IsNullOrEmpty(helperExe) || !File.Exists(helperExe))
+        // Start background readers
+        _readCancellation = new CancellationTokenSource();
+        StartBackgroundReaders(_readCancellation.Token);
+        ProcessPtyQueueAsync(_readCancellation.Token);
+    }
+
+    /// <summary>
+    /// Starts the terminal session with a specific shell and options.
+    /// </summary>
+    /// <param name="shell">The shell to start.</param>
+    /// <param name="workingDirectory">The working directory for the shell.</param>
+    /// <param name="environmentVariables">Additional environment variables.</param>
+    public void StartWithOptions(
+        string? shell = null,
+        string? workingDirectory = null,
+        System.Collections.Generic.IDictionary<string, string>? environmentVariables = null)
+    {
+        if (_isStarted) return;
+        _isStarted = true;
+
+        if (!PtyFactory.IsSupported)
         {
-            throw new Exception("Failed to find helper subprocess executable.");
+            var reason = PtyFactory.GetUnsupportedReason();
+            throw new PtyException(reason ?? "PTY is not supported on this platform.");
         }
 
-        var helperShell = Environment.GetEnvironmentVariable("SHELL") ?? "/bin/sh";
-        var psi = new ProcessStartInfo
-        {
-            FileName = helperExe,
-            Arguments = $"\"{helperShell}\"",
-            UseShellExecute = false,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-
-        var controlPath = Path.Combine(Path.GetTempPath(), $"dotty-control-{Guid.NewGuid():N}.sock");
-        psi.Environment["DOTTY_CONTROL_SOCKET"] = controlPath;
-        _controlSocketPath = controlPath;
-
-        _childProcess = Process.Start(psi);
-        if (_childProcess == null)
-        {
-            throw new Exception("Failed to start helper subprocess.");
-        }
-
-        _childOutputStream = _childProcess.StandardOutput.BaseStream;
-        _childErrorStream = _childProcess.StandardError.BaseStream;
-        _childInputStream = _childProcess.StandardInput.BaseStream;
-
-        if (!string.IsNullOrEmpty(_controlSocketPath))
-        {
-            _ = Task.Run(() => ConnectToControlSocketAsync(_controlSocketPath));
-        }
+        _pty = PtyFactory.Create();
+        _pty.ProcessExited += OnPtyProcessExited;
+        
+        _pty.Start(
+            shell: shell,
+            columns: Adapter.Buffer?.Columns ?? 80,
+            rows: Adapter.Buffer?.Rows ?? 24,
+            workingDirectory: workingDirectory,
+            environmentVariables: environmentVariables);
 
         _readCancellation = new CancellationTokenSource();
         StartBackgroundReaders(_readCancellation.Token);
         ProcessPtyQueueAsync(_readCancellation.Token);
     }
 
+    /// <summary>
+    /// Writes input data to the PTY.
+    /// </summary>
+    /// <param name="data">The data to write.</param>
     public void WriteInput(byte[] data)
     {
-        if (data == null || _childInputStream == null) return;
+        if (data == null || _pty?.InputStream == null) return;
         
         // Write directly without copying - data is not reused by caller
         Task.Run(async () =>
         {
             try
             {
-                await _childInputStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
-                await _childInputStream.FlushAsync().ConfigureAwait(false);
+                await _pty.InputStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
+                await _pty.InputStream.FlushAsync().ConfigureAwait(false);
             }
             catch { }
         });
     }
 
+    /// <summary>
+    /// Resizes the terminal to the specified dimensions.
+    /// </summary>
+    /// <param name="cols">New width in columns.</param>
+    /// <param name="rows">New height in rows.</param>
     public void Resize(int cols, int rows)
     {
         try { Adapter.ResizeBuffer(rows, cols); } catch { }
@@ -140,21 +193,17 @@ public class TerminalSession : IDisposable
         // Only send resize if size actually changed from initial
         if (cols != _initialCols || rows != _initialRows)
         {
-            _ = SendResizeMessageAsync(cols, rows);
+            try
+            {
+                _pty?.Resize(cols, rows);
+            }
+            catch { }
         }
     }
 
-    private async Task SendResizeMessageAsync(int cols, int rows)
+    private void OnPtyProcessExited(object? sender, int exitCode)
     {
-        if (_controlSocketStream == null) return;
-        try
-        {
-            var msg = $"{{\"type\":\"resize\",\"cols\":{cols},\"rows\":{rows}}}\n";
-            var bytes = Encoding.UTF8.GetBytes(msg);
-            await _controlSocketStream.WriteAsync(bytes, 0, bytes.Length);
-            await _controlSocketStream.FlushAsync();
-        }
-        catch { }
+        // PTY process has exited - could trigger UI notification here
     }
 
     private void ProcessPtyQueueAsync(CancellationToken token)
@@ -230,16 +279,16 @@ public class TerminalSession : IDisposable
         }, token);
     }
 
-    private async Task ReadChildOutputAsync(CancellationToken cancellationToken)
+    private async Task ReadPtyOutputAsync(CancellationToken cancellationToken)
     {
-        if (_childOutputStream == null) return;
+        if (_pty?.OutputStream == null) return;
 
         byte[]? batch = null;
         int batchLength = 0;
 
         try
         {
-            var reader = _childOutputStream;
+            var reader = _pty.OutputStream;
             byte[] buffer = new byte[131072];
             batch = ArrayPool<byte>.Shared.Rent(65536);
 
@@ -320,107 +369,28 @@ public class TerminalSession : IDisposable
         }
     }
 
-    private async Task ReadChildErrorAsync(CancellationToken cancellationToken)
-    {
-        if (_childErrorStream == null) return;
-
-        try
-        {
-            var reader = _childErrorStream;
-            byte[] buffer = new byte[131072];
-
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                try
-                {
-                    int bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
-                    if (bytesRead <= 0) break;
-                }
-                catch (OperationCanceledException) { break; }
-                catch { break; }
-            }
-        }
-        catch { }
-    }
-
     private void StartBackgroundReaders(CancellationToken cancellationToken)
     {
-        Task.Factory.StartNew(() => ReadChildOutputAsync(cancellationToken), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
-        Task.Factory.StartNew(() => ReadChildErrorAsync(cancellationToken), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
+        Task.Factory.StartNew(() => ReadPtyOutputAsync(cancellationToken), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default).Unwrap();
     }
 
-    private async Task ConnectToControlSocketAsync(string path)
-    {
-        try
-        {
-            var sw = Stopwatch.StartNew();
-            Socket? sock = null;
-            while (sw.Elapsed < TimeSpan.FromSeconds(5))
-            {
-                try
-                {
-                    sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                    var end = new UnixDomainSocketEndPoint(path);
-                    await Task.Run(() => sock.Connect(end));
-                    break;
-                }
-                catch
-                {
-                    try { sock?.Dispose(); } catch { }
-                    await Task.Delay(100);
-                }
-            }
-
-            if (sock == null || !sock.Connected)
-            {
-                try { sock?.Dispose(); } catch { }
-                return;
-            }
-
-            _controlSocketStream = new NetworkStream(sock, ownsSocket: true);
-            await SendResizeMessageAsync(Adapter.Buffer?.Columns ?? 80, Adapter.Buffer?.Rows ?? 24);
-        }
-        catch { }
-    }
-
-    private string FindPtyTestsProjectPath()
-    {
-        try
-        {
-            var cur = new DirectoryInfo(AppContext.BaseDirectory ?? ".");
-            for (int i = 0; i < 8 && cur != null; i++)
-            {
-                string candidate1 = Path.Combine(cur.FullName, "src", "Dotty.NativePty");
-                string candidate2 = Path.Combine(cur.FullName, "Dotty.NativePty");
-
-                if (Directory.Exists(candidate1)) return Path.GetFullPath(Path.Combine(cur.FullName, "src"));
-                if (Directory.Exists(candidate2)) return Path.GetFullPath(cur.FullName);
-
-                cur = cur.Parent;
-            }
-        }
-        catch { }
-
-        return Path.GetFullPath(Path.Combine(AppContext.BaseDirectory ?? ".", "..", "..", "..", "..", "src"));
-    }
-
+    /// <summary>
+    /// Releases all resources used by the terminal session.
+    /// </summary>
     public void Dispose()
     {
         _readCancellation?.Cancel();
 
         try
         {
-            if (_childInputStream != null) { try { _childInputStream.Close(); } catch { } }
-
-            if (_childProcess != null)
-            {
-                if (!_childProcess.HasExited) { try { _childProcess.Kill(); } catch { } }
-                try { _childProcess.Dispose(); } catch { }
-            }
+            _pty?.Dispose();
         }
         catch { }
 
-        try { _controlSocketStream?.Dispose(); } catch { }
-        _readCancellation?.Dispose();
+        try
+        {
+            _readCancellation?.Dispose();
+        }
+        catch { }
     }
 }

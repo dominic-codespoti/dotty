@@ -19,7 +19,6 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using Dotty.Abstractions.Config;
 using Dotty.App.ViewModels;
-using Dotty.App.Controls.Canvas.Rendering;
 using Dotty.App.Configuration;
 
 namespace Dotty.App.Views;
@@ -614,6 +613,14 @@ namespace Dotty.App.Views;
     private string GetHarnessStatsJson()
     {
         int activeTabIndex = _viewModel.ActiveTab == null ? -1 : _viewModel.Tabs.IndexOf(_viewModel.ActiveTab);
+        
+        // Get scrollback stats from active terminal
+        string scrollbackStats = "null";
+        if (_viewModel.ActiveTab != null && _terminalViews.TryGetValue(_viewModel.ActiveTab, out var activeView))
+        {
+            scrollbackStats = activeView.GetScrollbackStats();
+        }
+        
         return "{" +
             $"\"totalTabs\":{_viewModel.Tabs.Count}," +
             $"\"sessionsCreated\":{_viewModel.Tabs.Count(tab => tab.HasSession)}," +
@@ -621,7 +628,8 @@ namespace Dotty.App.Views;
             $"\"mountedViews\":{_terminalViews.Count}," +
             $"\"inactiveTimers\":{_inactiveTabTimers.Count}," +
             $"\"snapshots\":{_tabSnapshots.Count}," +
-            $"\"activeTabIndex\":{activeTabIndex}" +
+            $"\"activeTabIndex\":{activeTabIndex}," +
+            $"\"scrollback\":{scrollbackStats}" +
             "}";
     }
     
@@ -691,24 +699,9 @@ namespace Dotty.App.Views;
                         case "PREV_TAB":
                             SwitchTab(-1);
                             break;
-                        case "CAPTURE":
-                            CaptureScreenshot();
-                            break;
-                        case "CAPTURE_CANVAS":
-                            CaptureCanvasScreenshot();
-                            break;
                         default:
-                            // Handle CAPTURE_AUTO:<frame_count>
-                            if (command.Trim().ToUpper().StartsWith("CAPTURE_AUTO:"))
-                            {
-                                var parts = command.Trim().Split(':');
-                                if (parts.Length == 2 && int.TryParse(parts[1], out int frameCount))
-                                {
-                                    EnableAutoCapture(frameCount);
-                                }
-                            }
                             // Handle TYPE:text - send text to active terminal
-                            else if (command.Trim().ToUpper().StartsWith("TYPE:"))
+                            if (command.Trim().ToUpper().StartsWith("TYPE:"))
                             {
                                 var text = command.Trim().Substring(5);
                                 TypeTextToActiveTerminal(text);
@@ -747,54 +740,6 @@ namespace Dotty.App.Views;
             : (currentIndex - 1 + _viewModel.Tabs.Count) % _viewModel.Tabs.Count;
             
         _viewModel.ActiveTab = _viewModel.Tabs[newIndex];
-    }
-
-    private void EnableAutoCapture(int frameCount)
-    {
-        try
-        {
-            TerminalVisualHandler.EnableAutoCapture(frameCount);
-        }
-        catch (Exception)
-        {
-            // Auto-capture enable error, ignore
-        }
-    }
-
-    private void CaptureCanvasScreenshot()
-    {
-        try
-        {
-            TerminalVisualHandler.CaptureScreenshot();
-        }
-        catch (Exception)
-        {
-            // Canvas screenshot trigger error, ignore
-        }
-    }
-
-    private void CaptureScreenshot()
-    {
-        Dispatcher.UIThread.Post(() =>
-        {
-            try
-            {
-                var pixelSize = new PixelSize((int)Bounds.Width, (int)Bounds.Height);
-                using var renderBitmap = new RenderTargetBitmap(pixelSize);
-                
-                renderBitmap.Render(this);
-                
-                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-                var filename = $"/tmp/dotty_avalonia_{timestamp}.png";
-                
-                using var stream = System.IO.File.OpenWrite(filename);
-                renderBitmap.Save(stream);
-            }
-            catch (Exception)
-            {
-                // Screenshot error, ignore
-            }
-        });
     }
 
     private void OnClosed(object? sender, EventArgs e)

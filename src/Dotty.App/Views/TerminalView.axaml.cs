@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
 using Avalonia;
@@ -16,6 +17,7 @@ namespace Dotty.App.Views
     {
         private TerminalGrid? _grid;
         private TerminalCanvas? _canvas;
+        private SearchOverlay? _searchOverlay;
         private string _lineBuffer = string.Empty;
         private bool _suppressText = false;
         private readonly SelectionController _selectionController = new();
@@ -215,6 +217,7 @@ namespace Dotty.App.Views
         {
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
+            _searchOverlay = this.FindControl<SearchOverlay>("PART_SearchOverlay");
 
             if (_session != null)
             {
@@ -332,6 +335,19 @@ namespace Dotty.App.Views
 
         private void TerminalView_KeyDown(object? sender, KeyEventArgs e)
         {
+            // Skip key handling when search overlay is visible (let search handle its own keys)
+            if (_searchOverlay != null && _searchOverlay.IsVisible)
+            {
+                // Only handle Escape to close search, let everything else pass through
+                if (e.Key == Key.Escape)
+                {
+                    HideSearch();
+                    e.Handled = true;
+                }
+                // Don't process other keys - let them reach the search overlay
+                return;
+            }
+
             var modifiers = e.KeyModifiers;
             if (modifiers.HasFlag(KeyModifiers.Control) && modifiers.HasFlag(KeyModifiers.Shift))
             {
@@ -346,6 +362,14 @@ namespace Dotty.App.Views
                 if (e.Key == Key.V)
                 {
                     _ = PasteFromClipboardAsync();
+                    e.Handled = true;
+                    _suppressText = false;
+                    return;
+                }
+
+                if (e.Key == Key.F)
+                {
+                    ToggleSearch();
                     e.Handled = true;
                     _suppressText = false;
                     return;
@@ -372,6 +396,14 @@ namespace Dotty.App.Views
         private void TerminalView_TextInput(object? sender, TextInputEventArgs e)
         {
             if (e.Text == null) return;
+            
+            // Check if search overlay is visible - if so, don't send text to terminal
+            if (_searchOverlay != null && _searchOverlay.IsVisible)
+            {
+                // Search overlay is active, don't process text in terminal
+                return;
+            }
+            
             if (_suppressText) 
             {
                 return;
@@ -560,6 +592,107 @@ namespace Dotty.App.Views
             var bytes = Encoding.UTF8.GetBytes(text);
             RawInput?.Invoke(bytes);
             _lineBuffer += text;
+        }
+
+        public string GetScrollbackStats()
+        {
+            try
+            {
+                EnsureCanvas();
+                if (_canvas?.Buffer == null) return "{}";
+                
+                var buffer = _canvas.Buffer;
+                int sbCount = buffer.ScrollbackCount;
+                
+                // Get first few lines of scrollback for verification
+                var sampleLines = new List<string>();
+                int samplesToTake = Math.Min(3, sbCount);
+                for (int i = 0; i < samplesToTake; i++)
+                {
+                    var line = buffer.GetScrollbackLine(i);
+                    var content = line.ToString();
+                    sampleLines.Add(string.IsNullOrEmpty(content) ? "(empty)" : content.Substring(0, Math.Min(20, content.Length)));
+                }
+                
+                // Count non-empty lines
+                int nonEmptyCount = 0;
+                for (int i = 0; i < sbCount; i++)
+                {
+                    var line = buffer.GetScrollbackLine(i);
+                    if (line.Length > 0) nonEmptyCount++;
+                }
+                
+                return "{" +
+                    $"\"scrollbackCount\":{sbCount}," +
+                    $"\"nonEmptyCount\":{nonEmptyCount}," +
+                    $"\"sampleLines\":[\"{string.Join("\",\"", sampleLines)}\"]" +
+                    "}";
+            }
+            catch (Exception ex)
+            {
+                return "{\"error\":\"" + ex.Message + "\"}";
+            }
+        }
+
+        public void ToggleSearch()
+        {
+            if (_searchOverlay == null) return;
+            
+            if (_searchOverlay.IsVisible)
+            {
+                _searchOverlay.HideSearch();
+                FocusInput();
+            }
+            else
+            {
+                ShowSearch();  // FIXED: This initializes search with buffer
+            }
+        }
+
+        public void ShowSearch()
+        {
+            if (_searchOverlay == null) return;
+            
+            // Initialize search with the actual displayed buffer (_lastBuffer)
+            // NOT _canvas.Buffer which might be a different instance or null
+            var buffer = _lastBuffer ?? _session?.Adapter?.Buffer;
+            if (buffer != null)
+            {
+                var search = new TerminalSearch(buffer);
+                _searchOverlay.InitializeSearch(search);
+            }
+            
+            // Subscribe to match navigation events to update search highlights
+            _searchOverlay.MatchNavigated += OnSearchMatchNavigated;
+            
+            _searchOverlay.ShowSearch();
+        }
+
+        private void OnSearchMatchNavigated(object? sender, SearchMatch e)
+        {
+            // Update the canvas with all search matches for highlighting
+            if (_grid != null && _searchOverlay != null)
+            {
+                _grid.SearchMatches = _searchOverlay.Matches;
+            }
+        }
+
+        public void HideSearch()
+        {
+            if (_searchOverlay == null) return;
+            
+            // Unsubscribe from match navigation events
+            _searchOverlay.MatchNavigated -= OnSearchMatchNavigated;
+            
+            _searchOverlay.HideSearch();
+            
+            // Clear search highlights from the canvas
+            if (_grid != null)
+            {
+                _grid.SearchMatches = Array.Empty<SearchMatch>();
+            }
+            
+            FocusInput();
         }
 
         protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)

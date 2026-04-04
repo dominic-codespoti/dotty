@@ -104,6 +104,19 @@ public class TerminalBuffer
         return idx;
     }
 
+    /// <summary>
+    /// Gets the hyperlink URL for a given hyperlink ID.
+    /// Returns null if the ID is invalid or not found.
+    /// </summary>
+    public string? GetHyperlinkUrl(ushort hyperlinkId)
+    {
+        if (hyperlinkId == 0 || hyperlinkId >= _hyperlinks.Count)
+        {
+            return null;
+        }
+        return _hyperlinks[hyperlinkId];
+    }
+
     // Simple in-memory scrollback storage. Stores textual rows that have
     // scrolled off the top of the active screen. This is intentionally
     // lightweight; consumers that need richer history should snapshot
@@ -311,7 +324,8 @@ public class TerminalBuffer
             return new ScrollbackLine(System.Array.Empty<char>(), 0);
         }
 
-        return _scrollbackRing[(_scrollbackHead + index) % _scrollbackRing.Length];
+        int ringIdx = (_scrollbackHead + index) % _scrollbackRing.Length;
+        return _scrollbackRing[ringIdx];
     }
 
     public IReadOnlyList<string> GetScrollbackLines()
@@ -685,6 +699,7 @@ public class TerminalBuffer
     {
         var buf = _screens.Active;
         int lastCol = buf.GetRowMaxCol(row);
+        
         if (lastCol < 0) return new ScrollbackLine(existingArr ?? System.Array.Empty<char>(), 0);
         
         char[] arr = existingArr;

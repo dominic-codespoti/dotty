@@ -522,6 +522,6 @@ Ensure you're using constant values (literals) in your config class. The source 
 
 ## See Also
 
-- [Themes Guide](THEMES.md) - Detailed theme documentation with color swatches
-- [Architecture Overview](architecture.md) - Dotty's technical architecture
+- [Themes Guide](Themes.md) - Detailed theme documentation with color swatches
+- [Architecture Overview](Architecture.md) - Dotty's technical architecture
 - [Sample Configurations](/home/dom/projects/dotnet-term/samples/Config.cs) - Complete configuration examples

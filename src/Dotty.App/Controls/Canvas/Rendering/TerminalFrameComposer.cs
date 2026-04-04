@@ -282,6 +282,10 @@ public sealed class TerminalFrameComposer : IDisposable
     // GLYPH RENDERING
     // ============================================================
 
+    // Default hyperlink color (blue) - can be made configurable
+    private static readonly SKColor HyperlinkColor = new SKColor(0xFF, 0x64, 0xB0); // Accent blue
+    private static readonly SKColor HyperlinkUnderlineColor = new SKColor(0xFF, 0x64, 0xB0);
+
     private void DrawGlyphs(
         SKCanvas canvas,
         TerminalBuffer buffer,
@@ -320,7 +324,15 @@ public sealed class TerminalFrameComposer : IDisposable
                 if (raw.Invisible) continue;
                 if (raw.SlowBlink && !isBlinkVisible) continue;
 
+                // Check if this cell has a hyperlink
+                bool hasHyperlink = cc.HyperlinkId != 0;
+                
+                // Use hyperlink color if cell has a hyperlink, otherwise use cell foreground
                 var fgColor = cc.HasFg ? cc.Fg : defaultColor;
+                if (hasHyperlink)
+                {
+                    fgColor = HyperlinkColor;
+                }
                 _glyphPaint.Color = fgColor;
 
                 // Use a stroke-based embolden instead of Skia's FakeBoldText.
@@ -331,13 +343,24 @@ public sealed class TerminalFrameComposer : IDisposable
                 float x = MathF.Round(col * cellW);
                 canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
 
-                bool hasLine = raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline;
+                // Determine if we need to draw any lines (underline, strikethrough, etc.)
+                bool hasLine = raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline || hasHyperlink;
                 if (hasLine)
                 {
-                    _linePaint.Color = ((raw.UnderlineColor != 0)) ? new SKColor(raw.UnderlineColor) : fgColor;
+                    // For hyperlinks, use hyperlink underline color; otherwise use underline color or foreground
+                    if (hasHyperlink)
+                    {
+                        _linePaint.Color = HyperlinkUnderlineColor;
+                    }
+                    else
+                    {
+                        _linePaint.Color = ((raw.UnderlineColor != 0)) ? new SKColor(raw.UnderlineColor) : fgColor;
+                    }
+                    
                     float lineW = cellW * cc.Width;
                     
-                    if (raw.Underline)
+                    // Always draw underline for hyperlinks
+                    if (raw.Underline || hasHyperlink)
                     {
                         float y = baseline + fm.Descent * 0.5f;
                         canvas.DrawLine(x, y, x + lineW, y, _linePaint);
@@ -413,6 +436,7 @@ public sealed class TerminalFrameComposer : IDisposable
         public bool IsSeparatorGlyph;
         public bool ShouldDrawGlyph;
         public Cell RawCell;
+        public ushort HyperlinkId;
     }
 
     private void ClassifyRowCells(TerminalBuffer buffer, int row)
@@ -442,6 +466,8 @@ public sealed class TerminalFrameComposer : IDisposable
             cc.IsSeparatorGlyph = cc.FirstRune != -1 && IsLikelySeparatorRune(cc.FirstRune);
 
             cc.ShouldDrawGlyph = !cc.IsContinuation && !cell.IsEmpty && !(cc.IsSeparatorGlyph && !cc.HasBg);
+
+            cc.HyperlinkId = cell.HyperlinkId;
 
             _cellClasses[col] = cc;
         }

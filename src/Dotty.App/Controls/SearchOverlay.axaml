@@ -1,0 +1,120 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Dotty.App.Controls.SearchOverlay"
+             x:Name="Root"
+             Focusable="True"
+             IsVisible="False"
+             HorizontalAlignment="Stretch"
+             VerticalAlignment="Top">
+
+  <Border Background="#2D2D2D"
+          BorderBrush="#3D3D3D"
+          BorderThickness="0,0,0,1"
+          Padding="12,8"
+          HorizontalAlignment="Stretch"
+          VerticalAlignment="Top"
+          BoxShadow="0 2 8 0 #40000000">
+
+    <Grid ColumnDefinitions="*,Auto,Auto">
+      <!-- Search Input -->
+      <TextBox x:Name="SearchTextBox"
+               Grid.Column="0"
+               TabIndex="0"
+               Watermark="Search..."
+               FontSize="13"
+               Padding="8,4"
+               Margin="0,0,12,0"
+               VerticalAlignment="Center"
+               Background="#252525"
+               Foreground="#EEEEEE"
+               BorderBrush="#3D3D3D"
+               BorderThickness="1"
+               CornerRadius="4" />
+
+      <!-- Options and Navigation -->
+      <StackPanel Grid.Column="1"
+                  Orientation="Horizontal"
+                  Spacing="8"
+                  VerticalAlignment="Center"
+                  Margin="0,0,12,0">
+
+        <!-- Case Sensitive Toggle -->
+        <ToggleButton x:Name="CaseSensitiveToggle"
+                      TabIndex="1"
+                      Content="Aa"
+                      FontSize="11"
+                      Padding="6,2"
+                      Background="Transparent"
+                      Foreground="#999999"
+                      BorderBrush="#3D3D3D"
+                      BorderThickness="1"
+                      CornerRadius="3"
+                      ToolTip.Tip="Case sensitive (Alt+C)" />
+
+        <!-- Regex Toggle -->
+        <ToggleButton x:Name="RegexToggle"
+                      TabIndex="2"
+                      Content=".*"
+                      FontSize="11"
+                      Padding="6,2"
+                      Background="Transparent"
+                      Foreground="#999999"
+                      BorderBrush="#3D3D3D"
+                      BorderThickness="1"
+                      CornerRadius="3"
+                      ToolTip.Tip="Regular expression (Alt+R)" />
+
+        <!-- Match Counter -->
+        <TextBlock x:Name="MatchCounter"
+                   Text="0/0"
+                   FontSize="12"
+                   Foreground="#999999"
+                   VerticalAlignment="Center"
+                   Margin="8,0,0,0"
+                   MinWidth="40"
+                   TextAlignment="Center" />
+      </StackPanel>
+
+      <!-- Navigation Buttons -->
+      <StackPanel Grid.Column="2"
+                  Orientation="Horizontal"
+                  Spacing="4"
+                  VerticalAlignment="Center">
+
+        <Button x:Name="PreviousButton"
+                TabIndex="3"
+                Content="&#x25B2;"
+                FontSize="11"
+                Padding="8,4"
+                Background="#3D3D3D"
+                Foreground="#EEEEEE"
+                BorderThickness="0"
+                CornerRadius="3"
+                ToolTip.Tip="Previous match (Shift+Enter)" />
+
+        <Button x:Name="NextButton"
+                TabIndex="4"
+                Content="&#x25BC;"
+                FontSize="11"
+                Padding="8,4"
+                Background="#3D3D3D"
+                Foreground="#EEEEEE"
+                BorderThickness="0"
+                CornerRadius="3"
+                ToolTip.Tip="Next match (Enter)" />
+
+        <Button x:Name="CloseButton"
+                TabIndex="5"
+                Content="&#x2715;"
+                FontSize="11"
+                Padding="8,4"
+                Margin="8,0,0,0"
+                Background="Transparent"
+                Foreground="#999999"
+                BorderThickness="0"
+                CornerRadius="3"
+                ToolTip.Tip="Close (Escape)" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</UserControl>

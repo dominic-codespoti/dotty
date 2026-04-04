@@ -4,3 +4,17 @@ BenchmarkDotNet.Artifacts/
 artifacts/
 *.nupkg
 *.snupkg
+
+# Python linter cache
+.ruff_cache/
+
+# IDE files
+.vscode/
+.idea/
+*.user
+*.suo
+.vs/
+
+# OS-specific files
+.DS_Store
+Thumbs.db

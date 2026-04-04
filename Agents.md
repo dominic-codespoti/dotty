@@ -9,17 +9,17 @@ Dotty is a terminal emulator in .NET. AI agents should prioritize performance, m
 For detailed architectural information, we use progressive disclosure. Please refer to the specific documentation files based on the component you are modifying:
 
 - **System Architecture:** High-level project structure and dependencies.
-  ➡️ See [Architecture Docs](./docs/architecture.md) for details on project layering and responsibilities.
+  ➡️ See [Architecture Docs](./docs/Architecture.md) for details on project layering and responsibilities.
 - **Rendering:** `src/Dotty.App/Controls/Canvas/`
-  ➡️ See [Rendering Docs](./docs/rendering.md) for details on GlyphAtlas, BackgroundSynth, etc.
+  ➡️ See [Rendering Docs](./docs/Rendering.md) for details on GlyphAtlas, BackgroundSynth, etc.
 - **Terminal Parsing:** `src/Dotty.Abstractions/` and `src/Dotty.Terminal/`
-  ➡️ See [Parsing Docs](./docs/parsing.md) for control code handling and escaping sequences.
+  ➡️ See [Parsing Docs](./docs/Parsing.md) for control code handling and escaping sequences.
 - **Native PTY Integration:** `src/Dotty.NativePty/`
-  ➡️ See [Native PTY Docs](./docs/native-pty.md) for POSIX APIs and UNIX process isolation.
+  ➡️ See [Native PTY Docs](./docs/NativePty.md) for POSIX APIs and UNIX process isolation.
 - **Competitor Analysis:**
-  ➡️ See [Comparison Report](./docs/comparison-report.md) for a technical breakdown of how Dotty compares against tools like Ghostty and Wezterm.
+  ➡️ See [Comparison Report](./docs/ComparisonReport.md) for a technical breakdown of how Dotty compares against tools like Ghostty and Wezterm.
 - **Testing:** `tests/`
-  ➡️ See [Testing Docs](./docs/testing.md) for fuzzing, repro tests, and terminal emulation benchmarks.
+  ➡️ See [Testing Docs](./docs/Testing.md) for fuzzing, repro tests, and terminal emulation benchmarks.
 
 ## 💡 Code Conventions
 - Prefer `ref struct` and `Span<T>` for buffer manipulation.

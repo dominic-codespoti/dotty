@@ -4,11 +4,19 @@
              x:Class="Dotty.App.Views.TerminalView"
              Focusable="True"
              HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
-  <Border Background="{DynamicResource TerminalBackground}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
-    <controls:TerminalGrid Name="PART_Grid"
-                           FontFamily="{DynamicResource TerminalFontFamily}"
-                           FontSize="{DynamicResource TerminalFontSize}"
-                           RenderOptions.BitmapInterpolationMode="HighQuality"
-                           RenderOptions.EdgeMode="Antialias" />
-  </Border>
+  <Grid HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+    <Border Background="{DynamicResource TerminalBackground}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+      <controls:TerminalGrid Name="PART_Grid"
+                             FontFamily="{DynamicResource TerminalFontFamily}"
+                             FontSize="{DynamicResource TerminalFontSize}"
+                             RenderOptions.BitmapInterpolationMode="HighQuality"
+                             RenderOptions.EdgeMode="Antialias" />
+    </Border>
+
+    <!-- Search Overlay -->
+    <controls:SearchOverlay Name="PART_SearchOverlay"
+                           HorizontalAlignment="Stretch"
+                           VerticalAlignment="Top"
+                           IsVisible="False" />
+  </Grid>
 </UserControl>

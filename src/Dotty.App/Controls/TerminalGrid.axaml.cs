@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
@@ -44,6 +45,22 @@ namespace Dotty.App.Controls
         {
             get => GetValue(CursorBlinkIntervalProperty);
             set => SetValue(CursorBlinkIntervalProperty, value);
+        }
+
+        /// <summary>
+        /// Gets or sets the search matches to highlight on the terminal canvas.
+        /// </summary>
+        public IReadOnlyList<SearchMatch> SearchMatches
+        {
+            get => Canvas?.SearchMatches ?? Array.Empty<SearchMatch>();
+            set
+            {
+                var canvas = Canvas;
+                if (canvas != null)
+                {
+                    canvas.SearchMatches = value;
+                }
+            }
         }
 
         public TerminalGrid()

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -77,6 +78,19 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			if (_selectionRange == value) return;
 			_selectionRange = value;
+			SendRenderState();
+		}
+	}
+
+	private IReadOnlyList<SearchMatch> _searchMatches = Array.Empty<SearchMatch>();
+
+	public IReadOnlyList<SearchMatch> SearchMatches
+	{
+		get => _searchMatches;
+		set
+		{
+			if (_searchMatches == value) return;
+			_searchMatches = value ?? Array.Empty<SearchMatch>();
 			SendRenderState();
 		}
 	}
@@ -324,6 +338,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			_frameComposer,
 			ContentPadding,
 			_selectionRange,
+			_searchMatches,
 			SkPaint,
 			bgColor,
             _offset.Y,
@@ -478,6 +493,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			_frameComposer,
 			ContentPadding,
 			_selectionRange,
+			_searchMatches,
 			SkPaint,
 			bgColor,
             _offset.Y,

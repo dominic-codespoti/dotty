@@ -3,7 +3,7 @@
 A high-performance terminal emulator for .NET, built with Avalonia UI and optimized for speed and memory efficiency.
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](License.md)
 
 ## Overview
 
@@ -128,8 +128,8 @@ public partial class MyDottyConfig : IDottyConfig
 ### Documentation
 
 - **[Configuration Guide](docs/guides/configuration.md)** — Complete user guide with examples and troubleshooting
-- **[Architecture](docs/architecture/config-source-generator.md)** — How the source generator works
-- **[Advanced Topics](docs/CONFIGURATION_ADVANCED.md)** — Custom themes, transparency, and more
+- **[Architecture](docs/architecture/ConfigSourceGenerator.md)** — How the source generator works
+- **[Advanced Topics](docs/ConfigurationAdvanced.md)** — Custom themes, transparency, and more
 
 ### Regenerate Config
 
@@ -151,17 +151,17 @@ docs/                — Architecture and implementation docs
 
 ## Documentation
 
-- [Architecture Overview](docs/architecture.md)
-- [Rendering System](docs/rendering.md)
-- [Parser Implementation](docs/parsing.md)
-- [Native PTY](docs/native-pty.md)
-- [Testing](docs/testing.md)
-- [GUI Harness Benchmarking](docs/gui-harness-benchmarking.md)
-- [Performance Analysis](docs/comparison-report.md)
+- [Architecture Overview](docs/Architecture.md)
+- [Rendering System](docs/Rendering.md)
+- [Parser Implementation](docs/Parsing.md)
+- [Native PTY](docs/NativePty.md)
+- [Testing](docs/Testing.md)
+- [GUI Harness Benchmarking](docs/GuiHarnessBenchmarking.md)
+- [Performance Analysis](docs/ComparisonReport.md)
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) for details.
+MIT License - See [License](License.md) for details.
 
 ## Links
 

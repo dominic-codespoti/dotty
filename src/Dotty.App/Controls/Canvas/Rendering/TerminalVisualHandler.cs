@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Avalonia;
 using Avalonia.Media;
@@ -19,6 +20,7 @@ public record struct TerminalRenderState(
     TerminalFrameComposer? Composer,
     Thickness Padding,
     TerminalSelectionRange Selection,
+    IReadOnlyList<SearchMatch> SearchMatches,
     SKPaint? Paint,
     SKColor BgColor,
     double ScrollY,
@@ -35,21 +37,9 @@ public record struct TerminalRenderState(
 public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
 {
     private TerminalRenderState? _state;
-    private static bool _captureNextFrame = false;
-    private static int _captureFrameCount = 0;
     
     // Track if this is the first render to ensure we always start clean
     private bool _isFirstRender = true;
-    
-    public static void CaptureScreenshot()
-    {
-        _captureNextFrame = true;
-    }
-    
-    public static void EnableAutoCapture(int frameCount)
-    {
-        _captureFrameCount = frameCount;
-    }
     
     public override void OnMessage(object message)
     {
@@ -120,6 +110,7 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                 // If we have scrollback, we need the Composer to draw rows from -Scrollback up to Rows.
                 // Let's rely on the Composer drawing the visible range.
                 int sbCount = s.ScrollbackCount;
+                
                 // The scroll offset is in pixels. Y = 0 means the top of the scrollback.
                 // The bottom of the scrollback is Y = sbCount * CellHeight.
                 // The active buffer is below the scrollback.
@@ -151,6 +142,7 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
 
                     int sbStart = Math.Max(-sbCount, startVisibleRow);
                     int sbEnd = Math.Min(-1, endVisibleRow);
+                    
                     if (sbStart <= sbEnd)
                     {
                         var paint = s.Paint;
@@ -161,7 +153,10 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                         for (int r = sbStart; r <= sbEnd; r++)
                         {
                             int idx = r + sbCount;
+                            // Clamp index to valid range [0, sbCount-1]
+                            idx = Math.Max(0, Math.Min(sbCount - 1, idx));
                             var line = buffer.GetScrollbackLine(idx);
+                            
                             if (line.Length <= 0) continue;
 
                             float y = (float)(r * s.CellHeight + baselineOffset);
@@ -197,16 +192,8 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
                 // Also bump selection overlay by +sbCount
                 DrawSelectionOverlay(canvas, buffer, s.Selection, s.CellWidth, s.CellHeight, sbCount);
                 
-                // Capture screenshot if requested
-                if (_captureNextFrame || _captureFrameCount > 0)
-                {
-                    SaveCanvasToPng(lease, (int)s.ViewportWidth, (int)s.ViewportHeight, s.BgColor);
-                    _captureNextFrame = false;
-                    if (_captureFrameCount > 0)
-                    {
-                        _captureFrameCount--;
-                    }
-                }
+                // Draw search highlights
+                DrawSearchHighlights(canvas, buffer, s.SearchMatches, s.CellWidth, s.CellHeight, sbCount);
             }
             catch (Exception)
             {
@@ -219,37 +206,6 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
         }
     }
     
-    private void SaveCanvasToPng(ISkiaSharpApiLease lease, int width, int height, SKColor bgColor)
-    {
-        try
-        {
-            // Get the surface from the lease and read pixels
-            var surface = lease.SkSurface;
-            if (surface == null) return;
-            
-            // Create a bitmap to capture the current frame
-            using var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
-            
-            // Read pixels from the surface
-            if (surface.ReadPixels(bitmap.Info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0))
-            {
-                // Encode and save
-                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-                var filename = $"/tmp/dotty_canvas_{timestamp}.png";
-                
-                using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
-                if (data != null)
-                {
-                    File.WriteAllBytes(filename, data.ToArray());
-                }
-            }
-        }
-        catch (Exception)
-        {
-            // Screenshot save error, ignore
-        }
-    }
-
     private void DrawSelectionOverlay(SKCanvas canvas, TerminalBuffer buffer, TerminalSelectionRange selection, float cellW, float cellH, int sbCount)
     {
         if (selection.IsEmpty) return;
@@ -277,6 +233,46 @@ public sealed class TerminalVisualHandler : CompositionCustomVisualHandler
             };
 
             canvas.DrawRect(new SKRect(x, y, x + width, y + cellH), selectionPaint);
+        }
+    }
+
+    private void DrawSearchHighlights(SKCanvas canvas, TerminalBuffer buffer, IReadOnlyList<SearchMatch> matches, float cellW, float cellH, int sbCount)
+    {
+        if (matches == null || matches.Count == 0) return;
+        
+        using var matchPaint = new SKPaint
+        {
+            Color = new SKColor(255, 255, 0, 100), // Yellow highlight
+            Style = SKPaintStyle.Fill,
+            IsAntialias = false
+        };
+        
+        using var currentMatchPaint = new SKPaint
+        {
+            Color = new SKColor(255, 165, 0, 150), // Orange for current match
+            Style = SKPaintStyle.Fill,
+            IsAntialias = false
+        };
+        
+        foreach (var match in matches)
+        {
+            if (match.IsEmpty) continue;
+            
+            int row = match.Row;
+            int startCol = match.StartColumn;
+            int length = match.Length;
+            
+            // Clamp to buffer bounds
+            row = Math.Clamp(row, -sbCount, buffer.Rows - 1);
+            startCol = Math.Clamp(startCol, 0, buffer.Columns - 1);
+            length = Math.Min(length, buffer.Columns - startCol);
+            
+            float x = startCol * cellW;
+            float width = length * cellW;
+            float y = (row + sbCount) * cellH;
+            
+            // Draw highlight rectangle
+            canvas.DrawRect(new SKRect(x, y, x + width, y + cellH), matchPaint);
         }
     }
 

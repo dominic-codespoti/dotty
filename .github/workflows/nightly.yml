@@ -1,0 +1,334 @@
+name: Nightly Build
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/instructions/**'
+  schedule:
+    # Run every night at 2:00 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  PROJECT_PATH: 'src/Dotty.App/Dotty.App.csproj'
+  SOLUTION_PATH: 'Dotty.sln'
+
+jobs:
+  # Build for Linux x64
+  build-linux-nightly:
+    name: Nightly Linux x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get nightly version
+        id: version
+        run: |
+          DATE=$(date +%Y%m%d)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "version=0.0.0-nightly-${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "date=${DATE}" >> $GITHUB_OUTPUT
+          echo "Nightly version: 0.0.0-nightly-${DATE}-${SHORT_SHA}"
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-linux-nightly-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-linux-nightly-
+            nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+      - name: Build native pty-helper
+        working-directory: src/Dotty.NativePty
+        run: make
+
+      - name: Publish self-contained
+        run: |
+          dotnet publish ${{ env.PROJECT_PATH }} \
+            -c Release \
+            -r linux-x64 \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishAot=true \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -o ./publish/linux-x64
+
+      - name: Copy pty-helper to output
+        run: |
+          cp src/Dotty.NativePty/bin/pty-helper ./publish/linux-x64/
+          chmod +x ./publish/linux-x64/pty-helper
+          chmod +x ./publish/linux-x64/dotty
+
+      - name: Create tarball
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          cd ./publish/linux-x64
+          tar -czf "../../dotty-${VERSION}-linux-x64.tar.gz" \
+            --transform "s,^,dotty-${VERSION}-linux-x64/," \
+            dotty pty-helper *.json *.dll 2>/dev/null || true
+          cd ../..
+          ls -la *.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotty-nightly-linux-x64
+          path: dotty-*.tar.gz
+          retention-days: 7
+
+  # Build for macOS
+  build-macos-nightly:
+    name: Nightly macOS ${{ matrix.arch }}
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - arch: x64
+            rid: osx-x64
+          - arch: arm64
+            rid: osx-arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get nightly version
+        id: version
+        run: |
+          DATE=$(date +%Y%m%d)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "version=0.0.0-nightly-${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "date=${DATE}" >> $GITHUB_OUTPUT
+          echo "Nightly version: 0.0.0-nightly-${DATE}-${SHORT_SHA}"
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-macos-nightly-${{ matrix.arch }}-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-macos-nightly-${{ matrix.arch }}-
+            nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+      - name: Build native pty-helper
+        working-directory: src/Dotty.NativePty
+        run: make
+
+      - name: Publish self-contained
+        run: |
+          dotnet publish ${{ env.PROJECT_PATH }} \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:PublishAot=true \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -o ./publish/${{ matrix.rid }}
+
+      - name: Copy pty-helper to output
+        run: |
+          cp src/Dotty.NativePty/bin/pty-helper ./publish/${{ matrix.rid }}/
+          chmod +x ./publish/${{ matrix.rid }}/pty-helper
+          chmod +x ./publish/${{ matrix.rid }}/dotty
+
+      - name: Create tarball
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          cd ./publish/${{ matrix.rid }}
+          tar -czf "../../dotty-${VERSION}-${{ matrix.rid }}.tar.gz" \
+            --transform "s,^,dotty-${VERSION}-${{ matrix.rid }}/," \
+            dotty pty-helper *.json *.dylib 2>/dev/null || true
+          cd ../..
+          ls -la *.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotty-nightly-${{ matrix.rid }}
+          path: dotty-*.tar.gz
+          retention-days: 7
+
+  # Build for Windows
+  build-windows-nightly:
+    name: Nightly Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get nightly version
+        id: version
+        run: |
+          $date = Get-Date -Format "yyyyMMdd"
+          $shortSha = (git rev-parse --short HEAD)
+          $version = "0.0.0-nightly-$date-$shortSha"
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "date=$date" >> $env:GITHUB_OUTPUT
+          "Nightly version: $version"
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-windows-nightly-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-windows-nightly-
+            nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+      - name: Publish self-contained
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          dotnet publish ${{ env.PROJECT_PATH }} `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishAot=true `
+            -p:Version=$version `
+            -o .\publish\win-x64
+
+      - name: Create zip archive
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          Compress-Archive -Path "publish\win-x64\*" -DestinationPath "dotty-$version-win-x64.zip" -Force
+          Get-ChildItem *.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotty-nightly-win-x64
+          path: dotty-*.zip
+          retention-days: 7
+
+  # Create or update nightly release
+  create-nightly-release:
+    name: Create Nightly Release
+    needs: [build-linux-nightly, build-macos-nightly, build-windows-nightly]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get nightly version
+        id: version
+        run: |
+          DATE=$(date +%Y%m%d)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "version=0.0.0-nightly-${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "date=${DATE}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          pattern: dotty-nightly-*
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p ./release-assets
+          find ./artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} ./release-assets/ \;
+          ls -la ./release-assets/
+
+      - name: Generate release notes
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          DATE=${{ steps.version.outputs.date }}
+          cat > NIGHTLY_NOTES.md << EOF
+          # Dotty Nightly Build
+
+          **Version:** ${VERSION}
+          **Date:** $(date -d ${DATE} +%Y-%m-%d)
+          **Commit:** $(git rev-parse --short HEAD)
+          **Branch:** ${GITHUB_REF_NAME}
+
+          ⚠️ This is a nightly/development build. It may contain bugs and is not recommended for production use.
+
+          ### Installation
+
+          **Linux (x64):**
+          \`\`\`bash
+          tar -xzf dotty-${VERSION}-linux-x64.tar.gz
+          cd dotty-${VERSION}-linux-x64
+          ./dotty
+          \`\`\`
+
+          **macOS (Intel x64):**
+          \`\`\`bash
+          tar -xzf dotty-${VERSION}-osx-x64.tar.gz
+          cd dotty-${VERSION}-osx-x64
+          ./dotty
+          \`\`\`
+
+          **macOS (Apple Silicon):**
+          \`\`\`bash
+          tar -xzf dotty-${VERSION}-osx-arm64.tar.gz
+          cd dotty-${VERSION}-osx-arm64
+          ./dotty
+          \`\`\`
+
+          **Windows (x64):**
+          1. Extract \`dotty-${VERSION}-win-x64.zip\`
+          2. Run \`Dotty.exe\`
+
+          ### Changes in this build
+          $(git log -20 --oneline --no-decorate)
+
+          ### Checksums
+          EOF
+          
+          cd ./release-assets
+          sha256sum * >> ../NIGHTLY_NOTES.md
+          cd ..
+
+      - name: Create or update nightly release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: nightly
+          name: Nightly Build (${{ steps.version.outputs.date }})
+          body_path: NIGHTLY_NOTES.md
+          files: ./release-assets/*
+          draft: false
+          prerelease: true
+          force: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

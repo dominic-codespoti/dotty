@@ -16,6 +16,9 @@ public struct Cell
     public byte Width;
     public bool IsContinuation;
     
+    // OSC 8 Hyperlink ID - 0 means no hyperlink
+    public ushort HyperlinkId;
+    
     // Stores multi-character graphemes (base + combining marks)
     // When this is null, use Rune field for single codepoint graphemes
     private string? _grapheme;
@@ -29,6 +32,7 @@ public struct Cell
         Width = 0;
         IsContinuation = false;
         UnderlineColor = 0;
+        HyperlinkId = 0;
         _grapheme = null;
     }
 

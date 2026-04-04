@@ -27,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Dotty.Terminal\Dotty.Terminal.csproj" />
     <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
+    <ProjectReference Include="..\Dotty.NativePty\Dotty.NativePty.csproj" />
     
     <!-- Source Generator for configuration -->
     <ProjectReference Include="..\Dotty.Config.SourceGenerator\Dotty.Config.SourceGenerator.csproj">

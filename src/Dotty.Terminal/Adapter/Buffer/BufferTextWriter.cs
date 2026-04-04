@@ -163,7 +163,9 @@ internal sealed class BufferTextWriter
             cell.IsContinuation = false;
         }
 
+        // Update row max col for scrollback capture
         int endCol = col + run.Length - 1;
+        buf.UpdateRowMaxCol(row, endCol);
         if (_ctx._autoWrap)
         {
             if (endCol >= cols - 1)
@@ -278,6 +280,9 @@ internal sealed class BufferTextWriter
         ApplyAttributesFast(ref cell, in attributes, attrsDefault);
         cell.Width = 1;
         cell.IsContinuation = false;
+        
+        // Update row max col for scrollback capture
+        buf.UpdateRowMaxCol(currentRow, startCol);
 
         if (autoWrap)
         {
@@ -348,6 +353,9 @@ internal sealed class BufferTextWriter
             cont.IsContinuation = true;
             ApplyAttributes(ref cont, in attributes);
         }
+        
+        // Update row max col for scrollback capture
+        buf.UpdateRowMaxCol(currentRow, startCol + width - 1);
 
         if (autoWrap)
         {
@@ -430,6 +438,7 @@ internal sealed class BufferTextWriter
         cell.Invisible = attributes.Invisible;
         cell.SlowBlink = attributes.SlowBlink;
         cell.UnderlineColor = attributes.UnderlineColor.IsEmpty ? 0 : attributes.UnderlineColor.Argb;
+        cell.HyperlinkId = attributes.HyperlinkId;
     }
 
     private static void ApplyAttributesFast(ref Cell cell, in CellAttributes attributes, bool attrsDefault)
@@ -440,6 +449,7 @@ internal sealed class BufferTextWriter
             cell.Background = 0;
             cell.UnderlineColor = 0;
             cell.Flags = 0;
+            cell.HyperlinkId = 0;
             return;
         }
 
@@ -458,6 +468,7 @@ internal sealed class BufferTextWriter
             && !attributes.Strikethrough
             && !attributes.Overline
             && !attributes.Invisible
-            && !attributes.SlowBlink;
+            && !attributes.SlowBlink
+            && attributes.HyperlinkId == 0;
     }
 }

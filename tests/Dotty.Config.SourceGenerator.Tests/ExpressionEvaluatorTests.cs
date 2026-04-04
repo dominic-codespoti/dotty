@@ -1,6 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Dotty.Config.SourceGenerator.Models;
 using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
@@ -106,8 +107,8 @@ public class ExpressionEvaluatorTests
         var result = EvaluateExpressionForTest(propertyDecl.ExpressionBody!.Expression, semanticModel);
 
         // Assert
-        Assert.IsType<TestHelpers.Thickness>(result);
-        var thickness = (TestHelpers.Thickness)result;
+        Assert.IsType<ThicknessModel>(result);
+        var thickness = (ThicknessModel)result;
         Assert.Equal(10.0, thickness.Left);
         Assert.Equal(10.0, thickness.Top);
         Assert.Equal(10.0, thickness.Right);
@@ -132,8 +133,8 @@ public class ExpressionEvaluatorTests
         var result = EvaluateExpressionForTest(propertyDecl.ExpressionBody!.Expression, semanticModel);
 
         // Assert
-        Assert.IsType<TestHelpers.Thickness>(result);
-        var thickness = (TestHelpers.Thickness)result;
+        Assert.IsType<ThicknessModel>(result);
+        var thickness = (ThicknessModel)result;
         Assert.Equal(10.0, thickness.Left);
         Assert.Equal(20.0, thickness.Top);
         Assert.Equal(10.0, thickness.Right);
@@ -158,8 +159,8 @@ public class ExpressionEvaluatorTests
         var result = EvaluateExpressionForTest(propertyDecl.ExpressionBody!.Expression, semanticModel);
 
         // Assert
-        Assert.IsType<TestHelpers.Thickness>(result);
-        var thickness = (TestHelpers.Thickness)result;
+        Assert.IsType<ThicknessModel>(result);
+        var thickness = (ThicknessModel)result;
         Assert.Equal(1.0, thickness.Left);
         Assert.Equal(2.0, thickness.Top);
         Assert.Equal(3.0, thickness.Right);
@@ -451,18 +452,42 @@ public class ExpressionEvaluatorTests
         {
             var symbolInfo = semanticModel.GetSymbolInfo(memberAccess);
 
-            // For enum members, return the member name
-            if (symbolInfo.Symbol is IFieldSymbol field &&
-                field.ContainingType?.TypeKind == TypeKind.Enum)
+            // If we have a resolved symbol
+            if (symbolInfo.Symbol != null)
             {
-                return field.Name;
+                // For enum members, return the member name
+                if (symbolInfo.Symbol is IFieldSymbol field)
+                {
+                    // Check if this field is part of an enum type
+                    var isEnum = field.ContainingType?.TypeKind == TypeKind.Enum ||
+                                 field.Type?.TypeKind == TypeKind.Enum ||
+                                 field.Type?.BaseType?.SpecialType == SpecialType.System_Enum;
+                    
+                    if (isEnum)
+                    {
+                        return field.Name;
+                    }
+                }
+
+                // For properties, check if it's a theme type
+                if (symbolInfo.Symbol is IPropertySymbol property)
+                {
+                    var typeName = property.Type.Name;
+                    if (typeName.EndsWith("Theme") || typeName.EndsWith("Scheme"))
+                    {
+                        return typeName;
+                    }
+                }
             }
 
-            if (symbolInfo.Symbol is IFieldSymbol constField && constField.IsConst)
+            // For unsupported member accesses like System.DateTime.Now, return null
+            var expressionText = memberAccess.ToString();
+            if (expressionText.StartsWith("System.") || expressionText.Contains("DateTime"))
             {
-                return constField.ConstantValue;
+                return null;
             }
 
+            // Default: return the member name
             return memberAccess.Name.Identifier.ValueText;
         }
 
@@ -476,12 +501,17 @@ public class ExpressionEvaluatorTests
                 var args = objectCreation.ArgumentList.Arguments;
                 var values = args.Select(a => EvaluateExpressionForTest(a.Expression, semanticModel)).ToList();
 
-                if (values.Count == 1 && values[0] is double uniform)
-                    return new TestHelpers.Thickness(uniform);
-                if (values.Count == 2 && values[0] is double h && values[1] is double v)
-                    return new TestHelpers.Thickness(h, v);
-                if (values.Count == 4 && values[0] is double l && values[1] is double t && values[2] is double r && values[3] is double b)
-                    return new TestHelpers.Thickness(l, t, r, b);
+                // Helper to convert int or double to double
+                double? GetDouble(object? val) => val is double d ? d : (val is int i ? (double)i : null);
+
+                var dValues = values.Select(GetDouble).ToList();
+
+                if (dValues.Count == 1 && dValues[0] is double uniform)
+                    return new ThicknessModel(uniform);
+                if (dValues.Count == 2 && dValues[0] is double h && dValues[1] is double v)
+                    return new ThicknessModel(h, v);
+                if (dValues.Count == 4 && dValues[0] is double l && dValues[1] is double t && dValues[2] is double r && dValues[3] is double b)
+                    return new ThicknessModel(l, t, r, b);
             }
 
             return typeName;
@@ -493,26 +523,18 @@ public class ExpressionEvaluatorTests
             var left = EvaluateExpressionForTest(binary.Left, semanticModel);
             var right = EvaluateExpressionForTest(binary.Right, semanticModel);
 
-            if (left is double ld && right is double rd)
-            {
-                return binary.OperatorToken.ValueText switch
-                {
-                    "+" => ld + rd,
-                    "-" => ld - rd,
-                    "*" => ld * rd,
-                    "/" => rd != 0 ? ld / rd : 0,
-                    _ => null
-                };
-            }
+            // Convert both to double if either is numeric
+            double? leftDouble = left is double ld ? ld : (left is int li ? (double)li : null);
+            double? rightDouble = right is double rd ? rd : (right is int ri ? (double)ri : null);
 
-            if (left is int li && right is int ri)
+            if (leftDouble is double ldVal && rightDouble is double rdVal)
             {
                 return binary.OperatorToken.ValueText switch
                 {
-                    "+" => li + ri,
-                    "-" => li - ri,
-                    "*" => li * ri,
-                    "/" => ri != 0 ? li / ri : 0,
+                    "+" => ldVal + rdVal,
+                    "-" => ldVal - rdVal,
+                    "*" => ldVal * rdVal,
+                    "/" => rdVal != 0 ? ldVal / rdVal : 0,
                     _ => null
                 };
             }
@@ -536,13 +558,6 @@ public class ExpressionEvaluatorTests
             }
         }
 
-        // Try to get constant value through semantic model
-        var constantValue = semanticModel.GetConstantValue(expression);
-        if (constantValue.HasValue)
-        {
-            return constantValue.Value;
-        }
-
         // Handle identifier names
         if (expression is IdentifierNameSyntax identifier)
         {
@@ -551,6 +566,23 @@ public class ExpressionEvaluatorTests
                 return idField.ConstantValue;
             if (symbol is ILocalSymbol local && local.HasConstantValue)
                 return local.ConstantValue;
+        }
+
+        // Final fallback: try to get constant value
+        var constantValue = semanticModel.GetConstantValue(expression);
+        if (constantValue.HasValue)
+        {
+            var value = constantValue.Value;
+            
+            // For member access expressions that resolve to enum values,
+            // return the member name instead of the numeric value
+            if (expression is MemberAccessExpressionSyntax memberAccessForEnum)
+            {
+                // Just return the identifier text (e.g., "Blur" from "TransparencyLevel.Blur")
+                return memberAccessForEnum.Name.Identifier.ValueText;
+            }
+            
+            return value;
         }
 
         return null;

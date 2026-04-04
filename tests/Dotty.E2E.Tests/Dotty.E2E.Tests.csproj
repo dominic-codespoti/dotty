@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <!-- E2E Test specific settings -->
+  <PropertyGroup>
+    <!-- Allow longer timeouts for E2E tests -->
+    <TestTimeoutSeconds>300</TestTimeoutSeconds>
+    <!-- Capture screenshots on failure -->
+    <CaptureScreenshotsOnFailure>true</CaptureScreenshotsOnFailure>
+    <!-- Headless mode support for CI -->
+    <HeadlessMode Condition="'$(DOTTY_E2E_HEADLESS)' == '1'">true</HeadlessMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Main application reference -->
+    <ProjectReference Include="..\..\src\Dotty.App\Dotty.App.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.Terminal\Dotty.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.Abstractions\Dotty.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.NativePty\Dotty.NativePty.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Test framework -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageReference Include="xunit" Version="2.5.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.0" />
+    <PackageReference Include="xunit.extensibility.core" Version="2.5.0" />
+    
+    <!-- Avalonia UI testing -->
+    <PackageReference Include="Avalonia" Version="11.3.8" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.8" />
+    <PackageReference Include="Avalonia.Headless" Version="11.3.8" />
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="11.3.8" />
+    <PackageReference Include="Avalonia.Skia" Version="11.3.8" />
+    
+    <!-- Additional testing utilities -->
+    <PackageReference Include="Moq" Version="4.18.4" />
+    <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.FileExtensions" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+    
+    <!-- JSON for test data -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Include test data files -->
+    <None Include="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="e2e.appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="testhost.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- Compiler constants for conditional compilation -->
+    <DefineConstants Condition="'$(HeadlessMode)' == 'true'">$(DefineConstants);HEADLESS_MODE</DefineConstants>
+  </PropertyGroup>
+</Project>

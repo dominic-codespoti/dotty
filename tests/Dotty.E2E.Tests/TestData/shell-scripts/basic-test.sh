@@ -1,0 +1,6 @@
+echo "This is a test script for E2E testing"
+echo "Line 1: Basic output"
+echo "Line 2: Testing terminal rendering"
+echo "Line 3: Special chars: !@#$%^&*()"
+echo "Line 4: Unicode test: 你好世界"
+echo "Line 5: Done"

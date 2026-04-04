@@ -1,0 +1,90 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft": "Warning",
+      "System": "Warning",
+      "Dotty": "Debug"
+    },
+    "Console": {
+      "IncludeScopes": true
+    }
+  },
+  "E2ETest": {
+    "DefaultTimeoutMs": 30000,
+    "StartupTimeoutMs": 60000,
+    "HeadlessMode": true,
+    "ScreenshotOnFailure": true,
+    "AutoRestartOnFailure": false,
+    "HealthCheckIntervalMs": 5000,
+    "ScreenshotDirectory": "./artifacts/screenshots",
+    "StateDumpDirectory": "./artifacts/states",
+    "LogDirectory": "./artifacts/logs",
+    "TestApplicationPath": "../../../src/Dotty.App",
+    "BuildConfiguration": "Release",
+    "CommandInterface": {
+      "Protocol": "Tcp",
+      "Host": "127.0.0.1",
+      "BasePort": 19000,
+      "MaxPort": 19100
+    },
+    "Window": {
+      "DefaultWidth": 800,
+      "DefaultHeight": 600,
+      "DefaultCols": 80,
+      "DefaultRows": 24
+    },
+    "Rendering": {
+      "WaitForIdleTimeoutMs": 5000,
+      "IdleCheckIntervalMs": 100,
+      "MaxRenderTimeMs": 1000
+    },
+    "ProcessManagement": {
+      "GracefulShutdownTimeoutMs": 5000,
+      "ForceKillTimeoutMs": 3000,
+      "KillOrphanedProcesses": false,
+      "MonitorProcessHealth": true
+    },
+    "Headless": {
+      "UseAvaloniaHeadless": true,
+      "UseXvfbIfAvailable": true,
+      "Display": ":99",
+      "Screen": "1024x768x24"
+    },
+    "Performance": {
+      "Enabled": true,
+      "CollectMetrics": true,
+      "SamplingIntervalMs": 500,
+      "BaselinesPath": "./artifacts/baselines",
+      "ReportsPath": "./artifacts/reports",
+      "RegressionTolerancePercentage": 10.0,
+      "FailOnRegression": false,
+      "AlwaysCollectPerformance": true,
+      "UploadArtifacts": true,
+      "GenerateTrendReports": true,
+      "Thresholds": {
+        "MinFps": 30.0,
+        "MaxFrameTimeAvgMs": 16.67,
+        "MaxFrameTimeP95Ms": 33.33,
+        "MaxFrameTimeP99Ms": 50.0,
+        "MinParserBytesPerSec": 100000.0,
+        "MinParserSequencesPerSec": 1000.0,
+        "MaxHeapSizeMB": 512,
+        "MaxAllocationsPerOp": 100.0,
+        "MaxInputLatencyP95Ms": 50.0,
+        "MinScrollLinesPerSec": 60.0,
+        "MaxScrollTimeAvgMs": 16.67,
+        "MinCellUpdatesPerSec": 100000.0,
+        "MaxStartupTimeMs": 10000.0
+      },
+      "HeadlessThresholds": {
+        "MinFps": 1.0,
+        "MaxFrameTimeAvgMs": 100.0,
+        "MaxFrameTimeP95Ms": 200.0,
+        "MinParserBytesPerSec": 100000.0,
+        "MaxHeapSizeMB": 512,
+        "RegressionTolerancePercentage": 20.0
+      }
+    }
+  }
+}

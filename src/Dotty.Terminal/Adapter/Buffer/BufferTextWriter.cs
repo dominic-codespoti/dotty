@@ -256,7 +256,16 @@ internal sealed class BufferTextWriter
         int startCol;
         if (autoWrap)
         {
-            if (_cursor.EnsureSpace(1, _ctx.Rows, _ctx.Columns)) _ctx.ScrollUp(1);
+            // When at the end of the line with autowrap enabled, set wrap pending
+            // and let the caller handle scrolling via LineFeed()
+            if (_cursor.WrapPending)
+            {
+                _ctx.LineFeed();
+                _ctx.CarriageReturn();
+                _cursor.SetWrapPending(false);
+            }
+            // Only ensure we have space, don't scroll here - scrolling is handled by LineFeed
+            _cursor.EnsureSpace(1, _ctx.Rows, _ctx.Columns);
             startCol = _cursor.Col;
         }
         else
@@ -326,7 +335,16 @@ internal sealed class BufferTextWriter
         int startCol;
         if (autoWrap)
         {
-            if (_cursor.EnsureSpace(width, _ctx.Rows, _ctx.Columns)) _ctx.ScrollUp(1);
+            // When at the end of the line with autowrap enabled, set wrap pending
+            // and let the caller handle scrolling via LineFeed()
+            if (_cursor.WrapPending)
+            {
+                _ctx.LineFeed();
+                _ctx.CarriageReturn();
+                _cursor.SetWrapPending(false);
+            }
+            // Only ensure we have space, don't scroll here - scrolling is handled by LineFeed
+            _cursor.EnsureSpace(width, _ctx.Rows, _ctx.Columns);
             startCol = _cursor.Col;
         }
         else

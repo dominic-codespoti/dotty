@@ -126,10 +126,72 @@ jobs:
           dotnet format --verify-no-changes --verbosity detailed ${{ env.SOLUTION_PATH }} || echo "Formatting check completed"
         continue-on-error: true
 
+  # Job to run performance benchmarks
+  performance-tests:
+    name: Performance Tests (Linux)
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-ubuntu-latest-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-ubuntu-latest-
+            nuget-
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+      - name: Build solution
+        run: dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
+
+      - name: Run Performance Tests
+        run: |
+          cd tests/Dotty.Performance.Tests
+          dotnet run -c Release -- --mode quick
+        env:
+          CI: true
+          DOTTY_BENCH_MODE: quick
+
+      - name: Upload Performance Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-results
+          path: |
+            tests/Dotty.Performance.Tests/BenchmarkDotNet.Artifacts/
+            tests/Dotty.Performance.Tests/baselines.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Check for Performance Regressions
+        run: |
+          # Check if regressions were detected
+          if [ -f "tests/Dotty.Performance.Tests/regressions.txt" ]; then
+            echo "Performance regressions detected:"
+            cat tests/Dotty.Performance.Tests/regressions.txt
+            exit 1
+          fi
+          echo "No performance regressions detected."
+        continue-on-error: true
+
   # Summary job that depends on all others
   ci-summary:
     name: CI Summary
-    needs: [build-and-test, code-quality]
+    needs: [build-and-test, code-quality, performance-tests]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -139,4 +201,15 @@ jobs:
             echo "Build or tests failed!"
             exit 1
           fi
+          
+          if [ "${{ needs.code-quality.result }}" = "failure" ]; then
+            echo "Code quality checks failed!"
+            exit 1
+          fi
+          
+          if [ "${{ needs.performance-tests.result }}" = "failure" ]; then
+            echo "Performance tests failed!"
+            echo "Check the performance-results artifact for details."
+          fi
+          
           echo "All CI checks passed!"

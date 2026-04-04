@@ -1,0 +1,48 @@
+# Sample ANSI Test Sequences
+
+## Basic Colors (SGR)
+- Red foreground: ESC[31m
+- Green foreground: ESC[32m
+- Blue foreground: ESC[34m
+- Reset: ESC[0m
+
+## Text Attributes
+- Bold: ESC[1m
+- Dim: ESC[2m
+- Italic: ESC[3m
+- Underline: ESC[4m
+- Blink: ESC[5m
+- Reverse: ESC[7m
+- Hidden: ESC[8m
+- Strikethrough: ESC[9m
+
+## 256 Colors
+- Format: ESC[38;5;Nm (foreground)
+- Format: ESC[48;5;Nm (background)
+- Where N is 0-255
+
+## TrueColor
+- Format: ESC[38;2;R;G;Bm (foreground)
+- Format: ESC[48;2;R;G;Bm (background)
+
+## Cursor Movement
+- Up: ESC[nA
+- Down: ESC[nB
+- Forward: ESC[nC
+- Back: ESC[nD
+- Next line: ESC[nE
+- Prev line: ESC[nF
+- Horizontal abs: ESC[nG
+- Position: ESC[row;colH
+
+## Erase
+- Display: ESC[J or ESC[0J (cursor to end)
+- Display: ESC[1J (start to cursor)
+- Display: ESC[2J (entire display)
+- Line: ESC[K or ESC[0K (cursor to end)
+- Line: ESC[1K (start to cursor)
+- Line: ESC[2K (entire line)
+
+## Scrollback
+- Scroll up: ESC[nS
+- Scroll down: ESC[nT

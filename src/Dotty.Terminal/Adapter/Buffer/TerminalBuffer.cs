@@ -430,6 +430,9 @@ public class TerminalBuffer
         {
             // Capture the top-most line of the scroll region before it's
             // scrolled out, preserving it in scrollback history.
+            // Note: This is the primary place where scrollback is captured.
+            // BufferTextWriter no longer calls ScrollUp separately to avoid
+            // double-capturing the same lines.
             if (!_throughputMode && _scrollTop == 0)
             {
                 AddToScrollback(_scrollTop);

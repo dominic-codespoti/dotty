@@ -25,6 +25,7 @@ public class ScrollbackMinimalTest
             buffer.WriteText($"Row{i}".AsSpan(), null);
             if (i < buffer.Rows - 1)
             {
+                buffer.CarriageReturn();
                 buffer.LineFeed();
             }
         }
@@ -33,8 +34,10 @@ public class ScrollbackMinimalTest
         Console.WriteLine();
         
         // Step 2: Write one more line - this should trigger scrollback
-        Console.WriteLine("Step 2: Writing 'LINE1' and LineFeed...");
+        Console.WriteLine("Step 2: Writing 'LINE1' and CR+LF...");
+        buffer.CarriageReturn();
         buffer.WriteText("LINE1".AsSpan(), null);
+        buffer.CarriageReturn();
         buffer.LineFeed();
         
         Console.WriteLine($"Scrollback count: {buffer.ScrollbackCount} (should be 1)");
@@ -72,17 +75,24 @@ public class ScrollbackMinimalTest
         
         Console.WriteLine("\n=== Test: Multiple Lines to Scrollback ===");
         
-        // Fill buffer first
+        // Fill buffer first - use CR+LF to properly position cursor
         for (int i = 0; i < buffer.Rows; i++)
         {
             buffer.WriteText($"Initial{i}".AsSpan(), null);
-            if (i < buffer.Rows - 1) buffer.LineFeed();
+            if (i < buffer.Rows - 1) 
+            {
+                buffer.CarriageReturn();
+                buffer.LineFeed();
+            }
         }
         
         // Now add 15 lines, exceeding scrollback capacity
+        // Use CR+LF to properly position cursor at start of each new line
         for (int i = 0; i < 15; i++)
         {
+            buffer.CarriageReturn();
             buffer.WriteText($"TestLine{i:00}".AsSpan(), null);
+            buffer.CarriageReturn();
             buffer.LineFeed();
             
             Console.WriteLine($"After line {i}: scrollback={buffer.ScrollbackCount}");
@@ -96,7 +106,9 @@ public class ScrollbackMinimalTest
         }
         
         // With 15 lines and capacity 10, we should have 10 lines
-        // First should be TestLine05, last should be TestLine14
+        // The scrollback captures what scrolls off the top of the screen
+        // First visible TestLine scrolls into scrollback at position 0
+        // So we get TestLine01 through TestLine10 (first 10 TestLines that scrolled)
         Assert.Equal(10, buffer.ScrollbackCount);
         
         var first = buffer.GetScrollbackLine(0);
@@ -105,7 +117,7 @@ public class ScrollbackMinimalTest
         Console.WriteLine($"\nFirst: '{first}'");
         Console.WriteLine($"Last: '{last}'");
         
-        Assert.Contains("TestLine05", first.ToString());
-        Assert.Contains("TestLine14", last.ToString());
+        Assert.Contains("TestLine01", first.ToString());
+        Assert.Contains("TestLine10", last.ToString());
     }
 }

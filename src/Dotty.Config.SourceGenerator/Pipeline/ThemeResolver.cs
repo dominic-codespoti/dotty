@@ -1,8 +1,21 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Dotty.Config.SourceGenerator.Models;
 
 namespace Dotty.Config.SourceGenerator.Pipeline;
+
+/// <summary>
+/// JSON source generation context for theme deserialization.
+/// Required for AOT compatibility - avoids reflection-based serialization.
+/// </summary>
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(ThemeRoot))]
+[JsonSerializable(typeof(ThemeDefinition))]
+[JsonSerializable(typeof(ThemeColors))]
+internal partial class ThemeJsonContext : JsonSerializerContext
+{
+}
 
 /// <summary>
 /// Loads and resolves themes from the embedded themes.json resource.
@@ -77,12 +90,8 @@ public static class ThemeResolver
         using var reader = new StreamReader(stream);
         var json = reader.ReadToEnd();
 
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        };
-
-        var root = JsonSerializer.Deserialize<ThemeRoot>(json, options);
+        // Use source-generated deserializer for AOT compatibility
+        var root = JsonSerializer.Deserialize(json, ThemeJsonContext.Default.ThemeRoot);
         if (root?.Themes == null) return;
 
         foreach (var theme in root.Themes)

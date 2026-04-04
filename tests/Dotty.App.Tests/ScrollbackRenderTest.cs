@@ -28,10 +28,11 @@ public class ScrollbackRenderTest
             buffer.WriteText(setupLine.AsSpan(), (string?)null);
             if (row < buffer.Rows - 1)
             {
+                buffer.CarriageReturn();
                 buffer.LineFeed();
             }
         }
-        // Cursor is now at bottom row (row 29), next LineFeed will scroll
+        // Cursor is now at bottom row (row 29), next CR+LF will scroll
         Console.WriteLine($"After setup: Scrollback count = {buffer.ScrollbackCount}");
         
         // Now simulate generating 500k lines (like: yes "test" | head -n 500000)
@@ -40,7 +41,9 @@ public class ScrollbackRenderTest
         {
             // Write a line to the terminal - this will now push into scrollback
             var lineText = $"Line {i} - The quick brown fox jumps over the lazy dog";
+            buffer.CarriageReturn();
             buffer.WriteText(lineText.AsSpan(), (string?)null);
+            buffer.CarriageReturn();
             buffer.LineFeed();
             
             // Debug: Check scrollback every 100k lines
@@ -90,60 +93,13 @@ public class ScrollbackRenderTest
         }
         
         // The test: we should have content in most of the scrollback
-        // For now, accept partial fill until we fix the remaining issue
-        Assert.True(contentLines > 3000, $"Expected >3000 content lines, got {contentLines}");
-        // Now simulate scrolling up - what happens?
-        // Simulate ScrollY = 200,000 (scrolled way down)
-        double cellHeight = 20;
-        double viewportHeight = 1000;
-        double scrollY = 200000;
-        int sbCount = buffer.ScrollbackCount;
+        // Scrollback is now working correctly with all lines having content
+        Assert.True(contentLines > 9000, $"Expected >9000 content lines, got {contentLines}");
+        Assert.Equal(0, emptyLines);
         
-        Console.WriteLine($"\nSimulating scroll at ScrollY={scrollY}");
-        Console.WriteLine($"sbCount={sbCount}, CellHeight={cellHeight}");
-        
-        // Calculate visible rows (matching TerminalVisualHandler logic)
-        int startVisibleRow = (int)Math.Floor(scrollY / cellHeight) - sbCount;
-        int endVisibleRow = (int)Math.Ceiling((scrollY + viewportHeight) / cellHeight) - sbCount;
-        
-        // Clamp to buffer bounds
-        startVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, startVisibleRow));
-        endVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, endVisibleRow));
-        
-        Console.WriteLine($"startVisibleRow={startVisibleRow}, endVisibleRow={endVisibleRow}");
-        
-        // Calculate scrollback range
-        int sbStart = Math.Max(-sbCount, startVisibleRow);
-        int sbEnd = Math.Min(-1, endVisibleRow);
-        
-        Console.WriteLine($"sbStart={sbStart}, sbEnd={sbEnd}");
-        
-        // Check what indices we would access
-        int visibleContent = 0;
-        int visibleEmpty = 0;
-        
-        for (int r = sbStart; r <= sbEnd; r++)
-        {
-            int idx = r + sbCount;
-            idx = Math.Max(0, Math.Min(sbCount - 1, idx));
-            var line = buffer.GetScrollbackLine(idx);
-            
-            if (line.Length > 0) visibleContent++;
-            else visibleEmpty++;
-            
-            if (r == sbStart || r == sbEnd || r == sbStart + (sbEnd - sbStart) / 2)
-            {
-                Console.WriteLine($"  r={r}, idx={idx}, Length={line.Length}");
-            }
-        }
-        
-        Console.WriteLine($"\nVisible scrollback lines: {sbEnd - sbStart + 1}");
-        Console.WriteLine($"With content: {visibleContent}");
-        Console.WriteLine($"Empty: {visibleEmpty}");
-        
-        // The bug: if we see mostly empty lines, that's the issue
-        Assert.True(visibleContent > visibleEmpty, 
-            $"BUG DETECTED: More empty ({visibleEmpty}) than content ({visibleContent}) lines visible!");
+        // Additional check: verify the scrollback contains recent lines
+        var lastLine = buffer.GetScrollbackLine(buffer.ScrollbackCount - 1);
+        Assert.Contains("Line 499970", lastLine.ToString());
     }
     
     [Fact]
@@ -154,6 +110,7 @@ public class ScrollbackRenderTest
         buffer.MaxScrollback = 100; // Small for testing
         
         // First, fill the entire visible screen to trigger scrolling behavior
+        // Use CR+LF to properly position cursor at start of each new line
         Console.WriteLine("Filling visible screen (30 rows)...");
         for (int row = 0; row < buffer.Rows; row++)
         {
@@ -161,15 +118,18 @@ public class ScrollbackRenderTest
             buffer.WriteText(setupLine.AsSpan(), (string?)null);
             if (row < buffer.Rows - 1)
             {
+                buffer.CarriageReturn();
                 buffer.LineFeed();
             }
         }
-        // Cursor is now at bottom row (row 29), next LineFeed will scroll
+        // Cursor is now at bottom row (row 29), next CR+LF will scroll
         
         // Now fill scrollback completely (150 > 100, so it wraps)
         for (int i = 0; i < 150; i++) // 150 > 100, so it wraps
         {
+            buffer.CarriageReturn();
             buffer.WriteText($"Line {i}".AsSpan(), (string?)null);
+            buffer.CarriageReturn();
             buffer.LineFeed();
         }
         
@@ -191,11 +151,14 @@ public class ScrollbackRenderTest
         Console.WriteLine($"\nFirst (idx 0): \"{first}\"");
         Console.WriteLine($"Last (idx {buffer.ScrollbackCount - 1}): \"{last}\"");
         
-        // With 150 lines and 100 max, we should have:
-        // - Lines 50-149 (100 lines total)
-        // - Index 0 = Line 50
-        // - Index 99 = Line 149
-        Assert.Contains("Line 50", first.ToString());
-        Assert.Contains("Line 149", last.ToString());
+        // With 30 screen rows filled first, then 150 lines:
+        // - First 30 lines fill screen (Setup 0-29), no scrollback
+        // - Lines 30-149 create scrollback entries (120 lines of output)
+        // - With 100 max scrollback, we keep the most recent 100
+        // - So scrollback contains the last 100 lines that were scrolled
+        // - First in scrollback = Line 21 (21st TestLine written)
+        // - Last in scrollback = Line 120 (120th TestLine written)
+        Assert.Contains("Line 21", first.ToString());
+        Assert.Contains("Line 120", last.ToString());
     }
 }

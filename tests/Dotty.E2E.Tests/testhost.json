@@ -1,0 +1,10 @@
+{
+  "version": "2.0",
+  "logging": {
+    "enabled": true,
+    "logLevel": "Information"
+  },
+  "runtimeOptions": {
+    "rollForwardOnNoCandidateFx": 2
+  }
+}

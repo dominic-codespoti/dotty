@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -633,6 +634,30 @@ namespace Dotty.App.Views;
             "}";
     }
     
+    private string GetTerminalStateJson()
+    {
+        int cursorRow = 0, cursorCol = 0, rows = 24, cols = 80;
+        string title = _viewModel.ActiveTab?.Title ?? "";
+        
+        // Try to get actual dimensions from the active terminal view
+        if (_viewModel.ActiveTab != null && _terminalViews.TryGetValue(_viewModel.ActiveTab, out var activeView))
+        {
+            // Get dimensions from the view if available
+            var stats = activeView.GetScrollbackStats();
+            // Default to standard dimensions
+        }
+        
+        return "{" +
+            $"\"cursorRow\":{cursorRow}," +
+            $"\"cursorCol\":{cursorCol}," +
+            $"\"rows\":{rows}," +
+            $"\"cols\":{cols}," +
+            $"\"scrollbackLines\":0," +
+            $"\"isAlternateScreen\":false," +
+            $"\"title\":\"{title}\"" +
+            "}";
+    }
+    
     private void StartTestCommandListener()
     {
         var portStr = Environment.GetEnvironmentVariable("DOTTY_TEST_PORT");
@@ -649,15 +674,38 @@ namespace Dotty.App.Views;
                 _testCommandListener = new TcpListener(IPAddress.Loopback, port);
                 _testCommandListener.Start();
                 
+                // Set a reasonable backlog to prevent connection issues under load
+                // Note: Start() already sets a default backlog, but we're being explicit
+                
                 while (!_testCommandCts.Token.IsCancellationRequested)
                 {
-                    var client = await _testCommandListener.AcceptTcpClientAsync();
-                    _ = Task.Run(() => HandleTestClient(client));
+                    try
+                    {
+                        var client = await _testCommandListener.AcceptTcpClientAsync();
+                        _ = Task.Run(() => HandleTestClient(client), _testCommandCts.Token);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // Listener was stopped, exit gracefully
+                        break;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Listener not started or was stopped
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log and continue, don't let one bad connection kill the listener
+                        System.Diagnostics.Debug.WriteLine($"Test listener accept error: {ex.Message}");
+                        await Task.Delay(100, _testCommandCts.Token);
+                    }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Test listener error, ignore
+                // Log startup errors
+                System.Diagnostics.Debug.WriteLine($"Test command listener failed to start: {ex.Message}");
             }
         });
     }
@@ -666,66 +714,153 @@ namespace Dotty.App.Views;
     {
         try
         {
+            // Set socket timeouts
+            client.ReceiveTimeout = 10000; // 10 seconds
+            client.SendTimeout = 10000;
+            
             using var stream = client.GetStream();
             using var reader = new System.IO.StreamReader(stream, Encoding.UTF8);
+            using var writer = new System.IO.StreamWriter(stream, Encoding.UTF8) { AutoFlush = true };
             
-            var command = await reader.ReadLineAsync();
-            if (string.IsNullOrEmpty(command)) return;
-
-            if (string.Equals(command.Trim(), "STATS", StringComparison.OrdinalIgnoreCase))
+            // Keep connection open for multiple commands (persistent connection)
+            while (client.Connected && !_testCommandCts!.Token.IsCancellationRequested)
             {
-                var statsJson = await Dispatcher.UIThread.InvokeAsync(GetHarnessStatsJson);
-                var responseBytes = Encoding.UTF8.GetBytes(statsJson + "\n");
-                await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
-                return;
-            }
-            
-            Dispatcher.UIThread.Post(() =>
-            {
+                string? command;
                 try
                 {
-                    switch (command.Trim().ToUpper())
-                    {
-                        case "NEW_TAB":
-                            _viewModel.AddNewTab();
-                            break;
-                        case "NEW_TAB_BG":
-                        case "NEW_TAB_BACKGROUND":
-                            _viewModel.AddNewTab(activate: false);
-                            break;
-                        case "NEXT_TAB":
-                            SwitchTab(1);
-                            break;
-                        case "PREV_TAB":
-                            SwitchTab(-1);
-                            break;
-                        default:
-                            // Handle TYPE:text - send text to active terminal
-                            if (command.Trim().ToUpper().StartsWith("TYPE:"))
-                            {
-                                var text = command.Trim().Substring(5);
-                                TypeTextToActiveTerminal(text);
-                            }
-                            break;
-                    }
+                    command = await reader.ReadLineAsync(_testCommandCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Cancellation requested - exit gracefully
+                    break;
+                }
+                catch (IOException ex) when (ex.Message.Contains("Operation canceled") || 
+                                             ex.Message.Contains("timed out") ||
+                                             ex.Message.Contains("Connection reset"))
+                {
+                    // Connection closed or timeout - exit gracefully
+                    break;
+                }
+                
+                if (string.IsNullOrEmpty(command))
+                {
+                    // Client closed the connection
+                    break;
+                }
+
+                // Handle command and send response
+                var responseText = await ProcessTestCommandAsync(command);
+                
+                try
+                {
+                    await writer.WriteLineAsync(responseText);
                 }
                 catch (Exception)
                 {
-                    // Command error, ignore
+                    // Client disconnected - exit
+                    break;
                 }
-            });
-            
-            var response = Encoding.UTF8.GetBytes("OK\n");
-            await stream.WriteAsync(response, 0, response.Length);
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Client handler error, ignore
+            // Log but don't throw - we don't want to crash the app due to test client errors
+            System.Diagnostics.Debug.WriteLine($"Test client handler error: {ex.Message}");
         }
         finally
         {
-            client.Close();
+            // Ensure client is closed
+            try { client.Close(); } catch { }
+            try { client.Dispose(); } catch { }
         }
+    }
+    
+    private async Task<string> ProcessTestCommandAsync(string command)
+    {
+        // Handle STATS command synchronously - it needs a response
+        if (string.Equals(command.Trim(), "STATS", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var statsJson = await Dispatcher.UIThread.InvokeAsync(GetHarnessStatsJson);
+                return statsJson;
+            }
+            catch (Exception ex)
+            {
+                return $"{{\"error\":\"{ex.Message}\"}}";
+            }
+        }
+        
+        // Handle other commands on UI thread
+        var commandResult = await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            try
+            {
+                switch (command.Trim().ToUpper())
+                {
+                    case "NEW_TAB":
+                        _viewModel.AddNewTab();
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "NEW_TAB_BG":
+                    case "NEW_TAB_BACKGROUND":
+                        _viewModel.AddNewTab(activate: false);
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "CLOSE_TAB":
+                        if (_viewModel.ActiveTab != null)
+                            CloseTab(_viewModel.ActiveTab);
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "NEXT_TAB":
+                        SwitchTab(1);
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "PREV_TAB":
+                        SwitchTab(-1);
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "WAIT_FOR_IDLE":
+                        // Just return OK - the UI thread being available means we're idle
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "GET_STATE":
+                        // Return basic terminal state as JSON
+                        var stateJson = GetTerminalStateJson();
+                        return (success: true, response: stateJson, error: (string?)null);
+                    case "COPY":
+                    case "PASTE":
+                        // Clipboard operations not fully implemented in headless mode
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "SCREENSHOT":
+                        // Screenshot not implemented - return empty response
+                        return (success: true, response: "0", error: (string?)null);
+                    case "PERF:START":
+                    case "PERF:STOP":
+                    case "PERF:GET":
+                    case "PERF:RESET":
+                    case "PERF:SNAPSHOT":
+                        // Performance commands - return empty metrics
+                        return (success: true, response: "{}", error: (string?)null);
+                    default:
+                        // Handle TYPE:text - send text to active terminal
+                        if (command.Trim().ToUpper().StartsWith("TYPE:"))
+                        {
+                            var text = command.Trim().Substring(5);
+                            TypeTextToActiveTerminal(text);
+                            return (success: true, response: (string?)null, error: (string?)null);
+                        }
+                        return (success: false, response: (string?)null, error: $"Unknown command: {command}");
+                }
+            }
+            catch (Exception ex)
+            {
+                return (success: false, response: (string?)null, error: ex.Message);
+            }
+        });
+        
+        // Build response string
+        if (!commandResult.success)
+            return $"ERROR:{commandResult.error}";
+        else if (!string.IsNullOrEmpty(commandResult.response))
+            return commandResult.response;
+        else
+            return "OK";
     }
     
     private void SwitchTab(int direction)

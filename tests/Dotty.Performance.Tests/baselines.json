@@ -1,0 +1,163 @@
+{
+  "Parser_PlainText_100B": {
+    "expectedMeanMs": 0.005,
+    "maxLatencyMs": 0.02,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 128,
+    "regressionThreshold": 0.1
+  },
+  "Parser_PlainText_1KB": {
+    "expectedMeanMs": 0.05,
+    "maxLatencyMs": 0.1,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 1024,
+    "regressionThreshold": 0.1
+  },
+  "Parser_PlainText_10KB": {
+    "expectedMeanMs": 0.5,
+    "maxLatencyMs": 1.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 4096,
+    "regressionThreshold": 0.1
+  },
+  "Parser_PlainText_100KB": {
+    "expectedMeanMs": 5.0,
+    "maxLatencyMs": 10.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 16384,
+    "regressionThreshold": 0.1
+  },
+  "Parser_AnsiBasic_100B": {
+    "expectedMeanMs": 0.008,
+    "maxLatencyMs": 0.03,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 256,
+    "regressionThreshold": 0.1
+  },
+  "Parser_AnsiBasic_1KB": {
+    "expectedMeanMs": 0.08,
+    "maxLatencyMs": 0.2,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 2048,
+    "regressionThreshold": 0.1
+  },
+  "Parser_AnsiExtended_1KB": {
+    "expectedMeanMs": 0.12,
+    "maxLatencyMs": 0.3,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 3072,
+    "regressionThreshold": 0.1
+  },
+  "Parser_AnsiTrueColor_1KB": {
+    "expectedMeanMs": 0.15,
+    "maxLatencyMs": 0.4,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 4096,
+    "regressionThreshold": 0.1
+  },
+  "Render_FullScreen_80x24": {
+    "expectedMeanMs": 1.0,
+    "maxLatencyMs": 5.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 10000,
+    "regressionThreshold": 0.1
+  },
+  "Render_FullScreen_120x40": {
+    "expectedMeanMs": 2.5,
+    "maxLatencyMs": 10.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 20000,
+    "regressionThreshold": 0.1
+  },
+  "Render_Scroll_100Lines": {
+    "expectedMeanMs": 0.5,
+    "maxLatencyMs": 2.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 5000,
+    "regressionThreshold": 0.1
+  },
+  "Render_Scroll_1000Lines": {
+    "expectedMeanMs": 5.0,
+    "maxLatencyMs": 15.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 20000,
+    "regressionThreshold": 0.1
+  },
+  "Memory_Grid_Allocate_80x24": {
+    "expectedMeanMs": 0.5,
+    "maxLatencyMs": 2.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 50000,
+    "regressionThreshold": 0.1
+  },
+  "Memory_Buffer_Resize_Up": {
+    "expectedMeanMs": 1.0,
+    "maxLatencyMs": 5.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 100000,
+    "regressionThreshold": 0.1
+  },
+  "Throughput_1MB_Plain": {
+    "expectedMeanMs": 50.0,
+    "maxLatencyMs": 100.0,
+    "minThroughput": 20000,
+    "maxAllocationsPerOp": 500000,
+    "regressionThreshold": 0.1
+  },
+  "Throughput_10MB_Plain": {
+    "expectedMeanMs": 500.0,
+    "maxLatencyMs": 1000.0,
+    "minThroughput": 20000,
+    "maxAllocationsPerOp": 1000000,
+    "regressionThreshold": 0.1
+  },
+  "Startup_Cold_80x24": {
+    "expectedMeanMs": 0.5,
+    "maxLatencyMs": 2.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 10000,
+    "regressionThreshold": 0.1
+  },
+  "Startup_Cold_FullSetup": {
+    "expectedMeanMs": 1.0,
+    "maxLatencyMs": 5.0,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 20000,
+    "regressionThreshold": 0.1
+  },
+  "Latency_SingleChar": {
+    "expectedMeanMs": 0.001,
+    "maxLatencyMs": 0.01,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.1
+  },
+  "Latency_ParseSgr": {
+    "expectedMeanMs": 0.005,
+    "maxLatencyMs": 0.02,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 128,
+    "regressionThreshold": 0.1
+  },
+  "Sgr_ParseSimple": {
+    "expectedMeanMs": 0.002,
+    "maxLatencyMs": 0.01,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.1
+  },
+  "Sgr_Parse256Color": {
+    "expectedMeanMs": 0.003,
+    "maxLatencyMs": 0.015,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.1
+  },
+  "Sgr_ParseTrueColor": {
+    "expectedMeanMs": 0.005,
+    "maxLatencyMs": 0.02,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 128,
+    "regressionThreshold": 0.1
+  }
+}

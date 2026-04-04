@@ -26,7 +26,25 @@ public sealed class UnixPty : IPty
     private readonly object _stateLock = new();
 
     /// <inheritdoc />
-    public bool IsRunning => _helperProcess?.HasExited == false;
+    public bool IsRunning 
+    { 
+        get
+        {
+            try
+            {
+                return _helperProcess?.HasExited == false;
+            }
+            catch (InvalidOperationException)
+            {
+                // Process has been disposed or is not associated
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
 
     /// <inheritdoc />
     public int ProcessId => _helperProcess?.Id ?? -1;
@@ -106,13 +124,7 @@ public sealed class UnixPty : IPty
 
             _isStarted = true;
 
-            // Connect to control socket in background
-            if (!string.IsNullOrEmpty(_controlSocketPath))
-            {
-                _ = Task.Run(() => ConnectToControlSocketAsync(_controlSocketPath));
-            }
-
-            // Monitor process exit
+            // Monitor process exit - attach handler first
             _helperProcess.Exited += (sender, e) =>
             {
                 try
@@ -122,7 +134,28 @@ public sealed class UnixPty : IPty
                 }
                 catch { }
             };
+            
+            // Enable raising events AFTER handler is attached
+            // This ensures we don't miss any exit events
             _helperProcess.EnableRaisingEvents = true;
+
+            // Check if process has already exited (race condition)
+            // Fire the event synchronously if it has
+            try
+            {
+                if (_helperProcess.HasExited)
+                {
+                    var exitCode = _helperProcess.ExitCode;
+                    ProcessExited?.Invoke(this, exitCode);
+                }
+            }
+            catch { }
+
+            // Connect to control socket in background
+            if (!string.IsNullOrEmpty(_controlSocketPath))
+            {
+                _ = Task.Run(() => ConnectToControlSocketAsync(_controlSocketPath));
+            }
         }
     }
 
@@ -153,6 +186,8 @@ public sealed class UnixPty : IPty
                     if (force)
                     {
                         _helperProcess.Kill();
+                        // Wait for the process to actually terminate
+                        _helperProcess.WaitForExit(5000);
                     }
                     else
                     {
@@ -163,6 +198,8 @@ public sealed class UnixPty : IPty
                         if (!_helperProcess.WaitForExit(2000))
                         {
                             _helperProcess.Kill();
+                            // Wait for the process to actually terminate after kill
+                            _helperProcess.WaitForExit(3000);
                         }
                     }
                 }
@@ -179,7 +216,16 @@ public sealed class UnixPty : IPty
 
         using var registration = cancellationToken.Register(() => Kill(force: true));
 
-        await _helperProcess.WaitForExitAsync(cancellationToken);
+        try
+        {
+            await _helperProcess.WaitForExitAsync(cancellationToken);
+        }
+        catch (TaskCanceledException)
+        {
+            // Convert TaskCanceledException to OperationCanceledException for consistent API behavior
+            throw new OperationCanceledException(cancellationToken);
+        }
+        
         return _helperProcess.ExitCode;
     }
 

@@ -95,14 +95,16 @@ jobs:
   # Build for macOS
   build-macos-nightly:
     name: Nightly macOS ${{ matrix.arch }}
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - arch: x64
             rid: osx-x64
+            runner: macos-13
           - arch: arm64
             rid: osx-arm64
+            runner: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

@@ -33,7 +33,7 @@ jobs:
           - os: windows-latest
             rid: win-x64
             build-native: false
-          - os: macos-latest
+          - os: macos-13
             rid: osx-x64
             build-native: true
 

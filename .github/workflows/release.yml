@@ -84,14 +84,16 @@ jobs:
   # Build for macOS (Intel and Apple Silicon)
   build-macos:
     name: Build macOS ${{ matrix.arch }}
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - arch: x64
             rid: osx-x64
+            runner: macos-13
           - arch: arm64
             rid: osx-arm64
+            runner: macos-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

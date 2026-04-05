@@ -13,6 +13,11 @@ namespace Dotty.App.Tests;
 /// </summary>
 public class HyperlinkServiceTests
 {
+    public HyperlinkServiceTests()
+    {
+        Environment.SetEnvironmentVariable("DOTTY_DISABLE_EXTERNAL_URL_OPEN", "1");
+    }
+
     #region URL Scheme Validation
 
     [Theory]

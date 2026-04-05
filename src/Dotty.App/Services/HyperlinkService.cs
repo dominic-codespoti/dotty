@@ -12,6 +12,8 @@ namespace Dotty.App.Services;
 /// </summary>
 public static class HyperlinkService
 {
+    private const string DisableExternalOpenEnvVar = "DOTTY_DISABLE_EXTERNAL_URL_OPEN";
+
     // Allowed URL schemes for security
     private static readonly string[] AllowedSchemes = { "http", "https", "file" };
     
@@ -108,6 +110,13 @@ public static class HyperlinkService
         if (IsCautionScheme(sanitized))
         {
             // TODO: Could show a confirmation dialog here
+        }
+
+        // Test hook: allow validation logic to be exercised without launching
+        // external applications that can hang or crash headless runners.
+        if (string.Equals(Environment.GetEnvironmentVariable(DisableExternalOpenEnvVar), "1", StringComparison.Ordinal))
+        {
+            return true;
         }
 
         try

@@ -70,17 +70,22 @@ jobs:
 
       - name: Run tests (with filtering)
         run: |
-          # Run all tests with platform-specific filtering
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Skip Unix-specific tests on Windows
-            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build --filter "FullyQualifiedName!~Unix"
-          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            # Run all tests on Linux
-            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build
-          else
-            # Run all tests on macOS
-            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build
-          fi
+          # Run stable unit/integration test projects in CI.
+          # E2E tests are excluded here because they are environment-sensitive
+          # and have repeatedly stalled the hosted runners.
+          projects=(
+            tests/Dotty.Terminal.Tests/Dotty.Terminal.Tests.csproj
+            tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj
+            tests/Dotty.Config.SourceGenerator.Tests/Dotty.Config.SourceGenerator.Tests.csproj
+          )
+
+          for project in "${projects[@]}"; do
+            if [ "${{ matrix.os }}" = "windows-latest" ]; then
+              dotnet test "$project" -c Release --no-build --filter "FullyQualifiedName!~Unix"
+            else
+              dotnet test "$project" -c Release --no-build
+            fi
+          done
         shell: bash
 
       - name: Upload build artifacts

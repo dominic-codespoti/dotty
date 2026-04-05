@@ -65,7 +65,6 @@ jobs:
             -r linux-x64 \
             --self-contained true \
             -p:PublishSingleFile=true \
-            -p:PublishAot=true \
             -p:Version=${{ steps.version.outputs.version }} \
             -o ./publish/linux-x64
 
@@ -146,7 +145,6 @@ jobs:
             -r ${{ matrix.rid }} \
             --self-contained true \
             -p:PublishSingleFile=true \
-            -p:PublishAot=true \
             -p:Version=${{ steps.version.outputs.version }} \
             -o ./publish/${{ matrix.rid }}
 
@@ -218,7 +216,6 @@ jobs:
             -r win-x64 `
             --self-contained true `
             -p:PublishSingleFile=true `
-            -p:PublishAot=true `
             -p:Version=$version `
             -o .\publish\win-x64
 

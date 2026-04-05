@@ -55,7 +55,6 @@ jobs:
             -r linux-x64 \
             --self-contained true \
             -p:PublishSingleFile=true \
-            -p:PublishAot=true \
             -o ./publish/linux-x64
 
       - name: Copy pty-helper to output
@@ -127,7 +126,6 @@ jobs:
             -r ${{ matrix.rid }} \
             --self-contained true \
             -p:PublishSingleFile=true \
-            -p:PublishAot=true \
             -o ./publish/${{ matrix.rid }}
 
       - name: Copy pty-helper to output
@@ -187,7 +185,6 @@ jobs:
             -r win-x64 `
             --self-contained true `
             -p:PublishSingleFile=true `
-            -p:PublishAot=true `
             -o .\publish\win-x64
 
       - name: Create zip archive

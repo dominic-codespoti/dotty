@@ -732,6 +732,7 @@ public class WindowsPtyTests : IDisposable
 /// <summary>
 /// Extension methods for PTY testing.
 /// </summary>
+#if WINDOWS
 internal static class WindowsPtyTestExtensions
 {
     /// <summary>
@@ -743,5 +744,6 @@ internal static class WindowsPtyTestExtensions
         return await pty.WaitForExitAsync(cts.Token);
     }
 }
+#endif
 
 #endif

@@ -716,6 +716,7 @@ public class UnixPtyTests : IDisposable
 /// <summary>
 /// Extension methods for PTY testing.
 /// </summary>
+#if !WINDOWS
 internal static class UnixPtyTestExtensions
 {
     /// <summary>
@@ -727,3 +728,4 @@ internal static class UnixPtyTestExtensions
         return await pty.WaitForExitAsync(cts.Token);
     }
 }
+#endif

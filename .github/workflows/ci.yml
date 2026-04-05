@@ -81,9 +81,9 @@ jobs:
 
           for project in "${projects[@]}"; do
             if [ "${{ matrix.os }}" = "windows-latest" ]; then
-              dotnet test "$project" -c Release --no-build --filter "FullyQualifiedName!~Unix"
+              dotnet test "$project" -c Release --filter "FullyQualifiedName!~Unix"
             else
-              dotnet test "$project" -c Release --no-build
+              dotnet test "$project" -c Release
             fi
           done
         shell: bash

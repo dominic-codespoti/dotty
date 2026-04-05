@@ -70,7 +70,7 @@ jobs:
           cd ./publish/linux-x64
           tar -czf "../../dotty-${VERSION}-linux-x64.tar.gz" \
             --transform 's,^,dotty-${VERSION}-linux-x64/,' \
-            dotty pty-helper *.json *.dll 2>/dev/null || true
+            *
           cd ../..
           ls -la *.tar.gz
 
@@ -142,7 +142,7 @@ jobs:
           cd ./publish/${{ matrix.rid }}
           tar -czf "../../dotty-${VERSION}-${{ matrix.rid }}.tar.gz" \
             --transform "s,^,dotty-${VERSION}-${{ matrix.rid }}/," \
-            dotty pty-helper *.json *.dylib 2>/dev/null || true
+            *
           cd ../..
           ls -la *.tar.gz
 

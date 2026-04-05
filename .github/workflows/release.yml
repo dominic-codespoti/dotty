@@ -68,9 +68,11 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           cd ./publish/linux-x64
-          tar -czf "../../dotty-${VERSION}-linux-x64.tar.gz" \
-            --transform 's,^,dotty-${VERSION}-linux-x64/,' \
-            *
+          PACKAGE_DIR="dotty-${VERSION}-linux-x64"
+          mkdir -p "../../${PACKAGE_DIR}"
+          cp -R * "../../${PACKAGE_DIR}/"
+          tar -czf "../../${PACKAGE_DIR}.tar.gz" -C ../.. "${PACKAGE_DIR}"
+          rm -rf "../../${PACKAGE_DIR}"
           cd ../..
           ls -la *.tar.gz
 
@@ -90,7 +92,7 @@ jobs:
         include:
           - arch: x64
             rid: osx-x64
-            runner: macos-13
+            runner: macos-15-intel
           - arch: arm64
             rid: osx-arm64
             runner: macos-latest
@@ -142,9 +144,11 @@ jobs:
         run: |
           VERSION=${GITHUB_REF_NAME#v}
           cd ./publish/${{ matrix.rid }}
-          tar -czf "../../dotty-${VERSION}-${{ matrix.rid }}.tar.gz" \
-            --transform "s,^,dotty-${VERSION}-${{ matrix.rid }}/," \
-            *
+          PACKAGE_DIR="dotty-${VERSION}-${{ matrix.rid }}"
+          mkdir -p "../../${PACKAGE_DIR}"
+          cp -R * "../../${PACKAGE_DIR}/"
+          tar -czf "../../${PACKAGE_DIR}.tar.gz" -C ../.. "${PACKAGE_DIR}"
+          rm -rf "../../${PACKAGE_DIR}"
           cd ../..
           ls -la *.tar.gz
 

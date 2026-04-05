@@ -178,6 +178,41 @@ public class TestConfig : IDottyConfig
         configCode.Should().Contain("0xFF1E1E1E");
     }
 
+    /// <summary>
+    /// Verifies that enum-typed const fields are emitted as enum member names,
+    /// not their underlying numeric values.
+    /// </summary>
+    [Fact]
+    public async Task Generator_WithConstEnumField_EmitsValidTransparencySyntax()
+    {
+        // Arrange
+        const string source = @"
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
+
+public static class MyDefaults
+{
+    public const TransparencyLevel Transparency = TransparencyLevel.None;
+}
+
+public class TestConfig : IDottyConfig
+{
+    public IColorScheme? Colors => BuiltInThemes.DarkPlus;
+    public TransparencyLevel? Transparency => MyDefaults.Transparency;
+}
+";
+
+        // Act
+        var (_, generatedSources) = await RunGeneratorAsync(source);
+
+        // Assert
+        var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
+        var configCode = configSource.SourceText.ToString();
+
+        configCode.Should().Contain("TransparencyLevel.None");
+        configCode.Should().NotContain("TransparencyLevel.0");
+    }
+
     #endregion
 
     #region Test Helpers

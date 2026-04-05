@@ -83,17 +83,37 @@ public static class ExpressionEvaluator
     {
         var symbolInfo = semanticModel.GetSymbolInfo(memberAccess);
 
-        // For enum members, return the member name
-        if (symbolInfo.Symbol is IFieldSymbol field &&
-            field.ContainingType?.TypeKind == TypeKind.Enum)
+        if (symbolInfo.Symbol is IFieldSymbol field)
         {
-            return field.Name;
-        }
+            // For enum members, return the member name.
+            if (field.ContainingType?.TypeKind == TypeKind.Enum)
+            {
+                return field.Name;
+            }
 
-        // For const fields, return the constant value
-        if (symbolInfo.Symbol is IFieldSymbol constField && constField.IsConst)
-        {
-            return constField.ConstantValue;
+            // For const fields typed as enums (e.g. DottyDefaults.Transparency),
+            // return the enum member name instead of the underlying numeric value.
+            if (field.IsConst && field.Type.TypeKind == TypeKind.Enum)
+            {
+                var enumMember = field.Type
+                    .GetMembers()
+                    .OfType<IFieldSymbol>()
+                    .FirstOrDefault(member =>
+                        member.HasConstantValue &&
+                        !member.IsImplicitlyDeclared &&
+                        Equals(member.ConstantValue, field.ConstantValue));
+
+                if (enumMember != null)
+                {
+                    return enumMember.Name;
+                }
+            }
+
+            // For other const fields, return the constant value.
+            if (field.IsConst)
+            {
+                return field.ConstantValue;
+            }
         }
 
         // For properties returning built-in types, check the type

@@ -50,20 +50,26 @@ public class Program
         // Run benchmarks
         var summaries = new List<BenchmarkDotNet.Reports.Summary>();
 
-        if (string.IsNullOrEmpty(filter) || filter.Contains("parser"))
+        var runFullSuite = !string.IsNullOrEmpty(filter) || !IsQuickCiMode(mode);
+
+        if (runFullSuite && (string.IsNullOrEmpty(filter) || filter.Contains("parser")))
         {
             Console.WriteLine("Running Parser Benchmarks...");
             summaries.Add(BenchmarkRunner.Run<ParserBenchmarks>(benchmarkConfig));
+        }
+
+        if (runFullSuite && (string.IsNullOrEmpty(filter) || filter.Contains("parser")))
+        {
             summaries.Add(BenchmarkRunner.Run<ParserMicroBenchmarks>(benchmarkConfig));
         }
 
-        if (string.IsNullOrEmpty(filter) || filter.Contains("memory"))
+        if (runFullSuite && (string.IsNullOrEmpty(filter) || filter.Contains("memory")))
         {
             Console.WriteLine("Running Memory Benchmarks...");
             summaries.Add(BenchmarkRunner.Run<MemoryBenchmarks>(benchmarkConfig));
         }
 
-        if (string.IsNullOrEmpty(filter) || filter.Contains("rendering"))
+        if (runFullSuite && (string.IsNullOrEmpty(filter) || filter.Contains("rendering")))
         {
             Console.WriteLine("Running Rendering Benchmarks...");
             summaries.Add(BenchmarkRunner.Run<RenderingBenchmarks>(benchmarkConfig));
@@ -75,7 +81,7 @@ public class Program
             summaries.Add(BenchmarkRunner.Run<StartupBenchmarks>(benchmarkConfig));
         }
 
-        if (string.IsNullOrEmpty(filter) || filter.Contains("throughput"))
+        if (runFullSuite && (string.IsNullOrEmpty(filter) || filter.Contains("throughput")))
         {
             Console.WriteLine("Running Throughput Benchmarks...");
             summaries.Add(BenchmarkRunner.Run<ThroughputBenchmarks>(benchmarkConfig));
@@ -255,4 +261,6 @@ public class Program
         }
         return null;
     }
+
+    private static bool IsQuickCiMode(string? mode) => mode is "quick" or "ci";
 }

@@ -60,6 +60,7 @@ jobs:
       - name: Copy pty-helper to output
         run: |
           cp src/Dotty.NativePty/bin/pty-helper ./publish/linux-x64/
+          mv ./publish/linux-x64/Dotty.App ./publish/linux-x64/dotty
           chmod +x ./publish/linux-x64/pty-helper
           chmod +x ./publish/linux-x64/dotty
 
@@ -131,6 +132,7 @@ jobs:
       - name: Copy pty-helper to output
         run: |
           cp src/Dotty.NativePty/bin/pty-helper ./publish/${{ matrix.rid }}/
+          mv ./publish/${{ matrix.rid }}/Dotty.App ./publish/${{ matrix.rid }}/dotty
           chmod +x ./publish/${{ matrix.rid }}/pty-helper
           chmod +x ./publish/${{ matrix.rid }}/dotty
 

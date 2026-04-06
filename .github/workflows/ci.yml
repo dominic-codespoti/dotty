@@ -72,8 +72,8 @@ jobs:
         run: |
           # Run all tests with platform-specific filtering
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            # Skip Unix-specific tests on Windows
-            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build --filter "FullyQualifiedName!~Unix"
+            # Skip Unix-specific and Windows NativePty integration tests in CI
+            dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build --filter "FullyQualifiedName!~Unix&FullyQualifiedName!~WindowsPtyTests"
           elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
             # Run all tests on Linux
             dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build

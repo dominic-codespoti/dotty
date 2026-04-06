@@ -4,6 +4,7 @@ using Dotty.Abstractions.Pty;
 using Xunit;
 using FluentAssertions;
 using System.Text;
+using System.Reflection;
 
 namespace Dotty.NativePty.Tests;
 
@@ -18,6 +19,30 @@ public class WindowsPtyTests : IDisposable
     public void Dispose()
     {
         PtyTestHelpers.SafeCleanup(_pty);
+    }
+
+    private static (string? ApplicationName, string CommandLine) InvokeBuildProcessStartInfo(string shell)
+    {
+        var method = typeof(Windows.WindowsPty).GetMethod("BuildProcessStartInfo", BindingFlags.NonPublic | BindingFlags.Static);
+        method.Should().NotBeNull();
+
+        var result = method!.Invoke(null, [shell]);
+        result.Should().NotBeNull();
+
+        var resultType = result!.GetType();
+        var applicationName = (string?)resultType.GetField("Item1")!.GetValue(result);
+        var commandLine = (StringBuilder)resultType.GetField("Item2")!.GetValue(result)!;
+        return (applicationName, commandLine.ToString());
+    }
+
+    private static string CreateTempExecutablePath(string fileName)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"Dotty Windows Pty Tests {Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+
+        var executablePath = Path.Combine(directory, fileName);
+        File.WriteAllText(executablePath, string.Empty);
+        return executablePath;
     }
 
     #region Constructor and Factory Tests
@@ -199,6 +224,65 @@ public class WindowsPtyTests : IDisposable
 
         // Act & Assert
         Assert.Throws<InvalidOperationException>(() => _pty.Start());
+    }
+
+    /// <summary>
+    /// Verifies that existing executable paths containing spaces are quoted for CreateProcess.
+    /// </summary>
+    [Fact]
+    public void WindowsPty_BuildProcessStartInfo_QuotesExistingExecutablePathWithSpaces()
+    {
+        var executablePath = CreateTempExecutablePath("dotty test shell.exe");
+
+        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(executablePath);
+
+        applicationName.Should().Be(executablePath);
+        commandLine.Should().Be($"\"{executablePath}\"");
+    }
+
+    /// <summary>
+    /// Verifies that unquoted executable paths with spaces preserve trailing arguments.
+    /// </summary>
+    [Fact]
+    public void WindowsPty_BuildProcessStartInfo_ResolvesUnquotedExecutablePathWithSpacesAndArguments()
+    {
+        var executablePath = CreateTempExecutablePath("dotty test shell.exe");
+        var shell = $"{executablePath} /c \"echo hello world\"";
+
+        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(shell);
+
+        applicationName.Should().Be(executablePath);
+        commandLine.Should().Be($"\"{executablePath}\" /c \"echo hello world\"");
+    }
+
+    /// <summary>
+    /// Verifies that quoted executable paths preserve arguments without reparsing them.
+    /// </summary>
+    [Fact]
+    public void WindowsPty_BuildProcessStartInfo_PreservesQuotedExecutableAndArguments()
+    {
+        var executablePath = CreateTempExecutablePath("dotty test shell.exe");
+        var scriptPath = CreateTempExecutablePath("dotty script file.cmd");
+        var shell = $"\"{executablePath}\" -NoLogo -File \"{scriptPath}\"";
+
+        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(shell);
+
+        applicationName.Should().Be(executablePath);
+        commandLine.Should().Be(shell);
+    }
+
+    /// <summary>
+    /// Verifies that PATH-resolved commands are left unchanged.
+    /// </summary>
+    [Fact]
+    public void WindowsPty_BuildProcessStartInfo_LeavesSearchPathCommandsUnchanged()
+    {
+        const string shell = "cmd.exe /c echo hello";
+
+        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(shell);
+
+        applicationName.Should().BeNull();
+        commandLine.Should().Be(shell);
     }
 
     #endregion
@@ -625,7 +709,7 @@ public class WindowsPtyTests : IDisposable
         var outputStream = _pty.OutputStream!;
         
         // Use a command that produces significant output
-        var command = "dir /s C:\\Windows\\System32\\*.dll | head -100\r\n";
+        var command = "for /L %i in (1,1,500) do @echo WINDOWS_PTY_TEST_LINE_%i\r\n";
         var bytes = Encoding.ASCII.GetBytes(command);
         await inputStream.WriteAsync(bytes, 0, bytes.Length);
         await inputStream.FlushAsync();

@@ -34,7 +34,7 @@ public sealed class WindowsPty : IPty
     public bool IsRunning { get; private set; }
 
     /// <inheritdoc />
-    public int ProcessId => (int)_processInfo.dwProcessId;
+    public int ProcessId => _processInfo.dwProcessId > 0 ? _processInfo.dwProcessId : -1;
 
     /// <inheritdoc />
     public Stream? OutputStream => _outputStream;
@@ -230,6 +230,12 @@ public sealed class WindowsPty : IPty
         {
             throw new Win32Exception(result, "Failed to create pseudo console");
         }
+
+        // Once the pseudoconsole is created, it owns these ends of the pipes.
+        _inputReadHandle?.Dispose();
+        _inputReadHandle = null;
+        _outputWriteHandle?.Dispose();
+        _outputWriteHandle = null;
     }
 
     private void CreatePipe(
@@ -321,13 +327,13 @@ public sealed class WindowsPty : IPty
 
             try
             {
-                var commandLine = BuildShellCommandLine(shell);
+                var (applicationName, commandLine) = BuildProcessStartInfo(shell);
 
                 // Create the process
                 var creationFlags = 0x00080000 /* EXTENDED_STARTUPINFO_PRESENT */ | 0x00000400 /* CREATE_UNICODE_ENVIRONMENT */;
                 
                 bool success = NativeMethods.CreateProcess(
-                    null,                // Application name
+                    applicationName,     // Application name
                     commandLine,         // Command line (must be writable)
                     IntPtr.Zero,         // Process security attributes
                     IntPtr.Zero,         // Thread security attributes
@@ -364,24 +370,95 @@ public sealed class WindowsPty : IPty
         if (_processInfo.hThread != IntPtr.Zero)
         {
             NativeMethods.CloseHandle(_processInfo.hThread);
+            _processInfo.hThread = IntPtr.Zero;
         }
     }
 
-    private static StringBuilder BuildShellCommandLine(string shell)
+    private static (string? ApplicationName, StringBuilder CommandLine) BuildProcessStartInfo(string shell)
     {
         if (string.IsNullOrWhiteSpace(shell))
         {
-            return new StringBuilder("cmd.exe");
+            return (null, new StringBuilder("cmd.exe"));
         }
 
-        // If the caller provided only an executable path that contains spaces,
-        // quote it so CreateProcess parses it as a single application token.
-        if (!shell.StartsWith('"') && shell.Contains(' ') && File.Exists(shell))
+        if (File.Exists(shell))
         {
-            return new StringBuilder($"\"{shell}\"");
+            return (shell, new StringBuilder(QuoteCommandLineArgument(shell)));
         }
 
-        return new StringBuilder(shell);
+        if (TryExtractQuotedExecutable(shell, out var quotedExecutable, out var quotedArguments))
+        {
+            return (File.Exists(quotedExecutable) ? quotedExecutable : null, new StringBuilder(BuildCommandLine(quotedExecutable, quotedArguments)));
+        }
+
+        if (TryResolveExecutablePath(shell, out var executablePath, out var arguments))
+        {
+            return (executablePath, new StringBuilder(BuildCommandLine(executablePath, arguments)));
+        }
+
+        return (null, new StringBuilder(shell));
+    }
+
+    private static bool TryExtractQuotedExecutable(string shell, out string executable, out string arguments)
+    {
+        executable = string.Empty;
+        arguments = string.Empty;
+
+        if (string.IsNullOrEmpty(shell) || shell[0] != '"')
+        {
+            return false;
+        }
+
+        var closingQuote = shell.IndexOf('"', 1);
+        if (closingQuote <= 1)
+        {
+            return false;
+        }
+
+        executable = shell[1..closingQuote];
+        arguments = shell[(closingQuote + 1)..].TrimStart();
+        return true;
+    }
+
+    private static bool TryResolveExecutablePath(string shell, out string executable, out string arguments)
+    {
+        executable = string.Empty;
+        arguments = string.Empty;
+
+        for (var index = 0; index < shell.Length; index++)
+        {
+            if (!char.IsWhiteSpace(shell[index]))
+            {
+                continue;
+            }
+
+            var candidate = shell[..index].Trim();
+            if (!File.Exists(candidate))
+            {
+                continue;
+            }
+
+            executable = candidate;
+            arguments = shell[index..].TrimStart();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string BuildCommandLine(string executable, string arguments)
+    {
+        var quotedExecutable = QuoteCommandLineArgument(executable);
+        return string.IsNullOrWhiteSpace(arguments)
+            ? quotedExecutable
+            : $"{quotedExecutable} {arguments}";
+    }
+
+    private static string QuoteCommandLineArgument(string value)
+    {
+        return value.Contains(' ') && !value.StartsWith('"')
+            ? $"\"{value}\""
+            : value;
     }
 
     private IntPtr CreateEnvironmentBlock(System.Collections.IDictionary environment)
@@ -430,13 +507,18 @@ public sealed class WindowsPty : IPty
     private void CleanupResources()
     {
         _inputStream?.Dispose();
+        _inputStream = null;
         _outputStream?.Dispose();
+        _outputStream = null;
         
+        _inputReadHandle?.Dispose();
         _inputWriteHandle?.Dispose();
+        _inputWriteHandle = null;
         _outputReadHandle?.Dispose();
-        
-        // Note: _inputReadHandle and _outputWriteHandle are used by the child process
-        // and will be closed when the pseudo console is closed
+        _outputReadHandle = null;
+        _outputWriteHandle?.Dispose();
+        _inputReadHandle = null;
+        _outputWriteHandle = null;
         
         if (_pseudoConsoleHandle != IntPtr.Zero)
         {
@@ -447,8 +529,16 @@ public sealed class WindowsPty : IPty
         if (_processInfo.hProcess != IntPtr.Zero)
         {
             NativeMethods.CloseHandle(_processInfo.hProcess);
-            _processInfo.hProcess = IntPtr.Zero;
         }
+
+        if (_processInfo.hThread != IntPtr.Zero)
+        {
+            NativeMethods.CloseHandle(_processInfo.hThread);
+        }
+
+        _processInfo = new ProcessInformation();
+        _isStarted = false;
+        IsRunning = false;
     }
 }
 

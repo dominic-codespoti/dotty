@@ -379,8 +379,8 @@ namespace Dotty.Terminal.Parser
                         int mode = paramCount > 0 ? parsedParams[0] : 0;
                         if (mode == 3)
                             Handler?.OnClearScrollback();
-                        else if (mode == 2)
-                            Handler?.OnEraseDisplay(2);
+                        else if (mode == 0 || mode == 1 || mode == 2)
+                            Handler?.OnEraseDisplay(mode);
                         break;
                     }
                     case 'K':
@@ -425,7 +425,10 @@ namespace Dotty.Terminal.Parser
                     case 'n':
                         if (paramCount > 0 && parsedParams[0] == 6)
                         {
-                            Handler?.OnDeviceStatusReport(6);
+                            if (isPrivate)
+                                Handler?.OnCursorPositionReport();
+                            else
+                                Handler?.OnDeviceStatusReport(6);
                         }
                         else
                         {
@@ -439,6 +442,12 @@ namespace Dotty.Terminal.Parser
                         break;
                     case 'q':
                         Handler?.OnSetCursorShape(paramCount > 0 ? parsedParams[0] : 0);
+                        break;
+                    case 's':
+                        Handler?.OnSaveCursor();
+                        break;
+                    case 'u':
+                        Handler?.OnRestoreCursor();
                         break;
                     case 'h':
                     case 'l':
@@ -500,8 +509,8 @@ namespace Dotty.Terminal.Parser
                     int mode = GetParam(0, 0);
                     if (mode == 3)
                         Handler?.OnClearScrollback();
-                    else if (mode == 2)
-                        Handler?.OnEraseDisplay(2);
+                    else if (mode == 0 || mode == 1 || mode == 2)
+                        Handler?.OnEraseDisplay(mode);
                     break;
                 case 'K':
                     Handler?.OnEraseLine(GetParam(0, 0));
@@ -541,13 +550,36 @@ namespace Dotty.Terminal.Parser
                     Handler?.OnDeleteChars(GetParam(0, 1));
                     break;
                 case 'n':
-                    Handler?.OnDeviceStatusReport(GetParam(0, 0));
+                    {
+                        bool isPrivate = @params.StartsWith("?");
+                        int code = isPrivate && @params.Length > 1
+                            ? int.TryParse(@params.Substring(1), out var privateCode) ? privateCode : 0
+                            : GetParam(0, 0);
+
+                        if (code == 6)
+                        {
+                            if (isPrivate)
+                                Handler?.OnCursorPositionReport();
+                            else
+                                Handler?.OnDeviceStatusReport(6);
+                        }
+                        else
+                        {
+                            Handler?.OnDeviceStatusReport(code);
+                        }
+                    }
                     break;
                 case 'r':
                     Handler?.OnSetScrollRegion(GetParam(0, 1), GetParam(1, 0));
                     break;
                 case 'q':
                     Handler?.OnSetCursorShape(GetParam(0, 0));
+                    break;
+                case 's':
+                    Handler?.OnSaveCursor();
+                    break;
+                case 'u':
+                    Handler?.OnRestoreCursor();
                     break;
                 case 'h':
                 case 'l':

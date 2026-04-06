@@ -89,7 +89,7 @@ The parser handles all standard CSI sequences:
 | `F` | `[n]` | Cursor Previous Line | `OnCursorPreviousLine(n)` |
 | `G` | `[n]` | Cursor Horizontal Absolute | `OnCursorHorizontalAbsolute(n)` |
 | `H` | `[row;col]` | Cursor Position | `OnMoveCursor(row, col)` |
-| `J` | `[mode]` | Erase Display | `OnEraseDisplay(mode)` |
+| `J` | `[mode]` | Erase Display (`0/1/2`) | `OnEraseDisplay(mode)` |
 | `K` | `[mode]` | Erase Line | `OnEraseLine(mode)` |
 | `L` | `[n]` | Insert Lines | `OnInsertLines(n)` |
 | `M` | `[n]` | Delete Lines | `OnDeleteLines(n)` |
@@ -103,7 +103,13 @@ The parser handles all standard CSI sequences:
 | `n` | `[code]` | Device Status Report | `OnDeviceStatusReport(code)` |
 | `q` | `[shape]` | Set Cursor Shape | `OnSetCursorShape(shape)` |
 | `r` | `[top;bottom]` | Set Scroll Region | `OnSetScrollRegion(top, bottom)` |
+| `s` | none | Save Cursor (SCO) | `OnSaveCursor()` |
+| `u` | none | Restore Cursor (SCO) | `OnRestoreCursor()` |
 | `h`/`l` | `?<mode>` | Set/Reset Mode | `OnSetAlternateScreen()`, etc. |
+
+Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather than `OnEraseDisplay(3)`.
+`CSI ? 6 n` (DEC private CPR query) is routed to `OnCursorPositionReport()` so shells like PSReadLine
+receive a private CPR response (`ESC[?row;colR`) instead of the standard DSR response format.
 
 ### Parameter Parsing
 

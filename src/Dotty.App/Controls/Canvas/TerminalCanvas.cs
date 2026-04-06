@@ -146,6 +146,19 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private bool _lastBufferWasAlternate = false;
 	private double _renderScaling = 1.0;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
+	private static readonly string[] MonospaceFallbackFamilies =
+	{
+		"JetBrains Mono",
+		"JetBrainsMono Nerd Font Mono",
+		"Cascadia Code",
+		"Cascadia Mono",
+		"Consolas",
+		"Fira Code",
+		"Noto Sans Mono",
+		"Liberation Mono",
+		"Courier New",
+		"monospace"
+	};
 	
 	// Surface isolation: Each TerminalCanvas instance has its own composition visual
 	// that is created on attach and destroyed on detach. Never reused.
@@ -539,8 +552,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var fontSize = double.IsNaN(FontSize) || FontSize <= 0 ? 13.0 : FontSize;
 		var scale = Math.Max(0.1, _renderScaling);
 		var scaledFontSize = Math.Max(1f, (float)(fontSize * scale));
-		var familyName = FontFamily?.Name ?? "monospace";
-		var typeface = SKTypeface.FromFamilyName(familyName);
+		var typeface = ResolveTerminalTypeface();
 		SkPaint = new SKPaint
 		{
 			Typeface = typeface,
@@ -737,6 +749,78 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 
 		return fallback;
+	}
+
+	private SKTypeface ResolveTerminalTypeface()
+	{
+		var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		foreach (var candidate in EnumerateFontCandidates())
+		{
+			if (string.IsNullOrWhiteSpace(candidate) || !seen.Add(candidate))
+			{
+				continue;
+			}
+
+			if (!TryResolveTypeface(candidate, out var typeface))
+			{
+				continue;
+			}
+
+			if (FontHelpers.IsLikelySymbolFontName(candidate) || FontHelpers.IsLikelySymbolFontName(typeface.FamilyName))
+			{
+				typeface.Dispose();
+				continue;
+			}
+
+			return typeface;
+		}
+
+		return SKTypeface.Default;
+	}
+
+	private IEnumerable<string> EnumerateFontCandidates()
+	{
+		if (!string.IsNullOrWhiteSpace(FontFamily?.Name))
+		{
+			yield return FontFamily!.Name;
+		}
+
+		var configured = Generated.Config.FontFamily;
+		if (!string.IsNullOrWhiteSpace(configured))
+		{
+			var configuredCandidates = configured.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+			for (int i = 0; i < configuredCandidates.Length; i++)
+			{
+				yield return configuredCandidates[i];
+			}
+		}
+
+		for (int i = 0; i < MonospaceFallbackFamilies.Length; i++)
+		{
+			yield return MonospaceFallbackFamilies[i];
+		}
+	}
+
+	private static bool TryResolveTypeface(string familyName, out SKTypeface typeface)
+	{
+		typeface = null!;
+
+		try
+		{
+			var matched = SKFontManager.Default.MatchFamily(familyName);
+			if (matched == null)
+			{
+				return false;
+			}
+
+			typeface = matched;
+			return true;
+		}
+		catch
+		{
+			return false;
+		}
 	}
 
 

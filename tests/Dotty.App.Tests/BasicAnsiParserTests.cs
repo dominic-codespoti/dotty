@@ -38,11 +38,87 @@ public class BasicAnsiParserTests
         Assert.Equal(3, handler.PrintCalls.Count);
     }
 
+    [Theory]
+    [InlineData("\u001b[J", 0)]
+    [InlineData("\u001b[0J", 0)]
+    [InlineData("\u001b[1J", 1)]
+    [InlineData("\u001b[2J", 2)]
+    public void EraseDisplayModes_ZeroOneTwo_AreForwarded(string sequence, int expectedMode)
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        parser.Feed(Encoding.UTF8.GetBytes(sequence));
+
+        Assert.Single(handler.EraseDisplayCalls);
+        Assert.Equal(expectedMode, handler.EraseDisplayCalls[0]);
+    }
+
+    [Fact]
+    public void EraseDisplayModeThree_ClearsScrollbackOnly()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        parser.Feed(Encoding.UTF8.GetBytes("\u001b[3J"));
+
+        Assert.Empty(handler.EraseDisplayCalls);
+        Assert.Equal(1, handler.ClearScrollbackCalls);
+    }
+
+    [Fact]
+    public void CsiSaveAndRestoreCursor_AreForwarded()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        parser.Feed(Encoding.UTF8.GetBytes("\u001b[sHello\u001b[u"));
+
+        Assert.Equal(1, handler.SaveCursorCalls);
+        Assert.Equal(1, handler.RestoreCursorCalls);
+    }
+
+    [Fact]
+    public void CsiDeviceStatusReport6_UsesOnDeviceStatusReport()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        parser.Feed(Encoding.UTF8.GetBytes("\u001b[6n"));
+
+        Assert.Single(handler.DeviceStatusReportCodes);
+        Assert.Equal(6, handler.DeviceStatusReportCodes[0]);
+        Assert.Equal(0, handler.CursorPositionReportCalls);
+    }
+
+    [Fact]
+    public void CsiPrivateDeviceStatusReport6_UsesOnCursorPositionReport()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        parser.Feed(Encoding.UTF8.GetBytes("\u001b[?6n"));
+
+        Assert.Empty(handler.DeviceStatusReportCodes);
+        Assert.Equal(1, handler.CursorPositionReportCalls);
+    }
+
     private sealed class RecordingHandler : ITerminalHandler
     {
         public List<string> PrintCalls { get; } = new();
         public List<bool> SetCursorVisibilityCalls { get; } = new();
         public List<(int mode, bool enabled)> SetMouseModeCalls { get; } = new();
+        public List<int> EraseDisplayCalls { get; } = new();
+        public int ClearScrollbackCalls { get; set; }
+        public int SaveCursorCalls { get; set; }
+        public int RestoreCursorCalls { get; set; }
+        public List<int> DeviceStatusReportCodes { get; } = new();
+        public int CursorPositionReportCalls { get; set; }
 
         object? ITerminalHandler.Buffer => null;
         event Action<string>? ITerminalHandler.RenderRequested {
@@ -67,8 +143,8 @@ public class BasicAnsiParserTests
         void ITerminalHandler.RequestRenderExtern() { }
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }
         void ITerminalHandler.OnPrint(ReadOnlySpan<char> text) => PrintCalls.Add(text.ToString());
-        void ITerminalHandler.OnEraseDisplay(int mode) { }
-        void ITerminalHandler.OnClearScrollback() { }
+        void ITerminalHandler.OnEraseDisplay(int mode) => EraseDisplayCalls.Add(mode);
+        void ITerminalHandler.OnClearScrollback() => ClearScrollbackCalls++;
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> parameters) { }
         void ITerminalHandler.OnBell() { }
         void ITerminalHandler.OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload) { }
@@ -84,8 +160,8 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnSetOriginMode(bool enabled) { }
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) { }
         void ITerminalHandler.OnSetCursorVisibility(bool visible) => SetCursorVisibilityCalls.Add(visible);
-        void ITerminalHandler.OnSaveCursor() { }
-        void ITerminalHandler.OnRestoreCursor() { }
+        void ITerminalHandler.OnSaveCursor() => SaveCursorCalls++;
+        void ITerminalHandler.OnRestoreCursor() => RestoreCursorCalls++;
         void ITerminalHandler.OnInsertChars(int n) { }
         void ITerminalHandler.OnDeleteChars(int n) { }
         void ITerminalHandler.OnInsertLines(int n) { }
@@ -96,8 +172,8 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnClearAllTabStops() { }
         void ITerminalHandler.OnReverseIndex() { }
         void ITerminalHandler.OnSetBracketedPasteMode(bool enabled) { }
-        void ITerminalHandler.OnDeviceStatusReport(int code) { }
-        void ITerminalHandler.OnCursorPositionReport() { }
+        void ITerminalHandler.OnDeviceStatusReport(int code) => DeviceStatusReportCodes.Add(code);
+        void ITerminalHandler.OnCursorPositionReport() => CursorPositionReportCalls++;
         void ITerminalHandler.OnCursorHorizontalAbsolute(int col) { }
         void ITerminalHandler.OnCursorVerticalAbsolute(int row) { }
         void ITerminalHandler.OnCursorNextLine(int n) { }

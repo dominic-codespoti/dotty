@@ -53,15 +53,18 @@ public static class PtyPlatform
     {
         if (IsWindows)
         {
-            // Prefer PowerShell Core, then Windows PowerShell, then CMD
+            // Prefer Windows PowerShell first on Windows.
+            // Its default path avoids spaces and is broadly available.
+            var psPath = GetWindowsPowerShellPath();
+            if (!string.IsNullOrEmpty(psPath))
+                return psPath;
+
+            // Fall back to PowerShell Core when available.
             var pwshPath = GetPowerShellCorePath();
             if (!string.IsNullOrEmpty(pwshPath))
                 return pwshPath;
             
-            var psPath = GetWindowsPowerShellPath();
-            if (!string.IsNullOrEmpty(psPath))
-                return psPath;
-            
+            // Last-resort fallback for unusual locked-down environments.
             return Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
         }
         

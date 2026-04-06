@@ -29,6 +29,7 @@ public class TerminalSession : IDisposable
     private IPty? _pty;
     private CancellationTokenSource? _readCancellation;
     private readonly bool _throughputMode;
+    private readonly SemaphoreSlim _ptyInputWriteLock = new(1, 1);
     private bool _hasReceivedInitialResize = false;
     private int _initialCols = 0;
     private int _initialRows = 0;
@@ -76,6 +77,7 @@ public class TerminalSession : IDisposable
         Adapter = new TerminalAdapter(rows: rows, columns: columns);
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
+        Adapter.ReplyRequested += OnAdapterReplyRequested;
     }
 
     /// <summary>
@@ -100,13 +102,26 @@ public class TerminalSession : IDisposable
         _pty = PtyFactory.Create();
         _pty.ProcessExited += OnPtyProcessExited;
         
-        var shell = Environment.GetEnvironmentVariable("DOTTY_SHELL") 
-            ?? Environment.GetEnvironmentVariable("SHELL");
+        var shell = Environment.GetEnvironmentVariable("DOTTY_SHELL");
+        if (string.IsNullOrWhiteSpace(shell))
+        {
+            shell = Environment.GetEnvironmentVariable("SHELL");
+        }
+        if (string.IsNullOrWhiteSpace(shell))
+        {
+            shell = null;
+        }
         
+        var startCols = Adapter.Buffer?.Columns ?? 80;
+        var startRows = Adapter.Buffer?.Rows ?? 24;
+        _initialCols = startCols;
+        _initialRows = startRows;
+        _hasReceivedInitialResize = false;
+
         _pty.Start(
             shell: shell,
-            columns: Adapter.Buffer?.Columns ?? 80,
-            rows: Adapter.Buffer?.Rows ?? 24);
+            columns: startCols,
+            rows: startRows);
 
         // Start background readers
         _readCancellation = new CancellationTokenSource();
@@ -137,10 +152,16 @@ public class TerminalSession : IDisposable
         _pty = PtyFactory.Create();
         _pty.ProcessExited += OnPtyProcessExited;
         
+        var startCols = Adapter.Buffer?.Columns ?? 80;
+        var startRows = Adapter.Buffer?.Rows ?? 24;
+        _initialCols = startCols;
+        _initialRows = startRows;
+        _hasReceivedInitialResize = false;
+
         _pty.Start(
             shell: shell,
-            columns: Adapter.Buffer?.Columns ?? 80,
-            rows: Adapter.Buffer?.Rows ?? 24,
+            columns: startCols,
+            rows: startRows,
             workingDirectory: workingDirectory,
             environmentVariables: environmentVariables);
 
@@ -156,17 +177,54 @@ public class TerminalSession : IDisposable
     public void WriteInput(byte[] data)
     {
         if (data == null || _pty?.InputStream == null) return;
-        
-        // Write directly without copying - data is not reused by caller
+
+        QueuePtyInputWrite(data);
+    }
+
+    private void OnAdapterReplyRequested(string reply)
+    {
+        if (string.IsNullOrEmpty(reply))
+        {
+            return;
+        }
+
+        QueuePtyInputWrite(Encoding.ASCII.GetBytes(reply));
+    }
+
+    private void QueuePtyInputWrite(byte[] data)
+    {
+        if (data.Length == 0)
+        {
+            return;
+        }
+
         Task.Run(async () =>
         {
-            try
-            {
-                await _pty.InputStream.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
-                await _pty.InputStream.FlushAsync().ConfigureAwait(false);
-            }
-            catch { }
+            await WritePtyInputAsync(data).ConfigureAwait(false);
         });
+    }
+
+    private async Task WritePtyInputAsync(byte[] data)
+    {
+        var input = _pty?.InputStream;
+        if (input == null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _ptyInputWriteLock.WaitAsync().ConfigureAwait(false);
+            await input.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
+            await input.FlushAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+        finally
+        {
+            try { _ptyInputWriteLock.Release(); } catch { }
+        }
     }
 
     /// <summary>
@@ -177,25 +235,27 @@ public class TerminalSession : IDisposable
     public void Resize(int cols, int rows)
     {
         try { Adapter.ResizeBuffer(rows, cols); } catch { }
-        
-        // Skip sending resize message for the initial resize
-        // The shell starts with the default size, and the first "resize" is just
-        // informing it of the actual terminal size - not a change from previous
+
+        // On first UI-driven resize, send dimensions if they differ from the
+        // PTY startup size. This keeps shell cursor math aligned with the actual
+        // viewport when the window opens small/squashed.
         if (!_hasReceivedInitialResize)
         {
             _hasReceivedInitialResize = true;
-            _initialCols = cols;
-            _initialRows = rows;
-            // Don't send resize message - shell already started with this size
-            return;
+
+            if (cols == _initialCols && rows == _initialRows)
+            {
+                return;
+            }
         }
-        
-        // Only send resize if size actually changed from initial
+
         if (cols != _initialCols || rows != _initialRows)
         {
             try
             {
                 _pty?.Resize(cols, rows);
+                _initialCols = cols;
+                _initialRows = rows;
             }
             catch { }
         }
@@ -383,6 +443,21 @@ public class TerminalSession : IDisposable
 
         try
         {
+            Adapter.ReplyRequested -= OnAdapterReplyRequested;
+        }
+        catch { }
+
+        try
+        {
+            if (_pty != null)
+            {
+                _pty.ProcessExited -= OnPtyProcessExited;
+            }
+        }
+        catch { }
+
+        try
+        {
             _pty?.Dispose();
         }
         catch { }
@@ -390,6 +465,12 @@ public class TerminalSession : IDisposable
         try
         {
             _readCancellation?.Dispose();
+        }
+        catch { }
+
+        try
+        {
+            _ptyInputWriteLock.Dispose();
         }
         catch { }
     }

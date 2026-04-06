@@ -219,8 +219,10 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnCursorPositionReport()
     {
-        // CPR: delegate to the DSR code=6 handler which already implements this.
-        OnDeviceStatusReport(6);
+        // DEC private CPR response for CSI ? 6 n requests.
+        var r = _buffer.CursorRow + 1;
+        var c = _buffer.CursorCol + 1;
+        ReplyRequested?.Invoke($"\u001b[?{r};{c}R");
     }
 
     public void OnInsertChars(int n)

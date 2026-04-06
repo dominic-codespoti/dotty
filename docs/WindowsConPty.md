@@ -195,6 +195,48 @@ dotnet run --project src/Dotty.App
 2. Run `sfc /scannow` and `DISM` repair commands
 3. Check Windows Console/Terminal Services are running
 
+#### Issue: App exits immediately with code `0xC0000005`
+
+**Cause**: Older ConPTY interop code can crash during `UpdateProcThreadAttribute`
+if the pseudo console handle attribute is marshaled incorrectly.
+
+**Solution**:
+1. Update to a build that includes the ConPTY attribute list fix in `WindowsPty`
+2. Rebuild `Dotty.NativePty` on Windows so `WINDOWS`-guarded ConPTY code is compiled
+
+#### Issue: "Handle does not support asynchronous operations" on startup
+
+**Cause**: Windows `CreatePipe` returns synchronous handles. Wrapping those handles
+as async `FileStream` instances throws this exception.
+
+**Solution**:
+1. Use synchronous `FileStream` wrappers for ConPTY pipe handles
+2. Rebuild and rerun Dotty
+
+#### Issue: Terminal opens but shows no prompt and ignores input
+
+**Cause**: Usually one of these ConPTY integration issues:
+1. Incorrect `CreatePipe` interop signature (security attributes not passed by reference)
+2. Incorrect `UpdateProcThreadAttribute` payload for `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
+3. Empty `DOTTY_SHELL`/`SHELL` environment values being treated as a valid shell command
+
+**Solution**:
+1. Ensure `CreatePipe` passes `SECURITY_ATTRIBUTES` by reference
+2. Pass `HPCON` directly to `UpdateProcThreadAttribute` with `cbSize = IntPtr.Size`
+3. Treat empty or whitespace shell environment values as unset and fall back to platform default
+4. Verify that `powershell.exe` (or chosen shell) appears as a child process of `Dotty.App.exe`
+
+#### Issue: Prompt text appears in old output rows until window is maximized
+
+**Cause**: The PTY can start at default dimensions (for example 80x24), while the
+actual first UI size is different. If that first resize is not propagated to ConPTY,
+PowerShell cursor math (PSReadLine) can drift and write input on stale rows.
+
+**Solution**:
+1. Ensure the first UI resize is sent to PTY when it differs from startup size
+2. Ensure terminal replies to cursor position queries (`CSI 6n` / `CSI ? 6n`) are
+   routed back to PTY input so the shell can track cursor location correctly
+
 #### Issue: Shell doesn't start or crashes immediately
 
 **Cause**: The specified shell executable might not exist or have permission issues.

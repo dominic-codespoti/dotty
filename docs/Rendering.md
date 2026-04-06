@@ -345,6 +345,10 @@ var paint = new SKPaint
 };
 ```
 
+Dotty now treats symbol/icon families (for example Material Symbols, Wingdings, emoji-only families)
+as fallback-only candidates when choosing the primary terminal typeface. The renderer prefers
+monospace-capable families first so ASCII and prompt text keep stable cell metrics on Windows and Linux.
+
 ### Glyph Atlas
 
 The glyph atlas is a shared GPU texture that caches pre-rendered glyphs:

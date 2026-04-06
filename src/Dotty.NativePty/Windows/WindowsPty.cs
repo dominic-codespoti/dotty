@@ -4,6 +4,7 @@ using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Dotty.Abstractions.Pty;
@@ -77,9 +78,10 @@ public sealed class WindowsPty : IPty
                 // Start the shell process attached to the pseudo console
                 StartShellProcess(shell, workingDirectory, environmentVariables);
                 
-                // Create streams from the pipe handles
-                _inputStream = new FileStream(_inputWriteHandle!, FileAccess.Write, 4096, true);
-                _outputStream = new FileStream(_outputReadHandle!, FileAccess.Read, 4096, true);
+                // CreatePipe produces synchronous handles; wrapping them as async
+                // streams throws ArgumentException on Windows.
+                _inputStream = new FileStream(_inputWriteHandle!, FileAccess.Write, 4096, false);
+                _outputStream = new FileStream(_outputReadHandle!, FileAccess.Read, 4096, false);
                 
                 _isStarted = true;
                 IsRunning = true;
@@ -207,10 +209,10 @@ public sealed class WindowsPty : IPty
     private void CreatePseudoConsole(int columns, int rows)
     {
         // Create input pipe (from our input -> to PTY input)
-        CreatePipe(out _inputReadHandle, out _inputWriteHandle);
+        CreatePipe(out _inputReadHandle, out _inputWriteHandle, childInheritsReadEnd: true);
         
         // Create output pipe (from PTY output -> to our output)
-        CreatePipe(out _outputReadHandle, out _outputWriteHandle);
+        CreatePipe(out _outputReadHandle, out _outputWriteHandle, childInheritsReadEnd: false);
 
         var size = new Coord((short)columns, (short)rows);
         
@@ -230,7 +232,10 @@ public sealed class WindowsPty : IPty
         }
     }
 
-    private void CreatePipe(out SafeFileHandle readHandle, out SafeFileHandle writeHandle)
+    private void CreatePipe(
+        out SafeFileHandle readHandle,
+        out SafeFileHandle writeHandle,
+        bool childInheritsReadEnd)
     {
         var securityAttributes = new SecurityAttributes
         {
@@ -238,13 +243,16 @@ public sealed class WindowsPty : IPty
             bInheritHandle = true
         };
 
-        if (!NativeMethods.CreatePipe(out readHandle, out writeHandle, securityAttributes, 0))
+        if (!NativeMethods.CreatePipe(out readHandle, out writeHandle, ref securityAttributes, 0))
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create pipe");
         }
 
-        // Ensure the write handle is not inherited by the child process
-        if (!NativeMethods.SetHandleInformation(writeHandle, 1 /* HANDLE_FLAG_INHERIT */, 0))
+        // Keep only the end used by the pseudo console host inheritable.
+        // Input pipe: child should inherit read end.
+        // Output pipe: child should inherit write end.
+        var localHandle = childInheritsReadEnd ? writeHandle : readHandle;
+        if (!NativeMethods.SetHandleInformation(localHandle, 1 /* HANDLE_FLAG_INHERIT */, 0))
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to set handle information");
         }
@@ -264,11 +272,12 @@ public sealed class WindowsPty : IPty
         // Create the attribute list for the pseudo console
         const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
         IntPtr attributeList = IntPtr.Zero;
+        IntPtr attributeListSize = IntPtr.Zero;
         
         try
         {
             // Calculate attribute list size
-            if (!NativeMethods.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeList))
+            if (!NativeMethods.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeListSize))
             {
                 int error = Marshal.GetLastWin32Error();
                 if (error != 122) // ERROR_INSUFFICIENT_BUFFER
@@ -276,14 +285,14 @@ public sealed class WindowsPty : IPty
             }
 
             // Allocate memory for attribute list
-            attributeList = Marshal.AllocHGlobal((int)attributeList);
+            attributeList = Marshal.AllocHGlobal(attributeListSize);
             
-            if (!NativeMethods.InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeList))
+            if (!NativeMethods.InitializeProcThreadAttributeList(attributeList, 1, 0, ref attributeListSize))
             {
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to initialize proc thread attribute list");
             }
 
-            // Update attribute list with pseudo console handle
+            // Set pseudo console attribute using the HPCON handle value.
             if (!NativeMethods.UpdateProcThreadAttribute(
                 attributeList,
                 0,
@@ -312,12 +321,14 @@ public sealed class WindowsPty : IPty
 
             try
             {
+                var commandLine = BuildShellCommandLine(shell);
+
                 // Create the process
                 var creationFlags = 0x00080000 /* EXTENDED_STARTUPINFO_PRESENT */ | 0x00000400 /* CREATE_UNICODE_ENVIRONMENT */;
                 
                 bool success = NativeMethods.CreateProcess(
                     null,                // Application name
-                    shell,               // Command line
+                    commandLine,         // Command line (must be writable)
                     IntPtr.Zero,         // Process security attributes
                     IntPtr.Zero,         // Thread security attributes
                     false,               // Inherit handles
@@ -354,6 +365,23 @@ public sealed class WindowsPty : IPty
         {
             NativeMethods.CloseHandle(_processInfo.hThread);
         }
+    }
+
+    private static StringBuilder BuildShellCommandLine(string shell)
+    {
+        if (string.IsNullOrWhiteSpace(shell))
+        {
+            return new StringBuilder("cmd.exe");
+        }
+
+        // If the caller provided only an executable path that contains spaces,
+        // quote it so CreateProcess parses it as a single application token.
+        if (!shell.StartsWith('"') && shell.Contains(' ') && File.Exists(shell))
+        {
+            return new StringBuilder($"\"{shell}\"");
+        }
+
+        return new StringBuilder(shell);
     }
 
     private IntPtr CreateEnvironmentBlock(System.Collections.IDictionary environment)

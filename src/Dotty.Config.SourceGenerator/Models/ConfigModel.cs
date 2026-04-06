@@ -43,7 +43,7 @@ public record ConfigModel
 /// </summary>
 internal static class DottyDefaults
 {
-    public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols, Cascadia Code, Liberation Mono, Noto Sans Mono, monospace";
+    public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Cascadia Code, Consolas, Liberation Mono, Noto Sans Mono, monospace, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols";
     public const double FontSize = 15.0;
     public const double CellPadding = 0.0;
     public const int ScrollbackLines = 5000;

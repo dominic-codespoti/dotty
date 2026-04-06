@@ -77,7 +77,7 @@ Comprehensive documentation covering:
 ## Configuration Values Generated
 
 ### Font Settings
-- **FontFamily**: "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols, Cascadia Code, Liberation Mono, Noto Sans Mono, monospace"
+- **FontFamily**: "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Cascadia Code, Consolas, Liberation Mono, Noto Sans Mono, monospace, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols"
 - **FontSize**: 15.0
 - **CellPadding**: 1.5
 - **ContentPadding**: 0, 0, 0, 0

@@ -16,6 +16,7 @@ namespace Dotty.App.Services
                 : fontStack;
 
             var candidates = stack.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            FontFamily? symbolFallback = null;
             foreach (var candidate in candidates)
             {
                 if (string.IsNullOrWhiteSpace(candidate))
@@ -26,16 +27,33 @@ namespace Dotty.App.Services
                 var direct = TryCreateFontFamily(candidate);
                 if (direct != null)
                 {
-                    NotifyFontResolved(direct);
-                    return direct;
+                    if (!FontHelpers.IsLikelySymbolFontName(candidate) && !FontHelpers.IsLikelySymbolFontName(direct.Name))
+                    {
+                        NotifyFontResolved(direct);
+                        return direct;
+                    }
+
+                    symbolFallback ??= direct;
+                    continue;
                 }
 
                 var mapped = FindMatchingSystemFont(candidate);
                 if (mapped != null)
                 {
-                    NotifyFontResolved(mapped);
-                    return mapped;
+                    if (!FontHelpers.IsLikelySymbolFontName(candidate) && !FontHelpers.IsLikelySymbolFontName(mapped.Name))
+                    {
+                        NotifyFontResolved(mapped);
+                        return mapped;
+                    }
+
+                    symbolFallback ??= mapped;
                 }
+            }
+
+            if (symbolFallback != null)
+            {
+                NotifyFontResolved(symbolFallback);
+                return symbolFallback;
             }
 
             // If none of the individual candidates resolved, return a composite FontFamily

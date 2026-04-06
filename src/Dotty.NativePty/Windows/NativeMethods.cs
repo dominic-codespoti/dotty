@@ -1,6 +1,7 @@
 #if WINDOWS
 
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
@@ -48,7 +49,7 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool CreateProcess(
         string? lpApplicationName,
-        string lpCommandLine,
+        StringBuilder lpCommandLine,
         IntPtr lpProcessAttributes,
         IntPtr lpThreadAttributes,
         [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles,
@@ -128,7 +129,7 @@ internal static class NativeMethods
     internal static extern bool CreatePipe(
         out SafeFileHandle hReadPipe,
         out SafeFileHandle hWritePipe,
-        SecurityAttributes lpPipeAttributes,
+        ref SecurityAttributes lpPipeAttributes,
         int nSize);
 
     /// <summary>

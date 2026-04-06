@@ -228,7 +228,7 @@ public class PtyPlatformTests
 
     /// <summary>
     /// Verifies that GetDefaultShell returns a valid shell on Windows.
-    /// On Windows, should return cmd.exe, powershell.exe, or pwsh.exe.
+    /// On Windows, should prefer a PowerShell variant.
     /// </summary>
     [Fact]
     public void PtyPlatform_GetDefaultShell_ReturnsValidShellOnWindows()
@@ -244,12 +244,11 @@ public class PtyPlatformTests
 
         // Assert
         shell.Should().NotBeNullOrEmpty();
-        // Should be one of: cmd.exe, powershell.exe, pwsh.exe (with optional path)
+        // Should be one of: powershell.exe or pwsh.exe (with optional path)
         var shellLower = shell.ToLowerInvariant();
-        (shellLower.Contains("cmd") || 
-         shellLower.Contains("powershell") || 
+        (shellLower.Contains("powershell") || 
          shellLower.Contains("pwsh")).Should().BeTrue(
-             $"Windows shell should be cmd, powershell, or pwsh, but got: {shell}");
+             $"Windows shell should prefer PowerShell, but got: {shell}");
     }
 
     /// <summary>
@@ -358,11 +357,11 @@ public class PtyPlatformTests
     #region Shell Priority Tests
 
     /// <summary>
-    /// Verifies shell priority on Windows: pwsh > powershell > cmd.
-    /// Tests that PowerShell Core is preferred over Windows PowerShell and CMD.
+    /// Verifies shell priority on Windows: powershell > pwsh > cmd.
+    /// Tests that Windows PowerShell is preferred when available.
     /// </summary>
     [Fact]
-    public void PtyPlatform_GetDefaultShell_PrefersPwshOverPowerShell()
+    public void PtyPlatform_GetDefaultShell_PrefersWindowsPowerShellOverPwsh()
     {
         // Arrange
         if (!PtyPlatform.IsWindows)
@@ -374,11 +373,19 @@ public class PtyPlatformTests
         var shell = PtyPlatform.GetDefaultShell();
         var shellLower = shell.ToLowerInvariant();
 
-        // Assert - if pwsh exists, it should be returned
+        // Assert - if Windows PowerShell exists, it should be returned.
+        var windowsPowerShellPath = @"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe";
+        if (System.IO.File.Exists(windowsPowerShellPath))
+        {
+            shellLower.Should().Contain("powershell", "Windows PowerShell should be preferred when installed");
+            return;
+        }
+
+        // Otherwise, fall back to PowerShell Core when available.
         var pwshPath = @"C:\Program Files\PowerShell\7\pwsh.exe";
         if (System.IO.File.Exists(pwshPath))
         {
-            shell.Should().Contain("pwsh", "PowerShell Core should be preferred when installed");
+            shellLower.Should().Contain("pwsh", "PowerShell Core should be used when Windows PowerShell is unavailable");
         }
     }
 

@@ -10,6 +10,8 @@ using Avalonia.Input.Platform;
 using Dotty.App.Controls;
 using Dotty.Terminal.Adapter;
 using Dotty.App.Input;
+using Dotty.App.Services;
+using Avalonia.Threading;
 
 namespace Dotty.App.Views
 {
@@ -24,6 +26,9 @@ namespace Dotty.App.Views
         private readonly SelectionContextMenuBuilder _contextMenuBuilder;
         private readonly TerminalInputEncoder _inputEncoder = new();
         private TerminalBuffer? _lastBuffer;
+        private int? _mouseReportingButton;
+        private bool _sessionHandlersAttached;
+        private bool _rawInputAttached;
 
         public string? WorkingDirectory { get; set; }
         public bool KeypadApplicationMode { get; set; }
@@ -34,16 +39,16 @@ namespace Dotty.App.Views
         private bool _renderUpdatePending;
         private int _lastCols = -1;
         private int _lastRows = -1;
+        private bool _layoutSizeSyncPending;
+        private const int DefaultStartupCols = 80;
+        private const int DefaultStartupRows = 24;
 
         
         protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
         {
             base.OnDetachedFromVisualTree(e);
-            if (_session != null)
-            {
-                _session.RenderScheduled -= OnRenderScheduled;
-                this.RawInput -= _session.WriteInput;
-            }
+            DetachSessionHandlers();
+            DetachRawInput();
             
             // Remove input handlers to prevent accumulation
             RemoveHandler(KeyDownEvent, TerminalView_KeyDown);
@@ -51,6 +56,7 @@ namespace Dotty.App.Views
             RemoveHandler(PointerPressedEvent, TerminalView_PointerPressed);
             RemoveHandler(PointerMovedEvent, TerminalView_PointerMoved);
             RemoveHandler(PointerReleasedEvent, TerminalView_PointerReleased);
+            RemoveHandler(PointerWheelChangedEvent, TerminalView_PointerWheelChanged);
         }
         
         public Dotty.App.ViewModels.TerminalSession? Session
@@ -64,19 +70,102 @@ namespace Dotty.App.Views
                 // Unsubscribe from old session if exists
                 if (_session != null)
                 {
-                    _session.RenderScheduled -= OnRenderScheduled;
-                    this.RawInput -= _session.WriteInput;
+                    DetachSessionHandlers();
+                    DetachRawInput();
                 }
                 
                 _session = value;
+                _lastCols = -1;
+                _lastRows = -1;
                 
                 if (_session != null)
                 {
-                    // Connect handlers but don't resize - resize happens via OnSizeChanged
-                    _session.RenderScheduled += OnRenderScheduled;
-                    // Don't call UpdateSize here - it triggers a resize signal
-                    // The initial resize will happen when the view is measured
+                    if (VisualRoot != null)
+                    {
+                        AttachSessionHandlers();
+                        AttachRawInput();
+                    }
+
+                    TryStartSessionWithCurrentSize();
                 }
+            }
+        }
+
+        private void AttachSessionHandlers()
+        {
+            if (_session == null || _sessionHandlersAttached)
+            {
+                return;
+            }
+
+            _session.RenderScheduled += OnRenderScheduled;
+            _session.ClipboardWriteRequested += OnClipboardWriteRequested;
+            _sessionHandlersAttached = true;
+        }
+
+        private void DetachSessionHandlers()
+        {
+            if (_session == null || !_sessionHandlersAttached)
+            {
+                return;
+            }
+
+            _session.RenderScheduled -= OnRenderScheduled;
+            _session.ClipboardWriteRequested -= OnClipboardWriteRequested;
+            _sessionHandlersAttached = false;
+        }
+
+        private void AttachRawInput()
+        {
+            if (_session == null || _rawInputAttached)
+            {
+                return;
+            }
+
+            this.RawInput += _session.WriteInput;
+            _rawInputAttached = true;
+        }
+
+        private void DetachRawInput()
+        {
+            if (_session == null || !_rawInputAttached)
+            {
+                return;
+            }
+
+            this.RawInput -= _session.WriteInput;
+            _rawInputAttached = false;
+        }
+
+        private void TryStartSessionWithCurrentSize()
+        {
+            if (_session == null || _session.IsStarted)
+            {
+                return;
+            }
+
+            if (_lastCols <= 0 || _lastRows <= 0)
+            {
+                if (TryGetSeededStartupBufferSize(_session, out var seededCols, out var seededRows))
+                {
+                    _lastCols = seededCols;
+                    _lastRows = seededRows;
+                }
+                else
+                {
+                    UpdateSize();
+                }
+            }
+            else if (IsDefaultStartupSize(_lastCols, _lastRows)
+                && TryGetSeededStartupBufferSize(_session, out var seededCols, out var seededRows))
+            {
+                _lastCols = seededCols;
+                _lastRows = seededRows;
+            }
+
+            if (_lastCols > 0 && _lastRows > 0)
+            {
+                _session.Start();
             }
         }
         
@@ -121,14 +210,18 @@ namespace Dotty.App.Views
         private void UpdateSize()
         {
             if (_session == null || _grid == null || _canvas == null) return;
-            
-            var bounds = this.Bounds;
-            if (bounds.Width == 0 || bounds.Height == 0) return;
+
+            if (ShouldDeferPreStartSizeUpdate(_session, _lastCols, _lastRows))
+            {
+                return;
+            }
+
+            var viewport = GetResizeViewport();
+            if (viewport.Width <= 0 || viewport.Height <= 0) return;
             
             if (TryGetTerminalMetrics(out var cellWidth, out var cellHeight, out var padding))
             {
-                int cols = (int)Math.Max(1, (bounds.Width - padding.Left - padding.Right) / cellWidth);
-                int rows = (int)Math.Max(1, (bounds.Height - padding.Top - padding.Bottom) / cellHeight);
+                var (cols, rows) = CalculateTerminalSize(viewport, padding, cellWidth, cellHeight);
                 
                 // Only resize if size actually changed - prevents shell prompt redraw
                 if (cols != _lastCols || rows != _lastRows)
@@ -138,6 +231,103 @@ namespace Dotty.App.Views
                     _session.Resize(cols, rows);
                 }
             }
+        }
+
+        internal static bool ShouldDeferPreStartSizeUpdate(Dotty.App.ViewModels.TerminalSession session, int lastCols, int lastRows)
+        {
+            if (session == null || session.IsStarted)
+            {
+                return false;
+            }
+
+            return (lastCols <= 0 || lastRows <= 0 || IsDefaultStartupSize(lastCols, lastRows))
+                && TryGetSeededStartupBufferSize(session, out _, out _);
+        }
+
+        internal static bool TryGetSeededStartupBufferSize(Dotty.App.ViewModels.TerminalSession session, out int cols, out int rows)
+        {
+            cols = 0;
+            rows = 0;
+
+            var buffer = session?.Adapter?.Buffer;
+            if (buffer == null || buffer.Columns <= 0 || buffer.Rows <= 0)
+            {
+                return false;
+            }
+
+            if (buffer.Columns == DefaultStartupCols && buffer.Rows == DefaultStartupRows)
+            {
+                return false;
+            }
+
+            cols = buffer.Columns;
+            rows = buffer.Rows;
+            return true;
+        }
+
+        internal static bool IsDefaultStartupSize(int cols, int rows)
+        {
+            return cols == DefaultStartupCols && rows == DefaultStartupRows;
+        }
+
+        private void ScheduleLayoutSizeSync()
+        {
+            if (_layoutSizeSyncPending)
+            {
+                return;
+            }
+
+            _layoutSizeSyncPending = true;
+            Dispatcher.UIThread.Post(() =>
+            {
+                _layoutSizeSyncPending = false;
+                if (_session == null)
+                {
+                    return;
+                }
+
+                UpdateSize();
+                TryStartSessionWithCurrentSize();
+            }, DispatcherPriority.Loaded);
+        }
+
+        internal Size GetResizeViewport()
+        {
+            EnsureCanvas();
+
+            var canvasViewport = _canvas?.Viewport ?? default;
+            var canvasBounds = _canvas?.Bounds.Size ?? default;
+            var gridBounds = _grid?.Bounds.Size ?? default;
+            return SelectResizeViewport(Bounds.Size, gridBounds, canvasBounds, canvasViewport);
+        }
+
+        internal static Size SelectResizeViewport(Size viewBounds, Size gridBounds, Size canvasBounds, Size canvasViewport)
+        {
+            if (canvasViewport.Width > 0 && canvasViewport.Height > 0)
+            {
+                return canvasViewport;
+            }
+
+            if (canvasBounds.Width > 0 && canvasBounds.Height > 0)
+            {
+                return canvasBounds;
+            }
+
+            if (gridBounds.Width > 0 && gridBounds.Height > 0)
+            {
+                return gridBounds;
+            }
+
+            return viewBounds;
+        }
+
+        internal static (int Cols, int Rows) CalculateTerminalSize(Size viewport, Thickness padding, double cellWidth, double cellHeight)
+        {
+            var availableWidth = Math.Max(0, viewport.Width - padding.Left - padding.Right);
+            var availableHeight = Math.Max(0, viewport.Height - padding.Top - padding.Bottom);
+            var cols = (int)Math.Max(1, availableWidth / Math.Max(1.0, cellWidth));
+            var rows = (int)Math.Max(1, availableHeight / Math.Max(1.0, cellHeight));
+            return (cols, rows);
         }
 
 
@@ -190,6 +380,8 @@ namespace Dotty.App.Views
         {
             base.OnSizeChanged(e);
             UpdateSize();
+            TryStartSessionWithCurrentSize();
+            ScheduleLayoutSizeSync();
         }
         
         protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -226,9 +418,8 @@ namespace Dotty.App.Views
                     SetBuffer(_session.Adapter.Buffer);
                 }
                 
-                // Reconnect event handlers (they were disconnected in OnDetached)
-                _session.RenderScheduled += OnRenderScheduled;
-                this.RawInput += _session.WriteInput;
+                AttachSessionHandlers();
+                AttachRawInput();
                 
                 if (_fpsMeasurementCallback == null)
                 {
@@ -244,6 +435,10 @@ namespace Dotty.App.Views
             AddHandler(PointerPressedEvent, TerminalView_PointerPressed, RoutingStrategies.Tunnel);
             AddHandler(PointerMovedEvent, TerminalView_PointerMoved, RoutingStrategies.Tunnel);
             AddHandler(PointerReleasedEvent, TerminalView_PointerReleased, RoutingStrategies.Tunnel);
+            AddHandler(PointerWheelChangedEvent, TerminalView_PointerWheelChanged, RoutingStrategies.Tunnel);
+
+            TryStartSessionWithCurrentSize();
+            ScheduleLayoutSizeSync();
             
             // Request focus so we can receive input
             this.Focus();
@@ -254,6 +449,11 @@ namespace Dotty.App.Views
             EnsureCanvas();
             if (_canvas == null) return;
             var current = e.GetCurrentPoint(_canvas);
+
+            if (TryHandleMouseReportingPress(e, current))
+            {
+                return;
+            }
             
             // Handle right-click for context menu
             if (current.Properties.IsRightButtonPressed)
@@ -264,6 +464,12 @@ namespace Dotty.App.Views
             
             if (!current.Properties.IsLeftButtonPressed) return;
             if (!TryGetCellFromPointer(e, out int row, out int column)) return;
+
+            if (TryOpenHyperlink(row, column, e.KeyModifiers))
+            {
+                e.Handled = true;
+                return;
+            }
             
             // Handle double-click to select entire line
             if (e.ClickCount == 2)
@@ -285,6 +491,11 @@ namespace Dotty.App.Views
 
         private void TerminalView_PointerMoved(object? sender, PointerEventArgs e)
         {
+            if (TryHandleMouseReportingMove(e))
+            {
+                return;
+            }
+
             if (!_selectionController.IsDragging) return;
             if (!TryGetCellFromPointer(e, out int row, out int column)) return;
             _selectionController.UpdateSelection(row, column);
@@ -293,9 +504,20 @@ namespace Dotty.App.Views
 
         private void TerminalView_PointerReleased(object? sender, PointerReleasedEventArgs e)
         {
+            if (TryHandleMouseReportingRelease(e))
+            {
+                return;
+            }
+
             if (!_selectionController.IsDragging) return;
             _selectionController.EndSelection();
             UpdateCanvasSelection();
+        }
+
+        private void TerminalView_PointerWheelChanged(object? sender, PointerWheelEventArgs e)
+        {
+            if (!TrySendMouseReport(e, e.Delta.Y > 0 ? 64 : 65, isPress: true, isMove: false)) return;
+            e.Handled = true;
         }
 
         private void ShowContextMenu(PointerPressedEventArgs e)
@@ -573,7 +795,7 @@ namespace Dotty.App.Views
                 var text = await clipboard.TryGetTextAsync();
                 if (!string.IsNullOrEmpty(text))
                 {
-                    SendRawInput(text);
+                    SendPasteInput(text);
                 }
             }
             catch { }
@@ -592,6 +814,153 @@ namespace Dotty.App.Views
             var bytes = Encoding.UTF8.GetBytes(text);
             RawInput?.Invoke(bytes);
             _lineBuffer += text;
+        }
+
+        private void SendPasteInput(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            if (_suppressText) return;
+
+            if (_session?.Adapter?.Buffer?.BracketedPasteMode == true)
+            {
+                var wrapped = $"\u001b[200~{text}\u001b[201~";
+                RawInput?.Invoke(Encoding.UTF8.GetBytes(wrapped));
+                _lineBuffer += text;
+                return;
+            }
+
+            SendRawInput(text);
+        }
+
+        private async void OnClipboardWriteRequested(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+
+            await Dispatcher.UIThread.InvokeAsync(async () =>
+            {
+                var clipboard = GetClipboard();
+                if (clipboard == null) return;
+                try
+                {
+                    await clipboard.SetTextAsync(text);
+                }
+                catch { }
+            });
+        }
+
+        private bool TryOpenHyperlink(int row, int column, KeyModifiers modifiers)
+        {
+            var buffer = _canvas?.Buffer;
+            if (buffer == null || row < 0 || row >= buffer.Rows || column < 0 || column >= buffer.Columns)
+            {
+                return false;
+            }
+
+            var cell = buffer.GetCell(row, column);
+            if (cell.HyperlinkId == 0)
+            {
+                return false;
+            }
+
+            var url = buffer.GetHyperlinkUrl(cell.HyperlinkId);
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return false;
+            }
+
+            _ = HyperlinkService.OpenUrlAsync(url, modifiers.HasFlag(KeyModifiers.Control));
+            return modifiers.HasFlag(KeyModifiers.Control);
+        }
+
+        private bool TryHandleMouseReportingPress(PointerPressedEventArgs e, PointerPoint current)
+        {
+            if (!TryGetMouseReportButton(current.Properties, out var button))
+            {
+                return false;
+            }
+
+            if (!TrySendMouseReport(e, button, isPress: true, isMove: false))
+            {
+                return false;
+            }
+
+            _mouseReportingButton = button;
+            _selectionController.Clear();
+            UpdateCanvasSelection();
+            e.Handled = true;
+            return true;
+        }
+
+        private bool TryHandleMouseReportingMove(PointerEventArgs e)
+        {
+            int button = _mouseReportingButton ?? 3;
+            if (!TrySendMouseReport(e, button, isPress: true, isMove: true))
+            {
+                return false;
+            }
+
+            e.Handled = true;
+            return true;
+        }
+
+        private bool TryHandleMouseReportingRelease(PointerReleasedEventArgs e)
+        {
+            int button = _mouseReportingButton ?? 3;
+            if (!TrySendMouseReport(e, button, isPress: false, isMove: false))
+            {
+                _mouseReportingButton = null;
+                return false;
+            }
+
+            _mouseReportingButton = null;
+            e.Handled = true;
+            return true;
+        }
+
+        private bool TrySendMouseReport(PointerEventArgs e, int button, bool isPress, bool isMove)
+        {
+            var adapter = _session?.Adapter;
+            if (adapter == null || !adapter.MouseReportingEnabled) return false;
+            if (!TryGetCellFromPointer(e, out int row, out int column)) return false;
+            if (row < 0) return false;
+
+            var encoded = _inputEncoder.EncodeMouseEvent(
+                adapter.CurrentMouseMode,
+                adapter.CurrentMouseEncoding,
+                button,
+                row,
+                column,
+                isPress,
+                isMove,
+                e.KeyModifiers);
+
+            if (encoded == null) return false;
+            RawInput?.Invoke(encoded);
+            return true;
+        }
+
+        private static bool TryGetMouseReportButton(PointerPointProperties properties, out int button)
+        {
+            if (properties.IsLeftButtonPressed)
+            {
+                button = 0;
+                return true;
+            }
+
+            if (properties.IsMiddleButtonPressed)
+            {
+                button = 1;
+                return true;
+            }
+
+            if (properties.IsRightButtonPressed)
+            {
+                button = 2;
+                return true;
+            }
+
+            button = 3;
+            return false;
         }
 
         public string GetScrollbackStats()

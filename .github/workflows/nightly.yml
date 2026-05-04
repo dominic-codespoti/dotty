@@ -99,6 +99,7 @@ jobs:
     name: Nightly macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: x64
@@ -106,7 +107,7 @@ jobs:
             runner: macos-15-intel
           - arch: arm64
             rid: osx-arm64
-            runner: macos-latest
+            runner: macos-15
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

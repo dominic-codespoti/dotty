@@ -142,6 +142,18 @@ static void cleanup_and_exit(int signo) {
 int main(int argc, char **argv) {
     const char *control_path = getenv("DOTTY_CONTROL_SOCKET");
     const char *shell = NULL;
+    int initial_cols = 80;
+    int initial_rows = 24;
+    const char *initial_cols_env = getenv("DOTTY_INITIAL_COLS");
+    const char *initial_rows_env = getenv("DOTTY_INITIAL_ROWS");
+    if (initial_cols_env && *initial_cols_env) {
+        int parsed = atoi(initial_cols_env);
+        if (parsed > 0) initial_cols = parsed;
+    }
+    if (initial_rows_env && *initial_rows_env) {
+        int parsed = atoi(initial_rows_env);
+        if (parsed > 0) initial_rows = parsed;
+    }
     if (argc > 1) {
         shell = argv[1];
     } else if (getenv("DOTTY_SHELL") && strlen(getenv("DOTTY_SHELL"))>0) {
@@ -183,6 +195,12 @@ int main(int argc, char **argv) {
             fprintf(stderr, "pty-helper (child): open slave %s failed: %s\n", slave_name, strerror(errno));
             _exit(127);
         }
+        struct winsize ws;
+        ws.ws_col = (unsigned short)initial_cols;
+        ws.ws_row = (unsigned short)initial_rows;
+        ws.ws_xpixel = 0;
+        ws.ws_ypixel = 0;
+        ioctl(slave_fd, TIOCSWINSZ, &ws);
 #ifdef TIOCSCTTY
         ioctl(slave_fd, TIOCSCTTY, 0);
 #endif

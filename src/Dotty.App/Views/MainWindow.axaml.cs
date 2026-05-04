@@ -21,6 +21,7 @@ using Avalonia.Threading;
 using Dotty.Abstractions.Config;
 using Dotty.App.ViewModels;
 using Dotty.App.Configuration;
+using System.ComponentModel;
 
 namespace Dotty.App.Views;
 
@@ -38,8 +39,9 @@ namespace Dotty.App.Views;
         private int InactiveTabDestroyDelayMs => Generated.Config.InactiveTabDestroyDelayMs;
     private Grid? _contentContainer;
     private Control? _tabBar;
-    private SolidColorBrush? _semiTransparentBrush;
-    private bool _isHyprland = false;
+        private SolidColorBrush? _semiTransparentBrush;
+        private bool _isHyprland = false;
+        private TabViewModel? _windowTitleSubscribedTab;
 
         public MainWindow()
         {
@@ -48,7 +50,7 @@ namespace Dotty.App.Views;
             _viewModel = new MainViewModel();
             DataContext = _viewModel;
             
-            Title = Generated.Config.WindowTitle;
+            UpdateWindowTitle();
             
             // Configure window transparency based on platform and user settings
             ConfigureTransparency();
@@ -208,6 +210,7 @@ namespace Dotty.App.Views;
         // Initialize the first tab's content (lazy - only create when needed)
         if (_viewModel.ActiveTab != null)
         {
+            SubscribeToActiveTabTitle(_viewModel.ActiveTab);
             ShowTab(_viewModel.ActiveTab);
             _lastActiveTab = _viewModel.ActiveTab;
         }
@@ -236,6 +239,11 @@ namespace Dotty.App.Views;
                 if (ReferenceEquals(_lastActiveTab, tab))
                 {
                     _lastActiveTab = null;
+                }
+
+                if (ReferenceEquals(_windowTitleSubscribedTab, tab))
+                {
+                    UnsubscribeFromActiveTabTitle(tab);
                 }
             }
         }
@@ -478,6 +486,9 @@ namespace Dotty.App.Views;
         var activeTab = _viewModel.ActiveTab;
         if (activeTab == null) return;
 
+        SubscribeToActiveTabTitle(activeTab);
+        UpdateWindowTitle();
+
         var previousTab = _lastActiveTab;
         _lastActiveTab = activeTab;
 
@@ -574,8 +585,48 @@ namespace Dotty.App.Views;
             }, DispatcherPriority.Render);
         }
         
-        // STEP 6: Start the session
-        tab.Session?.Start();
+        UpdateWindowTitle();
+    }
+
+    private void SubscribeToActiveTabTitle(TabViewModel tab)
+    {
+        if (ReferenceEquals(_windowTitleSubscribedTab, tab))
+        {
+            return;
+        }
+
+        if (_windowTitleSubscribedTab != null)
+        {
+            UnsubscribeFromActiveTabTitle(_windowTitleSubscribedTab);
+        }
+
+        tab.PropertyChanged += OnActiveTabPropertyChanged;
+        _windowTitleSubscribedTab = tab;
+    }
+
+    private void UnsubscribeFromActiveTabTitle(TabViewModel tab)
+    {
+        tab.PropertyChanged -= OnActiveTabPropertyChanged;
+        if (ReferenceEquals(_windowTitleSubscribedTab, tab))
+        {
+            _windowTitleSubscribedTab = null;
+        }
+    }
+
+    private void OnActiveTabPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(TabViewModel.Title) || string.IsNullOrEmpty(e.PropertyName))
+        {
+            Dispatcher.UIThread.Post(UpdateWindowTitle);
+        }
+    }
+
+    private void UpdateWindowTitle()
+    {
+        var tabTitle = _viewModel.ActiveTab?.Title;
+        Title = string.IsNullOrWhiteSpace(tabTitle)
+            ? Generated.Config.WindowTitle
+            : $"{tabTitle} - {Generated.Config.WindowTitle}";
     }
     
     private void OnOpened(object? sender, EventArgs e)
@@ -903,6 +954,10 @@ namespace Dotty.App.Views;
             view.DataContext = null;
         }
         _terminalViews.Clear();
+        if (_windowTitleSubscribedTab != null)
+        {
+            UnsubscribeFromActiveTabTitle(_windowTitleSubscribedTab);
+        }
         
         // Dispose all tabs
         foreach(var tab in _viewModel.Tabs)
@@ -949,10 +1004,7 @@ namespace Dotty.App.Views;
     {
         if (sender is MenuItem mi && mi.DataContext is TabViewModel tvm)
         {
-            var newTab = new TabViewModel();
-            newTab.Title = tvm.Title + " (Copy)";
-            _viewModel.Tabs.Add(newTab);
-            _viewModel.ActiveTab = newTab;
+            _viewModel.DuplicateTab(tvm);
         }
     }
 

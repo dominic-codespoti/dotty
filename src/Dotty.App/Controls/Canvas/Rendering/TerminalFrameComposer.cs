@@ -99,13 +99,6 @@ public sealed class TerminalFrameComposer : IDisposable
         // ---- glyphs ----
         SyncGlyphPaint(paint);
 
-        // We are rendering directly to the target canvas, which typically allows LCD text if opaque, 
-        // but default to standard antialiasing constraints if unknown. Let's use target properties if possible,
-        // or just enable it aggressively for bleeding edge performance/quality.
-        _glyphPaint.LcdRenderText = true;
-        _glyphPaint.SubpixelText = true;
-        _glyphPaint.IsAntialias = true;
-
         DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
     }
 
@@ -296,24 +289,28 @@ public sealed class TerminalFrameComposer : IDisposable
         int endRow)
     {
         var fm = _glyphPaint.FontMetrics;
-        float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
-
-        // Center the glyph box vertically inside the cell box (capsule). We
-        // compute an offset relative to the top of the row and then add the
-        // row origin so we can snap the final baseline to the pixel grid.
-        float baselineOffset = (cellH * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
+        // Align baseline to font ascent from the row top (same convention used
+        // by GlyphAtlas) instead of centering glyphs in the cell. Centering
+        // introduces extra inter-row whitespace that shows up as horizontal
+        // striping in dense ASCII/box art.
+        float baselineOffset = -fm.Ascent;
 
         var defaultColor = paint.Color;
         long ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         bool isBlinkVisible = (ms % 1000) < 500;
+        bool baseAntialias = _glyphPaint.IsAntialias;
+        bool baseSubpixel = _glyphPaint.SubpixelText;
+        bool baseLcd = _glyphPaint.LcdRenderText;
 
         _linePaint.StrokeWidth = Math.Max(1f, cellH * 0.05f);
+        Span<SKRect> geometryRects = stackalloc SKRect[8];
 
         for (int row = startRow; row <= endRow; row++)
         {
             ClassifyRowCells(buffer, row);
 
-            float baseline = MathF.Round(row * cellH + baselineOffset);
+            float rowTop = row * cellH;
+            float baseline = MathF.Round(rowTop + baselineOffset);
 
             for (int col = 0; col < buffer.Columns; col++)
             {
@@ -335,16 +332,48 @@ public sealed class TerminalFrameComposer : IDisposable
                 }
                 _glyphPaint.Color = fgColor;
 
+                bool disableSmoothing = IsPixelGridRune(cc.FirstRune);
+                _glyphPaint.IsAntialias = disableSmoothing ? false : baseAntialias;
+                _glyphPaint.SubpixelText = disableSmoothing ? false : baseSubpixel;
+                _glyphPaint.LcdRenderText = disableSmoothing ? false : baseLcd;
+
                 // Use a stroke-based embolden instead of Skia's FakeBoldText.
                 _glyphPaint.StrokeWidth = raw.Bold ? 0.8f : 0f;
                 _glyphPaint.Style = SKPaintStyle.Fill;
 
                 // Snap X positions to integer pixels to align glyphs to the grid.
                 float x = MathF.Round(col * cellW);
-                canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
+                bool renderedAsBlockGeometry = false;
+                if (IsGeometryRenderedRune(cc.FirstRune))
+                {
+                    float left = x;
+                    float top = MathF.Round(row * cellH);
+                    float right = MathF.Round((col + cc.Width) * cellW);
+                    float bottom = MathF.Round((row + 1) * cellH);
+
+                    int rectCount = BuildGeometryRects(cc.FirstRune, geometryRects, left, top, right, bottom);
+                    if (rectCount > 0)
+                    {
+                        _glyphPaint.Style = SKPaintStyle.Fill;
+                        _glyphPaint.StrokeWidth = 0f;
+                        for (int i = 0; i < rectCount; i++)
+                        {
+                            var rect = geometryRects[i];
+                            if (rect.Width <= 0f || rect.Height <= 0f) continue;
+                            canvas.DrawRect(rect, _glyphPaint);
+                        }
+                        renderedAsBlockGeometry = true;
+                    }
+                }
+
+                if (!renderedAsBlockGeometry)
+                {
+                    canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
+                }
 
                 // Determine if we need to draw any lines (underline, strikethrough, etc.)
-                bool hasLine = raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline || hasHyperlink;
+                bool hasLine = !renderedAsBlockGeometry
+                    && (raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline || hasHyperlink);
                 if (hasLine)
                 {
                     // For hyperlinks, use hyperlink underline color; otherwise use underline color or foreground
@@ -384,6 +413,7 @@ public sealed class TerminalFrameComposer : IDisposable
                     }
                 }
             }
+
         }
     }
 
@@ -495,6 +525,357 @@ public sealed class TerminalFrameComposer : IDisposable
     // Optional helper to extend the whitelist at runtime (useful for tests).
     public static void AddSeparatorRune(int rune) => SeparatorRuneWhitelist.Add(rune);
 
+    private static bool IsPixelGridRune(int value)
+    {
+        // Keep block/box glyphs locked to hard pixel edges to avoid visible
+        // inter-row seams in dense ASCII art while preserving AA for normal text.
+        return (value >= 0x2500 && value <= 0x259F)
+            || (value >= 0x1FB00 && value <= 0x1FBFF);
+    }
+
+    private static bool IsBlockElementRune(int value)
+        => value >= 0x2580 && value <= 0x259F;
+
+    private static bool IsBoxDrawingRune(int value)
+        => value >= 0x2500 && value <= 0x257F;
+
+    private static bool IsGeometryRenderedRune(int value)
+        => IsBlockElementRune(value) || IsBoxDrawingRune(value);
+
+    private static int BuildGeometryRects(int rune, Span<SKRect> rects, float left, float top, float right, float bottom)
+    {
+        if (IsBlockElementRune(rune))
+        {
+            return BuildBlockElementRects(rune, rects, left, top, right, bottom);
+        }
+
+        if (IsBoxDrawingRune(rune))
+        {
+            return BuildBoxDrawingRects(rune, rects, left, top, right, bottom);
+        }
+
+        return 0;
+    }
+
+    private static int BuildBlockElementRects(int rune, Span<SKRect> rects, float left, float top, float right, float bottom)
+    {
+        float width = right - left;
+        float height = bottom - top;
+        if (width <= 0f || height <= 0f) return 0;
+
+        static void AddRect(Span<SKRect> rects, ref int count, float l, float t, float r, float b)
+        {
+            if (r <= l || b <= t) return;
+            rects[count++] = SKRect.Create(l, t, r - l, b - t);
+        }
+
+        static void AddHorizontalSlice(Span<SKRect> rects, ref int count, float left, float top, float right, float bottom, int eighths)
+        {
+            float h = (bottom - top) * (eighths / 8f);
+            AddRect(rects, ref count, left, bottom - h, right, bottom);
+        }
+
+        static void AddVerticalSlice(Span<SKRect> rects, ref int count, float left, float top, float right, float bottom, int eighths)
+        {
+            float w = (right - left) * (eighths / 8f);
+            AddRect(rects, ref count, left, top, left + w, bottom);
+        }
+
+        float midX = left + width * 0.5f;
+        float midY = top + height * 0.5f;
+        float x7_8 = left + width * 0.875f;
+        float y1_8 = top + height * 0.125f;
+
+        int count = 0;
+        switch (rune)
+        {
+            case 0x2580: // UPPER HALF BLOCK
+                AddRect(rects, ref count, left, top, right, midY);
+                break;
+            case 0x2581:
+            case 0x2582:
+            case 0x2583:
+            case 0x2584:
+            case 0x2585:
+            case 0x2586:
+            case 0x2587:
+                AddHorizontalSlice(rects, ref count, left, top, right, bottom, rune - 0x2580);
+                break;
+            case 0x2588: // FULL BLOCK
+                AddRect(rects, ref count, left, top, right, bottom);
+                break;
+            case 0x2589:
+            case 0x258A:
+            case 0x258B:
+            case 0x258C:
+            case 0x258D:
+            case 0x258E:
+            case 0x258F:
+                AddVerticalSlice(rects, ref count, left, top, right, bottom, 0x2590 - rune);
+                break;
+            case 0x2590: // RIGHT HALF BLOCK
+                AddRect(rects, ref count, midX, top, right, bottom);
+                break;
+            case 0x2594: // UPPER ONE EIGHTH
+                AddRect(rects, ref count, left, top, right, y1_8);
+                break;
+            case 0x2595: // RIGHT ONE EIGHTH
+                AddRect(rects, ref count, x7_8, top, right, bottom);
+                break;
+            case 0x2596: // QUADRANT LOWER LEFT
+                AddRect(rects, ref count, left, midY, midX, bottom);
+                break;
+            case 0x2597: // QUADRANT LOWER RIGHT
+                AddRect(rects, ref count, midX, midY, right, bottom);
+                break;
+            case 0x2598: // QUADRANT UPPER LEFT
+                AddRect(rects, ref count, left, top, midX, midY);
+                break;
+            case 0x2599: // QUADRANT UPPER LEFT AND LOWER LEFT AND LOWER RIGHT
+                AddRect(rects, ref count, left, top, midX, midY);
+                AddRect(rects, ref count, left, midY, right, bottom);
+                break;
+            case 0x259A: // QUADRANT UPPER LEFT AND LOWER RIGHT
+                AddRect(rects, ref count, left, top, midX, midY);
+                AddRect(rects, ref count, midX, midY, right, bottom);
+                break;
+            case 0x259B: // QUADRANT UPPER LEFT AND UPPER RIGHT AND LOWER LEFT
+                AddRect(rects, ref count, left, top, right, midY);
+                AddRect(rects, ref count, left, midY, midX, bottom);
+                break;
+            case 0x259C: // QUADRANT UPPER LEFT AND UPPER RIGHT AND LOWER RIGHT
+                AddRect(rects, ref count, left, top, right, midY);
+                AddRect(rects, ref count, midX, midY, right, bottom);
+                break;
+            case 0x259D: // QUADRANT UPPER RIGHT
+                AddRect(rects, ref count, midX, top, right, midY);
+                break;
+            case 0x259E: // QUADRANT UPPER RIGHT AND LOWER LEFT
+                AddRect(rects, ref count, midX, top, right, midY);
+                AddRect(rects, ref count, left, midY, midX, bottom);
+                break;
+            case 0x259F: // QUADRANT UPPER RIGHT AND LOWER LEFT AND LOWER RIGHT
+                AddRect(rects, ref count, midX, top, right, midY);
+                AddRect(rects, ref count, left, midY, right, bottom);
+                break;
+        }
+
+        return count;
+    }
+
+    private static int BuildBoxDrawingRects(int rune, Span<SKRect> rects, float left, float top, float right, float bottom)
+    {
+        float width = right - left;
+        float height = bottom - top;
+        if (width <= 0f || height <= 0f) return 0;
+
+        static void AddRect(Span<SKRect> rects, ref int count, float l, float t, float r, float b)
+        {
+            if (count >= rects.Length) return;
+            if (r <= l || b <= t) return;
+            rects[count++] = SKRect.Create(l, t, r - l, b - t);
+        }
+
+        static float ClampBand(float band, float limit)
+            => MathF.Max(1f, MathF.Min(MathF.Round(band), MathF.Max(1f, limit)));
+
+        float minDim = MathF.Min(width, height);
+        float singleThickness = ClampBand(minDim / 8f, minDim);
+        float heavyThickness = ClampBand(singleThickness * 1.75f, minDim);
+        float doubleThickness = ClampBand(singleThickness * 0.6f, minDim);
+        float centerX = left + width * 0.5f;
+        float centerY = top + height * 0.5f;
+
+        static void AddHorizontalBand(Span<SKRect> rects, ref int count, float left, float right, float centerY, float thickness)
+        {
+            float t = MathF.Max(1f, MathF.Round(thickness));
+            float bandTop = MathF.Round(centerY - t * 0.5f);
+            AddRect(rects, ref count, left, bandTop, right, bandTop + t);
+        }
+
+        static void AddVerticalBand(Span<SKRect> rects, ref int count, float top, float bottom, float centerX, float thickness)
+        {
+            float t = MathF.Max(1f, MathF.Round(thickness));
+            float bandLeft = MathF.Round(centerX - t * 0.5f);
+            AddRect(rects, ref count, bandLeft, top, bandLeft + t, bottom);
+        }
+
+        static void AddDoubleHorizontalBand(Span<SKRect> rects, ref int count, float left, float right, float centerY, float thickness)
+        {
+            float t = MathF.Max(1f, MathF.Round(thickness));
+            float gap = MathF.Max(1f, t);
+            AddHorizontalBand(rects, ref count, left, right, centerY - (gap + t) * 0.5f, t);
+            AddHorizontalBand(rects, ref count, left, right, centerY + (gap + t) * 0.5f, t);
+        }
+
+        static void AddDoubleVerticalBand(Span<SKRect> rects, ref int count, float top, float bottom, float centerX, float thickness)
+        {
+            float t = MathF.Max(1f, MathF.Round(thickness));
+            float gap = MathF.Max(1f, t);
+            AddVerticalBand(rects, ref count, top, bottom, centerX - (gap + t) * 0.5f, t);
+            AddVerticalBand(rects, ref count, top, bottom, centerX + (gap + t) * 0.5f, t);
+        }
+
+        static void AddHorizontalHalfBand(Span<SKRect> rects, ref int count, float left, float right, float centerY, float thickness, bool toRight)
+        {
+            float mid = MathF.Round((left + right) * 0.5f);
+            if (toRight)
+                AddHorizontalBand(rects, ref count, mid, right, centerY, thickness);
+            else
+                AddHorizontalBand(rects, ref count, left, mid, centerY, thickness);
+        }
+
+        static void AddVerticalHalfBand(Span<SKRect> rects, ref int count, float top, float bottom, float centerX, float thickness, bool toBottom)
+        {
+            float mid = MathF.Round((top + bottom) * 0.5f);
+            if (toBottom)
+                AddVerticalBand(rects, ref count, mid, bottom, centerX, thickness);
+            else
+                AddVerticalBand(rects, ref count, top, mid, centerX, thickness);
+        }
+
+        static void AddDoubleHorizontalHalfBand(Span<SKRect> rects, ref int count, float left, float right, float centerY, float thickness, bool toRight)
+        {
+            float mid = MathF.Round((left + right) * 0.5f);
+            if (toRight)
+                AddDoubleHorizontalBand(rects, ref count, mid, right, centerY, thickness);
+            else
+                AddDoubleHorizontalBand(rects, ref count, left, mid, centerY, thickness);
+        }
+
+        static void AddDoubleVerticalHalfBand(Span<SKRect> rects, ref int count, float top, float bottom, float centerX, float thickness, bool toBottom)
+        {
+            float mid = MathF.Round((top + bottom) * 0.5f);
+            if (toBottom)
+                AddDoubleVerticalBand(rects, ref count, mid, bottom, centerX, thickness);
+            else
+                AddDoubleVerticalBand(rects, ref count, top, mid, centerX, thickness);
+        }
+
+        int count = 0;
+
+        switch (rune)
+        {
+            // Single-line horizontal runs.
+            case 0x2500:
+            case 0x2504:
+            case 0x2508:
+            case 0x254C:
+            case 0x2574:
+                AddHorizontalBand(rects, ref count, left, right, centerY, singleThickness);
+                break;
+            case 0x2501:
+            case 0x2505:
+            case 0x2509:
+            case 0x254D:
+                AddHorizontalBand(rects, ref count, left, right, centerY, heavyThickness);
+                break;
+
+            // Single-line vertical runs.
+            case 0x2502:
+            case 0x2506:
+            case 0x250A:
+            case 0x254E:
+            case 0x2575:
+                AddVerticalBand(rects, ref count, top, bottom, centerX, singleThickness);
+                break;
+            case 0x2503:
+            case 0x2507:
+            case 0x250B:
+            case 0x254F:
+                AddVerticalBand(rects, ref count, top, bottom, centerX, heavyThickness);
+                break;
+
+            // Single-line corners and tees.
+            case 0x250C: // ┌
+                AddHorizontalHalfBand(rects, ref count, left, right, centerY, singleThickness, toRight: true);
+                AddVerticalHalfBand(rects, ref count, top, bottom, centerX, singleThickness, toBottom: true);
+                break;
+            case 0x2510: // ┐
+                AddHorizontalHalfBand(rects, ref count, left, right, centerY, singleThickness, toRight: false);
+                AddVerticalHalfBand(rects, ref count, top, bottom, centerX, singleThickness, toBottom: true);
+                break;
+            case 0x2514: // └
+                AddHorizontalHalfBand(rects, ref count, left, right, centerY, singleThickness, toRight: true);
+                AddVerticalHalfBand(rects, ref count, top, bottom, centerX, singleThickness, toBottom: false);
+                break;
+            case 0x2518: // ┘
+                AddHorizontalHalfBand(rects, ref count, left, right, centerY, singleThickness, toRight: false);
+                AddVerticalHalfBand(rects, ref count, top, bottom, centerX, singleThickness, toBottom: false);
+                break;
+            case 0x251C: // ├
+                AddHorizontalHalfBand(rects, ref count, left, right, centerY, singleThickness, toRight: true);
+                AddVerticalBand(rects, ref count, top, bottom, centerX, singleThickness);
+                break;
+            case 0x2524: // ┤
+                AddHorizontalHalfBand(rects, ref count, left, right, centerY, singleThickness, toRight: false);
+                AddVerticalBand(rects, ref count, top, bottom, centerX, singleThickness);
+                break;
+            case 0x252C: // ┬
+                AddHorizontalBand(rects, ref count, left, right, centerY, singleThickness);
+                AddVerticalHalfBand(rects, ref count, top, bottom, centerX, singleThickness, toBottom: true);
+                break;
+            case 0x2534: // ┴
+                AddHorizontalBand(rects, ref count, left, right, centerY, singleThickness);
+                AddVerticalHalfBand(rects, ref count, top, bottom, centerX, singleThickness, toBottom: false);
+                break;
+            case 0x253C: // ┼
+                AddHorizontalBand(rects, ref count, left, right, centerY, singleThickness);
+                AddVerticalBand(rects, ref count, top, bottom, centerX, singleThickness);
+                break;
+
+            // Double-line corners and tees (common in Neovim/UI banners).
+            case 0x2554: // ╔
+                AddDoubleHorizontalHalfBand(rects, ref count, left, right, centerY, doubleThickness, toRight: true);
+                AddDoubleVerticalHalfBand(rects, ref count, top, bottom, centerX, doubleThickness, toBottom: true);
+                break;
+            case 0x2557: // ╗
+                AddDoubleHorizontalHalfBand(rects, ref count, left, right, centerY, doubleThickness, toRight: false);
+                AddDoubleVerticalHalfBand(rects, ref count, top, bottom, centerX, doubleThickness, toBottom: true);
+                break;
+            case 0x255A: // ╚
+                AddDoubleHorizontalHalfBand(rects, ref count, left, right, centerY, doubleThickness, toRight: true);
+                AddDoubleVerticalHalfBand(rects, ref count, top, bottom, centerX, doubleThickness, toBottom: false);
+                break;
+            case 0x255D: // ╝
+                AddDoubleHorizontalHalfBand(rects, ref count, left, right, centerY, doubleThickness, toRight: false);
+                AddDoubleVerticalHalfBand(rects, ref count, top, bottom, centerX, doubleThickness, toBottom: false);
+                break;
+            case 0x2560: // ╠
+                AddDoubleHorizontalHalfBand(rects, ref count, left, right, centerY, doubleThickness, toRight: true);
+                AddDoubleVerticalBand(rects, ref count, top, bottom, centerX, doubleThickness);
+                break;
+            case 0x2563: // ╣
+                AddDoubleHorizontalHalfBand(rects, ref count, left, right, centerY, doubleThickness, toRight: false);
+                AddDoubleVerticalBand(rects, ref count, top, bottom, centerX, doubleThickness);
+                break;
+            case 0x2566: // ╦
+                AddDoubleHorizontalBand(rects, ref count, left, right, centerY, doubleThickness);
+                AddDoubleVerticalHalfBand(rects, ref count, top, bottom, centerX, doubleThickness, toBottom: true);
+                break;
+            case 0x2569: // ╩
+                AddDoubleHorizontalBand(rects, ref count, left, right, centerY, doubleThickness);
+                AddDoubleVerticalHalfBand(rects, ref count, top, bottom, centerX, doubleThickness, toBottom: false);
+                break;
+            case 0x256C: // ╬
+                AddDoubleHorizontalBand(rects, ref count, left, right, centerY, doubleThickness);
+                AddDoubleVerticalBand(rects, ref count, top, bottom, centerX, doubleThickness);
+                break;
+
+            // Double-line horizontal and vertical segments.
+            case 0x2550:
+            case 0x2576:
+                AddDoubleHorizontalBand(rects, ref count, left, right, centerY, doubleThickness);
+                break;
+            case 0x2551:
+            case 0x2577:
+                AddDoubleVerticalBand(rects, ref count, top, bottom, centerX, doubleThickness);
+                break;
+        }
+
+        return count;
+    }
+
     private void SyncGlyphPaint(SKPaint source)
     {
         _glyphPaint.Typeface = source.Typeface;
@@ -502,6 +883,11 @@ public sealed class TerminalFrameComposer : IDisposable
         _glyphPaint.TextEncoding = source.TextEncoding;
         _glyphPaint.TextScaleX = source.TextScaleX;
         _glyphPaint.TextSkewX = source.TextSkewX;
+        _glyphPaint.IsAntialias = source.IsAntialias;
+        _glyphPaint.IsLinearText = source.IsLinearText;
+        _glyphPaint.SubpixelText = source.SubpixelText;
+        _glyphPaint.LcdRenderText = source.LcdRenderText;
+        _glyphPaint.IsAutohinted = source.IsAutohinted;
     }
 
     private static unsafe bool TryParseHexColor(string? hex, out SKColor color)

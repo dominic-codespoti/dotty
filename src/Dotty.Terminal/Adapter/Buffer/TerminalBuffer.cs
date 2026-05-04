@@ -49,6 +49,7 @@ public class TerminalBuffer
         Rows = rows;
         Columns = cols;
         _screens.Resize(rows, cols);
+        _cursor.SetSize(rows, cols);
 
         if (fullScreenScroll)
         {

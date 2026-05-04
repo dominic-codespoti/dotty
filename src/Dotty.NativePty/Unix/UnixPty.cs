@@ -21,6 +21,8 @@ public sealed class UnixPty : IPty
     private Stream? _errorStream;
     private string? _controlSocketPath;
     private Stream? _controlSocketStream;
+    private int _startupColumns = 80;
+    private int _startupRows = 24;
     private bool _isDisposed;
     private bool _isStarted;
     private readonly object _stateLock = new();
@@ -111,6 +113,10 @@ public sealed class UnixPty : IPty
             var controlPath = Path.Combine(Path.GetTempPath(), $"dotty-control-{Guid.NewGuid():N}.sock");
             psi.EnvironmentVariables["DOTTY_CONTROL_SOCKET"] = controlPath;
             _controlSocketPath = controlPath;
+            _startupColumns = Math.Max(1, columns);
+            _startupRows = Math.Max(1, rows);
+            psi.EnvironmentVariables["DOTTY_INITIAL_COLS"] = _startupColumns.ToString();
+            psi.EnvironmentVariables["DOTTY_INITIAL_ROWS"] = _startupRows.ToString();
 
             _helperProcess = Process.Start(psi);
             if (_helperProcess == null)
@@ -287,7 +293,7 @@ public sealed class UnixPty : IPty
             _controlSocketStream = new NetworkStream(sock, ownsSocket: true);
             
             // Send initial resize to set the size
-            await SendResizeMessageAsync(80, 24);
+            await SendResizeMessageAsync(_startupColumns, _startupRows);
         }
         catch { }
     }

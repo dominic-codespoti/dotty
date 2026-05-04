@@ -144,6 +144,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private bool _framePending;
 	private const double FrameDebounceMs = 1;
 	private bool _lastBufferWasAlternate = false;
+	private int _lastKnownBufferRows = -1;
+	private int _lastKnownBufferColumns = -1;
+	private int _lastKnownScrollbackCount = -1;
 	private double _renderScaling = 1.0;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
 	private static readonly string[] MonospaceFallbackFamilies =
@@ -166,8 +169,23 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private bool _isAttached = false;
 	
 	public SKPaint? SkPaint { get; private set; }
-	public double CellWidth => _cellWidth;
-	public double CellHeight => _cellHeight;
+	public double CellWidth
+	{
+		get
+		{
+			EnsureMetrics();
+			return _cellWidth;
+		}
+	}
+
+	public double CellHeight
+	{
+		get
+		{
+			EnsureMetrics();
+			return _cellHeight;
+		}
+	}
 
 	private bool _showCursor = true;
 	public bool ShowCursor 
@@ -372,11 +390,35 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	public void OnBufferUpdated(TerminalBuffer buffer)
 	{
 		if (buffer == null) return;
+		HandleBufferGeometryChange(buffer);
 		if (_glyphDiscovery == null) return;
 		_glyphDiscovery.EnsureSize(buffer.Rows);
 		// Dirty tracking removed: enqueue all rows for discovery.
 		for (int r = 0; r < buffer.Rows; r++) _glyphDiscovery.EnqueueRow(r);
 		// discovery work is enqueued; it will be processed a bit at a time when a frame is requested
+	}
+
+	private void HandleBufferGeometryChange(TerminalBuffer buffer)
+	{
+		var geometryChanged =
+			buffer.Rows != _lastKnownBufferRows ||
+			buffer.Columns != _lastKnownBufferColumns;
+		var scrollChanged = buffer.ScrollbackCount != _lastKnownScrollbackCount;
+
+		_lastKnownBufferRows = buffer.Rows;
+		_lastKnownBufferColumns = buffer.Columns;
+		_lastKnownScrollbackCount = buffer.ScrollbackCount;
+
+		if (geometryChanged)
+		{
+			InvalidateMeasure();
+			InvalidateArrange();
+		}
+
+		if (geometryChanged || scrollChanged)
+		{
+			UpdateScrollState(buffer.ScrollbackCount);
+		}
 	}
 
 	/// <summary>
@@ -652,6 +694,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			var buf = Buffer;
 			if (buf != null)
 			{
+				HandleBufferGeometryChange(buf);
 				EnsureMetrics();
 				// Ensure glyph atlas exists for current metrics using shared service
 				if (_glyphAtlas == null)
@@ -689,6 +732,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}
 			else
 			{
+				_lastKnownBufferRows = -1;
+				_lastKnownBufferColumns = -1;
+				_lastKnownScrollbackCount = -1;
 				_glyphDiscovery = null;
 				// _glyphAtlas?.Dispose(); removed for safety
 				_glyphAtlas = null;

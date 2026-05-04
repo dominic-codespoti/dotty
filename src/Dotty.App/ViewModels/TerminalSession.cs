@@ -54,6 +54,8 @@ public class TerminalSession : IDisposable
     /// Event raised when raw input data is received from the PTY.
     /// </summary>
     public event Action<byte[]>? RawInputReceived;
+    public event Action<string>? ClipboardWriteRequested;
+    public event Action<string>? TitleChanged;
     
     /// <summary>
     /// Event raised when a render should be scheduled.
@@ -78,6 +80,8 @@ public class TerminalSession : IDisposable
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;
+        Adapter.ClipboardWriteRequested += text => ClipboardWriteRequested?.Invoke(text);
+        Adapter.TitleChanged += title => TitleChanged?.Invoke(title);
     }
 
     /// <summary>

@@ -1,7 +1,10 @@
 using Dotty.Abstractions.Pty;
 using Xunit;
 using FluentAssertions;
+using System.IO;
+using System.Linq;
 using System.Text;
+using System.Runtime.InteropServices;
 
 namespace Dotty.NativePty.Tests;
 
@@ -11,6 +14,11 @@ namespace Dotty.NativePty.Tests;
 /// </summary>
 public class UnixPtyTests : IDisposable
 {
+    private const uint TIOCGWINSZ = 0x5413;
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int ioctl(int fd, uint request, byte[] data);
+
     private IPty? _pty;
 
     public void Dispose()
@@ -362,6 +370,59 @@ public class UnixPtyTests : IDisposable
     }
 
     /// <summary>
+    /// Verifies that startup dimensions are preserved after control socket connects.
+    /// </summary>
+    [ConditionalFacts.UnixOnlyFact]
+    public void UnixPty_StartupSize_IsPreservedAfterControlSocketConnects()
+    {
+        // Arrange
+        _pty = new Unix.UnixPty();
+        const int expectedCols = 132;
+        const int expectedRows = 41;
+
+        // Act
+        _pty.Start(columns: expectedCols, rows: expectedRows, shell: "/usr/bin/nvim");
+        Thread.Sleep(800);
+
+        // Assert
+        var processId = _pty.ProcessId;
+        processId.Should().BeGreaterThan(0);
+
+        var commPath = $"/proc/{processId}/task/{processId}/children";
+        File.Exists(commPath).Should().BeTrue();
+        var childIds = File.ReadAllText(commPath)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(static s => int.TryParse(s, out var id) ? id : -1)
+            .Where(static id => id > 0)
+            .ToArray();
+        childIds.Should().NotBeEmpty();
+
+        var nvimId = childIds.FirstOrDefault(id =>
+        {
+            var processNamePath = $"/proc/{id}/comm";
+            return File.Exists(processNamePath) && File.ReadAllText(processNamePath).Trim() == "nvim";
+        });
+        nvimId.Should().BeGreaterThan(0, "nvim child should be running under pty-helper");
+
+        var fdPath = $"/proc/{nvimId}/fd/0";
+        File.Exists(fdPath).Should().BeTrue();
+        using var tty = File.OpenRead(fdPath);
+
+        var sizeBuffer = new byte[8];
+        var ioctlResult = ioctl(
+            tty.SafeFileHandle.DangerousGetHandle().ToInt32(),
+            TIOCGWINSZ,
+            sizeBuffer);
+
+        ioctlResult.Should().Be(0, "ioctl(TIOCGWINSZ) should succeed");
+
+        var actualRows = BitConverter.ToUInt16(sizeBuffer, 0);
+        var actualCols = BitConverter.ToUInt16(sizeBuffer, 2);
+        actualCols.Should().Be((ushort)expectedCols);
+        actualRows.Should().Be((ushort)expectedRows);
+    }
+
+    /// <summary>
     /// Verifies that UnixPty supports multiple resize operations.
     /// </summary>
     [ConditionalFacts.UnixOnlyFact]
@@ -597,7 +658,7 @@ public class UnixPtyTests : IDisposable
 
             // Assert - exit code after Kill() is typically 137 (128 + SIGKILL(9))
             // We just verify that WaitForExitAsync completes and returns a code
-            actualExitCode.Should().BeGreaterOrEqualTo(0, "Exit code should be non-negative");
+            actualExitCode.Should().BeGreaterThanOrEqualTo(0, "Exit code should be non-negative");
             
             // Cleanup for next iteration
             _pty.Dispose();

@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using Dotty.Performance.Tests.Infrastructure;
+using Perfolizer.Helpers;
+using Perfolizer.Models;
 
 namespace Dotty.Performance.Tests.Reporting;
 
@@ -110,8 +112,8 @@ public class PerformanceReport
         <table>
             <tr><th>Property</th><th>Value</th></tr>
             <tr><td>Runtime</td><td>" + BenchmarkDotNet.Environments.HostEnvironmentInfo.BenchmarkDotNetCaption + " " + summary.HostEnvironmentInfo.BenchmarkDotNetVersion + @"</td></tr>
-            <tr><td>OS</td><td>" + summary.HostEnvironmentInfo.OsVersion.Value + @"</td></tr>
-            <tr><td>CPU</td><td>" + summary.HostEnvironmentInfo.CpuInfo.Value.ToString() + @"</td></tr>
+            <tr><td>OS</td><td>" + summary.HostEnvironmentInfo.Os.Value.ToBrandString() + @"</td></tr>
+            <tr><td>CPU</td><td>" + summary.HostEnvironmentInfo.Cpu.Value.ToShortBrandName() + @"</td></tr>
             <tr><td>.NET Version</td><td>" + summary.HostEnvironmentInfo.DotNetSdkVersion.Value + @"</td></tr>
         </table>
     </div>
@@ -132,8 +134,8 @@ public class PerformanceReport
         {
             Timestamp = DateTime.UtcNow,
             BenchmarkDotNetVersion = summary.HostEnvironmentInfo.BenchmarkDotNetVersion,
-            OsVersion = summary.HostEnvironmentInfo.OsVersion.Value,
-            CpuInfo = summary.HostEnvironmentInfo.CpuInfo.Value.ToString(),
+            OsVersion = summary.HostEnvironmentInfo.Os.Value.ToBrandString(),
+            CpuInfo = summary.HostEnvironmentInfo.Cpu.Value.ToShortBrandName(),
             DotNetSdkVersion = summary.HostEnvironmentInfo.DotNetSdkVersion.Value,
             TotalDuration = summary.TotalTime,
             Benchmarks = summary.Reports.Select(r => new BenchmarkReportData

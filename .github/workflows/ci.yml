@@ -25,7 +25,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
         include:
           - os: ubuntu-latest
             rid: linux-x64
@@ -35,6 +34,9 @@ jobs:
             build-native: false
           - os: macos-15-intel
             rid: osx-x64
+            build-native: true
+          - os: macos-15
+            rid: osx-arm64
             build-native: true
 
     steps:
@@ -121,10 +123,7 @@ jobs:
         run: dotnet restore ${{ env.SOLUTION_PATH }}
 
       - name: Check formatting
-        run: |
-          dotnet tool restore || true
-          dotnet format --verify-no-changes --verbosity detailed ${{ env.SOLUTION_PATH }} || echo "Formatting check completed"
-        continue-on-error: true
+        run: dotnet format ${{ env.SOLUTION_PATH }} --verify-no-changes --verbosity detailed
 
   # Job to run performance benchmarks
   performance-tests:
@@ -186,7 +185,6 @@ jobs:
             exit 1
           fi
           echo "No performance regressions detected."
-        continue-on-error: true
 
   # Summary job that depends on all others
   ci-summary:
@@ -210,6 +208,7 @@ jobs:
           if [ "${{ needs.performance-tests.result }}" = "failure" ]; then
             echo "Performance tests failed!"
             echo "Check the performance-results artifact for details."
+            exit 1
           fi
           
           echo "All CI checks passed!"

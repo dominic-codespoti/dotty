@@ -12,15 +12,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
-    <PackageReference Include="xunit" Version="2.5.0" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
     <!-- Avalonia packages are required for types like Typeface/GlyphTypeface used indirectly by the app code. -->
-    <PackageReference Include="Avalonia" Version="11.3.8" />
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.8" />
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
     <!-- Avalonia headless testing for UI tests -->
-    <PackageReference Include="Avalonia.Headless" Version="11.3.8" />
-    <PackageReference Include="Avalonia.Headless.XUnit" Version="11.3.8" />
-    <PackageReference Include="Moq" Version="4.18.4" />
+    <PackageReference Include="Avalonia.Headless" />
+    <PackageReference Include="Avalonia.Headless.XUnit" />
+    <PackageReference Include="Moq" />
   </ItemGroup>
 </Project>

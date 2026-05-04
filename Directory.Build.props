@@ -1,25 +1,41 @@
 <Project>
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    
-    <!-- Centralized Version Info - Single source of truth for all Dotty components -->
-    <!-- NOTE: When updating, publish Dotty.Abstractions to NuGet first, then update this -->
+
+    <!-- Centralized Version Info -->
     <VersionPrefix>0.3.0</VersionPrefix>
     <AssemblyVersion>0.3.0.0</AssemblyVersion>
     <FileVersion>0.3.0.0</FileVersion>
     <InformationalVersion>$(VersionPrefix)</InformationalVersion>
   </PropertyGroup>
-  
+
+  <!-- Performance: enable dynamic PGO (Profile-Guided Optimization) -->
+  <PropertyGroup>
+    <TieredPGO>true</TieredPGO>
+  </PropertyGroup>
+
+  <!-- Release build optimizations -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>embedded</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
   <!-- AOT and trimming analysis for executable projects targeting net8.0+ -->
   <PropertyGroup Condition="'$(OutputType)' != 'Library' AND $([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0'))">
     <EnableAotAnalyzer>true</EnableAotAnalyzer>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
   </PropertyGroup>
-  
-  <!-- Only set PublishAot and SelfContained when actually publishing, not during build -->
+
+  <!-- Native AOT settings for published executables with RID -->
   <PropertyGroup Condition="'$(OutputType)' != 'Library' AND $([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net8.0')) AND '$(RuntimeIdentifier)' != ''">
     <PublishAot>true</PublishAot>
     <SelfContained>true</SelfContained>
     <IsTrimmable>true</IsTrimmable>
+    <IlcInstructionSet>native</IlcInstructionSet>
+  </PropertyGroup>
+
+  <!-- Optimization preference: favor speed over size -->
+  <PropertyGroup Condition="$([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net9.0'))">
+    <OptimizationPreference>Speed</OptimizationPreference>
   </PropertyGroup>
 </Project>

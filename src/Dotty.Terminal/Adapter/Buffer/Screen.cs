@@ -474,9 +474,10 @@ public class Screen
         int rows = Math.Min(Rows, destination.Rows);
         int cols = Math.Min(Columns, destination.Columns);
         for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
         {
-            destination._cells[_rowMap[r] * Columns + c] = _cells[_rowMap[r] * Columns + c];
+            int sourceOffset = _rowMap[r] * Columns;
+            int destinationOffset = destination._rowMap[r] * destination.Columns;
+            Array.Copy(_cells, sourceOffset, destination._cells, destinationOffset, cols);
         }
         // Copy the row max col cache (but cap at destination columns)
         for (int r = 0; r < rows; r++)

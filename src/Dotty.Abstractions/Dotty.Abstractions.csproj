@@ -23,9 +23,9 @@
   
   <!-- Polyfills for netstandard2.0 compatibility -->
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
-    <PackageReference Include="System.Memory" Version="4.6.3" />
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
-    <PackageReference Include="IsExternalInit" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="System.Memory" />
+    <PackageReference Include="System.Text.Json" />
+    <PackageReference Include="IsExternalInit" PrivateAssets="all" />
   </ItemGroup>
   
   <!-- Embedded resources -->

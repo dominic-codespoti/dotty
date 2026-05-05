@@ -20,10 +20,10 @@ public class PermutationScrollRenderTests
                 var cell = tb.GetCell(r, c);
                 if (cell.IsContinuation)
                 {
-                    Assert.True(string.IsNullOrEmpty(cell.Grapheme), $"Continuation cell at {r},{c} unexpectedly has Grapheme '{cell.Grapheme}'");
+                    Assert.True(cell.Rune == 0, $"Continuation cell at {r},{c} unexpectedly has Rune '{cell.Rune}'");
                 }
 
-                if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
+                if (!cell.IsContinuation && cell.Rune != 0)
                 {
                     int width = Math.Max(1, (int)cell.Width);
                     for (int i = 1; i < width; i++)
@@ -37,7 +37,7 @@ public class PermutationScrollRenderTests
         }
     }
 
-    private static Cell[,] GetScreenCells(TerminalBuffer tb)
+    private static CellHot[,] GetScreenCells(TerminalBuffer tb)
     {
         // Use an internal test accessor on `TerminalBuffer` and `Screen` to
         // obtain the live cells array without reflection. This requires
@@ -225,7 +225,7 @@ public class PermutationScrollRenderTests
                         var cell = cells[rr, cc];
                         if (rnd.NextDouble() < 0.2)
                         {
-                            cell.Grapheme = "界";
+                            cell.Rune = 0x754C; // 界
                             cell.Width = 2;
                             cell.IsContinuation = false;
                             cells[rr, cc] = cell;
@@ -275,7 +275,7 @@ public class PermutationScrollRenderTests
             for (int c = 0; c < cols; c++)
             {
                 var cell = tb.GetCell(r, c);
-                if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
+                if (!cell.IsContinuation && cell.Rune != 0)
                 {
                     int width = Math.Max(1, (int)cell.Width);
                     bool missing = false;
@@ -288,14 +288,14 @@ public class PermutationScrollRenderTests
 
                     if (missing)
                     {
-                        sb.AppendLine($"Base at {r},{c} width={width} Grapheme='{cell.Grapheme}'");
+                        sb.AppendLine($"Base at {r},{c} width={width} Rune={cell.Rune}");
                         // dump nearby cells [c-2 .. c+4]
                         int start = Math.Max(0, c - 2);
                         int end = Math.Min(cols - 1, c + 4);
                         for (int cc = start; cc <= end; cc++)
                         {
                             var nb = tb.GetCell(r, cc);
-                            sb.AppendLine($"  [{r},{cc}] G='{nb.Grapheme ?? ""}' W={nb.Width} cont={nb.IsContinuation}");
+                            sb.AppendLine($"  [{r},{cc}] Rune={nb.Rune} W={nb.Width} cont={nb.IsContinuation}");
                         }
                     }
                 }

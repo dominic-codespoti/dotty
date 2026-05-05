@@ -47,11 +47,7 @@ public class ScrollbackMinimalTest
         for (int i = 0; i < buffer.ScrollbackCount; i++)
         {
             var line = buffer.GetScrollbackLine(i);
-            Console.WriteLine($"  [{i}] Length={line.Length}, Buf={(line.Buffer == null ? "null" : $"len={line.Buffer.Length}")}");
-            if (line.Length > 0 && line.Buffer != null)
-            {
-                Console.WriteLine($"       Content: '{new string(line.Buffer, 0, line.Length)}'");
-            }
+            Console.WriteLine($"  [{i}] Length={line.Length}, Text='{line.Text}'");
         }
         
         if (buffer.ScrollbackCount > 0)

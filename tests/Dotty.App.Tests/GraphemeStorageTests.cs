@@ -10,7 +10,9 @@ public class GraphemeStorageTests
     {
         var buffer = new TerminalBuffer(rows:1, columns:4);
         buffer.WriteText("│".AsSpan(), CellAttributes.Default);
-        Assert.Equal("│", buffer.GetCell(0,0).Grapheme);
+        var cell = buffer.GetCell(0, 0);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal("│", GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex));
     }
 
     [Fact]
@@ -18,6 +20,8 @@ public class GraphemeStorageTests
     {
         var buffer = new TerminalBuffer(rows:1, columns:4);
         buffer.WriteText("\uE0B0".AsSpan(), CellAttributes.Default);
-        Assert.Equal("\uE0B0", buffer.GetCell(0,0).Grapheme);
+        var cell = buffer.GetCell(0, 0);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal("\uE0B0", GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex));
     }
 }

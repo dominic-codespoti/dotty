@@ -47,7 +47,8 @@ public class SearchBufferContentTest
             var cell = buffer.GetCell(row, col);
             if (!cell.IsEmpty && !cell.IsContinuation)
             {
-                sb.Append(cell.Grapheme ?? " ");
+                var cold = buffer.GetColdCell(row, col);
+                sb.Append(GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex) ?? " ");
             }
             else
             {

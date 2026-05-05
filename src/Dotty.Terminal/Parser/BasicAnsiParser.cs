@@ -7,14 +7,6 @@ using Dotty.Abstractions.Parser;
 
 namespace Dotty.Terminal.Parser
 {
-    /// <summary>
-    /// Minimal stateful ANSI/VT parser. Handles printable text and a very small set of control sequences:
-    /// - CSI 2 J (erase display)
-    /// - CSI 3 J (erase saved lines / scrollback)
-    /// - CSI H   (cursor home)
-    /// - CSI ... m (SGR) - forwarded to handler as raw params
-    /// - BEL (0x07) -> OnBell
-    /// </summary>
     public sealed class BasicAnsiParser : ITerminalParser
     {
         private const byte ESC = 0x1b;
@@ -22,8 +14,9 @@ namespace Dotty.Terminal.Parser
         private char[] _charScratch = new char[512];
         private int _leftoverLen = 0;
         private Charset _charset = Charset.Ascii;
-        private readonly bool _throughputMode = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_BENCH_THROUGHPUT"));
-        private int _throughputChunkCounter;
+
+        private static readonly SearchValues<byte> s_controlChars = SearchValues.Create(
+            new byte[] { ESC, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x7F });
 
         public ITerminalHandler? Handler { get; set; }
 
@@ -71,16 +64,6 @@ namespace Dotty.Terminal.Parser
 
         public void Feed(ReadOnlySpan<byte> bytes)
         {
-            if (_throughputMode && _leftoverLen == 0 && bytes.Length > 512)
-            {
-                _throughputChunkCounter++;
-                if ((_throughputChunkCounter & 511) != 0)
-                {
-                    return;
-                }
-            }
-
-            // If we have leftover, allocate a small buffer to concatenate
             byte[]? concat = null;
             ReadOnlySpan<byte> inputSpan;
             if (_leftoverLen > 0)
@@ -100,10 +83,21 @@ namespace Dotty.Terminal.Parser
                 int i = 0;
                 while (i < inputSpan.Length)
                 {
+                    int nextCtrl = inputSpan.Slice(i).IndexOfAny(s_controlChars);
+
+                    int runEnd = nextCtrl >= 0 ? i + nextCtrl : inputSpan.Length;
+
+                    if (runEnd > i)
+                    {
+                        var run = inputSpan.Slice(i, runEnd - i);
+                        DispatchPrintableRun(run);
+                        i = runEnd;
+                        if (i >= inputSpan.Length) break;
+                    }
+
                     byte b = inputSpan[i];
                     if (b == ESC)
                     {
-                        // Try to parse an escape sequence starting at i
                         int seqStart = i;
                         i++;
                         if (i >= inputSpan.Length)
@@ -113,23 +107,20 @@ namespace Dotty.Terminal.Parser
                         }
 
                         byte next = inputSpan[i];
-                        if (next == (byte)'[') // CSI
+                        if (next == (byte)'[')
                         {
-                            i++; // move into params
+                            i++;
                             int paramsStart = i;
-                            // scan until a letter between @ and ~ (final byte)
                             while (i < inputSpan.Length)
                             {
                                 byte cb = inputSpan[i];
                                 if (cb >= 0x40 && cb <= 0x7e)
                                 {
-                                    // final
                                     var final = (char)cb;
                                     var paramSpan = inputSpan.Slice(paramsStart, i - paramsStart);
-                                    
+
                                     if (final == 'M' && paramSpan.Length == 0)
                                     {
-                                        // X11 mouse format: ESC [ M Cb Cx Cy
                                         if (i + 3 < inputSpan.Length)
                                         {
                                             int cbByte = inputSpan[i + 1] - 32;
@@ -146,7 +137,7 @@ namespace Dotty.Terminal.Parser
                                             return;
                                         }
                                     }
-                                    
+
                                     HandleCsi(final, paramSpan);
                                     i++;
                                     break;
@@ -156,166 +147,155 @@ namespace Dotty.Terminal.Parser
 
                             if (i > inputSpan.Length)
                             {
-                                // incomplete
                                 SaveLeftover(inputSpan.Slice(seqStart));
                                 return;
                             }
                         }
-                        else
+                        else if (next == (byte)']')
                         {
-                            // Not CSI - handle OSC (] ... BEL), charset selects, and a few single byte sequences like ESC c
-                            if (next == (byte)']') // OSC - Operating System Command
+                            i++;
+                            int payloadStart = i;
+                            bool finished = false;
+                            while (i < inputSpan.Length)
                             {
-                                i++; // move into payload
-                                int payloadStart = i;
-                                bool finished = false;
-                                while (i < inputSpan.Length)
+                                byte cb = inputSpan[i];
+                                if (cb == 0x07)
                                 {
-                                    byte cb = inputSpan[i];
-                                    if (cb == 0x07) // BEL terminator
-                                    {
-                                        HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
-
-                                        i++;
-                                        finished = true;
-                                        break;
-                                    }
-                                    if (cb == ESC && i + 1 < inputSpan.Length && inputSpan[i + 1] == (byte)'\\')
-                                    {
-                                        HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
-
-                                        i += 2;
-                                        finished = true;
-                                        break;
-                                    }
+                                    HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
                                     i++;
+                                    finished = true;
+                                    break;
                                 }
-
-                                if (!finished)
+                                if (cb == ESC && i + 1 < inputSpan.Length && inputSpan[i + 1] == (byte)'\\')
                                 {
-                                    SaveLeftover(inputSpan.Slice(seqStart));
-                                    return;
+                                    HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
+                                    i += 2;
+                                    finished = true;
+                                    break;
                                 }
-                            }
-                            else if (next == (byte)'c')
-                            {
-                                Handler?.OnFullReset();
                                 i++;
                             }
-                            else if (next == (byte)'7')
-                            {
-                                Handler?.OnSaveCursor();
-                                i++;
-                            }
-                            else if (next == (byte)'8')
-                            {
-                                Handler?.OnRestoreCursor();
-                                i++;
-                            }
-                            else if (next == (byte)'(' || next == (byte)')')
-                            {
-                                i++;
-                                if (i >= inputSpan.Length)
-                                {
-                                    SaveLeftover(inputSpan.Slice(seqStart));
-                                    return;
-                                }
 
-                                var selection = (char)inputSpan[i];
-                                ApplyCharsetSelection(selection);
-                                i++;
-                            }
-                            else if (next == (byte)'=')
+                            if (!finished)
                             {
-                                // DECKPAM - Keypad Application Mode
-                                Handler?.OnSetKeypadApplicationMode(true);
-                                i++;
-                            }
-                            else if (next == (byte)'>')
-                            {
-                                // DECKPNM - Keypad Numeric Mode
-                                Handler?.OnSetKeypadApplicationMode(false);
-                                i++;
-                            }
-                            else
-                            {
-                                i++;
+                                SaveLeftover(inputSpan.Slice(seqStart));
+                                return;
                             }
                         }
+                        else if (next == (byte)'c')
+                        {
+                            Handler?.OnFullReset();
+                            i++;
+                        }
+                        else if (next == (byte)'7')
+                        {
+                            Handler?.OnSaveCursor();
+                            i++;
+                        }
+                        else if (next == (byte)'8')
+                        {
+                            Handler?.OnRestoreCursor();
+                            i++;
+                        }
+                        else if (next == (byte)'(' || next == (byte)')')
+                        {
+                            i++;
+                            if (i >= inputSpan.Length)
+                            {
+                                SaveLeftover(inputSpan.Slice(seqStart));
+                                return;
+                            }
+
+                            var selection = (char)inputSpan[i];
+                            ApplyCharsetSelection(selection);
+                            i++;
+                        }
+                        else if (next == (byte)'=')
+                        {
+                            Handler?.OnSetKeypadApplicationMode(true);
+                            i++;
+                        }
+                        else if (next == (byte)'>')
+                        {
+                            Handler?.OnSetKeypadApplicationMode(false);
+                            i++;
+                        }
+                        else
+                        {
+                            i++;
+                        }
                     }
-                    else if (b == 0x07) // BEL
+                    else if (b == 0x07)
                     {
                         Handler?.OnBell();
                         i++;
                     }
-                    else if (b == 0x08) // BS
+                    else if (b == 0x08)
                     {
                         Handler?.OnCursorBack(1);
                         i++;
                     }
-                    else if (b == 0x09) // TAB
+                    else if (b == 0x09)
                     {
                         Handler?.OnTab();
                         i++;
                     }
-                    else if (b == 0x0A || b == 0x0B || b == 0x0C) // LF, VT, FF
+                    else if (b == 0x0A || b == 0x0B || b == 0x0C)
                     {
                         Handler?.OnLineFeed();
                         i++;
                     }
-                    else if (b == 0x0D) // CR
+                    else if (b == 0x0D)
                     {
                         Handler?.OnCarriageReturn();
                         i++;
                     }
-                    else if (b < 0x20 || b == 0x7F)
-                    {
-                        // ignore other control characters
-                        i++;
-                    }
                     else
                     {
-                        // collect a run of printable bytes until next C0 character or DEL
-                        int start = i;
-                        bool hasNonAscii = false;
-                        while (i < inputSpan.Length && inputSpan[i] >= 0x20 && inputSpan[i] != 0x7F)
-                        {
-                            if (inputSpan[i] >= 0x80) hasNonAscii = true;
-                            i++;
-                        }
-                        var run = inputSpan.Slice(start, i - start);
-                        // Decode UTF-8 run, translate DEC graphics if active, and send to handler
-                        if (run.Length > 0)
-                        {
-                            if (!hasNonAscii && _charset != Charset.DecSpecialGraphics) 
-                            {
-                                // Direct fast path for ascii text runs
-                                Span<char> asc = GetScratch(run.Length, out char[]? rented);
-                                try
-                                {
-                                    for (int j = 0; j < run.Length; j++) { asc[j] = (char)run[j]; }
-                                    Handler?.OnPrint(asc);
-                                }
-                                finally
-                                {
-                                    ReturnScratch(rented);
-                                }
-                            }
-                            else
-                            {
-                                DecodePrintableRun(run);
-                            }
-                        }
+                        i++;
                     }
                 }
 
-                // finished without leftover -> clear leftover
                 _leftoverLen = 0;
             }
             finally
             {
-                // Defer flush to caller to allow batching
-                // Handler?.FlushRender();
+            }
+        }
+
+        private void DispatchPrintableRun(ReadOnlySpan<byte> run)
+        {
+            if (run.IsEmpty) return;
+
+            bool hasNonAscii = false;
+            for (int j = 0; j < run.Length; j++)
+            {
+                if (run[j] >= 0x80)
+                {
+                    hasNonAscii = true;
+                    break;
+                }
+            }
+
+            if (!hasNonAscii && _charset != Charset.DecSpecialGraphics)
+            {
+                Span<char> asc = GetScratch(run.Length, out char[]? rented);
+                try
+                {
+                    for (int j = 0; j < run.Length; j++)
+                    {
+                        asc[j] = (char)run[j];
+                    }
+                    Handler?.OnPrint(asc);
+                }
+                finally
+                {
+                    ReturnScratch(rented);
+                }
+            }
+            else
+            {
+                DecodePrintableRun(run);
             }
         }
 
@@ -351,7 +331,6 @@ namespace Dotty.Terminal.Parser
 
         private void HandleCsi(char final, ReadOnlySpan<byte> paramBytes)
         {
-            // SGR needs the full string for SgrParser
             if (final == 'm' && (paramBytes.IsEmpty || paramBytes[0] != '<'))
             {
                 int maxChars = Encoding.UTF8.GetMaxCharCount(paramBytes.Length);
@@ -368,7 +347,6 @@ namespace Dotty.Terminal.Parser
                 return;
             }
 
-            // Fast path: parse numeric params directly from bytes without string allocation
             Span<int> parsedParams = stackalloc int[8];
             if (TryParseParams(paramBytes, parsedParams, out int paramCount, out bool isPrivate))
             {
@@ -488,7 +466,6 @@ namespace Dotty.Terminal.Parser
             }
             else
             {
-                // Fallback to string-based parsing for unusual param formats
                 HandleCsiFallback(final, paramBytes);
             }
         }
@@ -592,7 +569,7 @@ namespace Dotty.Terminal.Parser
                             isPrivate = true;
                             p = p.Substring(1);
                         }
-                        
+
                         if (isPrivate)
                         {
                             bool enable = final == 'h';

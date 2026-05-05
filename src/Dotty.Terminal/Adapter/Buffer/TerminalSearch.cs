@@ -265,13 +265,18 @@ public sealed class TerminalSearch
                 // This ensures wide characters appear consecutively
                 continue;
             }
-            else if (string.IsNullOrEmpty(cell.Grapheme))
-            {
-                sb.Append(' ');
-            }
             else
             {
-                sb.Append(cell.Grapheme);  // Append full grapheme, not just first char
+                var cold = _buffer.GetColdCell(row, col);
+                var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
+                if (string.IsNullOrEmpty(grapheme))
+                {
+                    sb.Append(' ');
+                }
+                else
+                {
+                    sb.Append(grapheme);  // Append full grapheme, not just first char
+                }
             }
         }
         

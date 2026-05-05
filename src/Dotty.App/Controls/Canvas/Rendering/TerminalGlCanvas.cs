@@ -19,7 +19,8 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
     private int _lastCols = -1;
     private int _lastRows = -1;
 
-    private Dotty.Terminal.Adapter.Cell[] _cellsSnapshot = null!;
+    private CellHot[] _cellsSnapshot = null!;
+    private ColdCell[] _coldSnapshot = null!;
     private int[] _rowMapSnapshot = null!;
 
 
@@ -241,7 +242,7 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
                 System.Threading.Monitor.TryEnter(Buffer.SyncRoot, 0, ref lockTaken);
                 if (lockTaken)
                 {
-                    activeScreen.ReadSnapshot(ref _cellsSnapshot, ref _rowMapSnapshot);
+                    activeScreen.ReadSnapshot(ref _cellsSnapshot, ref _coldSnapshot, ref _rowMapSnapshot);
                 }
             } 
             finally 
@@ -249,25 +250,41 @@ public unsafe class TerminalGlCanvas : OpenGlControlBase
                 if (lockTaken) System.Threading.Monitor.Exit(Buffer.SyncRoot);
             }
 
-            if (_cellsSnapshot == null || _rowMapSnapshot == null) return;
+            if (_cellsSnapshot == null || _coldSnapshot == null || _rowMapSnapshot == null) return;
+            var styleSet = Buffer.StyleSet;
             for (int r = 0; r < rows; r++)
             {
                 int mappedRow = _rowMapSnapshot[r];
                 for (int c = 0; c < cols; c++)
                 {
                     var cell = _cellsSnapshot[mappedRow * cols + c];
+                    var cold = _coldSnapshot[mappedRow * cols + c];
                     
                     int idx = (r * cols + c) * 4;
+
+                    var style = styleSet.GetStyle(cell.StyleId);
                     
                     _gridData[idx] = BitConverter.Int32BitsToSingle(unchecked((int)cell.Rune));
-                    _gridData[idx + 1] = BitConverter.Int32BitsToSingle(unchecked((int)cell.Foreground));
-                    _gridData[idx + 2] = BitConverter.Int32BitsToSingle(unchecked((int)cell.Background));
-                    _gridData[idx + 3] = BitConverter.Int32BitsToSingle(unchecked((int)cell.Flags));
+                    _gridData[idx + 1] = BitConverter.Int32BitsToSingle(unchecked((int)style.Foreground.Argb));
+                    _gridData[idx + 2] = BitConverter.Int32BitsToSingle(unchecked((int)style.Background.Argb));
 
-                    string t = cell.Grapheme ?? string.Empty;
+                    ushort flags = 0;
+                    if (style.Bold) flags |= 1;
+                    if (style.Italic) flags |= 2;
+                    if (style.Underline) flags |= 4;
+                    if (style.DoubleUnderline) flags |= 8;
+                    if (style.Faint) flags |= 16;
+                    if (style.Inverse) flags |= 32;
+                    if (style.Strikethrough) flags |= 64;
+                    if (style.Overline) flags |= 128;
+                    if (style.Invisible) flags |= 256;
+                    if (style.SlowBlink) flags |= 512;
+                    _gridData[idx + 3] = BitConverter.Int32BitsToSingle(unchecked((int)flags));
+
+                    string t = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex) ?? string.Empty;
                     if (!string.IsNullOrEmpty(t) && t != " " && !cell.IsContinuation)
                     {
-                        var key = new GlyphKey(t, null, cell.Bold);
+                        var key = new GlyphKey(t, null, style.Bold);
                         if (_atlas.TryGetGlyph(key, out var info))
                         {
                             _uvData[idx] = info!.X;

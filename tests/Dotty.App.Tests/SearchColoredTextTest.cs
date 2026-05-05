@@ -37,7 +37,9 @@ public class SearchColoredTextTest
             var cell = buffer.GetCell(0, col);
             if (!cell.IsEmpty)
             {
-                Console.WriteLine($"Cell[0,{col}]: Grapheme='{cell.Grapheme}', Rune={cell.Rune}, Foreground={cell.Foreground:X6}");
+                var style = buffer.StyleSet.GetStyle(cell.StyleId);
+                var cold = buffer.GetColdCell(0, col);
+                Console.WriteLine($"Cell[0,{col}]: Rune={cell.Rune}, Foreground={style.Foreground.Argb:X6}");
             }
         }
         
@@ -53,7 +55,8 @@ public class SearchColoredTextTest
             var cell = buffer.GetCell(row, col);
             if (!cell.IsEmpty && !cell.IsContinuation)
             {
-                sb.Append(cell.Grapheme ?? " ");
+                var cold = buffer.GetColdCell(row, col);
+                sb.Append(GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex) ?? " ");
             }
             else
             {

@@ -66,14 +66,18 @@ public class GlyphDiscovery
 
         // sizing not required
         // Row changed: enumerate glyphs and inform atlas
+        var styleSet = buffer.StyleSet;
         for (int col = 0; col < buffer.Columns; col++)
         {
             var cell = buffer.GetCell(row, col);
             if (cell.IsContinuation) continue;
             if (cell.IsEmpty) continue;
 
-            var fg = cell.Foreground == 0 ? null : "#" + (cell.Foreground & 0xFFFFFF).ToString("X6");
-            var key = new GlyphKey(cell.Grapheme ?? string.Empty, fg, cell.Bold);
+            var cold = buffer.GetColdCell(row, col);
+            var style = styleSet.GetStyle(cell.StyleId);
+            var fg = style.Foreground.Argb == 0 ? null : "#" + (style.Foreground.Argb & 0xFFFFFF).ToString("X6");
+            var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex) ?? string.Empty;
+            var key = new GlyphKey(grapheme, fg, style.Bold);
             _atlas.EnsureGlyph(key);
         }
 

@@ -10,10 +10,10 @@ internal sealed class ScreenManager
     private Screen? _savedMain;
     private bool _usingAlt;
 
-    public ScreenManager(int rows, int columns)
+    public ScreenManager(int rows, int columns, int scrollbackCapacity = 10000)
     {
-        _main = new Screen(rows, columns);
-        _alt = new Screen(rows, columns);
+        _main = new Screen(rows, columns, scrollbackCapacity);
+        _alt = new Screen(rows, columns, scrollbackCapacity);
     }
 
     public Screen Active => _usingAlt ? _alt : _main;

@@ -12,9 +12,10 @@ public class ScreenContinuationTests
 
         // write a double-width grapheme at (0,0)
         ref var baseCell = ref screen.GetCellRef(0, 0);
-        baseCell.Grapheme = "界";
+        baseCell.Rune = 0x754C; // 界
         baseCell.Width = 2;
         baseCell.IsContinuation = false;
+        screen.SetColdGraphemeIndex(0, 0, GraphemeHelper.StoreGrapheme("界"));
 
         // mark continuation column
         ref var cont = ref screen.GetCellRef(0, 1);
@@ -39,19 +40,16 @@ public class ScreenContinuationTests
         // Simulate a corrupted state where the base thinks it's width=2
         // but the continuation cell has lost its IsContinuation marker.
         ref var baseCell = ref screen.GetCellRef(0, 0);
-        baseCell.Grapheme = "界";
+        baseCell.Rune = 0x754C; // 界
         baseCell.Width = 2;
         baseCell.IsContinuation = false;
+        screen.SetColdGraphemeIndex(0, 0, GraphemeHelper.StoreGrapheme("界"));
 
         // continuation cell appears not marked as continuation (corrupted)
         ref var cont = ref screen.GetCellRef(0, 1);
         cont.Reset();
         cont.IsContinuation = false;
 
-        // Historically, calling ClearCell on the continuation column could
-        // leave the base grapheme orphaned. We assert the desired behavior
-        // (clear the base) so this test will fail if the implementation
-        // doesn't handle this corrupted case.
         screen.ClearCell(0, 1);
 
         var afterBase = screen.GetCell(0, 0);

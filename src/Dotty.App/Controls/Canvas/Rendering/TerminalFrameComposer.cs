@@ -2,6 +2,7 @@ using System;
 using System.Text;
 using System.Collections.Generic;
 using Dotty.Terminal.Adapter;
+using Dotty.App.Rendering;
 using SkiaSharp;
 
 namespace Dotty.App.Rendering;
@@ -99,7 +100,10 @@ public sealed class TerminalFrameComposer : IDisposable
         // ---- glyphs ----
         SyncGlyphPaint(paint);
 
-        DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+        if (GlyphAtlas != null)
+            DrawGlyphsWithShader(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+        else
+            DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
     }
 
     public void ResetCaches()
@@ -271,13 +275,144 @@ public sealed class TerminalFrameComposer : IDisposable
         canvas.Restore();
     }
 
-    // ============================================================
+    //     ============================================================
     // GLYPH RENDERING
     // ============================================================
+
+    private static readonly string s_glyphSkSL = @"
+        uniform shader atlas;
+        uniform shader cellData;
+        uniform float2 u_cellSize;
+        uniform float2 u_gridSize;
+        uniform float2 u_atlasSize;
+
+        half4 main(float2 coord) {
+            float2 cellCoord = floor(coord / u_cellSize);
+            if (cellCoord.x >= u_gridSize.x || cellCoord.y >= u_gridSize.y)
+                return half4(0);
+
+            float2 cellUV = (cellCoord + 0.5) / u_gridSize;
+            half4 cell = cellData.eval(cellUV);
+
+            float2 inCell = coord - cellCoord * u_cellSize;
+            float2 glyphPos = cell.xy * 255.0;
+            float2 glyphSize = half2(cell.z * 4.0, cell.w * 4.0);
+
+            half4 fgColor = half4(0.88, 0.88, 0.88, 1.0);
+            float flags = 0;
+            half4 bgColor = half4(0, 0, 0, 1);
+
+            if (glyphSize.x > 0 && glyphSize.y > 0) {
+                float2 offset = (u_cellSize - glyphSize) * 0.5;
+                float2 samplePos = inCell - offset;
+                if (samplePos.x >= 0 && samplePos.x < glyphSize.x &&
+                    samplePos.y >= 0 && samplePos.y < glyphSize.y) {
+                    float2 atlasUV = (glyphPos + samplePos) / u_atlasSize;
+                    half4 texColor = atlas.eval(atlasUV);
+                    half4 blended = half4(mix(bgColor.rgb, fgColor.rgb, texColor.a), 1.0);
+                    return blended;
+                }
+            }
+            return bgColor;
+        }";
+
+    private void DrawGlyphsWithShader(
+        SKCanvas canvas,
+        TerminalBuffer buffer,
+        SKPaint paint,
+        float cellW,
+        float cellH,
+        int startRow,
+        int endRow)
+    {
+        if (GlyphAtlas == null) { DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow); return; }
+
+        int cols = buffer.Columns;
+        int rows = endRow - startRow + 1;
+
+        // Get atlas snapshot
+        using var atlasImage = GlyphAtlas.CreateSnapshot();
+        if (atlasImage == null) { DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow); return; }
+
+        // Build cell data texture (RGBA8888, rows×cols pixels)
+        // R: atlas U / 255, G: atlas V / 255, B: glyph width / 4, A: glyph height / 4
+        byte[] pixels = new byte[cols * rows * 4];
+
+        for (int r = startRow; r <= endRow; r++)
+        {
+            ClassifyRowCells(buffer, r);
+            for (int c = 0; c < cols; c++)
+            {
+                int pi = (r - startRow) * cols + c;
+                var cc = _cellClasses[c];
+                if (!cc.ShouldDrawGlyph)
+                {
+                    pixels[pi * 4 + 2] = 0;
+                    pixels[pi * 4 + 3] = 0;
+                    continue;
+                }
+
+                var key = new GlyphKey(cc.Grapheme, null, cc.Bold);
+                if (GlyphAtlas.TryGetGlyph(key, out var info))
+                {
+                    float uNorm = (float)info.X / atlasImage.Width;
+                    float vNorm = (float)info.Y / atlasImage.Height;
+                    pixels[pi * 4 + 0] = (byte)Math.Clamp(uNorm * 255, 0, 255);
+                    pixels[pi * 4 + 1] = (byte)Math.Clamp(vNorm * 255, 0, 255);
+                    pixels[pi * 4 + 2] = (byte)Math.Clamp(info.Width / 4f, 0, 255);
+                    pixels[pi * 4 + 3] = (byte)Math.Clamp(info.Height / 4f, 0, 255);
+                }
+                else
+                {
+                    pixels[pi * 4 + 2] = 0;
+                    pixels[pi * 4 + 3] = 0;
+                }
+            }
+        }
+
+        using var cellBitmap = new SKBitmap(cols, rows, SKColorType.Rgba8888, SKAlphaType.Premul);
+        System.Runtime.InteropServices.Marshal.Copy(pixels, 0, cellBitmap.GetPixels(), pixels.Length);
+        cellBitmap.NotifyPixelsChanged();
+        using var cellImage = SKImage.FromBitmap(cellBitmap);
+
+        // Create or reuse the runtime effect
+        if (_glyphShaderEffect == null)
+        {
+            _glyphShaderEffect = SKRuntimeEffect.Create(s_glyphSkSL, out var errors);
+            if (_glyphShaderEffect == null)
+            {
+                DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow);
+                return;
+            }
+        }
+
+        // Create uniforms
+        var uniforms = new SKRuntimeEffectUniforms(_glyphShaderEffect);
+        uniforms["u_cellSize"] = new float[] { cellW, cellH };
+        uniforms["u_gridSize"] = new float[] { cols, rows };
+        uniforms["u_atlasSize"] = new float[] { atlasImage.Width, atlasImage.Height };
+
+        // Create child shaders: atlas texture + cell data
+        var children = new SKRuntimeEffectChildren(_glyphShaderEffect);
+        children["atlas"] = atlasImage.ToShader();
+        children["cellData"] = cellImage.ToShader();
+
+        using var shader = _glyphShaderEffect.ToShader(false, uniforms, children);
+        if (shader == null) { DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow); return; }
+
+        using var shaderPaint = new SKPaint { Shader = shader };
+        float totalW = cols * cellW;
+        float totalH = rows * cellH;
+        canvas.DrawRect(0, startRow * cellH, totalW, totalH, shaderPaint);
+    }
 
     // Default hyperlink color (blue) - can be made configurable
     private static readonly SKColor HyperlinkColor = new SKColor(0xFF, 0x64, 0xB0); // Accent blue
     private static readonly SKColor HyperlinkUnderlineColor = new SKColor(0xFF, 0x64, 0xB0);
+
+    public GlyphAtlas? GlyphAtlas { get; set; }
+    private SKRuntimeEffect? _glyphShaderEffect;
+    private static readonly SKColor s_shaderBgDefault = new SKColor(0x00, 0x00, 0x00);
 
     private void DrawGlyphs(
         SKCanvas canvas,
@@ -289,10 +424,6 @@ public sealed class TerminalFrameComposer : IDisposable
         int endRow)
     {
         var fm = _glyphPaint.FontMetrics;
-        // Align baseline to font ascent from the row top (same convention used
-        // by GlyphAtlas) instead of centering glyphs in the cell. Centering
-        // introduces extra inter-row whitespace that shows up as horizontal
-        // striping in dense ASCII/box art.
         float baselineOffset = -fm.Ascent;
 
         var defaultColor = paint.Color;
@@ -317,33 +448,18 @@ public sealed class TerminalFrameComposer : IDisposable
                 var cc = _cellClasses[col];
                 if (!cc.ShouldDrawGlyph) continue;
 
-                var raw = cc.RawCell;
-                if (raw.Invisible) continue;
-                if (raw.SlowBlink && !isBlinkVisible) continue;
+                if (cc.Invisible) continue;
+                if (cc.SlowBlink && !isBlinkVisible) continue;
 
-                // Check if this cell has a hyperlink
                 bool hasHyperlink = cc.HyperlinkId != 0;
-                
-                // Use hyperlink color if cell has a hyperlink, otherwise use cell foreground
                 var fgColor = cc.HasFg ? cc.Fg : defaultColor;
-                if (hasHyperlink)
-                {
-                    fgColor = HyperlinkColor;
-                }
-                _glyphPaint.Color = fgColor;
+                if (hasHyperlink) fgColor = HyperlinkColor;
 
                 bool disableSmoothing = IsPixelGridRune(cc.FirstRune);
-                _glyphPaint.IsAntialias = disableSmoothing ? false : baseAntialias;
-                _glyphPaint.SubpixelText = disableSmoothing ? false : baseSubpixel;
-                _glyphPaint.LcdRenderText = disableSmoothing ? false : baseLcd;
 
-                // Use a stroke-based embolden instead of Skia's FakeBoldText.
-                _glyphPaint.StrokeWidth = raw.Bold ? 0.8f : 0f;
-                _glyphPaint.Style = SKPaintStyle.Fill;
-
-                // Snap X positions to integer pixels to align glyphs to the grid.
                 float x = MathF.Round(col * cellW);
                 bool renderedAsBlockGeometry = false;
+
                 if (IsGeometryRenderedRune(cc.FirstRune))
                 {
                     float left = x;
@@ -354,6 +470,10 @@ public sealed class TerminalFrameComposer : IDisposable
                     int rectCount = BuildGeometryRects(cc.FirstRune, geometryRects, left, top, right, bottom);
                     if (rectCount > 0)
                     {
+                        _glyphPaint.Color = fgColor;
+                        _glyphPaint.IsAntialias = disableSmoothing ? false : baseAntialias;
+                        _glyphPaint.SubpixelText = disableSmoothing ? false : baseSubpixel;
+                        _glyphPaint.LcdRenderText = disableSmoothing ? false : baseLcd;
                         _glyphPaint.Style = SKPaintStyle.Fill;
                         _glyphPaint.StrokeWidth = 0f;
                         for (int i = 0; i < rectCount; i++)
@@ -368,52 +488,48 @@ public sealed class TerminalFrameComposer : IDisposable
 
                 if (!renderedAsBlockGeometry)
                 {
+                    _glyphPaint.Color = fgColor;
+                    bool disableSmoothing2 = IsPixelGridRune(cc.FirstRune);
+                    _glyphPaint.IsAntialias = disableSmoothing2 ? false : baseAntialias;
+                    _glyphPaint.SubpixelText = disableSmoothing2 ? false : baseSubpixel;
+                    _glyphPaint.LcdRenderText = disableSmoothing2 ? false : baseLcd;
+                    _glyphPaint.StrokeWidth = cc.Bold ? 0.8f : 0f;
+                    _glyphPaint.Style = SKPaintStyle.Fill;
                     canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
                 }
 
-                // Determine if we need to draw any lines (underline, strikethrough, etc.)
                 bool hasLine = !renderedAsBlockGeometry
-                    && (raw.Underline || raw.DoubleUnderline || raw.Strikethrough || raw.Overline || hasHyperlink);
+                    && (cc.Underline || cc.DoubleUnderline || cc.Strikethrough || cc.Overline || hasHyperlink);
                 if (hasLine)
                 {
-                    // For hyperlinks, use hyperlink underline color; otherwise use underline color or foreground
-                    if (hasHyperlink)
-                    {
-                        _linePaint.Color = HyperlinkUnderlineColor;
-                    }
-                    else
-                    {
-                        _linePaint.Color = ((raw.UnderlineColor != 0)) ? new SKColor(raw.UnderlineColor) : fgColor;
-                    }
-                    
+                    if (hasHyperlink) _linePaint.Color = HyperlinkUnderlineColor;
+                    else _linePaint.Color = (cc.UnderlineColorArgb != 0) ? new SKColor(cc.UnderlineColorArgb) : fgColor;
+
                     float lineW = cellW * cc.Width;
-                    
-                    // Always draw underline for hyperlinks
-                    if (raw.Underline || hasHyperlink)
+                    if (cc.Underline || hasHyperlink)
                     {
                         float y = baseline + fm.Descent * 0.5f;
                         canvas.DrawLine(x, y, x + lineW, y, _linePaint);
                     }
-                    if (raw.DoubleUnderline)
+                    if (cc.DoubleUnderline)
                     {
                         float y1 = baseline + fm.Descent * 0.3f;
                         float y2 = baseline + fm.Descent * 0.8f;
                         canvas.DrawLine(x, y1, x + lineW, y1, _linePaint);
                         canvas.DrawLine(x, y2, x + lineW, y2, _linePaint);
                     }
-                    if (raw.Strikethrough)
+                    if (cc.Strikethrough)
                     {
                         float y = baseline - (fm.Ascent * -0.3f);
                         canvas.DrawLine(x, y, x + lineW, y, _linePaint);
                     }
-                    if (raw.Overline)
+                    if (cc.Overline)
                     {
                         float y = baseline + fm.Ascent * 1.05f;
                         canvas.DrawLine(x, y, x + lineW, y, _linePaint);
                     }
                 }
             }
-
         }
     }
 
@@ -465,8 +581,18 @@ public sealed class TerminalFrameComposer : IDisposable
         public int FirstRune;
         public bool IsSeparatorGlyph;
         public bool ShouldDrawGlyph;
-        public Cell RawCell;
+        public CellHot RawCell;
         public ushort HyperlinkId;
+
+        // Resolved style fields
+        public bool Bold;
+        public bool Underline;
+        public bool DoubleUnderline;
+        public bool Strikethrough;
+        public bool Overline;
+        public bool Invisible;
+        public bool SlowBlink;
+        public uint UnderlineColorArgb;
     }
 
     private void ClassifyRowCells(TerminalBuffer buffer, int row)
@@ -476,6 +602,7 @@ public sealed class TerminalFrameComposer : IDisposable
         for (int col = 0; col < buffer.Columns; col++)
         {
             var cell = buffer.GetCell(row, col);
+            var cold = buffer.GetColdCell(row, col);
 
             var cc = new CellClass();
             cc.RawCell = cell;
@@ -483,21 +610,31 @@ public sealed class TerminalFrameComposer : IDisposable
             cc.Width = Math.Max(1, (int)cell.Width);
 
             
-            cc.HasBg = cell.Background != 0;
-            cc.Bg = cell.Background != 0 ? ToSkColor(cell.Background) : default;
+            var style = buffer.StyleSet.GetStyle(cell.StyleId);
+            cc.HasBg = style.Background.Argb != 0;
+            cc.Bg = style.Background.Argb != 0 ? ToSkColor(style.Background.Argb) : default;
             if (cc.HasBg && cc.Bg.Alpha == 0) cc.Bg = cc.Bg.WithAlpha(255);
 
             
-            cc.HasFg = cell.Foreground != 0;
-            cc.Fg = cell.Foreground != 0 ? ToSkColor(cell.Foreground) : default;
+            cc.HasFg = style.Foreground.Argb != 0;
+            cc.Fg = style.Foreground.Argb != 0 ? ToSkColor(style.Foreground.Argb) : default;
 
-            cc.Grapheme = cell.Grapheme ?? string.Empty;
+            cc.Bold = style.Bold;
+            cc.Underline = style.Underline;
+            cc.DoubleUnderline = style.DoubleUnderline;
+            cc.Strikethrough = style.Strikethrough;
+            cc.Overline = style.Overline;
+            cc.Invisible = style.Invisible;
+            cc.SlowBlink = style.SlowBlink;
+            cc.UnderlineColorArgb = style.UnderlineColor.Argb;
+
+            cc.Grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex) ?? string.Empty;
             cc.FirstRune = GetFirstRune(cc.Grapheme);
             cc.IsSeparatorGlyph = cc.FirstRune != -1 && IsLikelySeparatorRune(cc.FirstRune);
 
             cc.ShouldDrawGlyph = !cc.IsContinuation && !cell.IsEmpty && !(cc.IsSeparatorGlyph && !cc.HasBg);
 
-            cc.HyperlinkId = cell.HyperlinkId;
+            cc.HyperlinkId = cold.HyperlinkId;
 
             _cellClasses[col] = cc;
         }

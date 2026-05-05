@@ -82,6 +82,12 @@ public class Program
             summaries.Add(BenchmarkRunner.Run<LatencyBenchmarks>(benchmarkConfig));
         }
 
+        if (string.IsNullOrEmpty(filter) || filter.Contains("bulk"))
+        {
+            Console.WriteLine("Running Bulk Output Benchmarks...");
+            summaries.Add(BenchmarkRunner.Run<BulkOutputBenchmark>(benchmarkConfig));
+        }
+
         // Generate reports
         GenerateReports(summaries);
 

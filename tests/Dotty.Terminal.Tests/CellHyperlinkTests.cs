@@ -1,11 +1,12 @@
 using Dotty.Terminal.Adapter;
+using Dotty.Terminal.Adapter.Buffer;
 using Xunit;
 
 namespace Dotty.Terminal.Tests;
 
 /// <summary>
 /// Comprehensive tests for Cell hyperlink functionality.
-/// Tests the HyperlinkId field in the Cell struct.
+/// HyperlinkId is now stored in ColdCell.
 /// </summary>
 public class CellHyperlinkTests
 {
@@ -14,35 +15,24 @@ public class CellHyperlinkTests
     [Fact]
     public void Cell_DefaultHyperlinkId_IsZero()
     {
-        // Arrange & Act
-        var cell = new Cell();
-        
-        // Assert - Default hyperlink ID should be 0 (no hyperlink)
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = new ColdCell();
+        Assert.Equal((ushort)0, cold.HyperlinkId);
     }
 
     [Fact]
     public void Cell_SetHyperlinkId_StoresCorrectly()
     {
-        // Arrange
-        var cell = new Cell();
-        
-        // Act
-        cell.HyperlinkId = 5;
-        
-        // Assert
-        Assert.Equal((ushort)5, cell.HyperlinkId);
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+        Assert.Equal((ushort)5, cold.HyperlinkId);
     }
 
     [Fact]
     public void Cell_HyperlinkIdZero_MeansNoHyperlink()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.HyperlinkId = 0;
-        
-        // Assert - 0 is the sentinel value for "no hyperlink"
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = new ColdCell();
+        cold.HyperlinkId = 0;
+        Assert.Equal((ushort)0, cold.HyperlinkId);
     }
 
     [Theory]
@@ -52,14 +42,9 @@ public class CellHyperlinkTests
     [InlineData(65535)]
     public void Cell_SetVariousHyperlinkIds_StoresCorrectly(ushort id)
     {
-        // Arrange
-        var cell = new Cell();
-        
-        // Act
-        cell.HyperlinkId = id;
-        
-        // Assert
-        Assert.Equal(id, cell.HyperlinkId);
+        var cold = new ColdCell();
+        cold.HyperlinkId = id;
+        Assert.Equal(id, cold.HyperlinkId);
     }
 
     #endregion
@@ -69,49 +54,37 @@ public class CellHyperlinkTests
     [Fact]
     public void Cell_Reset_ClearsHyperlinkId()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.HyperlinkId = 10;
-        cell.Rune = 'A';
-        cell.Width = 1;
-        
-        // Act
-        cell.Reset();
-        
-        // Assert
-        Assert.Equal((ushort)0, cell.HyperlinkId);
-        Assert.Equal((uint)0, cell.Rune);
-        Assert.Equal((byte)0, cell.Width);
+        var cold = new ColdCell();
+        cold.HyperlinkId = 10;
+        var hot = new CellHot();
+        hot.Rune = 'A';
+        hot.Reset();
+        cold.Reset();
+        Assert.Equal((ushort)0, cold.HyperlinkId);
+        Assert.Equal((uint)0, hot.Rune);
     }
 
     [Fact]
     public void Cell_Reset_AllFieldsCleared()
     {
-        // Arrange - Set all fields
-        var cell = new Cell
+        var hot = new CellHot
         {
             Rune = 'A',
-            Foreground = 0xFF0000,
-            Background = 0x00FF00,
-            UnderlineColor = 0x0000FF,
-            Flags = 0xFFFF,
+            StyleId = 42,
             Width = 2,
             IsContinuation = true,
-            HyperlinkId = 42
         };
-        
-        // Act
-        cell.Reset();
-        
-        // Assert - All fields should be reset
-        Assert.Equal((uint)0, cell.Rune);
-        Assert.Equal((uint)0, cell.Foreground);
-        Assert.Equal((uint)0, cell.Background);
-        Assert.Equal((uint)0, cell.UnderlineColor);
-        Assert.Equal((ushort)0, cell.Flags);
-        Assert.Equal((byte)0, cell.Width);
-        Assert.False(cell.IsContinuation);
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = new ColdCell();
+        cold.HyperlinkId = 42;
+
+        hot.Reset();
+        cold.Reset();
+
+        Assert.Equal((uint)0, hot.Rune);
+        Assert.Equal((ushort)0, hot.StyleId);
+        Assert.Equal((byte)1, hot.Width);
+        Assert.False(hot.IsContinuation);
+        Assert.Equal((ushort)0, cold.HyperlinkId);
     }
 
     #endregion
@@ -121,65 +94,47 @@ public class CellHyperlinkTests
     [Fact]
     public void Cell_IsEmpty_WithHyperlink_ReturnsFalse()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.HyperlinkId = 5;
-        
-        // Act & Assert
-        // Note: IsEmpty only checks Rune and IsContinuation, not HyperlinkId
-        // This is intentional - a cell can be empty (no content) but still have attributes
-        Assert.True(cell.IsEmpty);
+        var hot = new CellHot();
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+        Assert.True(hot.IsEmpty);
     }
 
     [Fact]
     public void Cell_IsEmpty_WithContentAndHyperlink_ReturnsFalse()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.SetAscii('A');
-        cell.HyperlinkId = 5;
-        
-        // Act & Assert
-        Assert.False(cell.IsEmpty);
+        var hot = new CellHot();
+        hot.SetAscii('A');
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+        Assert.False(hot.IsEmpty);
     }
 
     #endregion
 
-    #region Cell Flags Independence
+    #region Cell StyleId Independence
 
     [Fact]
-    public void Cell_HyperlinkIdIndependentOfFlags()
+    public void Cell_HyperlinkIdIndependentOfStyleId()
     {
-        // Arrange
-        var cell = new Cell();
-        
-        // Act - Set various flags
-        cell.Bold = true;
-        cell.Italic = true;
-        cell.Underline = true;
-        cell.HyperlinkId = 10;
-        
-        // Assert - HyperlinkId should be independent of Flags
-        Assert.Equal((ushort)10, cell.HyperlinkId);
-        Assert.True(cell.Bold);
-        Assert.True(cell.Italic);
-        Assert.True(cell.Underline);
+        var hot = new CellHot();
+        hot.StyleId = 7;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 10;
+        Assert.Equal((ushort)10, cold.HyperlinkId);
+        Assert.Equal((ushort)7, hot.StyleId);
     }
 
     [Fact]
-    public void Cell_SetHyperlinkId_DoesNotAffectFlags()
+    public void Cell_SetHyperlinkId_DoesNotAffectStyleId()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.Flags = 0xFF;
-        var originalFlags = cell.Flags;
-        
-        // Act
-        cell.HyperlinkId = 42;
-        
-        // Assert - Flags should be unchanged
-        Assert.Equal(originalFlags, cell.Flags);
-        Assert.Equal((ushort)42, cell.HyperlinkId);
+        var hot = new CellHot();
+        hot.StyleId = 7;
+        var originalStyleId = hot.StyleId;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 42;
+        Assert.Equal(originalStyleId, hot.StyleId);
+        Assert.Equal((ushort)42, cold.HyperlinkId);
     }
 
     #endregion
@@ -189,65 +144,93 @@ public class CellHyperlinkTests
     [Fact]
     public void Cell_HyperlinkWithBold_BothPreserved()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.SetAscii('A');
-        cell.HyperlinkId = 5;
-        cell.Bold = true;
-        
-        // Assert
-        Assert.Equal('A', (char)cell.Rune);
-        Assert.Equal((ushort)5, cell.HyperlinkId);
-        Assert.True(cell.Bold);
+        var buffer = new TerminalBuffer(rows: 10, columns: 80);
+        var styleSet = buffer.StyleSet;
+        var attrs = new CellAttributes { Bold = true, HyperlinkId = 5 };
+        ushort styleId = styleSet.GetOrCreateId(in attrs);
+        var hot = new CellHot();
+        hot.SetAscii('A');
+        hot.StyleId = styleId;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+
+        Assert.Equal('A', (char)hot.Rune);
+        Assert.Equal((ushort)5, cold.HyperlinkId);
+
+        var resolved = styleSet.GetStyle(hot.StyleId);
+        Assert.True(resolved.Bold);
     }
 
     [Fact]
     public void Cell_HyperlinkWithUnderline_BothPreserved()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.SetAscii('A');
-        cell.HyperlinkId = 5;
-        cell.Underline = true;
-        
-        // Assert
-        Assert.True(cell.Underline);
-        Assert.Equal((ushort)5, cell.HyperlinkId);
+        var buffer = new TerminalBuffer(rows: 10, columns: 80);
+        var styleSet = buffer.StyleSet;
+        var attrs = new CellAttributes { Underline = true, HyperlinkId = 5 };
+        ushort styleId = styleSet.GetOrCreateId(in attrs);
+        var hot = new CellHot();
+        hot.SetAscii('A');
+        hot.StyleId = styleId;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+
+        Assert.Equal((ushort)5, cold.HyperlinkId);
+
+        var resolved = styleSet.GetStyle(hot.StyleId);
+        Assert.True(resolved.Underline);
     }
 
     [Fact]
     public void Cell_HyperlinkWithColors_AllPreserved()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.SetAscii('A');
-        cell.HyperlinkId = 5;
-        cell.Foreground = 0xFF0000;
-        cell.Background = 0x00FF00;
-        
-        // Assert
-        Assert.Equal((uint)0xFF0000, cell.Foreground);
-        Assert.Equal((uint)0x00FF00, cell.Background);
-        Assert.Equal((ushort)5, cell.HyperlinkId);
+        var buffer = new TerminalBuffer(rows: 10, columns: 80);
+        var styleSet = buffer.StyleSet;
+        var attrs = new CellAttributes
+        {
+            Foreground = new SgrColorArgb(0xFFFF0000),
+            Background = new SgrColorArgb(0xFF00FF00),
+            HyperlinkId = 5
+        };
+        ushort styleId = styleSet.GetOrCreateId(in attrs);
+        var hot = new CellHot();
+        hot.SetAscii('A');
+        hot.StyleId = styleId;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+
+        var resolved = styleSet.GetStyle(hot.StyleId);
+        Assert.Equal((uint)0xFFFF0000, resolved.Foreground.Argb);
+        Assert.Equal((uint)0xFF00FF00, resolved.Background.Argb);
+        Assert.Equal((ushort)5, cold.HyperlinkId);
     }
 
     [Fact]
     public void Cell_FullHyperlinkStyle_AllAttributesPreserved()
     {
-        // Arrange - Simulate a fully styled hyperlink cell
-        var cell = new Cell();
-        cell.SetAscii('L');
-        cell.HyperlinkId = 10;
-        cell.Bold = true;
-        cell.Underline = true;
-        cell.Foreground = 0x0000FF; // Blue for hyperlinks
-        
-        // Assert
-        Assert.Equal('L', (char)cell.Rune);
-        Assert.Equal((ushort)10, cell.HyperlinkId);
-        Assert.True(cell.Bold);
-        Assert.True(cell.Underline);
-        Assert.Equal((uint)0x0000FF, cell.Foreground);
+        var buffer = new TerminalBuffer(rows: 10, columns: 80);
+        var styleSet = buffer.StyleSet;
+        var attrs = new CellAttributes
+        {
+            Bold = true,
+            Underline = true,
+            Foreground = new SgrColorArgb(0xFF0000FF),
+            HyperlinkId = 10
+        };
+        ushort styleId = styleSet.GetOrCreateId(in attrs);
+
+        var hot = new CellHot();
+        hot.SetAscii('L');
+        hot.StyleId = styleId;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 10;
+
+        Assert.Equal('L', (char)hot.Rune);
+        Assert.Equal((ushort)10, cold.HyperlinkId);
+
+        var resolved = styleSet.GetStyle(hot.StyleId);
+        Assert.True(resolved.Bold);
+        Assert.True(resolved.Underline);
+        Assert.Equal((uint)0xFF0000FF, resolved.Foreground.Argb);
     }
 
     #endregion
@@ -257,28 +240,26 @@ public class CellHyperlinkTests
     [Fact]
     public void Cell_WideCharHyperlink_BaseCellHasLink()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.Grapheme = "\u4e2d"; // Chinese character (wide)
-        cell.HyperlinkId = 5;
-        cell.Width = 2;
-        
-        // Assert
-        Assert.Equal((ushort)5, cell.HyperlinkId);
-        Assert.Equal((byte)2, cell.Width);
+        var hot = new CellHot();
+        hot.Rune = 0x4e2d;
+        hot.Width = 2;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+
+        Assert.Equal((ushort)5, cold.HyperlinkId);
+        Assert.Equal((byte)2, hot.Width);
     }
 
     [Fact]
     public void Cell_ContinuationCell_CanHaveHyperlink()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.IsContinuation = true;
-        cell.HyperlinkId = 5;
-        
-        // Assert - Continuation cells can have hyperlinks for proper rendering
-        Assert.True(cell.IsContinuation);
-        Assert.Equal((ushort)5, cell.HyperlinkId);
+        var hot = new CellHot();
+        hot.IsContinuation = true;
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+
+        Assert.True(hot.IsContinuation);
+        Assert.Equal((ushort)5, cold.HyperlinkId);
     }
 
     #endregion
@@ -288,34 +269,30 @@ public class CellHyperlinkTests
     [Fact]
     public void Cell_IsValueType_PassedByValue()
     {
-        // Arrange
-        var cell1 = new Cell();
-        cell1.HyperlinkId = 5;
-        cell1.SetAscii('A');
-        
-        // Act - cell2 is a copy
-        var cell2 = cell1;
-        cell2.HyperlinkId = 10;
-        
-        // Assert - cell1 should be unchanged
-        Assert.Equal((ushort)5, cell1.HyperlinkId);
-        Assert.Equal((ushort)10, cell2.HyperlinkId);
+        var cold1 = new ColdCell();
+        cold1.HyperlinkId = 5;
+        var hot1 = new CellHot();
+        hot1.SetAscii('A');
+
+        var cold2 = cold1;
+        cold2.HyperlinkId = 10;
+
+        Assert.Equal((ushort)5, cold1.HyperlinkId);
+        Assert.Equal((ushort)10, cold2.HyperlinkId);
     }
 
     [Fact]
     public void Cell_ReferenceSemantics_ModifiesOriginal()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.SetAscii('A');
-        cell.HyperlinkId = 5;
-        
-        // Act - Use ref to modify
-        ref var cellRef = ref cell;
-        cellRef.HyperlinkId = 10;
-        
-        // Assert
-        Assert.Equal((ushort)10, cell.HyperlinkId);
+        var hot = new CellHot();
+        hot.SetAscii('A');
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+
+        ref var coldRef = ref cold;
+        coldRef.HyperlinkId = 10;
+
+        Assert.Equal((ushort)10, cold.HyperlinkId);
     }
 
     #endregion
@@ -325,56 +302,39 @@ public class CellHyperlinkTests
     [Fact]
     public void Cell_MaxHyperlinkId_Valid()
     {
-        // Arrange
-        var cell = new Cell();
-        
-        // Act - Max ushort value
-        cell.HyperlinkId = ushort.MaxValue;
-        
-        // Assert
-        Assert.Equal(ushort.MaxValue, cell.HyperlinkId);
+        var cold = new ColdCell();
+        cold.HyperlinkId = ushort.MaxValue;
+        Assert.Equal(ushort.MaxValue, cold.HyperlinkId);
     }
 
     [Fact]
     public void Cell_HyperlinkIdOverflow_Wraps()
     {
-        // Arrange
-        var cell = new Cell();
         ushort max = ushort.MaxValue;
-        
-        // Act & Assert - ushort wraps on overflow
-        // This tests the behavior of the ushort type
         Assert.Equal(65535, max);
     }
 
     [Fact]
     public void Cell_SetGrapheme_DoesNotAffectHyperlinkId()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.HyperlinkId = 5;
-        
-        // Act
-        cell.Grapheme = "Hello";
-        
-        // Assert
-        Assert.Equal((ushort)5, cell.HyperlinkId);
-        Assert.Equal("Hello", cell.Grapheme);
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+        var graphemeIdx = GraphemeHelper.StoreGrapheme("Hello");
+        var hot = new CellHot();
+        hot.Rune = 0x4f60;
+        Assert.Equal((ushort)5, cold.HyperlinkId);
+        Assert.Equal("Hello", GraphemeHelper.Resolve(hot.Rune, graphemeIdx));
     }
 
     [Fact]
     public void Cell_SetAscii_DoesNotAffectHyperlinkId()
     {
-        // Arrange
-        var cell = new Cell();
-        cell.HyperlinkId = 5;
-        
-        // Act
-        cell.SetAscii('Z');
-        
-        // Assert
-        Assert.Equal((ushort)5, cell.HyperlinkId);
-        Assert.Equal('Z', (char)cell.Rune);
+        var hot = new CellHot();
+        var cold = new ColdCell();
+        cold.HyperlinkId = 5;
+        hot.SetAscii('Z');
+        Assert.Equal((ushort)5, cold.HyperlinkId);
+        Assert.Equal('Z', (char)hot.Rune);
     }
 
     #endregion
@@ -384,39 +344,105 @@ public class CellHyperlinkTests
     [Fact]
     public void CellAttributes_DefaultHyperlinkId_IsZero()
     {
-        // Arrange & Act
         var attrs = CellAttributes.Default;
-        
-        // Assert
         Assert.Equal((ushort)0, attrs.HyperlinkId);
     }
 
     [Fact]
     public void CellAttributes_SetHyperlinkId_StoresCorrectly()
     {
-        // Arrange
         var attrs = new CellAttributes();
-        
-        // Act
         attrs.HyperlinkId = 5;
-        
-        // Assert
         Assert.Equal((ushort)5, attrs.HyperlinkId);
     }
 
     [Fact]
     public void CellAttributes_HyperlinkIdIncludedInIsDefaultColors()
     {
-        // Arrange
         var attrs = new CellAttributes();
-        
-        // Act & Assert
-        // When all colors are default and no other flags, it's "default colors"
         Assert.True(attrs.IsDefaultColors);
-        
-        // Setting HyperlinkId doesn't affect IsDefaultColors
+
         attrs.HyperlinkId = 5;
-        Assert.True(attrs.IsDefaultColors); // Still default colors
+        Assert.True(attrs.IsDefaultColors);
+    }
+
+    #endregion
+
+    #region StyleSet Integration
+
+    [Fact]
+    public void StyleSet_DefaultStyle_ReturnsIdZero()
+    {
+        var styleSet = new StyleSet();
+        ushort id = styleSet.GetOrCreateId(CellAttributes.Default);
+        Assert.Equal((ushort)0, id);
+    }
+
+    [Fact]
+    public void StyleSet_SameAttributes_ReturnsSameId()
+    {
+        var styleSet = new StyleSet();
+        var attrs = new CellAttributes { Bold = true, Foreground = new SgrColorArgb(0xFFFF0000) };
+
+        ushort id1 = styleSet.GetOrCreateId(in attrs);
+        ushort id2 = styleSet.GetOrCreateId(in attrs);
+
+        Assert.Equal(id1, id2);
+    }
+
+    [Fact]
+    public void StyleSet_DifferentAttributes_ReturnsDifferentId()
+    {
+        var styleSet = new StyleSet();
+        var attrs1 = new CellAttributes { Bold = true };
+        var attrs2 = new CellAttributes { Italic = true };
+
+        ushort id1 = styleSet.GetOrCreateId(in attrs1);
+        ushort id2 = styleSet.GetOrCreateId(in attrs2);
+
+        Assert.NotEqual(id1, id2);
+    }
+
+    [Fact]
+    public void StyleSet_GetStyle_ReturnsOriginalAttributes()
+    {
+        var styleSet = new StyleSet();
+        var attrs = new CellAttributes
+        {
+            Bold = true,
+            Italic = true,
+            Underline = true,
+            Foreground = new SgrColorArgb(0xFFFF0000),
+            Background = new SgrColorArgb(0xFF00FF00)
+        };
+
+        ushort id = styleSet.GetOrCreateId(in attrs);
+        var resolved = styleSet.GetStyle(id);
+
+        Assert.Equal(attrs.Foreground.Argb, resolved.Foreground.Argb);
+        Assert.Equal(attrs.Background.Argb, resolved.Background.Argb);
+        Assert.True(resolved.Bold);
+        Assert.True(resolved.Italic);
+        Assert.True(resolved.Underline);
+    }
+
+    [Fact]
+    public void StyleSet_GetStyle_InvalidId_ReturnsDefault()
+    {
+        var styleSet = new StyleSet();
+        var resolved = styleSet.GetStyle(999);
+        Assert.Equal((uint)0, resolved.Foreground.Argb);
+        Assert.Equal((uint)0, resolved.Background.Argb);
+        Assert.False(resolved.Bold);
+    }
+
+    [Fact]
+    public void StyleSet_DefaultId_ReturnsDefaultStyle()
+    {
+        var styleSet = new StyleSet();
+        var resolved = styleSet.GetStyle(0);
+        Assert.Equal(CellAttributes.Default.Foreground.Argb, resolved.Foreground.Argb);
+        Assert.Equal(CellAttributes.Default.Background.Argb, resolved.Background.Argb);
     }
 
     #endregion

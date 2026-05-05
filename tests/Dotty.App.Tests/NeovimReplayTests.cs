@@ -19,11 +19,10 @@ public class NeovimReplayTests
                 var cell = tb.GetCell(r, c);
                 if (cell.IsContinuation)
                 {
-                    // continuation should not have Grapheme
-                    Assert.True(string.IsNullOrEmpty(cell.Grapheme), $"Continuation cell at {r},{c} unexpectedly has Grapheme '{cell.Grapheme}'");
+                    Assert.True(cell.Rune == 0, $"Continuation cell at {r},{c} unexpectedly has Rune '{cell.Rune}'");
                 }
 
-                if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
+                if (!cell.IsContinuation && cell.Rune != 0)
                 {
                     int width = Math.Max(1, (int)cell.Width);
                     // ensure trailing continuation cells exist and are marked

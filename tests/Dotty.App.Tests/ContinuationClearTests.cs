@@ -15,8 +15,9 @@ public class ContinuationClearTests
         tb.WriteText("界".AsSpan(), CellAttributes.Default);
 
         var beforeBase = tb.GetCell(0, 0);
+        var beforeCold = tb.GetColdCell(0, 0);
         var beforeCont = tb.GetCell(0, 1);
-        Assert.Equal("界", beforeBase.Grapheme);
+        Assert.Equal("界", GraphemeHelper.Resolve(beforeBase.Rune, beforeCold.GraphemeIndex));
         Assert.True(beforeCont.IsContinuation);
 
         // Move cursor into the continuation column and clear from cursor
@@ -26,7 +27,7 @@ public class ContinuationClearTests
         var afterBase = tb.GetCell(0, 0);
         var afterCont = tb.GetCell(0, 1);
 
-        Assert.True(afterBase.IsEmpty, $"Base cell not empty after clear: '{afterBase.Grapheme}' cont={afterBase.IsContinuation}");
-        Assert.True(afterCont.IsEmpty, $"Continuation cell not empty after clear: '{afterCont.Grapheme}' cont={afterCont.IsContinuation}");
+        Assert.True(afterBase.IsEmpty, $"Base cell not empty after clear: Rune={afterBase.Rune} cont={afterBase.IsContinuation}");
+        Assert.True(afterCont.IsEmpty, $"Continuation cell not empty after clear: Rune={afterCont.Rune} cont={afterCont.IsContinuation}");
     }
 }

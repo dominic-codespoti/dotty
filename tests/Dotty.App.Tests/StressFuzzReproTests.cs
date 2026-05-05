@@ -21,10 +21,10 @@ public class StressFuzzReproTests
                 if (cell.IsContinuation)
                 {
                     // continuation cells should not carry a grapheme
-                    Assert.True(string.IsNullOrEmpty(cell.Grapheme), $"Continuation cell at {r},{c} unexpectedly has Grapheme '{cell.Grapheme}'");
+                    Assert.True(cell.Rune == 0, $"Continuation cell at {r},{c} unexpectedly has Rune '{cell.Rune}'");
                 }
 
-                if (!cell.IsContinuation && !string.IsNullOrEmpty(cell.Grapheme))
+                if (!cell.IsContinuation && !cell.IsEmpty)
                 {
                     int width = Math.Max(1, (int)cell.Width);
                     for (int i = 1; i < width; i++)
@@ -38,7 +38,7 @@ public class StressFuzzReproTests
         }
     }
 
-    private static Cell[,] GetScreenCells(TerminalBuffer tb)
+    private static CellHot[,] GetScreenCells(TerminalBuffer tb)
     {
         // Use internal test accessor to avoid reflection and trimming warnings.
         return tb.ActiveScreenForTests.GetCellsForTests();
@@ -125,7 +125,7 @@ public class StressFuzzReproTests
                         // If empty, create a base wide glyph sometimes
                         if (cell.IsEmpty && rnd.NextDouble() < 0.3)
                         {
-                            cell.Grapheme = "界";
+                            cell.Rune = 0x754C; // 界
                             cell.Width = 2;
                             cell.IsContinuation = false;
                             cells[rr, cc] = cell;
@@ -133,9 +133,8 @@ public class StressFuzzReproTests
                             if (cc + 1 < cols)
                             {
                                 var cont = cells[rr, cc + 1];
-                                cont.Grapheme = null;
+                                cont.Reset();
                                 cont.IsContinuation = true;
-                                cont.Width = 0;
                                 cells[rr, cc + 1] = cont;
                             }
                             events.Add($"ManualCorrupt insert wide base at {rr},{cc}");
@@ -144,8 +143,6 @@ public class StressFuzzReproTests
                         {
                             // Flip a continuation flag (simulate lost marker)
                             cell.IsContinuation = !cell.IsContinuation;
-                            // Sometimes zero-out Width to simulate a partial write
-                            if (rnd.NextDouble() < 0.4) cell.Width = 0;
                             cells[rr, cc] = cell;
                             events.Add($"ManualCorrupt flip at {rr},{cc} cont={cell.IsContinuation} w={cell.Width}");
                         }

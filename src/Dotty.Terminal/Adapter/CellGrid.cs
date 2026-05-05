@@ -5,7 +5,8 @@ namespace Dotty.Terminal.Adapter;
 /// </summary>
 public sealed class CellGrid
 {
-    private Cell[,] _cells;
+    private CellHot[,] _cells;
+    private ColdCell[,] _coldCells;
 
     public int Rows { get; private set; }
     public int Columns { get; private set; }
@@ -14,13 +15,18 @@ public sealed class CellGrid
     {
         Rows = rows;
         Columns = columns;
-        _cells = new Cell[rows, columns];
+        _cells = new CellHot[rows, columns];
+        _coldCells = new ColdCell[rows, columns];
         ClearAll();
     }
 
-    public ref Cell GetRef(int row, int col) => ref _cells[row, col];
+    public ref CellHot GetRef(int row, int col) => ref _cells[row, col];
 
-    public Cell GetValue(int row, int col) => _cells[row, col];
+    public CellHot GetValue(int row, int col) => _cells[row, col];
+
+    public ColdCell GetColdValue(int row, int col) => _coldCells[row, col];
+
+    public ref ColdCell GetColdRef(int row, int col) => ref _coldCells[row, col];
 
     public void ClearAll()
     {
@@ -30,6 +36,7 @@ public sealed class CellGrid
         for (int c = 0; c < cols; c++)
         {
             _cells[r, c].Reset();
+            _coldCells[r, c].Reset();
         }
     }
 
@@ -44,6 +51,7 @@ public sealed class CellGrid
         int width = Math.Max(1, (int)cell.Width);
         bool isContinuation = cell.IsContinuation;
         cell.Reset();
+        _coldCells[row, col].Reset();
 
         if (!isContinuation)
         {
@@ -55,6 +63,7 @@ public sealed class CellGrid
                     break;
                 }
                 cont.Reset();
+                _coldCells[row, col + i].Reset();
             }
         }
     }
@@ -63,12 +72,16 @@ public sealed class CellGrid
     {
         for (int i = 0; i < Rows - lines; i++)
         for (int j = 0; j < Columns; j++)
+        {
             _cells[i, j] = _cells[i + lines, j];
+            _coldCells[i, j] = _coldCells[i + lines, j];
+        }
 
         for (int i = Rows - lines; i < Rows; i++)
         for (int j = 0; j < Columns; j++)
         {
             _cells[i, j].Reset();
+            _coldCells[i, j].Reset();
         }
     }
 
@@ -81,16 +94,22 @@ public sealed class CellGrid
             return;
         }
 
-        var newCells = new Cell[rows, columns];
+        var newCells = new CellHot[rows, columns];
+        var newCold = new ColdCell[rows, columns];
         int copyRows = Math.Min(rows, Rows);
         int copyCols = Math.Min(columns, Columns);
         for (int r = 0; r < copyRows; r++)
         for (int c = 0; c < copyCols; c++)
         {
             newCells[r, c] = _cells[r, c];
+            newCold[r, c] = _coldCells[r, c];
         }
+        for (int r = copyRows; r < rows; r++)
+        for (int c = 0; c < columns; c++)
+            newCold[r, c].GraphemeIndex = -1;
 
         _cells = newCells;
+        _coldCells = newCold;
         Rows = rows;
         Columns = columns;
     }

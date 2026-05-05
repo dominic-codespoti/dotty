@@ -197,8 +197,8 @@ public class HyperlinkStorageTests
         buffer.WriteText("A".AsSpan(), attrs);
         
         // Assert
-        var cell = buffer.GetCell(0, 0);
-        Assert.Equal(linkId, cell.HyperlinkId);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal(linkId, cold.HyperlinkId);
     }
 
     [Fact]
@@ -215,8 +215,8 @@ public class HyperlinkStorageTests
         // Assert
         for (int i = 0; i < 5; i++)
         {
-            var cell = buffer.GetCell(0, i);
-            Assert.Equal(linkId, cell.HyperlinkId);
+            var cold = buffer.GetColdCell(0, i);
+            Assert.Equal(linkId, cold.HyperlinkId);
         }
     }
 
@@ -231,8 +231,8 @@ public class HyperlinkStorageTests
         buffer.WriteText("A".AsSpan(), attrs);
         
         // Assert
-        var cell = buffer.GetCell(0, 0);
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal((ushort)0, cold.HyperlinkId);
     }
 
     [Fact]
@@ -247,12 +247,12 @@ public class HyperlinkStorageTests
         buffer.WriteText("\u6f22".AsSpan(), attrs); // 漢
         
         // Assert
-        var baseCell = buffer.GetCell(0, 0);
-        var contCell = buffer.GetCell(0, 1);
+        var baseCold = buffer.GetColdCell(0, 0);
+        var contCold = buffer.GetColdCell(0, 1);
         
-        Assert.Equal(linkId, baseCell.HyperlinkId);
+        Assert.Equal(linkId, baseCold.HyperlinkId);
         // Continuation cell should also have hyperlink
-        Assert.Equal(linkId, contCell.HyperlinkId);
+        Assert.Equal(linkId, contCold.HyperlinkId);
     }
 
     [Fact]
@@ -265,15 +265,15 @@ public class HyperlinkStorageTests
         var defaultAttrs = CellAttributes.Default;
         
         buffer.WriteText("A".AsSpan(), linkAttrs);
-        Assert.Equal(linkId, buffer.GetCell(0, 0).HyperlinkId);
+        Assert.Equal(linkId, buffer.GetColdCell(0, 0).HyperlinkId);
         
         // Act - Overwrite with default attrs
         buffer.SetCursor(0, 0);
         buffer.WriteText("B".AsSpan(), defaultAttrs);
         
         // Assert
-        var cell = buffer.GetCell(0, 0);
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal((ushort)0, cold.HyperlinkId);
     }
 
     [Fact]
@@ -292,12 +292,12 @@ public class HyperlinkStorageTests
         buffer.WriteText("Second".AsSpan(), attrs2);
         
         // Assert
-        Assert.Equal(id1, buffer.GetCell(0, 0).HyperlinkId);
-        Assert.Equal(id1, buffer.GetCell(0, 4).HyperlinkId);
-        Assert.Equal(id2, buffer.GetCell(0, 10).HyperlinkId);
-        Assert.Equal(id2, buffer.GetCell(0, 15).HyperlinkId);
+        Assert.Equal(id1, buffer.GetColdCell(0, 0).HyperlinkId);
+        Assert.Equal(id1, buffer.GetColdCell(0, 4).HyperlinkId);
+        Assert.Equal(id2, buffer.GetColdCell(0, 10).HyperlinkId);
+        Assert.Equal(id2, buffer.GetColdCell(0, 15).HyperlinkId);
         // Middle cells should have no hyperlink
-        Assert.Equal((ushort)0, buffer.GetCell(0, 5).HyperlinkId);
+        Assert.Equal((ushort)0, buffer.GetColdCell(0, 5).HyperlinkId);
     }
 
     [Fact]
@@ -312,10 +312,10 @@ public class HyperlinkStorageTests
         buffer.WriteText("Hello \u4e16\u754c".AsSpan(), attrs); // Hello 世界
         
         // Assert
-        var cell1 = buffer.GetCell(0, 6); // 世
-        var cell2 = buffer.GetCell(0, 8); // 界
-        Assert.Equal(linkId, cell1.HyperlinkId);
-        Assert.Equal(linkId, cell2.HyperlinkId);
+        var cold1 = buffer.GetColdCell(0, 6); // 世
+        var cold2 = buffer.GetColdCell(0, 8); // 界
+        Assert.Equal(linkId, cold1.HyperlinkId);
+        Assert.Equal(linkId, cold2.HyperlinkId);
     }
 
     #endregion
@@ -385,8 +385,8 @@ public class HyperlinkStorageTests
         buffer.ClearScreen();
         
         // Assert - Cells should be cleared
-        var cell = buffer.GetCell(0, 0);
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal((ushort)0, cold.HyperlinkId);
     }
 
     [Fact]
@@ -403,8 +403,8 @@ public class HyperlinkStorageTests
         buffer.EraseDisplay(2); // Erase entire display
         
         // Assert
-        var cell = buffer.GetCell(0, 0);
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal((ushort)0, cold.HyperlinkId);
     }
 
     [Fact]
@@ -421,8 +421,8 @@ public class HyperlinkStorageTests
         buffer.FullReset();
         
         // Assert - Cell should be cleared
-        var cell = buffer.GetCell(0, 0);
-        Assert.Equal((ushort)0, cell.HyperlinkId);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal((ushort)0, cold.HyperlinkId);
         
         // But URL lookup should still work (URLs are preserved)
         var url = buffer.GetHyperlinkUrl(linkId);
@@ -444,9 +444,9 @@ public class HyperlinkStorageTests
         adapter.OnPrint("Link text".AsSpan());
         
         // Assert
-        var cell = adapter.Buffer.GetCell(0, 0);
-        Assert.True(cell.HyperlinkId > 0);
-        var url = adapter.Buffer.GetHyperlinkUrl(cell.HyperlinkId);
+        var cold = adapter.Buffer.GetColdCell(0, 0);
+        Assert.True(cold.HyperlinkId > 0);
+        var url = adapter.Buffer.GetHyperlinkUrl(cold.HyperlinkId);
         Assert.Equal("https://example.com", url);
     }
 
@@ -465,11 +465,11 @@ public class HyperlinkStorageTests
         adapter.OnPrint(" Normal".AsSpan());
         
         // Assert
-        var linkCell = adapter.Buffer.GetCell(0, 0);
-        var normalCell = adapter.Buffer.GetCell(0, 5);
+        var linkCold = adapter.Buffer.GetColdCell(0, 0);
+        var normalCold = adapter.Buffer.GetColdCell(0, 5);
         
-        Assert.True(linkCell.HyperlinkId > 0);
-        Assert.Equal((ushort)0, normalCell.HyperlinkId);
+        Assert.True(linkCold.HyperlinkId > 0);
+        Assert.Equal((ushort)0, normalCold.HyperlinkId);
     }
 
     [Fact]
@@ -483,9 +483,9 @@ public class HyperlinkStorageTests
         adapter.OnPrint("Link".AsSpan());
         
         // Assert
-        var cell = adapter.Buffer.GetCell(0, 0);
-        Assert.True(cell.HyperlinkId > 0);
-        var url = adapter.Buffer.GetHyperlinkUrl(cell.HyperlinkId);
+        var cold = adapter.Buffer.GetColdCell(0, 0);
+        Assert.True(cold.HyperlinkId > 0);
+        var url = adapter.Buffer.GetHyperlinkUrl(cold.HyperlinkId);
         Assert.Equal("https://example.com", url);
     }
 
@@ -511,9 +511,9 @@ public class HyperlinkStorageTests
         buffer.WriteText("Second".AsSpan(), attrs2);
         
         // Assert
-        Assert.Equal(id1, buffer.GetCell(0, 0).HyperlinkId);
-        Assert.Equal(id2, buffer.GetCell(0, 5).HyperlinkId);
-        Assert.Equal(id2, buffer.GetCell(0, 10).HyperlinkId);
+        Assert.Equal(id1, buffer.GetColdCell(0, 0).HyperlinkId);
+        Assert.Equal(id2, buffer.GetColdCell(0, 5).HyperlinkId);
+        Assert.Equal(id2, buffer.GetColdCell(0, 10).HyperlinkId);
     }
 
     [Fact]
@@ -553,7 +553,7 @@ public class HyperlinkStorageTests
         buffer.DeleteChars(1);
         
         // Assert
-        var cellAt1 = buffer.GetCell(0, 1);
+        var cellAt1 = buffer.GetColdCell(0, 1);
         // After delete, the cell should contain what was at position 2
         Assert.Equal(id, cellAt1.HyperlinkId);
     }
@@ -572,8 +572,8 @@ public class HyperlinkStorageTests
         buffer.Resize(20, 120);
         
         // Assert - Hyperlink should be preserved in the cell
-        var cell = buffer.GetCell(0, 0);
-        Assert.Equal(id, cell.HyperlinkId);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal(id, cold.HyperlinkId);
     }
 
     [Fact]
@@ -590,8 +590,8 @@ public class HyperlinkStorageTests
         buffer.WriteText("Line 2".AsSpan(), new CellAttributes { HyperlinkId = id2 });
         
         // Assert
-        Assert.Equal(id1, buffer.GetCell(0, 0).HyperlinkId);
-        Assert.Equal(id2, buffer.GetCell(1, 0).HyperlinkId);
+        Assert.Equal(id1, buffer.GetColdCell(0, 0).HyperlinkId);
+        Assert.Equal(id2, buffer.GetColdCell(1, 0).HyperlinkId);
     }
 
     #endregion

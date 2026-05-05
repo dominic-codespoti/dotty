@@ -2,6 +2,7 @@ using BenchmarkDotNet.Attributes;
 using Dotty.Performance.Tests.Data;
 using Dotty.Performance.Tests.Infrastructure;
 using Dotty.Terminal.Adapter;
+using Dotty.Terminal.Adapter.Buffer;
 using Dotty.Terminal.Parser;
 
 namespace Dotty.Performance.Tests.Benchmarks;
@@ -163,6 +164,8 @@ public class RenderingBenchmarks : PerformanceTestBase
     public void Render_Fill80x24()
     {
         var grid = new CellGrid(24, 80);
+        var styleSet = new StyleSet();
+        ushort boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
         
         for (int row = 0; row < 24; row++)
         {
@@ -170,7 +173,7 @@ public class RenderingBenchmarks : PerformanceTestBase
             {
                 ref var cell = ref grid.GetRef(row, col);
                 cell.SetAscii((char)('A' + (col % 26)));
-                cell.Bold = true;
+                cell.StyleId = boldId;
             }
         }
     }

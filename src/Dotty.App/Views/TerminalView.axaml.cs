@@ -856,13 +856,13 @@ namespace Dotty.App.Views
                 return false;
             }
 
-            var cell = buffer.GetCell(row, column);
-            if (cell.HyperlinkId == 0)
+            var cold = buffer.GetColdCell(row, column);
+            if (cold.HyperlinkId == 0)
             {
                 return false;
             }
 
-            var url = buffer.GetHyperlinkUrl(cell.HyperlinkId);
+            var url = buffer.GetHyperlinkUrl(cold.HyperlinkId);
             if (string.IsNullOrWhiteSpace(url))
             {
                 return false;

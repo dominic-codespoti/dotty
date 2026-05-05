@@ -5,8 +5,9 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Platform;
+using Avalonia.Media.Imaging;
 using Avalonia.Styling;
-using Avalonia.Rendering.Composition;
 using Avalonia.Threading;
 using Dotty.App.Controls.Canvas;
 using Dotty.App.Controls.Canvas.Rendering;
@@ -78,7 +79,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			if (_selectionRange == value) return;
 			_selectionRange = value;
-			SendRenderState();
+			_bitmapDirty = true;
+			InvalidateVisual();
 		}
 	}
 
@@ -91,7 +93,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			if (_searchMatches == value) return;
 			_searchMatches = value ?? Array.Empty<SearchMatch>();
-			SendRenderState();
+			_bitmapDirty = true;
+			InvalidateVisual();
 		}
 	}
 
@@ -140,13 +143,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private GlyphAtlas? _glyphAtlas;
 	private GlyphDiscovery? _glyphDiscovery;
 	private TerminalFrameComposer? _frameComposer;
-	private DispatcherTimer? _frameDebounceTimer;
-	private bool _framePending;
-	private const double FrameDebounceMs = 1;
 	private bool _lastBufferWasAlternate = false;
 	private int _lastKnownBufferRows = -1;
 	private int _lastKnownBufferColumns = -1;
 	private int _lastKnownScrollbackCount = -1;
+	private ulong[]? _lastRowGenerations;
 	private double _renderScaling = 1.0;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
 	private static readonly string[] MonospaceFallbackFamilies =
@@ -163,10 +164,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		"monospace"
 	};
 	
-	// Surface isolation: Each TerminalCanvas instance has its own composition visual
-	// that is created on attach and destroyed on detach. Never reused.
-	private CompositionCustomVisual? _customVisual;
-	private bool _isAttached = false;
+	private WriteableBitmap? _bitmap;
+	private bool _bitmapDirty = true;
 	
 	public SKPaint? SkPaint { get; private set; }
 	public double CellWidth
@@ -196,7 +195,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			if (_showCursor != value)
 			{
 				_showCursor = value;
-				SendRenderState();
+				_bitmapDirty = true;
+				InvalidateVisual();
 			}
 		} 
 	}
@@ -217,9 +217,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
         {
             if (_offset != value)
             {
-                _offset = value;
-                ScrollInvalidated?.Invoke(this, EventArgs.Empty);
-                SendRenderState();
+			_offset = value;
+			ScrollInvalidated?.Invoke(this, EventArgs.Empty);
+			_bitmapDirty = true;
+			InvalidateVisual();
             }
         } 
     }
@@ -306,10 +307,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		base.OnSizeChanged(e);
         _viewport = e.NewSize;
         UpdateScrollState();
-		if (_customVisual != null)
-		{
-			_customVisual.Size = new Avalonia.Vector(e.NewSize.Width, e.NewSize.Height);
-		}
 	}
 
 	protected override Size MeasureOverride(Size availableSize)
@@ -332,18 +329,33 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		base.Render(context);
 
-		// Fill background using Avalonia so it's consistent with theming
 		var bg = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
 		context.FillRectangle(bg, new Rect(Bounds.Size));
 
-		// Only render via composition visual if we're attached and visible
-		if (!_isAttached || !IsVisible) return;
+		if (!IsVisible) return;
 
 		var buffer = Buffer;
 		if (buffer == null) return;
 
-		EnsureMetrics();
-		
+		// Render to WriteableBitmap if content changed
+		if (_bitmapDirty)
+		{
+			EnsureMetrics();
+			RenderToBitmap(buffer);
+			_bitmapDirty = false;
+		}
+
+		// Draw cached bitmap to screen
+		if (_bitmap != null)
+		{
+			context.DrawImage(_bitmap,
+				new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height),
+				new Rect(Bounds.Size));
+		}
+	}
+
+	private void RenderToBitmap(TerminalBuffer buffer)
+	{
 		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
 		{
 			_frameComposer.ResetCaches();
@@ -353,55 +365,122 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var bgBrush = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
 		var bgColor = SKColors.Black;
 		if (bgBrush is ISolidColorBrush solid)
-		{
 			bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
+
+		int w = Math.Max(1, (int)Bounds.Width);
+		int h = Math.Max(1, (int)Bounds.Height);
+
+		if (_bitmap == null || _bitmap.PixelSize.Width != w || _bitmap.PixelSize.Height != h)
+		{
+			_bitmap?.Dispose();
+			_bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888);
 		}
 
-		// Defer the scroll invalidation to avoid "Visual was invalidated during render pass" exception
-		// This can happen when UpdateScrollState triggers ScrollInvalidated during the render phase
-		var scrollbackCount = buffer.ScrollbackCount;
-		Dispatcher.UIThread.Post(() => UpdateScrollState(scrollbackCount), DispatcherPriority.Background);
+		try
+		{
+			buffer.MarkRender();
+		}
+		catch { }
 
-		var state = new TerminalRenderState(
-			buffer,
-			(float)_cellWidth,
-			(float)_cellHeight,
-			_frameComposer,
-			ContentPadding,
-			_selectionRange,
-			_searchMatches,
-			SkPaint,
-			bgColor,
-            _offset.Y,
-            _viewport.Width,
-            _viewport.Height,
-            buffer.ScrollbackCount,
-            _showCursor,
-            CursorShape
-		);
+		int sbCount = buffer.ScrollbackCount;
+		Dispatcher.UIThread.Post(() => UpdateScrollState(sbCount), DispatcherPriority.Background);
 
-		_customVisual?.SendHandlerMessage(state);
+		using var locked = _bitmap.Lock();
+		var info = new SKImageInfo(locked.Size.Width, locked.Size.Height);
+		using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
+		var canvas = surface.Canvas;
+
+		canvas.Clear(bgColor);
+
+		var m = SKMatrix.Identity;
+		canvas.SetMatrix(m);
+
+		if (ContentPadding.Left != 0 || ContentPadding.Top != 0)
+			canvas.Translate((float)ContentPadding.Left, (float)ContentPadding.Top);
+
+		canvas.Translate(0, (float)(sbCount * _cellHeight - _offset.Y));
+
+		if (_frameComposer != null)
+		{
+			int startVisibleRow = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
+			int endVisibleRow = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
+			startVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, startVisibleRow));
+			endVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, endVisibleRow));
+
+			int composerStart = Math.Max(0, startVisibleRow);
+			int composerEnd = Math.Max(0, Math.Min(buffer.Rows - 1, endVisibleRow));
+
+			if (composerStart <= composerEnd && SkPaint != null)
+				_frameComposer.RenderTo(canvas, buffer, SkPaint, (float)_cellWidth, (float)_cellHeight, composerStart, composerEnd);
+
+			int sbStart = Math.Max(-sbCount, startVisibleRow);
+			int sbEnd = Math.Min(-1, endVisibleRow);
+
+			if (sbStart <= sbEnd && SkPaint != null)
+			{
+				var paint = SkPaint;
+				var fm = paint.FontMetrics;
+				float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
+				float baselineOffset = (float)(_cellHeight * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
+
+				for (int r = sbStart; r <= sbEnd; r++)
+				{
+					int idx = r + sbCount;
+					idx = Math.Max(0, Math.Min(sbCount - 1, idx));
+					var line = buffer.GetScrollbackLine(idx);
+					if (line.Length <= 0) continue;
+					float y = (float)(r * _cellHeight + baselineOffset);
+					var text = line.Text ?? string.Empty;
+					canvas.DrawText(text, 0, y, paint);
+				}
+			}
+		}
+
+		canvas.Flush();
 	}
 
-	/// <summary>
-	/// Called when the buffer is updated (mutation time). This allows discovery
-	/// to run at mutation time instead of during Render.
-	/// </summary>
 	public void OnBufferUpdated(TerminalBuffer buffer)
 	{
 		if (buffer == null) return;
 		HandleBufferGeometryChange(buffer);
 		if (_glyphDiscovery == null) return;
 		_glyphDiscovery.EnsureSize(buffer.Rows);
-		// Dirty tracking removed: enqueue all rows for discovery.
-		for (int r = 0; r < buffer.Rows; r++) _glyphDiscovery.EnqueueRow(r);
-		// discovery work is enqueued; it will be processed a bit at a time when a frame is requested
+
+		var gens = buffer.RowGenerations;
+		if (!gens.IsEmpty)
+		{
+			if (_lastRowGenerations == null || _lastRowGenerations.Length != gens.Length)
+			{
+				_lastRowGenerations = gens.ToArray();
+				for (int r = 0; r < gens.Length; r++)
+					_glyphDiscovery.EnqueueRow(r);
+			}
+			else
+			{
+				for (int r = 0; r < gens.Length; r++)
+				{
+					if (gens[r] != _lastRowGenerations[r])
+					{
+						_lastRowGenerations[r] = gens[r];
+						_glyphDiscovery.EnqueueRow(r);
+					}
+				}
+			}
+		}
+		else
+		{
+			_lastRowGenerations = null;
+			for (int r = 0; r < buffer.Rows; r++)
+				_glyphDiscovery.EnqueueRow(r);
+		}
+
+		_bitmapDirty = true;
+		InvalidateVisual();
 	}
 
 	private void HandleBufferGeometryChange(TerminalBuffer buffer)
 	{
-		var geometryChanged =
-			buffer.Rows != _lastKnownBufferRows ||
+		var geometryChanged = buffer.Rows != _lastKnownBufferRows ||
 			buffer.Columns != _lastKnownBufferColumns;
 		var scrollChanged = buffer.ScrollbackCount != _lastKnownScrollbackCount;
 
@@ -416,150 +495,22 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 
 		if (geometryChanged || scrollChanged)
-		{
 			UpdateScrollState(buffer.ScrollbackCount);
-		}
 	}
 
-	/// <summary>
-	/// Request a single coalesced frame. Multiple calls before the dispatcher
-	/// runs will only cause a single InvalidateVisual.
-	/// </summary>
-	public void RequestFrame() 
-	{ 
-		if (!IsVisible || !_isAttached) return;
+	public void RequestFrame()
+	{
+		if (!IsVisible) return;
 		ProcessGlyphDiscoverySlice();
-		try
-		{
-			SendRenderState();
-		}
-		catch { }
+		_bitmapDirty = true;
+		InvalidateVisual();
 	}
 
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnAttachedToVisualTree(e);
-		
-		_isAttached = true;
-		
-		// CRITICAL: Always create a fresh composition visual on attach.
-		// Never reuse an old visual - this ensures complete surface isolation.
-		CreateCompositionVisual();
-		
-		EnsureFrameTimer();
-		
-		// Force an initial render
+		_bitmapDirty = true;
 		InvalidateVisual();
-	}
-
-	/// <summary>
-	/// Creates a fresh composition visual with an isolated surface.
-	/// This method ensures no surface sharing between tab switches.
-	/// </summary>
-	private void CreateCompositionVisual()
-	{
-		// First, ensure any existing visual is completely destroyed
-		DestroyCompositionVisual();
-		
-		var compositor = ElementComposition.GetElementVisual(this)?.Compositor;
-		if (compositor == null) return;
-		
-		// Create a fresh handler and visual
-		var handler = new TerminalVisualHandler();
-		_customVisual = compositor.CreateCustomVisual(handler);
-		_customVisual.Size = new Avalonia.Vector(Bounds.Width, Bounds.Height);
-		
-		// Set as child visual
-		ElementComposition.SetElementChildVisual(this, _customVisual);
-		
-		// Reset all caches for clean state
-		_frameComposer?.ResetCaches();
-	}
-
-	/// <summary>
-	/// Completely destroys the composition visual and releases all surface resources.
-	/// This is critical for preventing content stacking when switching tabs.
-	/// </summary>
-	private void DestroyCompositionVisual()
-	{
-		if (_customVisual != null)
-		{
-			// Remove from element - this should release the surface
-			ElementComposition.SetElementChildVisual(this, null);
-			
-			// The visual will be garbage collected. The handler's surface
-			// should be released when the visual is destroyed.
-			_customVisual = null;
-		}
-	}
-
-	private void EnsureFrameTimer()
-	{
-		if (_frameDebounceTimer != null) return;
-		_frameDebounceTimer = new DispatcherTimer
-		{
-			Interval = TimeSpan.FromMilliseconds(FrameDebounceMs)
-		};
-		_frameDebounceTimer.Tick += FrameDebounceTick;
-	}
-
-	private void FrameDebounceTick(object? sender, EventArgs e)
-	{
-		if (_frameDebounceTimer == null) return;
-		_frameDebounceTimer.Stop();
-		if (!_framePending) return;
-		_framePending = false;
-		ProcessGlyphDiscoverySlice();
-		try
-		{
-			SendRenderState();
-		}
-		catch { }
-	}
-
-	private void SendRenderState()
-	{
-		if (_customVisual == null || !_isAttached) return;
-
-		var buffer = Buffer;
-		if (buffer == null) return;
-
-		EnsureMetrics();
-		
-		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
-		{
-			_frameComposer.ResetCaches();
-			_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
-		}
-
-		var bgBrush = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
-		var bgColor = SKColors.Black;
-		if (bgBrush is ISolidColorBrush solid)
-		{
-			bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
-		}
-
-		UpdateScrollState();
-
-		var state = new TerminalRenderState(
-			buffer,
-			(float)_cellWidth,
-			(float)_cellHeight,
-			_frameComposer,
-			ContentPadding,
-			_selectionRange,
-			_searchMatches,
-			SkPaint,
-			bgColor,
-            _offset.Y,
-            _viewport.Width,
-            _viewport.Height,
-            buffer.ScrollbackCount,
-            _showCursor,
-            CursorShape
-		);
-
-		_customVisual?.SendHandlerMessage(state);
 	}
 
 	private void ProcessGlyphDiscoverySlice()
@@ -663,22 +614,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		if (change.Property == IsVisibleProperty)
 		{
-			if (IsVisible && _isAttached)
+			if (IsVisible)
 			{
-				// When becoming visible, ensure we have a fresh surface
-				// This handles the case where we were hidden and are now shown
-				if (_customVisual == null)
-				{
-					CreateCompositionVisual();
-				}
 				InvalidateVisual();
 				RequestFrame();
-			}
-			else if (!IsVisible)
-			{
-				// When becoming invisible, destroy the surface to free resources
-				// and ensure fresh start when we become visible again
-				DestroyCompositionVisual();
 			}
 		}
 
@@ -686,7 +625,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			_metricsDirty = true;
 			InvalidateMeasure();
-			SendRenderState();
+			_bitmapDirty = true;
+			InvalidateVisual();
 		}
 
 		if (change.Property == BufferProperty)
@@ -724,6 +664,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				{
 					_frameComposer.ResetCaches();
 				}
+				_frameComposer.GlyphAtlas = _glyphAtlas;
 				_lastBufferWasAlternate = buf.IsAlternateScreenActive;
 				
 				// Force re-render with new buffer
@@ -748,14 +689,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		base.OnDetachedFromVisualTree(e);
 		
-		_isAttached = false;
-		_framePending = false;
-		
-		// CRITICAL: Completely destroy the composition visual when detaching.
-		// This ensures the surface is released and won't cause stacking.
-		DestroyCompositionVisual();
-		
-		// Win 3: Clear inactive tab caches - aggressively clean up render state
 		// Clear glyph discovery to free memory
 		_glyphDiscovery = null;
 		
@@ -773,13 +706,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			SkPaint = null;
 		}
 		
-		// Stop and clean up frame timer
-		if (_frameDebounceTimer != null)
-		{
-			_frameDebounceTimer.Stop();
-			_frameDebounceTimer.Tick -= FrameDebounceTick;
-			_frameDebounceTimer = null;
-		}
+		// Dispose bitmap
+		_bitmap?.Dispose();
+		_bitmap = null;
 		
 		// Reset metrics to ensure fresh calculation on reattach
 		_metricsDirty = true;

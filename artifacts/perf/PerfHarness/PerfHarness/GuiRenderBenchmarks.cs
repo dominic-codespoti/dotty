@@ -1,5 +1,4 @@
 using System;
-using System.Reflection;
 using BenchmarkDotNet.Attributes;
 using Dotty.App.Rendering;
 using Dotty.Terminal.Adapter;
@@ -19,11 +18,6 @@ public class GuiRenderBenchmarks
     private const float CellWidth = 9f;
     private const float CellHeight = 18f;
     private const int ScrollbackVisibleLines = 24;
-    private const int SimulatedScrollbackCount = 500000;
-
-    private static readonly FieldInfo ScrollbackRingField = typeof(TerminalBuffer).GetField("_scrollbackRing", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo ScrollbackHeadField = typeof(TerminalBuffer).GetField("_scrollbackHead", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    private static readonly FieldInfo ScrollbackCountField = typeof(TerminalBuffer).GetField("_scrollbackCount", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
     [GlobalSetup]
     public void Setup()
@@ -79,7 +73,7 @@ public class GuiRenderBenchmarks
             var line = buffer.GetScrollbackLine(i);
             if (line.Length <= 0) continue;
 
-            string text = new string(line.Buffer, 0, line.Length);
+            string text = line.Text ?? string.Empty;
             float y = ((i - start) * CellHeight) + baselineOffset;
             _canvas.DrawText(text, 0, y, _paint);
         }
@@ -110,16 +104,14 @@ public class GuiRenderBenchmarks
 
     private static void SeedScrollback(TerminalBuffer buffer)
     {
-        var sharedLine = new string('y', buffer.Columns).ToCharArray();
-        var ring = new TerminalBuffer.ScrollbackLine[SimulatedScrollbackCount];
-
-        for (int i = 0; i < ring.Length; i++)
+        var line = new string('y', buffer.Columns);
+        int targetLines = buffer.MaxScrollback;
+        for (int i = 0; i < targetLines + buffer.Rows; i++)
         {
-            ring[i] = new TerminalBuffer.ScrollbackLine(sharedLine, sharedLine.Length);
+            buffer.CarriageReturn();
+            buffer.WriteText(line.AsSpan(), CellAttributes.Default);
+            buffer.CarriageReturn();
+            buffer.LineFeed();
         }
-
-        ScrollbackRingField.SetValue(buffer, ring);
-        ScrollbackHeadField.SetValue(buffer, 0);
-        ScrollbackCountField.SetValue(buffer, SimulatedScrollbackCount);
     }
 }

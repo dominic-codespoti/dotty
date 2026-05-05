@@ -14,7 +14,9 @@ public class TerminalBufferCursorTests
         Assert.Equal(3, buffer.CursorCol);
 
         var wideCell = buffer.GetCell(0, 1);
-        Assert.Equal("汉", wideCell.Grapheme);
+        var wideCold = buffer.GetColdCell(0, 1);
+        var grapheme = GraphemeHelper.Resolve(wideCell.Rune, wideCold.GraphemeIndex);
+        Assert.Equal("汉", grapheme);
         Assert.Equal(2, wideCell.Width);
         Assert.True(buffer.GetCell(0, 2).IsContinuation);
     }

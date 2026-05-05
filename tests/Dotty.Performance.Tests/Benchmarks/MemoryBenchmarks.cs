@@ -2,6 +2,7 @@ using BenchmarkDotNet.Attributes;
 using Dotty.Performance.Tests.Data;
 using Dotty.Performance.Tests.Infrastructure;
 using Dotty.Terminal.Adapter;
+using Dotty.Terminal.Adapter.Buffer;
 using Dotty.Terminal.Parser;
 
 namespace Dotty.Performance.Tests.Benchmarks;
@@ -133,15 +134,15 @@ public class MemoryBenchmarks : PerformanceTestBase
     public void Cell_SetAttributes()
     {
         var grid = new CellGrid(24, 80);
+        var styleSet = new StyleSet();
+        ushort styleId = styleSet.GetOrCreateId(new CellAttributes { Bold = true, Italic = true, Underline = true });
         
         for (int row = 0; row < 24; row++)
         {
             for (int col = 0; col < 80; col++)
             {
                 ref var cell = ref grid.GetRef(row, col);
-                cell.Bold = true;
-                cell.Italic = true;
-                cell.Underline = true;
+                cell.StyleId = styleId;
             }
         }
     }
@@ -164,6 +165,8 @@ public class MemoryBenchmarks : PerformanceTestBase
     public void Cell_Reset()
     {
         var grid = new CellGrid(24, 80);
+        var styleSet = new StyleSet();
+        ushort boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
         
         // Fill first
         for (int row = 0; row < 24; row++)
@@ -172,7 +175,7 @@ public class MemoryBenchmarks : PerformanceTestBase
             {
                 ref var cell = ref grid.GetRef(row, col);
                 cell.SetAscii('X');
-                cell.Bold = true;
+                cell.StyleId = boldId;
             }
         }
         

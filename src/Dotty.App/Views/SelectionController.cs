@@ -71,13 +71,15 @@ internal sealed class SelectionController
                     continue;
                 }
 
-                if (string.IsNullOrEmpty(cell.Grapheme))
+                var cold = buffer.GetColdCell(row, col);
+                var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
+                if (string.IsNullOrEmpty(grapheme))
                 {
                     sb.Append(' ');
                 }
                 else
                 {
-                    sb.Append(cell.Grapheme);
+                    sb.Append(grapheme);
                 }
             }
 

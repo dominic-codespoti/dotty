@@ -15,8 +15,12 @@ public class BufferWriterTests
         buffer.WriteText("\b".AsSpan(), CellAttributes.Default);
 
         Assert.Equal(0, buffer.CursorCol);
-        Assert.True(string.IsNullOrEmpty(buffer.GetCell(0, 0).Grapheme));
-        Assert.True(string.IsNullOrEmpty(buffer.GetCell(0, 1).Grapheme));
+        var cell0 = buffer.GetCell(0, 0);
+        var cold0 = buffer.GetColdCell(0, 0);
+        Assert.True(cell0.IsEmpty);
+        var cell1 = buffer.GetCell(0, 1);
+        var cold1 = buffer.GetColdCell(0, 1);
+        Assert.True(cell1.IsEmpty);
     }
 
     [Fact]
@@ -25,7 +29,9 @@ public class BufferWriterTests
         var buffer = new TerminalBuffer(rows: 1, columns: 16);
         buffer.WriteText("A\tB".AsSpan(), CellAttributes.Default);
 
-        Assert.Equal("B", buffer.GetCell(0, 8).Grapheme);
+        var cell = buffer.GetCell(0, 8);
+        var cold = buffer.GetColdCell(0, 8);
+        Assert.Equal("B", GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex));
         Assert.Equal(9, buffer.CursorCol);
     }
 
@@ -36,7 +42,8 @@ public class BufferWriterTests
         buffer.WriteText("a\u0301".AsSpan(), CellAttributes.Default);
 
         var cell = buffer.GetCell(0, 0);
-            Assert.Equal("a\u0301", cell.Grapheme);
+        var cold = buffer.GetColdCell(0, 0);
+        Assert.Equal("a\u0301", GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex));
         Assert.Equal(1, buffer.CursorCol);
     }
 }

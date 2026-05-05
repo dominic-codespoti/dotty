@@ -8,6 +8,11 @@ namespace Dotty.App.Input
 {
     public class TerminalInputEncoder
     {
+        /// <summary>
+        /// Kitty keyboard protocol mode: 0=disabled, 1=full, 2=partial.
+        /// </summary>
+        public int KittyMode { get; set; }
+
         public byte[]? EncodeMouseEvent(
             TerminalAdapter.MouseMode mode, 
             TerminalAdapter.MouseEncoding encoding, 
@@ -61,7 +66,11 @@ namespace Dotty.App.Input
 
         public byte[]? Encode(Key key, KeyModifiers modifiers, bool keypadApplicationMode = false)
         {
-            // Handle Control + Char
+            // Kitty keyboard protocol: unambiguous encoding for all key combinations
+            if (KittyMode > 0)
+                return EncodeKitty(key, modifiers, keypadApplicationMode);
+
+            // Legacy encoding below
             if (modifiers.HasFlag(KeyModifiers.Control) && !modifiers.HasFlag(KeyModifiers.Shift) && !modifiers.HasFlag(KeyModifiers.Alt))
             {
                 if (key >= Key.A && key <= Key.Z)
@@ -157,6 +166,57 @@ namespace Dotty.App.Input
             }
 
             return null; // Let text input handle it if possible
+        }
+
+        private static int GetModifier(KeyModifiers modifiers)
+        {
+            int m = 1; // none
+            if (modifiers.HasFlag(KeyModifiers.Shift)) m += 1; // 2
+            if (modifiers.HasFlag(KeyModifiers.Alt)) m += 2;   // 3 (with shift: 4)
+            if (modifiers.HasFlag(KeyModifiers.Control)) m += 4; // 5-8
+            if (modifiers.HasFlag(KeyModifiers.Meta)) m += 8;   // 9-16
+            return m;
+        }
+
+        private byte[]? EncodeKitty(Key key, KeyModifiers modifiers, bool keypadApplicationMode)
+        {
+            int modifier = GetModifier(modifiers);
+            var sb = new StringBuilder();
+
+            // Determine CSI code for the key
+            int code = key switch
+            {
+                Key.Tab => 9,
+                Key.Enter => 13,
+                Key.Escape => 27,
+                Key.Back => 127,
+                Key.Up => 1, Key.Down => 2, Key.Right => 3, Key.Left => 4,
+                Key.PageUp => 5, Key.PageDown => 6, Key.Home => 7, Key.End => 8,
+                Key.Insert => 2, Key.Delete => 3,
+                Key.F1 => 1, Key.F2 => 2, Key.F3 => 3, Key.F4 => 4,
+                Key.F5 => 15, Key.F6 => 17, Key.F7 => 18, Key.F8 => 19,
+                Key.F9 => 20, Key.F10 => 21, Key.F11 => 23, Key.F12 => 24,
+                _ => -1
+            };
+
+            if (code > 0)
+            {
+                // Special keys: \e[code;modifieru (or : for CSI)
+                // CSI keys (code >= 15 or arrows etc.) use : separator
+                bool isCsi = code >= 15 || (code >= 1 && code <= 8);
+                char sep = isCsi ? ':' : 'u';
+                if (modifier > 1)
+                    sb.Append($"\x1b[{code};{modifier}{sep}");
+                else
+                    sb.Append($"\x1b[{code}{sep}");
+            }
+            else
+            {
+                // Not a special key - return null to let TextInput handle it
+                return null;
+            }
+
+            return sb.Length > 0 ? Encoding.UTF8.GetBytes(sb.ToString()) : null;
         }
     }
 }

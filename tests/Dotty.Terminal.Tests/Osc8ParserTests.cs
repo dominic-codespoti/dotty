@@ -585,6 +585,8 @@ public class Osc8ParserTests
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) { }
         void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) { }
         void ITerminalHandler.OnSetSynchronizedUpdate(bool enabled) { }
+        void ITerminalHandler.OnSetKittyKeyboardMode(int mode) { }
+        void ITerminalHandler.OnQueryKittyKeyboard() { }
         void ITerminalHandler.FlushRender() { }
     }
 

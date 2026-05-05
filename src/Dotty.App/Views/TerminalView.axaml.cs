@@ -598,6 +598,7 @@ namespace Dotty.App.Views
                 }
             }
 
+            _inputEncoder.KittyMode = _session?.Adapter.KittyKeyboardMode ?? 0;
             var encoded = _inputEncoder.Encode(e.Key, e.KeyModifiers, KeypadApplicationMode);
             if (encoded != null)
             {

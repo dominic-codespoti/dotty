@@ -191,6 +191,8 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) { }
         void ITerminalHandler.OnSetSynchronizedUpdate(bool enabled) { }
         void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) => SetMouseModeCalls.Add((mode, enabled));
+        void ITerminalHandler.OnSetKittyKeyboardMode(int mode) { }
+        void ITerminalHandler.OnQueryKittyKeyboard() { }
         void ITerminalHandler.FlushRender() { }
     }
 }

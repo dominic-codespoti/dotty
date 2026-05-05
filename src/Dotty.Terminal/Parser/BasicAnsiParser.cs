@@ -425,7 +425,19 @@ namespace Dotty.Terminal.Parser
                         Handler?.OnSaveCursor();
                         break;
                     case 'u':
-                        Handler?.OnRestoreCursor();
+                        if (isPrivate && paramCount > 0)
+                        {
+                            int mode = parsedParams[0];
+                            Handler?.OnSetKittyKeyboardMode(mode);
+                        }
+                        else if (isPrivate && paramCount == 0)
+                        {
+                            Handler?.OnQueryKittyKeyboard();
+                        }
+                        else
+                        {
+                            Handler?.OnRestoreCursor();
+                        }
                         break;
                     case 'h':
                     case 'l':
@@ -442,6 +454,8 @@ namespace Dotty.Terminal.Parser
                                 else if (code == 2004) Handler?.OnSetBracketedPasteMode(enable);
                                 else if (code == 1000 || code == 1002 || code == 1003 || code == 1005 || code == 1006 || code == 1015) 
                                     Handler?.OnSetMouseMode(code, enable);
+                                else if (code == 2026) 
+                                    Handler?.OnSetSynchronizedUpdate(enable);
                             }
                         }
                         break;

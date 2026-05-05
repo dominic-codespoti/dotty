@@ -488,6 +488,18 @@ public class TerminalAdapter : ITerminalHandler
         if (!enabled) FlushRender();
     }
 
+    public int KittyKeyboardMode { get; private set; }
+
+    public void OnSetKittyKeyboardMode(int mode)
+    {
+        KittyKeyboardMode = mode;
+    }
+
+    public void OnQueryKittyKeyboard()
+    {
+        ReplyRequested?.Invoke($"\x1b[{KittyKeyboardMode}u");
+    }
+
     public void FlushRender()
     {
         if (_synchronizedUpdateActive) return;

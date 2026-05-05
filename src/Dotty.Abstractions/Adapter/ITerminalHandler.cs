@@ -88,6 +88,10 @@ namespace Dotty.Abstractions.Adapter
         // Synchronized Update
         void OnSetSynchronizedUpdate(bool enabled);
 
+        // Kitty Keyboard Protocol
+        void OnSetKittyKeyboardMode(int mode);
+        void OnQueryKittyKeyboard();
+
         // Render batching
         void FlushRender();
     }

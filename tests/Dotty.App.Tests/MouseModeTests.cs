@@ -547,6 +547,8 @@ public class MouseModeTests
         void ITerminalHandler.OnSetSynchronizedUpdate(bool enabled) { }
         void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) => SetMouseModeCalls.Add((mode, enabled));
         void ITerminalHandler.OnSetApplicationCursorKeys(bool enabled) { }
+        void ITerminalHandler.OnSetKittyKeyboardMode(int mode) { }
+        void ITerminalHandler.OnQueryKittyKeyboard() { }
         void ITerminalHandler.FlushRender() { }
     }
 }

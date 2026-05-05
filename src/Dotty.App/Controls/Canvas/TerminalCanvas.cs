@@ -509,7 +509,35 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnAttachedToVisualTree(e);
+		RuntimeSettings.Changed += OnRuntimeSettingsChanged;
 		_bitmapDirty = true;
+		InvalidateVisual();
+	}
+
+	private void OnRuntimeSettingsChanged(object? sender, EventArgs e)
+	{
+		if (!IsVisible) return;
+		var rs = RuntimeSettings.Current;
+
+		if (rs.FontFamily != null)
+			FontFamily = new FontFamily(rs.FontFamily);
+		if (rs.FontSize.HasValue)
+			FontSize = rs.FontSize.Value;
+		if (rs.CellPadding.HasValue)
+			CellPadding = rs.CellPadding.Value;
+		if (rs.ContentPaddingLeft.HasValue || rs.ContentPaddingTop.HasValue ||
+			rs.ContentPaddingRight.HasValue || rs.ContentPaddingBottom.HasValue)
+		{
+			ContentPadding = new Thickness(
+				rs.ContentPaddingLeft ?? Generated.Config.ContentPaddingLeft,
+				rs.ContentPaddingTop ?? Generated.Config.ContentPaddingTop,
+				rs.ContentPaddingRight ?? Generated.Config.ContentPaddingRight,
+				rs.ContentPaddingBottom ?? Generated.Config.ContentPaddingBottom);
+		}
+
+		_metricsDirty = true;
+		_bitmapDirty = true;
+		InvalidateMeasure();
 		InvalidateVisual();
 	}
 
@@ -688,8 +716,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnDetachedFromVisualTree(e);
+		RuntimeSettings.Changed -= OnRuntimeSettingsChanged;
 		
-		// Clear glyph discovery to free memory
 		_glyphDiscovery = null;
 		
 		// Release per-view render state now that this canvas is leaving the tree.

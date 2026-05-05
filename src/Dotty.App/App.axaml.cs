@@ -28,6 +28,8 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
     }
 
+    private static FileSystemConfigWatcher? s_configWatcher;
+
     public override void OnFrameworkInitializationCompleted()
     {
         try
@@ -36,7 +38,11 @@ public partial class App : Application
             _themeManager = new ThemeManager();
             _themeManager.ThemeChanged += OnThemeChanged;
             Console.WriteLine($"[App] ThemeManager initialized with {_themeManager.AvailableThemes.Count} themes");
-            
+
+            // Start config file watcher for hot-reload
+            s_configWatcher = new FileSystemConfigWatcher();
+            s_configWatcher.Start();
+
             ApplyDefaultsToResources();
         }
         catch (Exception ex)

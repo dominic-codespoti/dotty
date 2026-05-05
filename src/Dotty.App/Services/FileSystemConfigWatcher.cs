@@ -6,7 +6,7 @@ using Dotty.Abstractions.Themes;
 
 namespace Dotty.App.Services;
 
-public sealed class RuntimeSettings
+public class RuntimeSettingsData
 {
     public string? FontFamily { get; set; }
     public double? FontSize { get; set; }
@@ -24,6 +24,25 @@ public sealed class RuntimeSettings
     public double? ContentPaddingBottom { get; set; }
 }
 
+public static class RuntimeSettings
+{
+    private static RuntimeSettingsData s_current = new();
+    public static RuntimeSettingsData Current => s_current;
+
+    public static event EventHandler? Changed;
+
+    internal static void Apply(RuntimeSettingsData data)
+    {
+        s_current = data;
+        Changed?.Invoke(null, EventArgs.Empty);
+    }
+
+    public static string GetFontFamily() => Current.FontFamily ?? global::Dotty.Generated.Config.FontFamily;
+    public static double GetFontSize() => Current.FontSize ?? global::Dotty.Generated.Config.FontSize;
+    public static double GetCellPadding() => Current.CellPadding ?? global::Dotty.Generated.Config.CellPadding;
+    public static double GetCursorBlinkIntervalMs() => Current.CursorBlinkIntervalMs ?? global::Dotty.Generated.Config.CursorBlinkIntervalMs;
+}
+
 public sealed class FileSystemConfigWatcher : IDisposable
 {
     private readonly string _configPath;
@@ -34,7 +53,6 @@ public sealed class FileSystemConfigWatcher : IDisposable
     private bool _disposed;
     private const int DebounceDelayMs = 300;
 
-    public event EventHandler<RuntimeSettings>? SettingsChanged;
     public event EventHandler<string>? Error;
 
     public FileSystemConfigWatcher(string? configDir = null)
@@ -46,7 +64,7 @@ public sealed class FileSystemConfigWatcher : IDisposable
     public bool IsWatching => _watcher?.EnableRaisingEvents ?? false;
     public string ConfigPath => _configPath;
 
-    public RuntimeSettings? LoadSettings()
+    public RuntimeSettingsData? LoadSettings()
     {
         try
         {
@@ -54,7 +72,7 @@ public sealed class FileSystemConfigWatcher : IDisposable
                 return null;
 
             var json = File.ReadAllText(_configPath);
-            return JsonSerializer.Deserialize<RuntimeSettings>(json);
+            return JsonSerializer.Deserialize<RuntimeSettingsData>(json);
         }
         catch (Exception ex)
         {
@@ -63,7 +81,7 @@ public sealed class FileSystemConfigWatcher : IDisposable
         }
     }
 
-    public void SaveSettings(RuntimeSettings settings)
+    public void SaveSettings(RuntimeSettingsData settings)
     {
         try
         {
@@ -123,7 +141,10 @@ public sealed class FileSystemConfigWatcher : IDisposable
             {
                 var settings = LoadSettings();
                 if (settings != null)
-                    SettingsChanged?.Invoke(this, settings);
+                {
+                    RuntimeSettings.Apply(settings);
+                    Console.WriteLine($"[ConfigWatcher] Settings reloaded from '{_configPath}'");
+                }
             }
             catch (Exception ex)
             {

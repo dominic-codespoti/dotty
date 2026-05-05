@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Threading;
 using Dotty.Terminal.Adapter;
 using Dotty.App.Configuration;
+using Dotty.App.Services;
 
 namespace Dotty.App.Controls
 {
@@ -67,7 +68,21 @@ namespace Dotty.App.Controls
         {
             InitializeComponent();
             this.PropertyChanged += OnStyledPropertyChanged;
+            RuntimeSettings.Changed += OnRuntimeSettingsChanged;
             StartBlinkLoop();
+        }
+
+        private void OnRuntimeSettingsChanged(object? sender, EventArgs e)
+        {
+            var rs = RuntimeSettings.Current;
+            if (rs.CursorBlinkIntervalMs.HasValue && _blinkTimer != null)
+            {
+                _blinkTimer.Interval = TimeSpan.FromMilliseconds(rs.CursorBlinkIntervalMs.Value);
+            }
+            if (rs.CursorShape != null && Enum.TryParse<TerminalCursorShape>(rs.CursorShape, out var shape))
+            {
+                CursorShape = shape;
+            }
         }
 
         private TerminalCanvas? Canvas => this.FindControl<TerminalCanvas>("PART_Canvas");

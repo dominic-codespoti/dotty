@@ -572,6 +572,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				rs.ContentPaddingBottom ?? Generated.Config.ContentPaddingBottom);
 		}
 
+		// Update default text color from runtime foreground
+		if (rs.Foreground != null && SkPaint != null)
+		{
+			ParseHexColor(rs.Foreground, out var fg);
+			SkPaint.Color = fg;
+		}
+
 		_metricsDirty = true;
 		_bitmapDirty = true;
 		InvalidateMeasure();
@@ -611,6 +618,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var scale = Math.Max(0.1, _renderScaling);
 		var scaledFontSize = Math.Max(1f, (float)(fontSize * scale));
 		var typeface = ResolveTerminalTypeface();
+		var defaultFg = SKColors.White;
+		var fgHex = RuntimeSettings.Current.Foreground;
+		if (fgHex != null) ParseHexColor(fgHex, out defaultFg);
+
 		SkPaint = new SKPaint
 		{
 			Typeface = typeface,
@@ -620,7 +631,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			SubpixelText = true,
 			IsAutohinted = true,
 			LcdRenderText = true,
-			Color = SKColors.White,
+			Color = defaultFg,
 		};
 
 		var fm = SkPaint.FontMetrics;
@@ -867,6 +878,27 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private double GetRenderScaling()
 	{
 		return VisualRoot?.RenderScaling ?? 1.0;
+	}
+
+	private static bool ParseHexColor(string hex, out SKColor color)
+	{
+		color = SKColors.White;
+		try
+		{
+			hex = hex.TrimStart('#');
+			if (hex.Length == 6) hex = "FF" + hex;
+			if (hex.Length == 8 && uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var argb))
+			{
+				color = new SKColor(
+					(byte)((argb >> 16) & 0xFF),
+					(byte)((argb >> 8) & 0xFF),
+					(byte)(argb & 0xFF),
+					(byte)((argb >> 24) & 0xFF));
+				return true;
+			}
+		}
+		catch { }
+		return false;
 	}
 
 	private static GlyphRasterizationOptions CreateRasterizationOptions(SKPaint? paint)

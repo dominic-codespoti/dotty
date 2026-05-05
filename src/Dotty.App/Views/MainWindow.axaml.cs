@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -19,9 +20,10 @@ using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Dotty.Abstractions.Config;
-using Dotty.App.ViewModels;
 using Dotty.App.Configuration;
-using System.ComponentModel;
+using Dotty.App.Services;
+using Dotty.App.ViewModels;
+using Dotty.Terminal.Adapter;
 
 namespace Dotty.App.Views;
 
@@ -51,16 +53,27 @@ namespace Dotty.App.Views;
             DataContext = _viewModel;
             
             UpdateWindowTitle();
-            
-            // Configure window transparency based on platform and user settings
             ConfigureTransparency();
+            
+            RuntimeSettings.Changed += OnRuntimeSettingsChanged;
             
             KeyDown += OnWindowKeyDown;
             Closed += OnClosed;
             Opened += OnOpened;
             
-            // Start test command listener for automated testing
             StartTestCommandListener();
+        }
+
+        private void OnRuntimeSettingsChanged(object? sender, EventArgs e)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                var rs = RuntimeSettings.Current;
+                if (rs.Transparency != null || rs.WindowOpacity.HasValue)
+                    ConfigureTransparency();
+                if (rs.Background != null)
+                    ConfigureTransparency();
+            });
         }
         
         /// <summary>

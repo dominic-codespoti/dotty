@@ -2,46 +2,8 @@ using System;
 using System.IO;
 using System.Text.Json;
 using System.Threading;
-using Dotty.Abstractions.Themes;
 
 namespace Dotty.App.Services;
-
-public class RuntimeSettingsData
-{
-    public string? FontFamily { get; set; }
-    public double? FontSize { get; set; }
-    public string? CursorShape { get; set; }
-    public bool? CursorBlink { get; set; }
-    public double? CursorBlinkIntervalMs { get; set; }
-    public string? Background { get; set; }
-    public string? Foreground { get; set; }
-    public string? SelectionColor { get; set; }
-    public string? Theme { get; set; }
-    public double? CellPadding { get; set; }
-    public double? ContentPaddingLeft { get; set; }
-    public double? ContentPaddingTop { get; set; }
-    public double? ContentPaddingRight { get; set; }
-    public double? ContentPaddingBottom { get; set; }
-}
-
-public static class RuntimeSettings
-{
-    private static RuntimeSettingsData s_current = new();
-    public static RuntimeSettingsData Current => s_current;
-
-    public static event EventHandler? Changed;
-
-    internal static void Apply(RuntimeSettingsData data)
-    {
-        s_current = data;
-        Changed?.Invoke(null, EventArgs.Empty);
-    }
-
-    public static string GetFontFamily() => Current.FontFamily ?? global::Dotty.Generated.Config.FontFamily;
-    public static double GetFontSize() => Current.FontSize ?? global::Dotty.Generated.Config.FontSize;
-    public static double GetCellPadding() => Current.CellPadding ?? global::Dotty.Generated.Config.CellPadding;
-    public static double GetCursorBlinkIntervalMs() => Current.CursorBlinkIntervalMs ?? global::Dotty.Generated.Config.CursorBlinkIntervalMs;
-}
 
 public sealed class FileSystemConfigWatcher : IDisposable
 {

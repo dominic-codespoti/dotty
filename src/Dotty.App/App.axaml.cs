@@ -57,6 +57,15 @@ public partial class App : Application
             s_configWatcher.Start();
 
             ApplyDefaultsToResources();
+
+            // Re-apply resources when runtime settings change (font, colors, etc.)
+            RuntimeSettings.Changed += (_, _) =>
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    try { ApplyDefaultsToResources(); } catch { }
+                });
+            };
         }
         catch (Exception ex)
         {

@@ -128,6 +128,13 @@ public sealed class CSharpConfigWatcher : IDisposable
         Try(() => rs.FontFamily = config.FontFamily);
         Try(() => rs.FontSize = config.FontSize);
         Try(() => rs.CellPadding = config.CellPadding);
+        Try(() => rs.ScrollbackLines = config.ScrollbackLines);
+        Try(() => rs.InactiveTabDestroyDelayMs = config.InactiveTabDestroyDelayMs);
+        Try(() => rs.WindowOpacity = config.WindowOpacity);
+
+        Try(() => rs.Transparency = config.Transparency?.ToString());
+        Try(() => rs.SelectionColor = config.SelectionColor is { } sc ? $"#{sc:X8}" : null);
+        Try(() => rs.TabBarBackgroundColor = config.TabBarBackgroundColor is { } tb ? $"#{tb:X8}" : null);
         Try(() => rs.Background = config.Colors?.Background is { } bg ? $"#{bg:X8}" : null);
         Try(() => rs.Foreground = config.Colors?.Foreground is { } fg ? $"#{fg:X8}" : null);
         Try(() =>

@@ -17,6 +17,8 @@ public sealed class CSharpConfigWatcher : IDisposable
     private readonly string _configDir;
     private FileSystemWatcher? _watcher;
     private Timer? _debounceTimer;
+    private Timer? _pollTimer;
+    private DateTime _lastPollWrite;
     private readonly object _lock = new();
     private bool _disposed;
     private AssemblyLoadContext? _loadContext;
@@ -35,6 +37,7 @@ public sealed class CSharpConfigWatcher : IDisposable
     {
         _configDir = ConfigGeneratorService.ProjectDir;
         _configPath = ConfigGeneratorService.ConfigPath;
+        try { _lastPollWrite = File.GetLastWriteTimeUtc(_configPath); } catch { _lastPollWrite = DateTime.MinValue; }
     }
 
     public bool IsWatching => _watcher?.EnableRaisingEvents ?? false;
@@ -159,7 +162,7 @@ public sealed class CSharpConfigWatcher : IDisposable
 
         _watcher = new FileSystemWatcher(_configDir, "Config.cs")
         {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName | NotifyFilters.Size,
             EnableRaisingEvents = false
         };
 
@@ -167,7 +170,20 @@ public sealed class CSharpConfigWatcher : IDisposable
         _watcher.Created += OnConfigFileChanged;
         _watcher.Renamed += OnConfigFileRenamed;
         _watcher.Error += OnWatcherError;
+        _watcher.IncludeSubdirectories = false;
+        _watcher.InternalBufferSize = 32768;
         _watcher.EnableRaisingEvents = true;
+
+        // Also watch for changes via polling as fallback (for editors that use atomic saves)
+        _pollTimer = new Timer(_ =>
+        {
+            var lastWrite = File.GetLastWriteTimeUtc(_configPath);
+            if (lastWrite > _lastPollWrite)
+            {
+                _lastPollWrite = lastWrite;
+                OnConfigFileChanged(null, new FileSystemEventArgs(WatcherChangeTypes.Changed, _configDir, "Config.cs"));
+            }
+        }, null, 2000, 2000);
 
         Console.WriteLine($"[CSharpConfig] Watching '{_configPath}'");
     }
@@ -185,6 +201,8 @@ public sealed class CSharpConfigWatcher : IDisposable
             _watcher.Dispose();
             _watcher = null;
         }
+        _pollTimer?.Dispose();
+        _pollTimer = null;
         _debounceTimer?.Dispose();
         _debounceTimer = null;
     }
@@ -245,6 +263,7 @@ public sealed class CSharpConfigWatcher : IDisposable
         if (_disposed) return;
         _disposed = true;
         Stop();
+        _pollTimer?.Dispose();
         _debounceTimer?.Dispose();
         _loadContext?.Unload();
     }

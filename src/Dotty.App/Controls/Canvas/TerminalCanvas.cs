@@ -436,6 +436,42 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}
 		}
 
+		// Draw cursor
+		if (_showCursor && buffer != null)
+		{
+			int curRow = buffer.CursorRow;
+			int curCol = buffer.CursorCol;
+			if (curRow >= 0 && curRow < buffer.Rows && curCol >= 0 && curCol < buffer.Columns)
+			{
+				float cx = curCol * (float)_cellWidth;
+				float cy = curRow * (float)_cellHeight;
+				float cw = (float)_cellWidth;
+				float ch = (float)_cellHeight;
+
+				using var cursorPaint = new SKPaint
+				{
+					Color = new SKColor(0xFF, 0xFF, 0xFF, 180),
+					Style = SKPaintStyle.Fill,
+					IsAntialias = false
+				};
+
+				switch (CursorShape)
+				{
+					case TerminalCursorShape.Block:
+						canvas.DrawRect(new SKRect(cx, cy, cx + cw, cy + ch), cursorPaint);
+						break;
+					case TerminalCursorShape.Beam:
+						float beamW = Math.Max(1f, cw * 0.08f);
+						canvas.DrawRect(new SKRect(cx, cy, cx + beamW, cy + ch), cursorPaint);
+						break;
+					case TerminalCursorShape.Underline:
+						float ulH = Math.Max(1f, ch * 0.08f);
+						canvas.DrawRect(new SKRect(cx, cy + ch - ulH, cx + cw, cy + ch), cursorPaint);
+						break;
+				}
+			}
+		}
+
 		canvas.Flush();
 	}
 

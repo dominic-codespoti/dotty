@@ -546,6 +546,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		base.OnAttachedToVisualTree(e);
 		RuntimeSettings.Changed += OnRuntimeSettingsChanged;
+		OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
 		_bitmapDirty = true;
 		InvalidateVisual();
 	}

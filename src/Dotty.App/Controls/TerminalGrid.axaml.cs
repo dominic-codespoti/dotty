@@ -69,6 +69,7 @@ namespace Dotty.App.Controls
             InitializeComponent();
             this.PropertyChanged += OnStyledPropertyChanged;
             RuntimeSettings.Changed += OnRuntimeSettingsChanged;
+            OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
             StartBlinkLoop();
         }
 

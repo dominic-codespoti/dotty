@@ -56,6 +56,7 @@ namespace Dotty.App.Views;
             ConfigureTransparency();
             
             RuntimeSettings.Changed += OnRuntimeSettingsChanged;
+            OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
             
             KeyDown += OnWindowKeyDown;
             Closed += OnClosed;

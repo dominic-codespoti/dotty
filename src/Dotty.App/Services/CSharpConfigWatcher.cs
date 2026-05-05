@@ -23,15 +23,12 @@ public sealed class CSharpConfigWatcher : IDisposable
     private bool _disposed;
     private AssemblyLoadContext? _loadContext;
     private const int DebounceDelayMs = 500;
-    private static readonly string[] s_assemblyPaths = new[]
-    {
-        typeof(IDottyConfig).Assembly.Location,
-        typeof(object).Assembly.Location,
-        typeof(System.Linq.Enumerable).Assembly.Location,
-    };
 
     public event EventHandler<RuntimeSettingsData>? ConfigCompiled;
     public event EventHandler<string>? Error;
+
+    public bool IsWatching => _watcher?.EnableRaisingEvents ?? false;
+    public string ConfigPath => _configPath;
 
     public CSharpConfigWatcher()
     {
@@ -40,40 +37,41 @@ public sealed class CSharpConfigWatcher : IDisposable
         try { _lastPollWrite = File.GetLastWriteTimeUtc(_configPath); } catch { _lastPollWrite = DateTime.MinValue; }
     }
 
-    public bool IsWatching => _watcher?.EnableRaisingEvents ?? false;
-    public string ConfigPath => _configPath;
-
     public RuntimeSettingsData? CompileAndLoad()
     {
         if (!File.Exists(_configPath))
+        {
+            Console.WriteLine($"[CSharpConfig] Config file not found: {_configPath}");
             return null;
+        }
 
         try
         {
             var source = File.ReadAllText(_configPath);
-
-            // Add using statements and wrap in a class that implements IDottyConfig
-            // The user's Config.cs is a partial class implementing IDottyConfig.
-            // We compile it as a standalone assembly referencing Dotty.Abstractions.
             var syntaxTree = CSharpSyntaxTree.ParseText(source);
 
+            // Collect all assembly references recursively
             var references = new List<MetadataReference>();
-            foreach (var asmPath in s_assemblyPaths)
-                references.Add(MetadataReference.CreateFromFile(asmPath));
+            var loadedAsm = new HashSet<string>();
 
-            // Also add all assemblies referenced by Dotty.Abstractions
-            foreach (var refAsm in typeof(IDottyConfig).Assembly.GetReferencedAssemblies())
+            void AddAssembly(Assembly asm)
             {
-                try
+                if (asm == null || asm.IsDynamic) return;
+                if (!loadedAsm.Add(asm.Location)) return;
+                try { references.Add(MetadataReference.CreateFromFile(asm.Location)); } catch { }
+                foreach (var r in asm.GetReferencedAssemblies())
                 {
-                    var asm = Assembly.Load(refAsm);
-                    references.Add(MetadataReference.CreateFromFile(asm.Location));
+                    try { AddAssembly(Assembly.Load(r)); } catch { }
                 }
-                catch { }
             }
 
+            AddAssembly(typeof(IDottyConfig).Assembly);
+            AddAssembly(typeof(object).Assembly);
+            try { AddAssembly(Assembly.Load("System.Runtime")); } catch { }
+            try { AddAssembly(Assembly.Load("System.Console")); } catch { }
+
             var compilation = CSharpCompilation.Create(
-                "UserConfig_Generated",
+                "UserConfig_Gen",
                 new[] { syntaxTree },
                 references,
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary)
@@ -85,40 +83,39 @@ public sealed class CSharpConfigWatcher : IDisposable
             if (!result.Success)
             {
                 var errors = string.Join("; ", result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error));
+                Console.Error.WriteLine($"[CSharpConfig] Compilation failed: {errors}");
                 Error?.Invoke(this, $"Compilation failed: {errors}");
                 return null;
             }
 
+            Console.WriteLine($"[CSharpConfig] Compiled ({ms.Length} bytes)");
             ms.Position = 0;
 
-            // Unload previous context
-            if (_loadContext != null)
-            {
-                _loadContext.Unload();
-                _loadContext = null;
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-            }
+            _loadContext?.Unload();
+            _loadContext = null;
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
 
-            _loadContext = new AssemblyLoadContext("UserConfig", isCollectible: true);
+            _loadContext = new AssemblyLoadContext("UserCfg", isCollectible: true);
             var assembly = _loadContext.LoadFromStream(ms);
 
-            // Find the config class implementing IDottyConfig
             foreach (var type in assembly.GetTypes())
             {
                 if (typeof(IDottyConfig).IsAssignableFrom(type) && !type.IsAbstract)
                 {
                     var instance = (IDottyConfig)Activator.CreateInstance(type)!;
+                    Console.WriteLine($"[CSharpConfig] Loaded {type.Name}");
                     return ExtractSettings(instance);
                 }
             }
 
-            Error?.Invoke(this, "No class implementing IDottyConfig found in compiled config");
+            Error?.Invoke(this, "No IDottyConfig implementor found");
             return null;
         }
         catch (Exception ex)
         {
-            Error?.Invoke(this, $"Failed to compile config: {ex.Message}");
+            Console.Error.WriteLine($"[CSharpConfig] Exception: {ex.Message}");
+            Error?.Invoke(this, $"Exception: {ex.Message}");
             return null;
         }
     }
@@ -126,10 +123,14 @@ public sealed class CSharpConfigWatcher : IDisposable
     private static RuntimeSettingsData ExtractSettings(IDottyConfig config)
     {
         var rs = new RuntimeSettingsData();
+        void Try(Action a) { try { a(); } catch { } }
 
-        try { rs.FontFamily = config.FontFamily; } catch { }
-        try { rs.FontSize = config.FontSize; } catch { }
-        try
+        Try(() => rs.FontFamily = config.FontFamily);
+        Try(() => rs.FontSize = config.FontSize);
+        Try(() => rs.CellPadding = config.CellPadding);
+        Try(() => rs.Background = config.Colors?.Background is { } bg ? $"#{bg:X8}" : null);
+        Try(() => rs.Foreground = config.Colors?.Foreground is { } fg ? $"#{fg:X8}" : null);
+        Try(() =>
         {
             if (config.Cursor != null)
             {
@@ -137,18 +138,11 @@ public sealed class CSharpConfigWatcher : IDisposable
                 rs.CursorBlink = config.Cursor.Blink;
                 rs.CursorBlinkIntervalMs = config.Cursor.BlinkIntervalMs;
             }
-        }
-        catch { }
-        try
-        {
-            if (config.Colors != null)
-            {
-                rs.Background = $"#{config.Colors.Background:X8}";
-                rs.Foreground = $"#{config.Colors.Foreground:X8}";
-            }
-        }
-        catch { }
-        try { rs.CellPadding = config.CellPadding; } catch { }
+        });
+        Try(() => rs.ContentPaddingLeft = config.ContentPadding?.Left);
+        Try(() => rs.ContentPaddingTop = config.ContentPadding?.Top);
+        Try(() => rs.ContentPaddingRight = config.ContentPadding?.Right);
+        Try(() => rs.ContentPaddingBottom = config.ContentPadding?.Bottom);
 
         return rs;
     }
@@ -162,7 +156,7 @@ public sealed class CSharpConfigWatcher : IDisposable
 
         _watcher = new FileSystemWatcher(_configDir, "Config.cs")
         {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.CreationTime | NotifyFilters.FileName | NotifyFilters.Size,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime | NotifyFilters.FileName,
             EnableRaisingEvents = false
         };
 
@@ -174,15 +168,19 @@ public sealed class CSharpConfigWatcher : IDisposable
         _watcher.InternalBufferSize = 32768;
         _watcher.EnableRaisingEvents = true;
 
-        // Also watch for changes via polling as fallback (for editors that use atomic saves)
         _pollTimer = new Timer(_ =>
         {
-            var lastWrite = File.GetLastWriteTimeUtc(_configPath);
-            if (lastWrite > _lastPollWrite)
+            try
             {
-                _lastPollWrite = lastWrite;
-                OnConfigFileChanged(null, new FileSystemEventArgs(WatcherChangeTypes.Changed, _configDir, "Config.cs"));
+                if (!File.Exists(_configPath)) return;
+                var lastWrite = File.GetLastWriteTimeUtc(_configPath);
+                if (lastWrite > _lastPollWrite)
+                {
+                    _lastPollWrite = lastWrite;
+                    OnConfigFileChanged(null, new FileSystemEventArgs(WatcherChangeTypes.Changed, _configDir, "Config.cs"));
+                }
             }
+            catch { }
         }, null, 2000, 2000);
 
         Console.WriteLine($"[CSharpConfig] Watching '{_configPath}'");
@@ -207,34 +205,40 @@ public sealed class CSharpConfigWatcher : IDisposable
         _debounceTimer = null;
     }
 
-    private void OnConfigFileChanged(object sender, FileSystemEventArgs e)
+    private void OnConfigFileChanged(object? sender, FileSystemEventArgs e)
     {
         Debounce(() =>
         {
             Thread.Sleep(100);
             try
             {
+                Console.WriteLine($"[CSharpConfig] Change detected, compiling...");
                 var settings = CompileAndLoad();
                 if (settings != null)
                 {
-                    RuntimeSettings.Apply(settings);
-                    Console.WriteLine($"[CSharpConfig] Config recompiled and applied");
+                    ConfigCompiled?.Invoke(this, settings);
+                    Console.WriteLine($"[CSharpConfig] ✓ Reloaded");
+                }
+                else
+                {
+                    Console.WriteLine($"[CSharpConfig] ✗ CompileAndLoad returned null");
                 }
             }
             catch (Exception ex)
             {
-                Error?.Invoke(this, $"Error: {ex.Message}");
+                Console.Error.WriteLine($"[CSharpConfig] Error: {ex.Message}");
+                Error?.Invoke(this, ex.Message);
             }
         });
     }
 
-    private void OnConfigFileRenamed(object sender, RenamedEventArgs e)
+    private void OnConfigFileRenamed(object? sender, RenamedEventArgs e)
     {
         if (e.Name == "Config.cs" || e.FullPath == _configPath)
             OnConfigFileChanged(sender, e);
     }
 
-    private void OnWatcherError(object sender, ErrorEventArgs e)
+    private void OnWatcherError(object? sender, ErrorEventArgs e)
     {
         Error?.Invoke(this, $"Watcher error: {e.GetException().Message}");
         try { Stop(); Start(); } catch { }
@@ -248,7 +252,7 @@ public sealed class CSharpConfigWatcher : IDisposable
             _debounceTimer = new Timer(_ =>
             {
                 try { action(); }
-                catch (Exception ex) { Error?.Invoke(this, $"Debounce error: {ex.Message}"); }
+                catch (Exception ex) { Error?.Invoke(this, $"Debounce: {ex.Message}"); }
             }, null, DebounceDelayMs, Timeout.Infinite);
         }
     }
@@ -263,8 +267,6 @@ public sealed class CSharpConfigWatcher : IDisposable
         if (_disposed) return;
         _disposed = true;
         Stop();
-        _pollTimer?.Dispose();
-        _debounceTimer?.Dispose();
         _loadContext?.Unload();
     }
 }

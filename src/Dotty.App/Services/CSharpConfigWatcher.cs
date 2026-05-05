@@ -137,6 +137,22 @@ public sealed class CSharpConfigWatcher : IDisposable
         Try(() => rs.TabBarBackgroundColor = config.TabBarBackgroundColor is { } tb ? $"#{tb:X8}" : null);
         Try(() => rs.Background = config.Colors?.Background is { } bg ? $"#{bg:X8}" : null);
         Try(() => rs.Foreground = config.Colors?.Foreground is { } fg ? $"#{fg:X8}" : null);
+        Try(() => rs.AnsiBlack = config.Colors?.AnsiBlack is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiRed = config.Colors?.AnsiRed is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiGreen = config.Colors?.AnsiGreen is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiYellow = config.Colors?.AnsiYellow is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBlue = config.Colors?.AnsiBlue is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiMagenta = config.Colors?.AnsiMagenta is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiCyan = config.Colors?.AnsiCyan is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiWhite = config.Colors?.AnsiWhite is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightBlack = config.Colors?.AnsiBrightBlack is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightRed = config.Colors?.AnsiBrightRed is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightGreen = config.Colors?.AnsiBrightGreen is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightYellow = config.Colors?.AnsiBrightYellow is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightBlue = config.Colors?.AnsiBrightBlue is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightMagenta = config.Colors?.AnsiBrightMagenta is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightCyan = config.Colors?.AnsiBrightCyan is { } c ? $"#{c:X8}" : null);
+        Try(() => rs.AnsiBrightWhite = config.Colors?.AnsiBrightWhite is { } c ? $"#{c:X8}" : null);
         Try(() =>
         {
             if (config.Cursor != null)

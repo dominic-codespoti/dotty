@@ -23,6 +23,24 @@ public class RuntimeSettingsData
     public string? TabBarBackgroundColor { get; set; }
     public string? Theme { get; set; }
 
+    // ANSI 16-color palette (ARGB hex strings)
+    public string? AnsiBlack { get; set; }
+    public string? AnsiRed { get; set; }
+    public string? AnsiGreen { get; set; }
+    public string? AnsiYellow { get; set; }
+    public string? AnsiBlue { get; set; }
+    public string? AnsiMagenta { get; set; }
+    public string? AnsiCyan { get; set; }
+    public string? AnsiWhite { get; set; }
+    public string? AnsiBrightBlack { get; set; }
+    public string? AnsiBrightRed { get; set; }
+    public string? AnsiBrightGreen { get; set; }
+    public string? AnsiBrightYellow { get; set; }
+    public string? AnsiBrightBlue { get; set; }
+    public string? AnsiBrightMagenta { get; set; }
+    public string? AnsiBrightCyan { get; set; }
+    public string? AnsiBrightWhite { get; set; }
+
     // Cursor
     public string? CursorShape { get; set; }
     public bool? CursorBlink { get; set; }

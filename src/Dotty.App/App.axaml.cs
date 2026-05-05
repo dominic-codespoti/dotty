@@ -118,36 +118,48 @@ public partial class App : Application
             FontResolver.FontResolved += OnTerminalFontResolved;
         }
 
+        var rs = RuntimeSettings.Current;
         var resources = Current.Resources;
         resources["TerminalFontFamily"] = FontResolver.ResolveFontFamily(Defaults.DefaultFontStack);
         resources["TerminalFontSize"] = Defaults.GetInitialFontSize();
 
         // Check if transparency is enabled
-        var transparency = global::Dotty.Generated.Config.Transparency;
-        var windowOpacity = global::Dotty.Generated.Config.WindowOpacity;
+        var transparency = RuntimeSettings.GetTransparency();
+        var windowOpacity = RuntimeSettings.GetWindowOpacity();
         var hasOpacity = windowOpacity < 100;
         var isTransparent = transparency != TransparencyLevel.None || hasOpacity;
+
+        // Determine background and foreground colors
+        string bgColorStr, fgColorStr;
+        if (rs.Background != null) bgColorStr = rs.Background;
+        else bgColorStr = Defaults.DefaultBackground;
+
+        if (rs.Foreground != null) fgColorStr = rs.Foreground;
+        else fgColorStr = Defaults.DefaultForeground;
 
         // Set terminal background - transparent if transparency or opacity enabled
         if (isTransparent)
         {
-            // Use transparent background so window transparency shows through
             resources["TerminalBackground"] = Brushes.Transparent;
             resources["TerminalBackgroundTransparent"] = Brushes.Transparent;
         }
         else
         {
-            // Solid background for fully opaque mode
-            try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
-            try { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse(Defaults.DefaultBackground)); } catch { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
+            try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(bgColorStr)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
+            try { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse(bgColorStr)); } catch { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
         }
-        
-        try { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse(Defaults.DefaultForeground)); } catch { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse("#D4D4D4")); }
-        
-        // Add tab bar background and foreground resources from theme
-        resources["TabBarBackground"] = new SolidColorBrush(ConfigBridge.ToColor(global::Dotty.Generated.Config.TabBarBackgroundColor));
-        resources["TabBarForeground"] = new SolidColorBrush(ConfigBridge.ToColor(global::Dotty.Generated.Config.Foreground));
-        
+
+        try { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse(fgColorStr)); } catch { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse("#D4D4D4")); }
+
+        // Tab bar colors from runtime or generated config
+        uint tabBarArgb = global::Dotty.Generated.Config.TabBarBackgroundColor;
+        if (rs.TabBarBackgroundColor != null)
+        {
+            try { tabBarArgb = ConfigBridge.FromHex(rs.TabBarBackgroundColor); } catch { }
+        }
+        resources["TabBarBackground"] = new SolidColorBrush(ConfigBridge.ToColor(tabBarArgb));
+        resources["TabBarForeground"] = new SolidColorBrush(Color.Parse(fgColorStr));
+
         // Apply the user's color theme to the terminal's ANSI palette
         ApplyAnsiColorPalette();
     }
@@ -157,8 +169,32 @@ public partial class App : Application
         try
         {
             uint[] ansiPalette;
-            
-            if (theme != null)
+            var rs = RuntimeSettings.Current;
+
+            // Check if runtime has ANSI colors
+            if (rs.AnsiBlack != null)
+            {
+                ansiPalette = new uint[]
+                {
+                    SafeParseHex(rs.AnsiBlack),
+                    SafeParseHex(rs.AnsiRed),
+                    SafeParseHex(rs.AnsiGreen),
+                    SafeParseHex(rs.AnsiYellow),
+                    SafeParseHex(rs.AnsiBlue),
+                    SafeParseHex(rs.AnsiMagenta),
+                    SafeParseHex(rs.AnsiCyan),
+                    SafeParseHex(rs.AnsiWhite),
+                    SafeParseHex(rs.AnsiBrightBlack),
+                    SafeParseHex(rs.AnsiBrightRed),
+                    SafeParseHex(rs.AnsiBrightGreen),
+                    SafeParseHex(rs.AnsiBrightYellow),
+                    SafeParseHex(rs.AnsiBrightBlue),
+                    SafeParseHex(rs.AnsiBrightMagenta),
+                    SafeParseHex(rs.AnsiBrightCyan),
+                    SafeParseHex(rs.AnsiBrightWhite)
+                };
+            }
+            else if (theme != null)
             {
                 // Use provided theme
                 ansiPalette = new uint[]
@@ -205,13 +241,19 @@ public partial class App : Application
                     colors.AnsiBrightWhite
                 };
             }
-            
+
             SgrColorArgb.SetAnsiPalette(ansiPalette);
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Failed to apply ANSI color palette: {ex.Message}");
         }
+    }
+
+    private static uint SafeParseHex(string? hex)
+    {
+        if (string.IsNullOrEmpty(hex)) return 0;
+        try { return ConfigBridge.FromHex(hex); } catch { return 0; }
     }
 
     private static void OnTerminalFontResolved(FontFamily family)

@@ -39,8 +39,10 @@ public partial class App : Application
             _themeManager.ThemeChanged += OnThemeChanged;
             Console.WriteLine($"[App] ThemeManager initialized with {_themeManager.AvailableThemes.Count} themes");
 
-            // Start config file watcher for hot-reload
+            // Start config file watcher for hot-reload.
+            // Seeds the JSON config from compiled defaults on first launch.
             s_configWatcher = new FileSystemConfigWatcher();
+            s_configWatcher.EnsureSeeded();
             s_configWatcher.Start();
 
             ApplyDefaultsToResources();

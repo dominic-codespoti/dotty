@@ -95,6 +95,31 @@ public sealed class FileSystemConfigWatcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// Creates the JSON config file from compile-time defaults if it doesn't exist.
+    /// This ensures the user always has a single file to edit after first launch.
+    /// </summary>
+    public void EnsureSeeded()
+    {
+        if (File.Exists(_configPath)) return;
+
+        var defaults = new RuntimeSettingsData
+        {
+            FontFamily = global::Dotty.Generated.Config.FontFamily,
+            FontSize = global::Dotty.Generated.Config.FontSize,
+            CursorShape = global::Dotty.Generated.Config.CursorShape,
+            CursorBlinkIntervalMs = global::Dotty.Generated.Config.CursorBlinkIntervalMs,
+            CellPadding = global::Dotty.Generated.Config.CellPadding,
+            ContentPaddingLeft = global::Dotty.Generated.Config.ContentPaddingLeft,
+            ContentPaddingTop = global::Dotty.Generated.Config.ContentPaddingTop,
+            ContentPaddingRight = global::Dotty.Generated.Config.ContentPaddingRight,
+            ContentPaddingBottom = global::Dotty.Generated.Config.ContentPaddingBottom,
+        };
+
+        SaveSettings(defaults);
+        Console.WriteLine($"[ConfigWatcher] Created seeded config at '{_configPath}'");
+    }
+
     public void Start()
     {
         ThrowIfDisposed();

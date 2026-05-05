@@ -28,7 +28,7 @@ public partial class App : Application
         AvaloniaXamlLoader.Load(this);
     }
 
-    private static FileSystemConfigWatcher? s_configWatcher;
+    private static CSharpConfigWatcher? s_configWatcher;
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -39,10 +39,21 @@ public partial class App : Application
             _themeManager.ThemeChanged += OnThemeChanged;
             Console.WriteLine($"[App] ThemeManager initialized with {_themeManager.AvailableThemes.Count} themes");
 
-            // Start config file watcher for hot-reload.
-            // Seeds the JSON config from compiled defaults on first launch.
-            s_configWatcher = new FileSystemConfigWatcher();
-            s_configWatcher.EnsureSeeded();
+            // Watch and compile the user's Config.cs at runtime.
+            // Changes to ~/.config/dotty/Dotty.UserConfig/Config.cs are
+            // automatically compiled and applied without restart.
+            s_configWatcher = new CSharpConfigWatcher();
+            s_configWatcher.ConfigCompiled += (_, settings) =>
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    RuntimeSettings.Apply(settings);
+                });
+            };
+            // Compile existing config on startup (if any), then watch for changes
+            var startupSettings = s_configWatcher.CompileAndLoad();
+            if (startupSettings != null)
+                RuntimeSettings.Apply(startupSettings);
             s_configWatcher.Start();
 
             ApplyDefaultsToResources();

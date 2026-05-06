@@ -3,12 +3,27 @@ using System.Collections.Concurrent;
 
 namespace Dotty.Terminal.Adapter;
 
+public sealed class AnsiPaletteChangedEventArgs : EventArgs
+{
+    public AnsiPaletteChangedEventArgs(uint[] previousPalette, uint[] currentPalette)
+    {
+        PreviousPalette = previousPalette;
+        CurrentPalette = currentPalette;
+    }
+
+    public uint[] PreviousPalette { get; }
+
+    public uint[] CurrentPalette { get; }
+}
+
 /// <summary>
 /// Zero-allocation SGR color representation using uint ARGB values instead of hex strings.
 /// Avoids string allocations and provides O(1) equality checks.
 /// </summary>
 public readonly record struct SgrColorArgb(uint Argb)
 {
+    private static readonly object s_paletteLock = new();
+
     public bool IsEmpty => Argb == 0;
     
     public byte A => (byte)(Argb >> 24);
@@ -65,6 +80,22 @@ public readonly record struct SgrColorArgb(uint Argb)
     // 256-color palette cache - lazily initialized, but first 16 can be overridden with theme colors
     private static SgrColorArgb[] _palette256 = InitializePalette256();
 
+    public static event EventHandler<AnsiPaletteChangedEventArgs>? AnsiPaletteChanged;
+
+    public static uint[] GetAnsiPaletteSnapshot()
+    {
+        lock (s_paletteLock)
+        {
+            var snapshot = new uint[16];
+            for (int i = 0; i < 16; i++)
+            {
+                snapshot[i] = _palette256[i].Argb;
+            }
+
+            return snapshot;
+        }
+    }
+
     /// <summary>
     /// Sets the first 16 ANSI colors (indices 0-15) from a theme palette.
     /// Call this during app startup to apply the user's color theme.
@@ -74,12 +105,34 @@ public readonly record struct SgrColorArgb(uint Argb)
     {
         if (ansiColors?.Length != 16)
             throw new ArgumentException("ANSI palette must have exactly 16 colors", nameof(ansiColors));
-        
-        // Update the first 16 entries with theme colors
-        for (int i = 0; i < 16; i++)
+
+        uint[] previousPalette;
+        bool changed = false;
+
+        lock (s_paletteLock)
         {
-            _palette256[i] = new SgrColorArgb(ansiColors[i]);
+            previousPalette = new uint[16];
+            for (int i = 0; i < 16; i++)
+            {
+                previousPalette[i] = _palette256[i].Argb;
+                changed |= previousPalette[i] != ansiColors[i];
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            // Update the first 16 entries with theme colors
+            for (int i = 0; i < 16; i++)
+            {
+                _palette256[i] = new SgrColorArgb(ansiColors[i]);
+            }
         }
+
+        AnsiPaletteChanged?.Invoke(
+            null,
+            new AnsiPaletteChangedEventArgs(previousPalette, (uint[])ansiColors.Clone()));
     }
 
     private static SgrColorArgb[] InitializePalette256()

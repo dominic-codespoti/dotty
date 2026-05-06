@@ -579,6 +579,14 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			SkPaint.Color = fg;
 		}
 
+		// Update selection brush color
+		if (rs.SelectionColor != null)
+		{
+			ParseHexColor(rs.SelectionColor, out var sel);
+			SelectionBrush = new SolidColorBrush(
+				global::Avalonia.Media.Color.FromArgb(sel.Alpha, sel.Red, sel.Green, sel.Blue));
+		}
+
 		_metricsDirty = true;
 		_bitmapDirty = true;
 		InvalidateMeasure();

@@ -38,7 +38,7 @@ namespace Dotty.App.Views;
         private readonly Dictionary<TabViewModel, DispatcherTimer> _inactiveTabTimers = new();
         private readonly Dictionary<TabViewModel, WriteableBitmap> _tabSnapshots = new();
         private TabViewModel? _lastActiveTab;
-        private int InactiveTabDestroyDelayMs => Generated.Config.InactiveTabDestroyDelayMs;
+        private int InactiveTabDestroyDelayMs => RuntimeSettings.Current.InactiveTabDestroyDelayMs ?? Generated.Config.InactiveTabDestroyDelayMs;
     private Grid? _contentContainer;
     private Control? _tabBar;
         private SolidColorBrush? _semiTransparentBrush;
@@ -56,6 +56,7 @@ namespace Dotty.App.Views;
             ConfigureTransparency();
             
             RuntimeSettings.Changed += OnRuntimeSettingsChanged;
+            SgrColorArgb.AnsiPaletteChanged += OnAnsiPaletteChanged;
             OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
             
             KeyDown += OnWindowKeyDown;
@@ -69,12 +70,55 @@ namespace Dotty.App.Views;
         {
             Dispatcher.UIThread.Post(() =>
             {
-                var rs = RuntimeSettings.Current;
-                if (rs.Transparency != null || rs.WindowOpacity.HasValue)
-                    ConfigureTransparency();
-                if (rs.Background != null)
-                    ConfigureTransparency();
+                ConfigureTransparency();
+                ClearAllTabSnapshots();
+
+                foreach (var view in _terminalViews.Values)
+                {
+                    try { view.ForceImmediateRender(); } catch { }
+                }
             });
+        }
+
+        private void OnAnsiPaletteChanged(object? sender, AnsiPaletteChangedEventArgs e)
+        {
+            Dispatcher.UIThread.Post(() =>
+            {
+                foreach (var tab in _viewModel.Tabs)
+                {
+                    if (!tab.HasSession)
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        tab.Session.Adapter.Buffer.StyleSet.RemapAnsiPalette(e.PreviousPalette, e.CurrentPalette);
+                    }
+                    catch { }
+                }
+
+                foreach (var view in _terminalViews.Values)
+                {
+                    try { view.ForceImmediateRender(); } catch { }
+                }
+            });
+        }
+
+        private static uint GetRuntimeBackgroundArgb()
+        {
+            var background = RuntimeSettings.Current.Background;
+            if (!string.IsNullOrWhiteSpace(background))
+            {
+                try { return ConfigBridge.FromHex(background); } catch { }
+            }
+
+            return Generated.Config.Background;
+        }
+
+        private static double GetRuntimeWindowOpacity()
+        {
+            return RuntimeSettings.GetWindowOpacity() / 100.0;
         }
         
         /// <summary>
@@ -106,29 +150,37 @@ namespace Dotty.App.Views;
         /// </summary>
         private void ConfigureTransparency()
         {
-            var windowOpacity = global::Dotty.Generated.Config.WindowOpacity / 100.0;
+            var windowOpacity = GetRuntimeWindowOpacity();
             var isWayland = Environment.GetEnvironmentVariable("XDG_SESSION_TYPE") == "wayland";
-            var transparency = global::Dotty.Generated.Config.Transparency;
+            var transparency = RuntimeSettings.GetTransparency();
+            var backgroundColor = ConfigBridge.ToColor(GetRuntimeBackgroundArgb());
+
+            this.Opacity = 1.0;
+            _semiTransparentBrush = null;
+            TransparencyLevelHint = Array.Empty<WindowTransparencyLevel>();
             
             // Case 1: Hyprland - use compositor transparency
             if (DetectHyprland())
             {
                 _isHyprland = true;
-                Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+                Background = new SolidColorBrush(backgroundColor);
+                SyncContentContainerBackground();
                 return;
             }
+
+            _isHyprland = false;
             
             // Case 2: Other Wayland + opacity - use brush alpha
             if (windowOpacity < 1.0 && isWayland)
             {
-                var baseColor = ConfigBridge.ToColor(Generated.Config.Background);
                 byte alpha = (byte)(windowOpacity * 255);
-                var transparentColor = new Color(alpha, baseColor.R, baseColor.G, baseColor.B);
+                var transparentColor = new Color(alpha, backgroundColor.R, backgroundColor.G, backgroundColor.B);
                 _semiTransparentBrush = new SolidColorBrush(transparentColor);
                 Background = _semiTransparentBrush;
                 
                 // Set Transparent hint so Avalonia treats window as translucent
                 TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent };
+                SyncContentContainerBackground();
                 return;
             }
             
@@ -137,18 +189,21 @@ namespace Dotty.App.Views;
             {
                 this.Opacity = windowOpacity;
                 Background = Brushes.Transparent;
+                SyncContentContainerBackground();
                 return;
             }
             
             // Case 4: Full transparency modes - use Avalonia hints
             if (transparency != TransparencyLevel.None)
             {
-                ApplyAvaloniaTransparency(transparency);
+                ApplyAvaloniaTransparency(transparency, backgroundColor);
+                SyncContentContainerBackground();
                 return;
             }
             
             // Case 5: Default - solid background
-            Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+            Background = new SolidColorBrush(backgroundColor);
+            SyncContentContainerBackground();
         }
         
         /// <summary>
@@ -174,7 +229,7 @@ namespace Dotty.App.Views;
         /// <summary>
         /// Applies Avalonia's transparency settings for full transparency modes (Blur/Acrylic/Transparent).
         /// </summary>
-        private void ApplyAvaloniaTransparency(TransparencyLevel transparency)
+        private void ApplyAvaloniaTransparency(TransparencyLevel transparency, Color backgroundColor)
         {
             switch (transparency)
             {
@@ -193,14 +248,42 @@ namespace Dotty.App.Views;
                     
                 case TransparencyLevel.None:
                 default:
-                    Background = new SolidColorBrush(ConfigBridge.ToColor(Generated.Config.Background));
+                    Background = new SolidColorBrush(backgroundColor);
                     break;
             }
         }
+
+        private void SyncContentContainerBackground()
+        {
+            if (_contentContainer == null || _isHyprland)
+            {
+                return;
+            }
+
+            if (_semiTransparentBrush != null)
+            {
+                _contentContainer.Background = _semiTransparentBrush;
+            }
+            else if (Background is IBrush brush)
+            {
+                _contentContainer.Background = brush;
+            }
+        }
+
+        private void ClearAllTabSnapshots()
+        {
+            foreach (var snapshot in _tabSnapshots.Values)
+            {
+                try { snapshot.Dispose(); } catch { }
+            }
+
+            _tabSnapshots.Clear();
+            RemoveTabSnapshotImmediate();
+        }
     
-    protected override void OnLoaded(RoutedEventArgs e)
-    {
-        base.OnLoaded(e);
+        protected override void OnLoaded(RoutedEventArgs e)
+        {
+            base.OnLoaded(e);
         
         // Get references to our manual container and tab bar
         _contentContainer = this.FindControl<Grid>("ContentContainer");
@@ -209,17 +292,7 @@ namespace Dotty.App.Views;
         // Sync ContentContainer background with window transparency settings
         // On Hyprland, ContentContainer stays solid (compositor handles transparency)
         // On other platforms with opacity, ContentContainer matches window background
-        if (_contentContainer != null && !_isHyprland)
-        {
-            if (_semiTransparentBrush != null)
-            {
-                _contentContainer.Background = _semiTransparentBrush;
-            }
-            else if (Background is SolidColorBrush solidBrush)
-            {
-                _contentContainer.Background = solidBrush;
-            }
-        }
+        SyncContentContainerBackground();
         
         // Initialize the first tab's content (lazy - only create when needed)
         if (_viewModel.ActiveTab != null)
@@ -944,6 +1017,9 @@ namespace Dotty.App.Views;
 
     private void OnClosed(object? sender, EventArgs e)
     {
+        RuntimeSettings.Changed -= OnRuntimeSettingsChanged;
+        SgrColorArgb.AnsiPaletteChanged -= OnAnsiPaletteChanged;
+
         // Stop test command listener
         _testCommandCts?.Cancel();
         try { _testCommandListener?.Stop(); } catch { }

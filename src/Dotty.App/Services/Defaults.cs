@@ -24,12 +24,12 @@ namespace Dotty.App.Services
         /// <summary>
         /// Default background color in hex format.
         /// </summary>
-        public static string DefaultBackground => ConfigBridge.ToHex(DottyDefaults.TabBarBackgroundColor);
+        public static string DefaultBackground => ConfigBridge.ToHex(DottyDefaults.DefaultColorScheme.Background);
 
         /// <summary>
         /// Default foreground color in hex format.
         /// </summary>
-        public static string DefaultForeground => ConfigBridge.ToHex(DottyDefaults.SelectionColor);
+        public static string DefaultForeground => ConfigBridge.ToHex(DottyDefaults.DefaultColorScheme.Foreground);
 
         /// <summary>
         /// Gets the initial font size, checking environment variable override first.

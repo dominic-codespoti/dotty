@@ -775,25 +775,177 @@ namespace Dotty.App.Views;
     private string GetTerminalStateJson()
     {
         int cursorRow = 0, cursorCol = 0, rows = 24, cols = 80;
+        int scrollbackLines = 0;
+        bool isAlternate = false;
         string title = _viewModel.ActiveTab?.Title ?? "";
         
-        // Try to get actual dimensions from the active terminal view
-        if (_viewModel.ActiveTab != null && _terminalViews.TryGetValue(_viewModel.ActiveTab, out var activeView))
+        var tab = _viewModel.ActiveTab;
+        if (tab?.Session?.Adapter?.Buffer is TerminalBuffer buf)
         {
-            // Get dimensions from the view if available
-            var stats = activeView.GetScrollbackStats();
-            // Default to standard dimensions
+            cursorRow = buf.CursorRow;
+            cursorCol = buf.CursorCol;
+            rows = buf.Rows;
+            cols = buf.Columns;
+            scrollbackLines = buf.ScrollbackCount;
+            isAlternate = buf.IsAlternateScreenActive;
         }
         
-        return "{" +
-            $"\"cursorRow\":{cursorRow}," +
-            $"\"cursorCol\":{cursorCol}," +
-            $"\"rows\":{rows}," +
-            $"\"cols\":{cols}," +
-            $"\"scrollbackLines\":0," +
-            $"\"isAlternateScreen\":false," +
-            $"\"title\":\"{title}\"" +
-            "}";
+        var sb = new StringBuilder();
+        sb.Append("{\"cursorRow\":").Append(cursorRow)
+          .Append(",\"cursorCol\":").Append(cursorCol)
+          .Append(",\"rows\":").Append(rows)
+          .Append(",\"cols\":").Append(cols)
+          .Append(",\"scrollbackLines\":").Append(scrollbackLines)
+          .Append(",\"isAlternateScreen\":").Append(isAlternate ? "true" : "false")
+          .Append(",\"title\":\"").Append(EscapeJson(title)).Append("\"}")
+          ;
+        return sb.ToString();
+    }
+
+    private string DumpTerminalScreen()
+    {
+        var tab = _viewModel.ActiveTab;
+        if (tab?.Session?.Adapter?.Buffer is not TerminalBuffer buf)
+            return "DUMP EMPTY";
+
+        var output = new StringBuilder();
+        output.Append("DUMP OK\n");
+        output.Append("R=").Append(buf.Rows)
+              .Append(" C=").Append(buf.Columns)
+              .Append(" CUR=").Append(buf.CursorRow)
+              .Append(',').Append(buf.CursorCol)
+              .Append('\n');
+
+        for (int r = 0; r < buf.Rows; r++)
+        {
+            AppendAnsiLine(output, buf, r);
+            output.Append('\n');
+        }
+
+        output.Append("END");
+        return output.ToString();
+    }
+
+    private static void AppendAnsiLine(StringBuilder output, TerminalBuffer buf, int row)
+    {
+        int prevFg = -1, prevBg = -1;
+        bool prevBold = false, prevItalic = false, prevUnderline = false;
+        bool prevInverse = false, prevStrikethrough = false, prevOverline = false;
+
+        for (int c = 0; c < buf.Columns; c++)
+        {
+            var cell = buf.GetCell(row, c);
+            var cold = buf.GetColdCell(row, c);
+
+            if (cell.IsContinuation)
+            {
+                output.Append(' ');
+                continue;
+            }
+
+            string? ch;
+            if (cell.Rune == 0)
+            {
+                ch = " ";
+            }
+            else
+            {
+                ch = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
+                ch ??= " ";
+            }
+
+            var style = buf.StyleSet.GetStyle(cell.StyleId);
+
+            // Check if attributes changed from previous cell
+            bool attrChanged = false;
+            int fg = style.Foreground.IsEmpty ? -1 : (int)(style.Foreground.Argb & 0xFFFFFF);
+            int bg = style.Background.IsEmpty ? -1 : (int)(style.Background.Argb & 0xFFFFFF);
+
+            if (fg != prevFg || bg != prevBg ||
+                style.Bold != prevBold || style.Italic != prevItalic ||
+                style.Underline != prevUnderline || style.Inverse != prevInverse ||
+                style.Strikethrough != prevStrikethrough || style.Overline != prevOverline)
+            {
+                attrChanged = true;
+                prevFg = fg;
+                prevBg = bg;
+                prevBold = style.Bold;
+                prevItalic = style.Italic;
+                prevUnderline = style.Underline;
+                prevInverse = style.Inverse;
+                prevStrikethrough = style.Strikethrough;
+                prevOverline = style.Overline;
+            }
+
+            if (attrChanged)
+            {
+                output.Append("\e[0m");
+                if (style.Bold) output.Append("\e[1m");
+                if (style.Faint) output.Append("\e[2m");
+                if (style.Italic) output.Append("\e[3m");
+                if (style.Underline) output.Append("\e[4m");
+                if (style.SlowBlink) output.Append("\e[5m");
+                if (style.Inverse) output.Append("\e[7m");
+                if (style.Strikethrough) output.Append("\e[9m");
+                if (style.Overline) output.Append("\e[53m");
+                if (fg >= 0) output.Append("\e[38;2;").Append(style.Foreground.R).Append(';').Append(style.Foreground.G).Append(';').Append(style.Foreground.B).Append('m');
+                if (bg >= 0) output.Append("\e[48;2;").Append(style.Background.R).Append(';').Append(style.Background.G).Append(';').Append(style.Background.B).Append('m');
+            }
+
+            // Escape special characters for safe display
+            foreach (char chChar in ch)
+            {
+                if (chChar == '\n') output.Append("\\n");
+                else if (chChar == '\r') output.Append("\\r");
+                else if (chChar == '\t') output.Append("\\t");
+                else if (chChar == '\e') output.Append("\\e");
+                else if (chChar < 32) output.Append(' ');
+                else output.Append(chChar);
+            }
+        }
+
+        output.Append("\e[0m");
+    }
+
+    private static char? MapKeyToControl(string keyName)
+    {
+        return keyName.ToUpperInvariant() switch
+        {
+            "ENTER" or "RETURN" => '\r',
+            "TAB" => '\t',
+            "ESCAPE" or "ESC" => '\x1b',
+            "BACKSPACE" or "BS" => '\x7f',
+            "CTRLC" or "CTRL_C" or "CTRL-C" => '\x03',
+            "CTRLD" or "CTRL_D" or "CTRL-D" => '\x04',
+            "CTRLZ" or "CTRL_Z" or "CTRL-Z" => '\x1a',
+            "CTRLL" or "CTRL_L" or "CTRL-L" => '\x0c',
+            "CTRLU" or "CTRL_U" or "CTRL-U" => '\x15',
+            "DEL" or "DELETE" => '\x7f',
+            "SPACE" => ' ',
+            _ => null,
+        };
+    }
+
+    private static string EscapeJson(string raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return "";
+        var sb = new StringBuilder(raw.Length);
+        foreach (char c in raw)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < 32) sb.Append(' ');
+                    else sb.Append(c);
+                    break;
+            }
+        }
+        return sb.ToString();
     }
     
     private void StartTestCommandListener()
@@ -957,8 +1109,26 @@ namespace Dotty.App.Views;
                     case "WAIT_FOR_IDLE":
                         // Just return OK - the UI thread being available means we're idle
                         return (success: true, response: (string?)null, error: (string?)null);
+                    case "SHUTDOWN":
+                        // Close the application
+                        Close();
+                        return (success: true, response: (string?)null, error: (string?)null);
+                    case var resizeCmd when resizeCmd.StartsWith("RESIZE:", StringComparison.OrdinalIgnoreCase):
+                        var resizeParts = resizeCmd.Substring(7).Split(':');
+                        if (resizeParts.Length >= 2 &&
+                            int.TryParse(resizeParts[0], out int resizeCols) &&
+                            int.TryParse(resizeParts[1], out int resizeRows))
+                        {
+                            var tab = _viewModel.ActiveTab;
+                            if (tab?.Session != null)
+                                tab.Session.Resize(resizeCols, resizeRows);
+                            return (success: true, response: (string?)null, error: (string?)null);
+                        }
+                        return (success: false, response: (string?)null, error: "Invalid RESIZE format. Use RESIZE:cols:rows");
+                    case "DUMP":
+                        var dumpText = DumpTerminalScreen();
+                        return (success: true, response: dumpText, error: (string?)null);
                     case "GET_STATE":
-                        // Return basic terminal state as JSON
                         var stateJson = GetTerminalStateJson();
                         return (success: true, response: stateJson, error: (string?)null);
                     case "COPY":
@@ -982,6 +1152,18 @@ namespace Dotty.App.Views;
                             var text = command.Trim().Substring(5);
                             TypeTextToActiveTerminal(text);
                             return (success: true, response: (string?)null, error: (string?)null);
+                        }
+                        // Handle KEY:keyname - send control character
+                        if (command.Trim().ToUpper().StartsWith("KEY:"))
+                        {
+                            var keyName = command.Trim().Substring(4).Trim();
+                            var controlChar = MapKeyToControl(keyName);
+                            if (controlChar.HasValue)
+                            {
+                                TypeTextToActiveTerminal(new string((char)controlChar.Value, 1));
+                                return (success: true, response: (string?)null, error: (string?)null);
+                            }
+                            return (success: false, response: (string?)null, error: $"Unknown key: {keyName}");
                         }
                         return (success: false, response: (string?)null, error: $"Unknown command: {command}");
                 }

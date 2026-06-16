@@ -21,6 +21,8 @@ public class TabViewModel : ViewModelBase, IDisposable
     private string? _userTitleOverride;
     private string? _sessionTitle;
     private TerminalSession? _session;
+    private int? _pendingCols;
+    private int? _pendingRows;
 
     private bool _isActive;
     public bool IsActive
@@ -79,9 +81,19 @@ public class TabViewModel : ViewModelBase, IDisposable
         }
     }
 
+    internal void SeedStartupSize(int cols, int rows)
+    {
+        _pendingCols = cols;
+        _pendingRows = rows;
+    }
+
     private TerminalSession CreateAndAttachSession()
     {
-        var session = new TerminalSession();
+        var session = new TerminalSession(
+            rows: _pendingRows ?? 24,
+            columns: _pendingCols ?? 80);
+        _pendingCols = null;
+        _pendingRows = null;
         AttachSession(session);
         return session;
     }
@@ -180,6 +192,6 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        targetTab.Session.Resize(sourceBuffer.Columns, sourceBuffer.Rows);
+        targetTab.SeedStartupSize(sourceBuffer.Columns, sourceBuffer.Rows);
     }
 }

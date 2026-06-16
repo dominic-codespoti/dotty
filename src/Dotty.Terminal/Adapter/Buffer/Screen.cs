@@ -536,6 +536,8 @@ public unsafe class Screen : IDisposable
         int cols = Math.Min(Columns, destination.Columns);
         int rowSizeBytes = cols * Unsafe.SizeOf<CellHot>();
         int coldRowSizeBytes = cols * Unsafe.SizeOf<ColdCell>();
+
+        // Copy visible rows.
         for (int r = 0; r < rows; r++)
         {
             int srcPhys = GetPhysicalRow(r);
@@ -549,6 +551,39 @@ public unsafe class Screen : IDisposable
                 (void*)(destination._coldCellsPtr + dstPhys * destination.Columns * Unsafe.SizeOf<ColdCell>()),
                 coldRowSizeBytes, coldRowSizeBytes);
             destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], cols - 1);
+        }
+
+        // Preserve scrollback ring buffer across all resize shapes.
+        // When columns shrink, rows are truncated at the new width.
+        // When columns grow, rows are padded with blank cells (destination is zero-init).
+        // Full re-flow (re-wrapping long lines) is not yet implemented, but truncation is
+        // far better than losing the entire history on every resize.
+        {
+            int srcTotal = _scrollbackCapacity + Rows;
+            int dstTotal = destination._scrollbackCapacity + destination.Rows;
+            int maxSbCopy = Math.Min(_scrollbackCapacity, destination._scrollbackCapacity);
+            // Use the narrower column count so MemoryCopy never reads past a row boundary.
+            int copyCols = Math.Min(Columns, destination.Columns);
+            int hotRowBytes = copyCols * Unsafe.SizeOf<CellHot>();
+            int coldRowBytes = copyCols * Unsafe.SizeOf<ColdCell>();
+
+            for (int i = 0; i < maxSbCopy; i++)
+            {
+                int srcPhys = (_head - 1 - i + srcTotal * 2) % srcTotal;
+
+                // Destination uses _head = 0; scrollback slots run from dstTotal-1 downward.
+                int dstPhys = dstTotal - 1 - i;
+                System.Buffer.MemoryCopy(
+                    (void*)(_cellsPtr + (long)srcPhys * Columns * Unsafe.SizeOf<CellHot>()),
+                    (void*)(destination._cellsPtr + (long)dstPhys * destination.Columns * Unsafe.SizeOf<CellHot>()),
+                    hotRowBytes, hotRowBytes);
+                System.Buffer.MemoryCopy(
+                    (void*)(_coldCellsPtr + (long)srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
+                    (void*)(destination._coldCellsPtr + (long)dstPhys * destination.Columns * Unsafe.SizeOf<ColdCell>()),
+                    coldRowBytes, coldRowBytes);
+                // Clamp maxCol to the new width in case we just truncated the row.
+                destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], destination.Columns - 1);
+            }
         }
     }
 

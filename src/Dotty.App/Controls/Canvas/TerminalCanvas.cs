@@ -860,8 +860,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			var buf = Buffer;
 			if (buf != null)
 			{
-				HandleBufferGeometryChange(buf);
 				EnsureMetrics();
+				HandleBufferGeometryChange(buf);
 				// Ensure glyph atlas exists for current metrics using shared service
 				if (_glyphAtlas == null)
 				{

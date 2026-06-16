@@ -79,6 +79,13 @@ public interface IDottyConfig
     /// Controls how quickly inactive tab visuals are destroyed to save memory.
     /// </summary>
     int? InactiveTabDestroyDelayMs { get; }
+
+    /// <summary>
+    /// Enable shell integration (OSC 133) for prompt marking and navigation.
+    /// When enabled, Ctrl+Up/Down will jump between shell prompts.
+    /// Requires shell-side configuration (e.g., for bash/zsh/fish).
+    /// </summary>
+    bool? EnableShellIntegration { get; }
 }
 
 /// <summary>

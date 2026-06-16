@@ -78,4 +78,10 @@ public enum TerminalAction
 
     /// <summary>Quit the application.</summary>
     Quit,
+
+    /// <summary>Scroll to previous shell prompt.</summary>
+    PreviousPrompt,
+
+    /// <summary>Scroll to next shell prompt.</summary>
+    NextPrompt,
 }

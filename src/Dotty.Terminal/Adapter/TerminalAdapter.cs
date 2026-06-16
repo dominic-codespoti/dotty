@@ -128,6 +128,27 @@ public class TerminalAdapter : ITerminalHandler
                 }
             }
         }
+        else if (code == 133)
+        {
+            // Shell Integration (OSC 133) — FinalTerm / Suzi protocol
+            if (payload.Length == 0) return;
+            var subcmd = payload[0];
+            switch (subcmd)
+            {
+                case 'A': // Prompt start
+                    _buffer.AddPromptMark(PromptKind.Prompt);
+                    break;
+                case 'B': // Command start
+                    _buffer.AddPromptMark(PromptKind.Command);
+                    break;
+                case 'C': // Output start
+                    _buffer.AddPromptMark(PromptKind.Output);
+                    break;
+                case 'D': // Command end / output done
+                    _buffer.AddPromptMark(PromptKind.CommandEnd);
+                    break;
+            }
+        }
     }
 
     public void OnSaveCursor()

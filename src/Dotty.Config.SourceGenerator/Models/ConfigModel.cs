@@ -29,6 +29,9 @@ public record ConfigModel
     public byte WindowOpacity { get; init; } = DottyDefaults.WindowOpacity;
     public string Transparency { get; init; } = DottyDefaults.Transparency.ToString();
 
+    // Shell Integration
+    public bool EnableShellIntegration { get; init; } = DottyDefaults.EnableShellIntegration;
+
     // Theme
     public ThemeModel Theme { get; init; } = ThemeModel.DarkPlus;
 
@@ -62,4 +65,5 @@ internal static class DottyDefaults
     public const byte WindowOpacity = 100;
     public const string Transparency = "None";
     public const string DefaultThemeName = "DarkPlus";
+    public const bool EnableShellIntegration = true;
 }

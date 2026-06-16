@@ -80,6 +80,9 @@ public static class ConfigExtractor
                 "Transparency" => evaluatedValue != null
                     ? model with { Transparency = evaluatedValue.ToString() ?? DottyDefaults.Transparency }
                     : model,
+                "EnableShellIntegration" => evaluatedValue is bool esi
+                    ? model with { EnableShellIntegration = esi }
+                    : model,
                 _ => model
             };
         }

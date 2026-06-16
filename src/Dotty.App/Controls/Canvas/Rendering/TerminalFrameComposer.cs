@@ -41,6 +41,41 @@ public sealed class TerminalFrameComposer : IDisposable
     private readonly Stack<ActiveRegion> _activeRegionPool = new();
     private SynthCell[] _reusableSynthSpan = Array.Empty<SynthCell>();
 
+    // --- HarfBuzz text shaping ---
+    private TextShaper? _textShaper;
+    private ShapedRunCache? _shapedRunCache;
+
+    public TextShaper? TextShaper
+    {
+        get => _textShaper;
+        set => _textShaper = value;
+    }
+
+    public ShapedRunCache? ShapedRunCache
+    {
+        get => _shapedRunCache;
+        set => _shapedRunCache = value;
+    }
+
+    // --- Font fallback ---
+    private List<SKTypeface>? _fallbackTypefaces;
+    private SKTypeface? _primaryTypeface;
+
+    /// <summary>
+    /// Ordered list of typefaces for font fallback. Index 0 = primary.
+    /// The primary typeface from the paint is used when this is null or empty.
+    /// Emoji fonts should be placed at the end of the list.
+    /// </summary>
+    public List<SKTypeface>? FallbackTypefaces
+    {
+        get => _fallbackTypefaces;
+        set
+        {
+            _fallbackTypefaces = value;
+            _primaryTypeface = value != null && value.Count > 0 ? value[0] : null;
+        }
+    }
+
     // --- cached cell info ---
     // Legacy `_cellInfos` removed in favor of a single `CellClass` pass.
     private CellClass[] _cellClasses = Array.Empty<CellClass>();
@@ -430,6 +465,7 @@ public sealed class TerminalFrameComposer : IDisposable
 
         _linePaint.StrokeWidth = Math.Max(1f, cellH * 0.05f);
         Span<SKRect> geometryRects = stackalloc SKRect[8];
+        var sb = new StringBuilder(64);
 
         for (int row = startRow; row <= endRow; row++)
         {
@@ -441,13 +477,15 @@ public sealed class TerminalFrameComposer : IDisposable
             canvas.Save();
             canvas.ClipRect(SKRect.Create(0, rowTop, buffer.Columns * cellW, cellH));
 
-            for (int col = 0; col < buffer.Columns; col++)
+            int col = 0;
+            while (col < buffer.Columns)
             {
                 var cc = _cellClasses[col];
-                if (!cc.ShouldDrawGlyph) continue;
-
-                if (cc.Invisible) continue;
-                if (cc.SlowBlink && !isBlinkVisible) continue;
+                if (!cc.ShouldDrawGlyph || cc.Invisible || (cc.SlowBlink && !isBlinkVisible))
+                {
+                    col += cc.Width;
+                    continue;
+                }
 
                 bool hasHyperlink = cc.HyperlinkId != 0;
                 var fgColor = cc.HasFg ? cc.Fg : defaultColor;
@@ -458,6 +496,7 @@ public sealed class TerminalFrameComposer : IDisposable
                 float x = MathF.Round(col * cellW);
                 bool renderedAsBlockGeometry = false;
 
+                // Handle block elements / box drawing with geometry (not shaped text)
                 if (IsGeometryRenderedRune(cc.FirstRune))
                 {
                     float left = x;
@@ -486,51 +525,168 @@ public sealed class TerminalFrameComposer : IDisposable
 
                 if (!renderedAsBlockGeometry)
                 {
+                    // Attempt to extend a shapeable run from this cell
+                    int runEnd = col + cc.Width;
+                    if (!disableSmoothing && _textShaper != null && !cc.IsContinuation)
+                    {
+                        var runFg = fgColor;
+                        bool runBold = cc.Bold;
+                        int runTypefaceIdx = cc.TypefaceIndex;
+
+                        while (runEnd < buffer.Columns)
+                        {
+                            var next = _cellClasses[runEnd];
+                            if (!next.ShouldDrawGlyph || next.Invisible) break;
+                            if (IsPixelGridRune(next.FirstRune)) break;
+                            if (next.HasFg ? next.Fg != runFg : runFg != defaultColor) break;
+                            if (next.Bold != runBold) break;
+                            if (next.TypefaceIndex != runTypefaceIdx) break;
+                            if (next.IsContinuation) { runEnd++; continue; }
+                            runEnd += next.Width;
+                        }
+
+                        // Count non-continuation glyph cells in the run
+                        int glyphCount = 0;
+                        for (int c = col; c < runEnd; )
+                        {
+                            if (!_cellClasses[c].IsContinuation) glyphCount++;
+                            c += _cellClasses[c].Width;
+                        }
+
+                        if (glyphCount >= 2)
+                        {
+                            // Build combined text for the run
+                            sb.Clear();
+                            for (int c = col; c < runEnd; )
+                            {
+                                var cell = _cellClasses[c];
+                                if (cell.ShouldDrawGlyph && !cell.IsContinuation)
+                                    sb.Append(cell.Grapheme);
+                                c += cell.Width;
+                            }
+
+                            string combined = sb.ToString();
+                            var runTypeface = GetTypefaceForIndex(runTypefaceIdx);
+                            float textSize = _glyphPaint.TextSize;
+
+                            ShapedRun shaped;
+                            if (_shapedRunCache == null || !_shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped))
+                            {
+                                shaped = _textShaper.Shape(combined, runTypeface, textSize);
+                                _shapedRunCache?.Add(combined, runTypeface, textSize, runBold, shaped);
+                            }
+
+                            _glyphPaint.Color = fgColor;
+                            _glyphPaint.StrokeWidth = runBold ? 0.8f : 0f;
+                            _glyphPaint.Style = SKPaintStyle.Fill;
+
+                            // Use HarfBuzz-shaped positions: build an SKTextBlob
+                            var blobBuilder = new SKTextBlobBuilder();
+                            using var runFont = new SKFont(runTypeface, textSize);
+                            var runHandle = blobBuilder.AllocatePositionedRun(runFont, shaped.GlyphIndices.Length);
+                            runHandle.SetGlyphs(shaped.GlyphIndices.AsSpan());
+                            runHandle.SetPositions(shaped.Positions.AsSpan());
+                            using var blob = blobBuilder.Build();
+                            canvas.DrawText(blob, x, baseline, _glyphPaint);
+
+                            // Draw per-cell decorations for the shaped run
+                            for (int c = col; c < runEnd; )
+                            {
+                                var cell = _cellClasses[c];
+                                if (!cell.IsContinuation && cell.ShouldDrawGlyph && !cell.Invisible)
+                                {
+                                    float cellX = MathF.Round(c * cellW);
+                                    float cellLineW = cellW * cell.Width;
+                                    DrawCellDecorations(canvas, fm, fgColor, hasHyperlink,
+                                        cellX, baseline, cellLineW, cell);
+                                }
+                                c += cell.Width;
+                            }
+
+                            col = runEnd;
+                            continue;
+                        }
+                    }
+
+                    // Single cell (or shaping unavailable): direct DrawText
                     _glyphPaint.Color = fgColor;
-                    bool disableSmoothing2 = IsPixelGridRune(cc.FirstRune);
-                    _glyphPaint.IsAntialias = disableSmoothing2 ? false : baseAntialias;
-                    _glyphPaint.SubpixelText = disableSmoothing2 ? false : baseSubpixel;
-                    _glyphPaint.LcdRenderText = disableSmoothing2 ? false : baseLcd;
+                    _glyphPaint.IsAntialias = disableSmoothing ? false : baseAntialias;
+                    _glyphPaint.SubpixelText = disableSmoothing ? false : baseSubpixel;
+                    _glyphPaint.LcdRenderText = disableSmoothing ? false : baseLcd;
                     _glyphPaint.StrokeWidth = cc.Bold ? 0.8f : 0f;
                     _glyphPaint.Style = SKPaintStyle.Fill;
+
+                    // Use fallback typeface if this cell needs a different font
+                    var savedTypeface = _glyphPaint.Typeface;
+                    if (cc.TypefaceIndex != 0)
+                    {
+                        var cellTf = GetTypefaceForIndex(cc.TypefaceIndex);
+                        if (cellTf != null)
+                            _glyphPaint.Typeface = cellTf;
+                    }
+
                     canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
+
+                    // Restore primary typeface
+                    if (cc.TypefaceIndex != 0)
+                        _glyphPaint.Typeface = savedTypeface;
                 }
 
-                bool hasLine = !renderedAsBlockGeometry
-                    && (cc.Underline || cc.DoubleUnderline || cc.Strikethrough || cc.Overline || hasHyperlink);
-                if (hasLine)
-                {
-                    if (hasHyperlink) _linePaint.Color = HyperlinkUnderlineColor;
-                    else _linePaint.Color = (cc.UnderlineColorArgb != 0) ? new SKColor(cc.UnderlineColorArgb) : fgColor;
+                // Draw per-cell decorations
+                DrawCellDecorations(canvas, fm, fgColor, hasHyperlink, x, baseline, cellW * cc.Width, cc);
 
-                    float lineW = cellW * cc.Width;
-                    if (cc.Underline || hasHyperlink)
-                    {
-                        float y = baseline + fm.Descent * 0.5f;
-                        canvas.DrawLine(x, y, x + lineW, y, _linePaint);
-                    }
-                    if (cc.DoubleUnderline)
-                    {
-                        float y1 = baseline + fm.Descent * 0.3f;
-                        float y2 = baseline + fm.Descent * 0.8f;
-                        canvas.DrawLine(x, y1, x + lineW, y1, _linePaint);
-                        canvas.DrawLine(x, y2, x + lineW, y2, _linePaint);
-                    }
-                    if (cc.Strikethrough)
-                    {
-                        float y = baseline - (fm.Ascent * -0.3f);
-                        canvas.DrawLine(x, y, x + lineW, y, _linePaint);
-                    }
-                    if (cc.Overline)
-                    {
-                        float y = baseline + fm.Ascent * 1.05f;
-                        canvas.DrawLine(x, y, x + lineW, y, _linePaint);
-                    }
-                }
+                col += cc.Width;
             }
 
             canvas.Restore();
         }
+    }
+
+    private void DrawCellDecorations(
+        SKCanvas canvas,
+        SKFontMetrics fm,
+        SKColor fgColor,
+        bool hasHyperlink,
+        float x,
+        float baseline,
+        float lineW,
+        in CellClass cc)
+    {
+        bool hasLine = cc.Underline || cc.DoubleUnderline || cc.Strikethrough || cc.Overline || hasHyperlink;
+        if (!hasLine) return;
+
+        if (hasHyperlink) _linePaint.Color = HyperlinkUnderlineColor;
+        else _linePaint.Color = (cc.UnderlineColorArgb != 0) ? new SKColor(cc.UnderlineColorArgb) : fgColor;
+
+        if (cc.Underline || hasHyperlink)
+        {
+            float y = baseline + fm.Descent * 0.5f;
+            canvas.DrawLine(x, y, x + lineW, y, _linePaint);
+        }
+        if (cc.DoubleUnderline)
+        {
+            float y1 = baseline + fm.Descent * 0.3f;
+            float y2 = baseline + fm.Descent * 0.8f;
+            canvas.DrawLine(x, y1, x + lineW, y1, _linePaint);
+            canvas.DrawLine(x, y2, x + lineW, y2, _linePaint);
+        }
+        if (cc.Strikethrough)
+        {
+            float y = baseline - (fm.Ascent * -0.3f);
+            canvas.DrawLine(x, y, x + lineW, y, _linePaint);
+        }
+        if (cc.Overline)
+        {
+            float y = baseline + fm.Ascent * 1.05f;
+            canvas.DrawLine(x, y, x + lineW, y, _linePaint);
+        }
+    }
+
+    private SKTypeface GetTypefaceForIndex(int index)
+    {
+        if (_fallbackTypefaces != null && index >= 0 && index < _fallbackTypefaces.Count)
+            return _fallbackTypefaces[index];
+        return _glyphPaint.Typeface;
     }
 
     private static SKColor ToSkColor(uint argb)
@@ -593,6 +749,9 @@ public sealed class TerminalFrameComposer : IDisposable
         public bool Invisible;
         public bool SlowBlink;
         public uint UnderlineColorArgb;
+
+        // Font fallback: index into FallbackTypefaces (0 = primary)
+        public int TypefaceIndex;
     }
 
     private void ClassifyRowCells(TerminalBuffer buffer, int row)
@@ -636,8 +795,32 @@ public sealed class TerminalFrameComposer : IDisposable
 
             cc.HyperlinkId = cold.HyperlinkId;
 
+            cc.TypefaceIndex = ResolveCellTypeface(cc);
+
             _cellClasses[col] = cc;
         }
+    }
+
+    private int ResolveCellTypeface(in CellClass cc)
+    {
+        if (!cc.ShouldDrawGlyph || cc.IsContinuation || cc.FirstRune <= 0)
+            return 0;
+
+        if (_fallbackTypefaces == null || _fallbackTypefaces.Count <= 1)
+            return 0;
+
+        // Check primary font (index 0)
+        if (_fallbackTypefaces[0].ContainsGlyph(cc.FirstRune))
+            return 0;
+
+        // Walk the fallback chain (monospace fonts first, then emoji)
+        for (int i = 1; i < _fallbackTypefaces.Count; i++)
+        {
+            if (_fallbackTypefaces[i].ContainsGlyph(cc.FirstRune))
+                return i;
+        }
+
+        return 0;
     }
 
     // Whitelist of known separator runes (common Powerline / Nerd Font codepoints).

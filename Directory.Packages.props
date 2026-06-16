@@ -52,6 +52,15 @@
     <PackageVersion Include="Moq" Version="4.20.72" />
   </ItemGroup>
 
+  <!-- Text Shaping -->
+  <ItemGroup>
+    <PackageVersion Include="HarfBuzzSharp" Version="8.3.1.1" />
+    <PackageVersion Include="HarfBuzzSharp.NativeAssets.Linux" Version="8.3.1.1" />
+    <PackageVersion Include="HarfBuzzSharp.NativeAssets.macOS" Version="8.3.1.1" />
+    <PackageVersion Include="HarfBuzzSharp.NativeAssets.Win32" Version="8.3.1.1" />
+    <PackageVersion Include="SkiaSharp.HarfBuzz" Version="2.88.9" />
+  </ItemGroup>
+
   <!-- System -->
   <ItemGroup>
     <PackageVersion Include="System.Diagnostics.PerformanceCounter" Version="10.0.7" />

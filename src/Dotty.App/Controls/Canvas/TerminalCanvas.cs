@@ -141,6 +141,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private GlyphAtlas? _glyphAtlas;
 	private GlyphDiscovery? _glyphDiscovery;
 	private TerminalFrameComposer? _frameComposer;
+	private TextShaper? _textShaper;
+	private static readonly ShapedRunCache SharedShapedRunCache = new();
 	private bool _lastBufferWasAlternate = false;
 	private int _lastKnownBufferRows = -1;
 	private int _lastKnownBufferColumns = -1;
@@ -160,6 +162,15 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		"Liberation Mono",
 		"Courier New",
 		"monospace"
+	};
+
+	private static readonly string[] EmojiFontFamilies =
+	{
+		"Noto Color Emoji",
+		"Apple Color Emoji",
+		"Segoe UI Emoji",
+		"EmojiOne Color",
+		"Twemoji Mozilla",
 	};
 	
 	private WriteableBitmap? _bitmap;
@@ -217,12 +228,26 @@ public class TerminalCanvas : Control, ILogicalScrollable
         set
         {
             if (_offset != value)
-			{
-			_offset = value;
-			ScrollInvalidated?.Invoke(this, EventArgs.Empty);
-			InvalidateVisual();
-			}
+            {
+                _offset = value;
+                ScrollInvalidated?.Invoke(this, EventArgs.Empty);
+                InvalidateVisual();
+            }
         } 
+    }
+
+    /// <summary>
+    /// Returns true when the viewport is scrolled to the very bottom
+    /// (within a sub-pixel tolerance). Used to decide whether new output
+    /// should auto-scroll or preserve the user's scrollback position.
+    /// </summary>
+    public bool IsAtBottom
+    {
+        get
+        {
+            var extent = Extent;
+            return Math.Abs(_offset.Y - Math.Max(0, extent.Height - _viewport.Height)) < 0.1;
+        }
     }
 
     public Size Extent 
@@ -301,6 +326,43 @@ public class TerminalCanvas : Control, ILogicalScrollable
         }
     }
     // -----------------------------------------
+
+    public void ScrollToRow(int visibleRow)
+    {
+        var buf = Buffer;
+        if (buf == null) return;
+
+        int sbCount = buf.ScrollbackCount;
+        float targetY = (float)((visibleRow + sbCount) * _cellHeight);
+        targetY = Math.Clamp(targetY, 0, (float)Math.Max(0, Extent.Height - _viewport.Height));
+        Offset = new Vector(0, targetY);
+    }
+
+    public void ScrollToPreviousPrompt()
+    {
+        var buf = Buffer;
+        if (buf == null) return;
+
+        int currentVisibleRow = (int)Math.Floor(_offset.Y / _cellHeight) - buf.ScrollbackCount;
+        var mark = buf.FindNearestPrompt(currentVisibleRow, searchForward: false);
+        if (mark == null) return;
+
+        int targetRow = buf.GetPromptVisibleRow(mark.Value);
+        ScrollToRow(targetRow);
+    }
+
+    public void ScrollToNextPrompt()
+    {
+        var buf = Buffer;
+        if (buf == null) return;
+
+        int currentVisibleRow = (int)Math.Floor(_offset.Y / _cellHeight) - buf.ScrollbackCount + (int)(_viewport.Height / _cellHeight) - 1;
+        var mark = buf.FindNearestPrompt(currentVisibleRow, searchForward: true);
+        if (mark == null) return;
+
+        int targetRow = buf.GetPromptVisibleRow(mark.Value);
+        ScrollToRow(targetRow);
+    }
 
 	protected override void OnSizeChanged(SizeChangedEventArgs e)
 	{
@@ -733,6 +795,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		_cellWidth = (float)Math.Round(Math.Max(4, glyphAdvance / (float)scale + (float)(padding * 2.0)));
 		_cellHeight = (float)Math.Round(Math.Max((float)fontSize, glyphHeight / (float)scale + (float)(padding * 2.0)));
 
+		// Resolve fallback typefaces and set on composer
+		var fallbackTypefaces = ResolveAllTypefaces(scaledFontSize);
+		if (_frameComposer != null)
+			_frameComposer.FallbackTypefaces = fallbackTypefaces;
+
 		// Recreate glyph atlas when metrics change (font family/size)
 		// Use shared atlas service to reduce memory across tabs
 		_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
@@ -818,6 +885,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				if (_frameComposer == null)
 				{
 					_frameComposer = new TerminalFrameComposer();
+					_textShaper = new TextShaper();
+					_frameComposer.TextShaper = _textShaper;
+					_frameComposer.ShapedRunCache = SharedShapedRunCache;
 				}
 				else
 				{
@@ -851,9 +921,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		
 		_glyphDiscovery = null;
 		
-		// Release per-view render state now that this canvas is leaving the tree.
-		try { _frameComposer?.Dispose(); } catch { }
-		_frameComposer = null;
+        // Release per-view render state now that this canvas is leaving the tree.
+        try { _frameComposer?.Dispose(); } catch { }
+        _frameComposer = null;
+        _textShaper?.Dispose();
+        _textShaper = null;
 		
 		// Clear glyph atlas reference (atlas itself is shared via service)
 		_glyphAtlas = null;
@@ -917,6 +989,38 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 
 		return SKTypeface.Default;
+	}
+
+	private List<SKTypeface> ResolveAllTypefaces(float textSize)
+	{
+		var result = new List<SKTypeface>();
+		var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		// Resolve monospace fonts from the fallback chain first
+		foreach (var candidate in EnumerateFontCandidates())
+		{
+			if (string.IsNullOrWhiteSpace(candidate) || !seen.Add(candidate))
+				continue;
+			if (!TryResolveTypeface(candidate, out var typeface))
+				continue;
+			if (FontHelpers.IsLikelySymbolFontName(candidate) || FontHelpers.IsLikelySymbolFontName(typeface.FamilyName))
+			{
+				typeface.Dispose();
+				continue;
+			}
+			result.Add(typeface);
+		}
+
+		// Add emoji fonts at the end of the fallback chain
+		foreach (var emojiName in EmojiFontFamilies)
+		{
+			if (!seen.Add(emojiName))
+				continue;
+			if (TryResolveTypeface(emojiName, out var typeface))
+				result.Add(typeface);
+		}
+
+		return result;
 	}
 
 	private IEnumerable<string> EnumerateFontCandidates()

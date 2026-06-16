@@ -571,6 +571,26 @@ namespace Dotty.App.Views
             }
 
             var modifiers = e.KeyModifiers;
+
+            // Prompt navigation: Ctrl+Up / Ctrl+Down
+            if (modifiers == KeyModifiers.Control)
+            {
+                if (e.Key == Key.Up)
+                {
+                    _grid?.ScrollToPreviousPrompt();
+                    e.Handled = true;
+                    _suppressText = false;
+                    return;
+                }
+                if (e.Key == Key.Down)
+                {
+                    _grid?.ScrollToNextPrompt();
+                    e.Handled = true;
+                    _suppressText = false;
+                    return;
+                }
+            }
+
             if (modifiers.HasFlag(KeyModifiers.Control) && modifiers.HasFlag(KeyModifiers.Shift))
             {
                 if (e.Key == Key.C && _selectionController.HasSelection)

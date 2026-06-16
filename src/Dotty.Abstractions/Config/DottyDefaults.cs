@@ -54,6 +54,9 @@ public static class DottyDefaults
     public const TransparencyLevel Transparency = TransparencyLevel.None;
     public const byte WindowOpacity = 100;
 
+    // Shell Integration
+    public const bool EnableShellIntegration = true;
+
     // Theme Settings
     public static readonly IColorScheme DefaultColorScheme = BuiltInThemes.DarkPlus;
     public const string DefaultThemeName = "DarkPlus";

@@ -53,4 +53,7 @@ public partial class DefaultDottyConfig : IDottyConfig
     // Transparency - using DottyDefaults
     public TransparencyLevel? Transparency => DottyDefaults.Transparency;
     public byte? WindowOpacity => DottyDefaults.WindowOpacity;
+
+    // Shell Integration
+    public bool? EnableShellIntegration => true;
 }

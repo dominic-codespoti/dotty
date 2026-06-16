@@ -71,6 +71,12 @@ public static class ConfigEmitter
         sb.AppendLine("    #endregion");
         sb.AppendLine();
 
+        // Shell Integration
+        sb.AppendLine("    #region Shell Integration");
+        sb.AppendLine($"    public static bool EnableShellIntegration => {model.EnableShellIntegration.ToString().ToLowerInvariant()};");
+        sb.AppendLine("    #endregion");
+        sb.AppendLine();
+
         // Cursor settings
         sb.AppendLine("    #region Cursor Settings");
         sb.AppendLine($"    public static string CursorShape => {SymbolDisplay.FormatLiteral(model.Cursor.Shape, true)};");

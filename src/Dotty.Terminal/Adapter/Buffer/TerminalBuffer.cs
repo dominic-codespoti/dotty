@@ -134,6 +134,7 @@ public class TerminalBuffer
     }
 
     private int _totalScrolled = 0;
+    private readonly List<PromptMark> _promptMarks = new();
     private bool[]? _tabStops;
     internal bool _autoWrap = true; // DECAWM default is enabled
     private bool _bracketedPaste = false;
@@ -227,9 +228,51 @@ public class TerminalBuffer
         return 0;
     }
 
+    public void AddPromptMark(PromptKind kind)
+    {
+        int absoluteRow = _totalScrolled + _cursor.Row;
+        _promptMarks.Add(new PromptMark(absoluteRow, kind));
+        if (_promptMarks.Count > 5000)
+            _promptMarks.RemoveRange(0, _promptMarks.Count - 5000);
+    }
+
+    public IReadOnlyList<PromptMark> GetPromptMarks() => _promptMarks;
+
+    public PromptMark? FindNearestPrompt(int fromVisibleRow, bool searchForward)
+    {
+        if (_promptMarks.Count == 0) return null;
+
+        int targetAbsolute = _totalScrolled + fromVisibleRow;
+
+        if (searchForward)
+        {
+            for (int i = 0; i < _promptMarks.Count; i++)
+            {
+                if (_promptMarks[i].AbsoluteRow > targetAbsolute)
+                    return _promptMarks[i];
+            }
+            return null;
+        }
+        else
+        {
+            for (int i = _promptMarks.Count - 1; i >= 0; i--)
+            {
+                if (_promptMarks[i].AbsoluteRow < targetAbsolute)
+                    return _promptMarks[i];
+            }
+            return null;
+        }
+    }
+
+    public int GetPromptVisibleRow(PromptMark mark)
+    {
+        return mark.AbsoluteRow - _totalScrolled;
+    }
+
     public void ClearScrollback()
     {
         _totalScrolled = 0;
+        _promptMarks.Clear();
     }
 
     /// <summary>
@@ -240,6 +283,9 @@ public class TerminalBuffer
     public void TrimScrollback(int maxLines)
     {
         if (maxLines < 0) maxLines = 0;
+        int trimStart = _totalScrolled - maxLines; // lines being dropped
+        if (trimStart > 0)
+            _promptMarks.RemoveAll(m => m.AbsoluteRow < trimStart);
         _totalScrolled = Math.Min(_totalScrolled, maxLines);
     }
 

@@ -249,10 +249,15 @@ public static class ConfigGeneratorService
                $"    public int? ScrollbackLines => null;  // Default: {defaultScrollbackLines}\n" +
                $"    \n" +
                $"    // Time before inactive tab visuals are destroyed (milliseconds)\n" +
-               $"    public int? InactiveTabDestroyDelayMs => null;  // Default: {defaultInactiveTabDelay}\n" +
-               $"    \n" +
-                $"    // =========================================================================\n" +
-                $"    // TRANSPARENCY SETTINGS (Optional - null uses defaults)\n" +
+                $"    public int? InactiveTabDestroyDelayMs => null;  // Default: {defaultInactiveTabDelay}\n" +
+                $"    \n" +
+                $"    // Enable shell integration for prompt marking and navigation\n" +
+                $"    // When enabled, Ctrl+Up/Down jumps between shell prompts.\n" +
+                $"    // Also requires shell-side config (see docs/shell-integration.md)\n" +
+                $"    public bool? EnableShellIntegration => true;\n" +
+                $"    \n" +
+                 $"    // =========================================================================\n" +
+                 $"    // TRANSPARENCY SETTINGS (Optional - null uses defaults)\n" +
                 $"    // =========================================================================\n" +
                 $"    // There are two ways to achieve transparency:\n" +
                 $"    //\n" +

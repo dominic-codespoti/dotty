@@ -42,6 +42,7 @@ namespace Dotty.Abstractions.Adapter
         void OnRestoreCursor();
         void OnInsertChars(int n);
         void OnDeleteChars(int n);
+        void OnEraseCharacters(int n);
         void OnInsertLines(int n);
         void OnDeleteLines(int n);
         void OnSetAutoWrap(bool enabled);

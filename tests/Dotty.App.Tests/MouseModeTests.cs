@@ -522,6 +522,7 @@ public class MouseModeTests
         void ITerminalHandler.OnRestoreCursor() { }
         void ITerminalHandler.OnInsertChars(int n) { }
         void ITerminalHandler.OnDeleteChars(int n) { }
+        void ITerminalHandler.OnEraseCharacters(int n) { }
         void ITerminalHandler.OnInsertLines(int n) { }
         void ITerminalHandler.OnDeleteLines(int n) { }
         void ITerminalHandler.OnSetAutoWrap(bool enabled) { }

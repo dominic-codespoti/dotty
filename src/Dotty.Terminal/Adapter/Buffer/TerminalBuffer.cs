@@ -77,16 +77,24 @@ public class TerminalBuffer
 
     public bool IsAlternateScreenActive => _isAlternate;
 
-    public void SetScrollRegion(int top, int bottom)
+    public void SetScrollRegion(int top1Based, int bottom1Based)
     {
-        int newTop = Math.Max(0, top);
-        int newBottom = Math.Clamp(bottom, 0, Rows - 1);
+        int newTop = Math.Max(0, top1Based - 1);
+        int newBottom = Math.Clamp(bottom1Based - 1, 0, Rows - 1);
 
         if (newTop < newBottom)
         {
             _scrollTop = newTop;
             _scrollBottom = newBottom;
         }
+        else
+        {
+            _scrollTop = 0;
+            _scrollBottom = Rows - 1;
+        }
+
+        // DECSTBM homes the cursor after setting margins.
+        _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
     }
 
     public void SetCursorVisible(bool visible)
@@ -129,8 +137,6 @@ public class TerminalBuffer
     private bool[]? _tabStops;
     internal bool _autoWrap = true; // DECAWM default is enabled
     private bool _bracketedPaste = false;
-
-    internal bool _clearLineOnNextWrite = false;
 
     public int CursorRow => _cursor.Row;
     public int CursorCol => _cursor.Col;
@@ -244,7 +250,6 @@ public class TerminalBuffer
         _cursor.Reset();
         _bracketedPaste = false;
         _hasSavedCursor = false;
-        _clearLineOnNextWrite = false;
         InitializeTabStops();
         _totalScrolled = 0;
         MarkAllRowsDirty();
@@ -254,13 +259,33 @@ public class TerminalBuffer
     {
         if (n <= 0) return;
         ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, n);
+        if (_scrollTop == 0)
+            unchecked { _totalScrolled += Math.Min(n, _scrollBottom - _scrollTop + 1); }
         MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
     }
 
     public void ScrollDownLines(int n)
     {
         if (n <= 0) return;
+        int clampedLines = Math.Min(n, _scrollBottom - _scrollTop + 1);
+        int restoredFromScrollback = 0;
+        bool isFullScreenRegion = _scrollTop == 0 && _scrollBottom == Rows - 1;
+        if (isFullScreenRegion)
+            restoredFromScrollback = Math.Min(_totalScrolled, clampedLines);
+
         ActiveBuffer.ScrollDownRegion(_scrollTop, _scrollBottom, n);
+        if (_scrollTop == 0 && _totalScrolled > 0)
+            unchecked { _totalScrolled = Math.Max(0, _totalScrolled - clampedLines); }
+
+        // Full-screen reverse scrolling should reveal history until scrollback is
+        // exhausted, then fall back to the terminal's blank-line insertion.
+        if (isFullScreenRegion)
+        {
+            int blankLines = clampedLines - restoredFromScrollback;
+            for (int row = 0; row < blankLines; row++)
+                ActiveBuffer.ClearRow(row);
+        }
+
         MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
     }
 
@@ -360,19 +385,8 @@ public class TerminalBuffer
     public void SetOriginMode(bool enabled)
     {
         _originMode = enabled;
-        // When toggling origin mode, ensure the cursor is in a sensible place.
-        if (_originMode)
-        {
-            if (_cursor.Row < _scrollTop || _cursor.Row > _scrollBottom)
-            {
-                _cursor.Set(_scrollTop, _cursor.Col, Rows, Columns);
-            }
-        }
-        else
-        {
-            // Ensure cursor remains within full-screen bounds
-            _cursor.Set(Math.Clamp(_cursor.Row, 0, Rows - 1), _cursor.Col, Rows, Columns);
-        }
+        // DECOM resets the cursor to the current home position.
+        _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
         // Changing origin may change visible content; mark all rows dirty.
         MarkAllRowsDirty();
     }
@@ -398,7 +412,6 @@ public class TerminalBuffer
     public void CarriageReturn()
     {
         _cursor.CarriageReturn();
-        _clearLineOnNextWrite = true;
     }
 
     public void LineFeed()
@@ -429,13 +442,9 @@ public class TerminalBuffer
 
     public void ReverseIndex()
     {
-        // If the cursor is at the top of the scroll region, scroll the region
-        // down by one line (DEC RI). Otherwise move the cursor up.
         if (_cursor.Row == _scrollTop)
         {
-            ActiveBuffer.ScrollDownRegion(_scrollTop, _scrollBottom, 1);
-            // Signal movement so renderer can update caches
-            MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+            ScrollDownLines(1);
             return;
         }
 
@@ -456,8 +465,9 @@ public class TerminalBuffer
         if (count <= 0) return;
         int row = _cursor.Row;
         int col = _cursor.Col;
+        int cols = Columns;
         // Shift cells to the right
-        for (int c = Columns - 1; c >= col + count; c--)
+        for (int c = cols - 1; c >= col + count; c--)
         {
             ref var dst = ref ActiveBuffer.GetCellRef(row, c);
             var src = ActiveBuffer.GetCell(row, c - count);
@@ -466,10 +476,12 @@ public class TerminalBuffer
             ActiveBuffer.GetColdCellRef(row, c) = srcCold;
         }
         // Clear inserted region
-        for (int c = col; c < Math.Min(Columns, col + count); c++)
+        for (int c = col; c < Math.Min(cols, col + count); c++)
         {
             ActiveBuffer.ClearCell(row, c);
         }
+        // Clean orphaned continuations in the shifted range
+        CleanRowContinuations(row, col + count, cols);
         MarkRowDirty(row);
     }
 
@@ -478,7 +490,9 @@ public class TerminalBuffer
         if (count <= 0) return;
         int row = _cursor.Row;
         int col = _cursor.Col;
-        for (int c = col; c < Columns - count; c++)
+        int cols = Columns;
+        int endShift = cols - count;
+        for (int c = col; c < endShift; c++)
         {
             ref var dst = ref ActiveBuffer.GetCellRef(row, c);
             var src = ActiveBuffer.GetCell(row, c + count);
@@ -487,10 +501,50 @@ public class TerminalBuffer
             ActiveBuffer.GetColdCellRef(row, c) = srcCold;
         }
         // Clear trailing cells
-        for (int c = Math.Max(0, Columns - count); c < Columns; c++)
+        for (int c = Math.Max(0, endShift); c < cols; c++)
         {
             ActiveBuffer.ClearCell(row, c);
         }
+        // Clean orphaned continuations in the copied range
+        CleanRowContinuations(row, col, cols);
+        MarkRowDirty(row);
+    }
+
+    private void CleanRowContinuations(int row, int startCol, int endCol)
+    {
+        var buf = ActiveBuffer;
+        for (int c = startCol; c < endCol && c < Columns; c++)
+        {
+            ref var cell = ref buf.GetCellRef(row, c);
+            if (!cell.IsContinuation) continue;
+            bool valid = c > 0;
+            if (valid)
+            {
+                var prev = buf.GetCellRef(row, c - 1);
+                valid = !prev.IsContinuation && prev.Rune != 0 && prev.Width == 2;
+            }
+            if (!valid)
+            {
+                cell.Reset();
+                buf.GetColdCellRef(row, c).Reset();
+            }
+        }
+        ActiveBuffer.RecalculateRowMaxCol(row);
+    }
+
+    public void EraseCharacters(int count)
+    {
+        if (count <= 0) return;
+
+        int row = _cursor.Row;
+        int start = Math.Clamp(_cursor.Col, 0, Columns - 1);
+        int endExclusive = Math.Min(Columns, start + count);
+
+        for (int c = start; c < endExclusive; c++)
+        {
+            ActiveBuffer.ClearCell(row, c);
+        }
+
         MarkRowDirty(row);
     }
 
@@ -702,7 +756,35 @@ public class TerminalBuffer
     {
         _screens.ClearAll();
         _cursor.Reset();
-        _clearLineOnNextWrite = false;
         MarkAllRowsDirty();
+    }
+
+    public string GetDebugInfo()
+    {
+        var sb = new StringBuilder();
+        var buf = ActiveBuffer;
+        sb.Append($"H={buf.Head} TScrolled={_totalScrolled} SbCnt={ScrollbackCount}");
+        sb.Append($" sTOP={_scrollTop} sBOT={_scrollBottom} org={_originMode}");
+        sb.Append($" gen={_globalGeneration}");
+        sb.Append($" rows={Rows} cols={Columns} cur=({_cursor.Row},{_cursor.Col})");
+        sb.Append(" physmap:[");
+        for (int r = 0; r < Math.Min(Rows, 6); r++)
+        {
+            if (r > 0) sb.Append(',');
+            sb.Append(buf.GetPhysicalRow(r));
+        }
+        if (Rows > 6) sb.Append("...");
+        sb.Append(']');
+        // Last 3 rows of scroll region (for warping diagnostics)
+        sb.Append(" tails:");
+        int regionBot = Math.Min(_scrollBottom, Rows - 1);
+        for (int r = Math.Max(0, regionBot - 2); r <= regionBot; r++)
+        {
+            sb.Append(r == Math.Max(0, regionBot - 2) ? '|' : ';');
+            var text = GetRowText(r).TrimEnd();
+            if (text.Length > 24) text = text.Substring(0, 24);
+            sb.Append(text);
+        }
+        return sb.ToString();
     }
 }

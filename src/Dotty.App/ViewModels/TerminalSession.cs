@@ -11,6 +11,7 @@ using Dotty.Abstractions.Pty;
 using Dotty.NativePty;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
+using Dotty.App.Services;
 
 namespace Dotty.App.ViewModels;
 
@@ -44,6 +45,8 @@ public class TerminalSession : IDisposable
         Adapter.ReplyRequested += OnAdapterReplyRequested;
         Adapter.ClipboardWriteRequested += text => ClipboardWriteRequested?.Invoke(text);
         Adapter.TitleChanged += title => TitleChanged?.Invoke(title);
+        if (TerminalTrace.Enabled)
+            Adapter.Trace = (reason, buf) => TerminalTrace.Snapshot(buf, reason);
     }
 
     public void Start()
@@ -137,7 +140,14 @@ public class TerminalSession : IDisposable
 
     public void Resize(int cols, int rows)
     {
-        try { Adapter.ResizeBuffer(rows, cols); } catch { }
+        try
+        {
+            lock (Adapter.Buffer.SyncRoot)
+            {
+                Adapter.ResizeBuffer(rows, cols);
+            }
+        }
+        catch { }
 
         if (!_hasReceivedInitialResize)
         {
@@ -193,9 +203,13 @@ public class TerminalSession : IDisposable
             channel.Writer.Complete();
         }, cancellationToken);
 
-        // Consumer: reads from channel, processes sequentially
+        // Consumer: reads from channel, processes sequentially.
+        // SyncRoot is acquired so the renderer never reads a partially-updated buffer state.
+        // FlushRender is called immediately after each chunk so the render timer
+        // never catches an intermediate state between related operations (e.g. scroll+write).
         _ = Task.Run(async () =>
         {
+            int chunkCount = 0;
             try
             {
                 await foreach (var entry in channel.Reader.ReadAllAsync(cancellationToken))
@@ -203,10 +217,16 @@ public class TerminalSession : IDisposable
                     var (chunk, length) = entry;
                     try
                     {
-                        Parser.Feed(chunk.AsSpan(0, length));
+                        lock (Adapter.Buffer.SyncRoot)
+                        {
+                            Parser.Feed(chunk.AsSpan(0, length));
+                        }
                     }
                     catch { }
                     ArrayPool<byte>.Shared.Return(chunk);
+                    try { Adapter.FlushRender(); } catch { }
+                    if (TerminalTrace.Enabled && ++chunkCount % 10 == 0)
+                        TerminalTrace.Snapshot(Adapter.Buffer, "periodic");
                 }
             }
             catch { }

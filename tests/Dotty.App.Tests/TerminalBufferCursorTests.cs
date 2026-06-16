@@ -65,4 +65,23 @@ public class TerminalBufferCursorTests
         Assert.Equal(2, buffer.CursorRow);
         Assert.Equal(4, buffer.CursorCol);
     }
+
+    [Fact]
+    public void CarriageReturn_DoesNotClearDifferentRowOnNextWrite()
+    {
+        var buffer = new TerminalBuffer(rows: 2, columns: 10);
+
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("abcdef".AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(1, 0);
+        buffer.WriteText("uvwxyz".AsSpan(), CellAttributes.Default);
+
+        buffer.SetCursor(0, 6);
+        buffer.CarriageReturn();
+        buffer.SetCursor(1, 0);
+        buffer.WriteText("xy".AsSpan(), CellAttributes.Default);
+
+        Assert.Equal("abcdef", buffer.GetRowText(0).TrimEnd());
+        Assert.Equal("xywxyz", buffer.GetRowText(1).TrimEnd());
+    }
 }

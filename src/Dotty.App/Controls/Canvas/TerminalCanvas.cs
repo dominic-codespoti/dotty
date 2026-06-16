@@ -166,6 +166,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	
 	private WriteableBitmap? _bitmap;
 	private bool _bitmapDirty = true;
+	private SKPaint? _debugTextPaint;
+	private SKPaint? _debugBgPaint;
+
+	public bool ShowDebugOverlay { get; set; }
 	
 	public SKPaint? SkPaint { get; private set; }
 	public double CellWidth
@@ -337,13 +341,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var buffer = Buffer;
 		if (buffer == null) return;
 
-		// Render to WriteableBitmap if content changed
-		if (_bitmapDirty)
-		{
-			EnsureMetrics();
-			RenderToBitmap(buffer);
-			_bitmapDirty = false;
-		}
+		// Always render fresh from buffer — no bitmap caching.
+		// This eliminates stale-frame artifacts from inter-chunk render timing.
+		EnsureMetrics();
+		RenderToBitmap(buffer);
 
 		// Draw cached bitmap to screen
 		if (_bitmap != null)
@@ -356,33 +357,38 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 	private void RenderToBitmap(TerminalBuffer buffer)
 	{
-		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
-		{
-			_frameComposer.ResetCaches();
-			_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
-		}
-
-		var bgBrush = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
-		var bgColor = SKColors.Black;
-		if (bgBrush is ISolidColorBrush solid)
-			bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
-
-		int w = Math.Max(1, (int)Bounds.Width);
-		int h = Math.Max(1, (int)Bounds.Height);
-
-		if (_bitmap == null || _bitmap.PixelSize.Width != w || _bitmap.PixelSize.Height != h)
-		{
-			_bitmap?.Dispose();
-			_bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888);
-		}
-
+		bool lockTaken = false;
 		try
 		{
-			buffer.MarkRender();
-		}
-		catch { }
+			System.Threading.Monitor.Enter(buffer.SyncRoot, ref lockTaken);
 
-		int sbCount = buffer.ScrollbackCount;
+			if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
+			{
+				_frameComposer.ResetCaches();
+				_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
+			}
+
+			var bgBrush = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
+			var bgColor = SKColors.Black;
+			if (bgBrush is ISolidColorBrush solid)
+				bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
+
+			int w = Math.Max(1, (int)Bounds.Width);
+			int h = Math.Max(1, (int)Bounds.Height);
+
+			if (_bitmap == null || _bitmap.PixelSize.Width != w || _bitmap.PixelSize.Height != h)
+			{
+				_bitmap?.Dispose();
+				_bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888);
+			}
+
+			try
+			{
+				buffer.MarkRender();
+			}
+			catch { }
+
+			int sbCount = buffer.ScrollbackCount;
 		Dispatcher.UIThread.Post(() => UpdateScrollState(sbCount), DispatcherPriority.Background);
 
 		using var locked = _bitmap.Lock();
@@ -472,7 +478,39 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}
 		}
 
+		// Debug overlay
+		if (ShowDebugOverlay && SkPaint != null)
+		{
+			canvas.Save();
+			if (_debugTextPaint == null)
+			{
+				_debugTextPaint = new SKPaint
+				{
+					Typeface = SKTypeface.Default,
+					TextSize = 13f,
+					Color = SKColors.Lime,
+					IsAntialias = true,
+				};
+				_debugBgPaint = new SKPaint
+				{
+					Style = SKPaintStyle.Fill,
+					Color = new SKColor(0, 0, 0, 200),
+				};
+			}
+			var debugInfo = buffer.GetDebugInfo();
+			float y = 4f;
+			canvas.DrawRect(0, 0, canvas.DeviceClipBounds.Width, 20, _debugBgPaint);
+			canvas.DrawText(debugInfo, 4, y + 14, _debugTextPaint);
+			canvas.Restore();
+		}
+
 		canvas.Flush();
+		}
+		finally
+		{
+			if (lockTaken)
+				System.Threading.Monitor.Exit(buffer.SyncRoot);
+		}
 	}
 
 	public void OnBufferUpdated(TerminalBuffer buffer)
@@ -790,6 +828,12 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			SkPaint = null;
 		}
 		
+		// Dispose debug overlay paints
+		_debugTextPaint?.Dispose();
+		_debugTextPaint = null;
+		_debugBgPaint?.Dispose();
+		_debugBgPaint = null;
+
 		// Dispose bitmap
 		_bitmap?.Dispose();
 		_bitmap = null;

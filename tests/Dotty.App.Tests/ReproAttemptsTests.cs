@@ -172,4 +172,20 @@ public class ReproAttemptsTests
 
         AssertNoOrphanedBases(tb);
     }
+
+    [Fact]
+    public void AsciiOverwrite_ClearsTrailingContinuationPastRunEnd()
+    {
+        var tb = new TerminalBuffer(rows: 4, columns: 20);
+
+        tb.SetCursor(1, 2);
+        tb.WriteText("a界".AsSpan(), CellAttributes.Default);
+
+        tb.SetCursor(1, 2);
+        tb.WriteText("bc".AsSpan(), CellAttributes.Default);
+
+        Assert.Equal("bc", tb.GetRowText(1).Substring(2, 2));
+        Assert.True(tb.GetCell(1, 4).IsEmpty, $"Expected stale continuation at col 4 to be cleared, got Rune={tb.GetCell(1, 4).Rune} cont={tb.GetCell(1, 4).IsContinuation}");
+        AssertNoOrphanedBases(tb);
+    }
 }

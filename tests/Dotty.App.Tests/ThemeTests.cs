@@ -1,6 +1,7 @@
 using Xunit;
 using Dotty.Abstractions.Themes;
 using Dotty.Abstractions.Config;
+using Dotty.App.Configuration;
 
 namespace Dotty.App.Tests;
 
@@ -85,6 +86,17 @@ public class ThemeTests
         
         // Without hash
         Assert.Equal(0xFFFF5733u, ColorSchemeBase.FromHex("FF5733"));
+    }
+
+    [Fact]
+    public void ConfigBridge_FromHex_PreservesArgbOrdering()
+    {
+        var color = ConfigBridge.ToColor(ConfigBridge.FromHex("#FF1E1E2E"));
+
+        Assert.Equal(0xFF, color.A);
+        Assert.Equal(0x1E, color.R);
+        Assert.Equal(0x1E, color.G);
+        Assert.Equal(0x2E, color.B);
     }
 
     [Fact]

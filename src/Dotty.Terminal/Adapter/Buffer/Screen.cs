@@ -217,6 +217,22 @@ public unsafe class Screen : IDisposable
         return Math.Max(0, _rowMaxCol[pRow] + 1);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ClearPhysicalRow(int physicalRow)
+    {
+        new Span<CellHot>((void*)(_cellsPtr + physicalRow * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
+        var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + physicalRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
+        for (int i = 0; i < Columns; i++)
+            coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
+        _rowMaxCol[physicalRow] = -1;
+    }
+
+    public void ClearRow(int logicalRow)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return;
+        ClearPhysicalRow(GetPhysicalRow(logicalRow));
+    }
+
     public void Clear()
     {
         new Span<CellHot>((void*)_cellsPtr, _cellCount).Clear();
@@ -322,15 +338,16 @@ public unsafe class Screen : IDisposable
         int regionHeight = bottom - top + 1;
         int total = _scrollbackCapacity + Rows;
 
-        if (top == 0 && bottom == Rows - 1 && lines == 1)
+        // Full-screen fast path: rotate ring-buffer head, works for any lines count
+        if (top == 0 && bottom == Rows - 1)
         {
-            _head = (_head + 1) % total;
-            int newBottom = (_head + Rows - 1) % total;
-            new Span<CellHot>((void*)(_cellsPtr + newBottom * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-            var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + newBottom * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-            for (int i = 0; i < Columns; i++)
-                coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-            _rowMaxCol[newBottom] = -1;
+            int clampedLines = Math.Min(lines, regionHeight);
+            _head = (_head + clampedLines) % total;
+            for (int i = 0; i < clampedLines; i++)
+            {
+                int phys = (_head + Rows - 1 - i + total) % total;
+                ClearPhysicalRow(phys);
+            }
             return;
         }
 
@@ -348,6 +365,7 @@ public unsafe class Screen : IDisposable
             return;
         }
 
+        // Non-full-screen single-line: memory copy
         if (lines == 1)
         {
             int physicalTop = GetPhysicalRow(top);
@@ -416,6 +434,16 @@ public unsafe class Screen : IDisposable
         if (top > bottom) return;
 
         int regionHeight = bottom - top + 1;
+
+        // Full-screen fast path: rotate ring-buffer head backward
+        if (top == 0 && bottom == Rows - 1)
+        {
+            int clampedLines = Math.Min(lines, regionHeight);
+            int total = _scrollbackCapacity + Rows;
+            _head = (_head - clampedLines + total * (clampedLines / total + 1)) % total;
+            return;
+        }
+
         if (lines >= regionHeight)
         {
             for (int r = top; r <= bottom; r++)
@@ -427,18 +455,6 @@ public unsafe class Screen : IDisposable
                     coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
                 _rowMaxCol[pRow] = -1;
             }
-            return;
-        }
-
-        if (lines == 1 && top == 0 && bottom == Rows - 1)
-        {
-            _head = (_head - 1 + _scrollbackCapacity + Rows) % (_scrollbackCapacity + Rows);
-            int newTop = _head;
-            new Span<CellHot>((void*)(_cellsPtr + newTop * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-            var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + newTop * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-            for (int i = 0; i < Columns; i++)
-                coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-            _rowMaxCol[newTop] = -1;
             return;
         }
 

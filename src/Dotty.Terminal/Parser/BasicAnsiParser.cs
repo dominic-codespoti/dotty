@@ -111,11 +111,13 @@ namespace Dotty.Terminal.Parser
                         {
                             i++;
                             int paramsStart = i;
+                            bool csiFinalFound = false;
                             while (i < inputSpan.Length)
                             {
                                 byte cb = inputSpan[i];
                                 if (cb >= 0x40 && cb <= 0x7e)
                                 {
+                                    csiFinalFound = true;
                                     var final = (char)cb;
                                     var paramSpan = inputSpan.Slice(paramsStart, i - paramsStart);
 
@@ -145,7 +147,7 @@ namespace Dotty.Terminal.Parser
                                 i++;
                             }
 
-                            if (i > inputSpan.Length)
+                            if (!csiFinalFound)
                             {
                                 SaveLeftover(inputSpan.Slice(seqStart));
                                 return;
@@ -208,6 +210,16 @@ namespace Dotty.Terminal.Parser
 
                             var selection = (char)inputSpan[i];
                             ApplyCharsetSelection(selection);
+                            i++;
+                        }
+                        else if (next == (byte)'M')
+                        {
+                            Handler?.OnReverseIndex();
+                            i++;
+                        }
+                        else if (next == (byte)'H')
+                        {
+                            Handler?.OnSetTabStop();
                             i++;
                         }
                         else if (next == (byte)'=')
@@ -391,14 +403,41 @@ namespace Dotty.Terminal.Parser
                     case 'G':
                         Handler?.OnCursorHorizontalAbsolute(paramCount > 0 ? parsedParams[0] : 1);
                         break;
+                    case 'd':
+                        Handler?.OnCursorVerticalAbsolute(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'Z':
+                        Handler?.OnBackTab(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'b':
+                        Handler?.OnRepeatCharacter(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'g':
+                    {
+                        int mode = paramCount > 0 ? parsedParams[0] : 0;
+                        if (mode == 3)
+                            Handler?.OnClearAllTabStops();
+                        else if (mode == 0)
+                            Handler?.OnClearTabStop();
+                        break;
+                    }
                     case 'L':
                         Handler?.OnInsertLines(paramCount > 0 ? parsedParams[0] : 1);
                         break;
                     case '@':
                         Handler?.OnInsertChars(paramCount > 0 ? parsedParams[0] : 1);
                         break;
+                    case 'X':
+                        Handler?.OnEraseCharacters(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
                     case 'P':
                         Handler?.OnDeleteChars(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'S':
+                        Handler?.OnScrollUp(paramCount > 0 ? parsedParams[0] : 1);
+                        break;
+                    case 'T':
+                        Handler?.OnScrollDown(paramCount > 0 ? parsedParams[0] : 1);
                         break;
                     case 'n':
                         if (paramCount > 0 && parsedParams[0] == 6)
@@ -412,6 +451,9 @@ namespace Dotty.Terminal.Parser
                         {
                             Handler?.OnDeviceStatusReport(paramCount > 0 ? parsedParams[0] : 0);
                         }
+                        break;
+                    case 'c':
+                        Handler?.OnSendDeviceAttributes(isPrivate ? 2 : 0);
                         break;
                     case 'r':
                         Handler?.OnSetScrollRegion(
@@ -451,6 +493,7 @@ namespace Dotty.Terminal.Parser
                                 else if (code == 25) Handler?.OnSetCursorVisibility(enable);
                                 else if (code == 6) Handler?.OnSetOriginMode(enable);
                                 else if (code == 1) Handler?.OnSetApplicationCursorKeys(enable);
+                                else if (code == 7) Handler?.OnSetAutoWrap(enable);
                                 else if (code == 2004) Handler?.OnSetBracketedPasteMode(enable);
                                 else if (code == 1000 || code == 1002 || code == 1003 || code == 1005 || code == 1006 || code == 1015) 
                                     Handler?.OnSetMouseMode(code, enable);
@@ -531,14 +574,41 @@ namespace Dotty.Terminal.Parser
                 case 'G':
                     Handler?.OnCursorHorizontalAbsolute(GetParam(0, 1));
                     break;
+                case 'd':
+                    Handler?.OnCursorVerticalAbsolute(GetParam(0, 1));
+                    break;
+                case 'Z':
+                    Handler?.OnBackTab(GetParam(0, 1));
+                    break;
+                case 'b':
+                    Handler?.OnRepeatCharacter(GetParam(0, 1));
+                    break;
+                case 'g':
+                    {
+                        int tabClearMode = GetParam(0, 0);
+                        if (tabClearMode == 3)
+                            Handler?.OnClearAllTabStops();
+                        else if (tabClearMode == 0)
+                            Handler?.OnClearTabStop();
+                    }
+                    break;
                 case 'L':
                     Handler?.OnInsertLines(GetParam(0, 1));
                     break;
                 case '@':
                     Handler?.OnInsertChars(GetParam(0, 1));
                     break;
+                case 'X':
+                    Handler?.OnEraseCharacters(GetParam(0, 1));
+                    break;
                 case 'P':
                     Handler?.OnDeleteChars(GetParam(0, 1));
+                    break;
+                case 'S':
+                    Handler?.OnScrollUp(GetParam(0, 1));
+                    break;
+                case 'T':
+                    Handler?.OnScrollDown(GetParam(0, 1));
                     break;
                 case 'n':
                     {
@@ -559,6 +629,9 @@ namespace Dotty.Terminal.Parser
                             Handler?.OnDeviceStatusReport(code);
                         }
                     }
+                    break;
+                case 'c':
+                    Handler?.OnSendDeviceAttributes(@params.StartsWith(">") ? 2 : 0);
                     break;
                 case 'r':
                     Handler?.OnSetScrollRegion(GetParam(0, 1), GetParam(1, 0));
@@ -596,6 +669,7 @@ namespace Dotty.Terminal.Parser
                                     else if (code == 25) Handler?.OnSetCursorVisibility(enable);
                                     else if (code == 6) Handler?.OnSetOriginMode(enable);
                                     else if (code == 1) Handler?.OnSetApplicationCursorKeys(enable);
+                                    else if (code == 7) Handler?.OnSetAutoWrap(enable);
                                     else if (code == 2004) Handler?.OnSetBracketedPasteMode(enable);
                                     else if (code == 1000 || code == 1002 || code == 1003 || code == 1005 || code == 1006 || code == 1015) 
                                         Handler?.OnSetMouseMode(code, enable);

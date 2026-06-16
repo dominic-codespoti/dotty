@@ -106,6 +106,18 @@ public partial class App : Application
     private static readonly bool ShouldLogFontResolution =
         !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DOTTY_LOG_FONT_RESOLUTION"));
 
+    private static Color ParseRuntimeColorOrFallback(string color, uint fallbackArgb)
+    {
+        try
+        {
+            return ConfigBridge.ToColor(ConfigBridge.FromHex(color));
+        }
+        catch
+        {
+            return ConfigBridge.ToColor(fallbackArgb);
+        }
+    }
+
     private static void ApplyDefaultsToResources()
     {
         if (Current == null)
@@ -145,11 +157,11 @@ public partial class App : Application
         }
         else
         {
-            try { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse(bgColorStr)); } catch { resources["TerminalBackground"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
-            try { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse(bgColorStr)); } catch { resources["TerminalBackgroundTransparent"] = new SolidColorBrush(Color.Parse("#801E1E1E")); }
+            resources["TerminalBackground"] = new SolidColorBrush(ParseRuntimeColorOrFallback(bgColorStr, 0xFF1E1E1E));
+            resources["TerminalBackgroundTransparent"] = new SolidColorBrush(ParseRuntimeColorOrFallback(bgColorStr, 0xFF1E1E1E));
         }
 
-        try { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse(fgColorStr)); } catch { resources["TerminalForeground"] = new SolidColorBrush(Color.Parse("#D4D4D4")); }
+        resources["TerminalForeground"] = new SolidColorBrush(ParseRuntimeColorOrFallback(fgColorStr, 0xFFD4D4D4));
 
         // Tab bar colors from runtime or generated config
         uint tabBarArgb = global::Dotty.Generated.Config.TabBarBackgroundColor;
@@ -158,7 +170,7 @@ public partial class App : Application
             try { tabBarArgb = ConfigBridge.FromHex(rs.TabBarBackgroundColor); } catch { }
         }
         resources["TabBarBackground"] = new SolidColorBrush(ConfigBridge.ToColor(tabBarArgb));
-        resources["TabBarForeground"] = new SolidColorBrush(Color.Parse(fgColorStr));
+        resources["TabBarForeground"] = new SolidColorBrush(ParseRuntimeColorOrFallback(fgColorStr, 0xFFD4D4D4));
 
         // Apply the user's color theme to the terminal's ANSI palette
         ApplyAnsiColorPalette();

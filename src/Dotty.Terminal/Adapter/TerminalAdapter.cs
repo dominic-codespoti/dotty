@@ -59,6 +59,12 @@ public class TerminalAdapter : ITerminalHandler
     object? ITerminalHandler.Buffer => _buffer;
     public Buffer.StyleSet StyleSet => _buffer.StyleSet;
 
+    /// <summary>
+    /// Optional trace hook for diagnostics. Subscribe to receive snapshot events
+    /// at key buffer-modifying operations. String parameter is the reason/event name.
+    /// </summary>
+    public Action<string, TerminalBuffer>? Trace { get; set; }
+
     public string? WindowTitle => _windowTitle;
 
     public void ResizeBuffer(int rows, int columns)
@@ -78,10 +84,12 @@ public class TerminalAdapter : ITerminalHandler
         {
             _lastPrintedChar = text[text.Length - 1];
         }
+        if (text.Length > 40)
+            Trace?.Invoke($"Print({text.Length}chars)", _buffer);
         RequestRender();
     }
 
-    
+
     public void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload)
     {
         if (code == 0 || code == 2)
@@ -163,6 +171,7 @@ public class TerminalAdapter : ITerminalHandler
     public void OnReverseIndex()
     {
         _buffer.ReverseIndex();
+        Trace?.Invoke($"RI cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
@@ -213,21 +222,31 @@ public class TerminalAdapter : ITerminalHandler
         RequestRender();
     }
 
+    public void OnEraseCharacters(int n)
+    {
+        _buffer.EraseCharacters(n);
+        Trace?.Invoke($"ECH({n})", _buffer);
+        RequestRender();
+    }
+
     public void OnInsertLines(int n)
     {
         _buffer.InsertLines(n);
+        Trace?.Invoke($"IL({n})", _buffer);
         RequestRender();
     }
 
     public void OnDeleteLines(int n)
     {
         _buffer.DeleteLines(n);
+        Trace?.Invoke($"DL({n})", _buffer);
         RequestRender();
     }
 
     public void OnClearScreen()
     {
         _buffer.EraseDisplay(2);
+        Trace?.Invoke("ED(2)", _buffer);
         RequestRender();
     }
 
@@ -240,6 +259,7 @@ public class TerminalAdapter : ITerminalHandler
     public void OnEraseDisplay(int mode)
     {
         _buffer.EraseDisplay(mode);
+        Trace?.Invoke($"ED({mode})", _buffer);
         RequestRender();
     }
 
@@ -251,36 +271,42 @@ public class TerminalAdapter : ITerminalHandler
     public void OnMoveCursor(int row, int col)
     {
         _buffer.SetCursor(Math.Max(0, row - 1), Math.Max(0, col - 1));
+        Trace?.Invoke($"CUP({row},{col})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorUp(int n)
     {
         _buffer.MoveCursorBy(-Math.Max(1, n), 0);
+        Trace?.Invoke($"CUU({n}) cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorDown(int n)
     {
         _buffer.MoveCursorBy(Math.Max(1, n), 0);
+        Trace?.Invoke($"CUD({n}) cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorForward(int n)
     {
         _buffer.MoveCursorBy(0, Math.Max(1, n));
+        Trace?.Invoke($"CUF({n}) cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorBack(int n)
     {
         _buffer.MoveCursorBy(0, -Math.Max(1, n));
+        Trace?.Invoke($"CUB({n}) cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnEraseLine(int mode)
     {
         _buffer.EraseLine(mode);
+        Trace?.Invoke($"EL({mode}) cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
@@ -293,18 +319,21 @@ public class TerminalAdapter : ITerminalHandler
     public void OnLineFeed()
     {
         _buffer.LineFeed();
+        Trace?.Invoke($"LF cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnSetAlternateScreen(bool enabled)
     {
         _buffer.SetAlternateScreen(enabled);
+        Trace?.Invoke($"AltScreen({enabled})", _buffer);
         RequestRender();
     }
 
     public void OnSetOriginMode(bool enabled)
     {
         _buffer.SetOriginMode(enabled);
+        Trace?.Invoke($"DECOM({enabled})", _buffer);
         RequestRender();
     }
 
@@ -313,6 +342,7 @@ public class TerminalAdapter : ITerminalHandler
         // If bottom omitted (0), treat as full screen bottom
         if (bottom1Based == 0) bottom1Based = _buffer.Rows;
         _buffer.SetScrollRegion(top1Based, bottom1Based);
+        Trace?.Invoke($"DECSTBM({top1Based},{bottom1Based})", _buffer);
         RequestRender();
     }
 
@@ -329,30 +359,33 @@ public class TerminalAdapter : ITerminalHandler
     public void OnCursorHorizontalAbsolute(int col)
     {
         // CHA - CSI n G - move cursor to column n (1-based)
-        _buffer.SetCursor(_buffer.CursorRow, Math.Max(0, col - 1));
+        int targetCol = Math.Max(0, col - 1);
+        _buffer.MoveCursorBy(0, targetCol - _buffer.CursorCol);
+        Trace?.Invoke($"CHA({col})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorVerticalAbsolute(int row)
     {
         // VPA - CSI n d - move cursor to row n (1-based)
-        _buffer.SetCursor(Math.Max(0, row - 1), _buffer.CursorCol);
+        _buffer.MoveCursorTo(Math.Max(0, row - 1), _buffer.CursorCol);
+        Trace?.Invoke($"VPA({row})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorNextLine(int n)
     {
         // CNL - CSI n E - move cursor down n lines, to column 1
-        _buffer.MoveCursorBy(Math.Max(1, n), 0);
-        _buffer.SetCursor(_buffer.CursorRow, 0);
+        _buffer.MoveCursorBy(Math.Max(1, n), -_buffer.CursorCol);
+        Trace?.Invoke($"CNL({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorPreviousLine(int n)
     {
         // CPL - CSI n F - move cursor up n lines, to column 1
-        _buffer.MoveCursorBy(-Math.Max(1, n), 0);
-        _buffer.SetCursor(_buffer.CursorRow, 0);
+        _buffer.MoveCursorBy(-Math.Max(1, n), -_buffer.CursorCol);
+        Trace?.Invoke($"CPL({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
@@ -360,6 +393,7 @@ public class TerminalAdapter : ITerminalHandler
     {
         // SU - CSI n S - scroll up n lines within scroll region
         _buffer.ScrollUpLines(Math.Max(1, n));
+        Trace?.Invoke($"SU({n})", _buffer);
         RequestRender();
     }
 
@@ -367,6 +401,7 @@ public class TerminalAdapter : ITerminalHandler
     {
         // SD - CSI n T - scroll down n lines within scroll region
         _buffer.ScrollDownLines(Math.Max(1, n));
+        Trace?.Invoke($"SD({n})", _buffer);
         RequestRender();
     }
 
@@ -403,7 +438,8 @@ public class TerminalAdapter : ITerminalHandler
     {
         // HT - horizontal tab
         int nextStop = _buffer.GetNextTabStopFrom(_buffer.CursorCol);
-        _buffer.SetCursor(_buffer.CursorRow, nextStop);
+        _buffer.MoveCursorBy(0, nextStop - _buffer.CursorCol);
+        Trace?.Invoke($"HT→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
@@ -415,7 +451,8 @@ public class TerminalAdapter : ITerminalHandler
         {
             col = _buffer.GetPrevTabStopFrom(col);
         }
-        _buffer.SetCursor(_buffer.CursorRow, col);
+        _buffer.MoveCursorBy(0, col - _buffer.CursorCol);
+        Trace?.Invoke($"CBT({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
@@ -512,7 +549,6 @@ public class TerminalAdapter : ITerminalHandler
 
     private void RequestRender()
     {
-        if (_synchronizedUpdateActive) return;
         _renderDirty = true;
     }
 

@@ -135,13 +135,6 @@ internal sealed class BufferTextWriter
 
             if (col < 0 || col >= cols) return;
 
-            if (_ctx._clearLineOnNextWrite)
-            {
-                _eraser.ClearLineFromCursor(_ctx.ActiveBuffer, _cursor, _ctx.Columns);
-                _ctx._clearLineOnNextWrite = false;
-                RequestMarkRowDirty(row);
-            }
-
             int spaceOnRow = cols - col;
             int chunkLen = Math.Min(remaining, spaceOnRow);
 
@@ -209,6 +202,23 @@ internal sealed class BufferTextWriter
                 if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
                     cold.Reset();
             }
+
+            // If the previous contents ended with a wide glyph that extended past
+            // this ASCII overwrite, clear its trailing continuation cells so stale
+            // fragments do not survive at the right edge of the rewritten run.
+            int trailingCol = endCol + 1;
+            while (trailingCol < cols)
+            {
+                ref var trailing = ref buf.GetCellRef(row, trailingCol);
+                if (!trailing.IsContinuation)
+                    break;
+
+                trailing.Reset();
+                buf.GetColdCellRef(row, trailingCol).Reset();
+                trailingCol++;
+            }
+
+            buf.RecalculateRowMaxCol(row);
 
             if (hyperlinkId != 0)
             {

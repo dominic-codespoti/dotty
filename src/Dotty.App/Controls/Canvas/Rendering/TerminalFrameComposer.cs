@@ -100,10 +100,11 @@ public sealed class TerminalFrameComposer : IDisposable
         // ---- glyphs ----
         SyncGlyphPaint(paint);
 
-        if (GlyphAtlas != null)
-            DrawGlyphsWithShader(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
-        else
-            DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+        // The shader glyph path rebuilds a lossy per-frame cell texture and has
+        // been observed to misrender clipped row ranges during scrolling.
+        // Keep the direct glyph renderer as the correctness path until the
+        // shader path is rebuilt with exact cell/color semantics.
+        DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
     }
 
     public void ResetCaches()
@@ -443,6 +444,9 @@ public sealed class TerminalFrameComposer : IDisposable
             float rowTop = row * cellH;
             float baseline = MathF.Round(rowTop + baselineOffset);
 
+            canvas.Save();
+            canvas.ClipRect(SKRect.Create(0, rowTop, buffer.Columns * cellW, cellH));
+
             for (int col = 0; col < buffer.Columns; col++)
             {
                 var cc = _cellClasses[col];
@@ -530,6 +534,8 @@ public sealed class TerminalFrameComposer : IDisposable
                     }
                 }
             }
+
+            canvas.Restore();
         }
     }
 

@@ -23,4 +23,9 @@
     <PackageReference Include="Avalonia.Headless.XUnit" />
     <PackageReference Include="Moq" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="nvim_capture.typescript" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

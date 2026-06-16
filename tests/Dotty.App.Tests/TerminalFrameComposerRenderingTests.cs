@@ -101,6 +101,63 @@ public class TerminalFrameComposerRenderingTests
     }
 
     [Fact]
+    public void RenderTo_WithGlyphAtlas_RendersNonZeroStartRow()
+    {
+        using var composer = new TerminalFrameComposer();
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 26f);
+        atlas.EnsureGlyph(new GlyphKey("W"));
+        composer.GlyphAtlas = atlas;
+
+        var buffer = new TerminalBuffer(rows: 2, columns: 2);
+        buffer.SetCursor(1, 0);
+        buffer.WriteText("W".AsSpan(), CellAttributes.Default);
+
+        const float cellW = 24f;
+        const float cellH = 30f;
+
+        using var bitmap = new SKBitmap(48, 60, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Black);
+
+        using var paint = new SKPaint
+        {
+            Typeface = SKTypeface.Default,
+            TextSize = 26f,
+            Color = SKColors.White,
+            IsAntialias = true,
+            LcdRenderText = true,
+            SubpixelText = true
+        };
+
+        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 1, endRow: 1);
+
+        int targetRowPixels = 0;
+        int otherRowPixels = 0;
+
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                var px = bitmap.GetPixel(x, y);
+                bool isDrawn = px.Red != 0 || px.Green != 0 || px.Blue != 0 || px.Alpha != 255;
+                if (!isDrawn) continue;
+
+                if (y >= 30 && y < 60)
+                {
+                    targetRowPixels++;
+                }
+                else
+                {
+                    otherRowPixels++;
+                }
+            }
+        }
+
+        Assert.True(targetRowPixels > 0, "Expected glyph pixels inside the rendered non-zero start row.");
+        Assert.Equal(0, otherRowPixels);
+    }
+
+    [Fact]
     public void RenderTo_UsesFontAscentBaselineWithoutRowCenteringGap()
     {
         using var composer = new TerminalFrameComposer();
@@ -479,5 +536,110 @@ public class TerminalFrameComposerRenderingTests
 
         Assert.True(totalInk > 0, $"Expected box-drawing glyph '{glyph}' to render ink.");
         Assert.False(topQuarterHasFullWidthBand, $"Glyph '{glyph}' rendered an unexpected full-width top band.");
+    }
+
+    [Fact]
+    public void RenderTo_NearbyRows_DoNotBleedIntoEachOther()
+    {
+        using var composer = new TerminalFrameComposer();
+        var buffer = new TerminalBuffer(rows: 3, columns: 24);
+
+        buffer.SetCursor(0, 0);
+        buffer.WriteText(new string('A', 20).AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(1, 0);
+        buffer.WriteText(new string('B', 20).AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(2, 0);
+        buffer.WriteText(new string('C', 20).AsSpan(), CellAttributes.Default);
+
+        const int width = 480;
+        const int cellH = 28;
+        using var bitmap = new SKBitmap(width, cellH * 3, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Black);
+
+        using var paint = new SKPaint
+        {
+            Typeface = SKTypeface.Default,
+            TextSize = 24f,
+            Color = SKColors.White,
+            IsAntialias = true,
+            LcdRenderText = true,
+            SubpixelText = true
+        };
+
+        composer.RenderTo(canvas, buffer, paint, cellW: 20f, cellH: cellH, startRow: 1, endRow: 1);
+
+        int middleRowInk = 0;
+        int topRowInk = 0;
+        int bottomRowInk = 0;
+
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                var px = bitmap.GetPixel(x, y);
+                bool isDrawn = px.Red != 0 || px.Green != 0 || px.Blue != 0 || px.Alpha != 255;
+                if (!isDrawn) continue;
+
+                if (y >= cellH && y < cellH * 2)
+                    middleRowInk++;
+                else if (y < cellH)
+                    topRowInk++;
+                else
+                    bottomRowInk++;
+            }
+        }
+
+        Assert.True(middleRowInk > 0, "Expected ink in the rendered middle row.");
+        Assert.Equal(0, topRowInk);
+        Assert.Equal(0, bottomRowInk);
+    }
+
+    [Fact]
+    public void RenderTo_OversizedGlyph_IsClippedToRowBounds()
+    {
+        using var composer = new TerminalFrameComposer();
+        var buffer = new TerminalBuffer(rows: 2, columns: 2);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("g".AsSpan(), CellAttributes.Default);
+
+        const float cellW = 24f;
+        const float cellH = 18f;
+
+        using var bitmap = new SKBitmap(48, 36, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Black);
+
+        using var paint = new SKPaint
+        {
+            Typeface = SKTypeface.Default,
+            TextSize = 34f,
+            Color = SKColors.White,
+            IsAntialias = true,
+            LcdRenderText = true,
+            SubpixelText = true
+        };
+
+        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 0);
+
+        int row0Ink = 0;
+        int row1Ink = 0;
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                var px = bitmap.GetPixel(x, y);
+                bool ink = px.Red != 0 || px.Green != 0 || px.Blue != 0 || px.Alpha != 255;
+                if (!ink) continue;
+
+                if (y < cellH)
+                    row0Ink++;
+                else
+                    row1Ink++;
+            }
+        }
+
+        Assert.True(row0Ink > 0, "Expected oversized glyph to render into row 0.");
+        Assert.Equal(0, row1Ink);
     }
 }

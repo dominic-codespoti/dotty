@@ -215,6 +215,10 @@ public class TerminalSession : IDisposable
                 await foreach (var entry in channel.Reader.ReadAllAsync(cancellationToken))
                 {
                     var (chunk, length) = entry;
+                    var rawInputReceived = RawInputReceived;
+                    if (rawInputReceived != null)
+                        rawInputReceived(chunk.AsSpan(0, length).ToArray());
+
                     try
                     {
                         lock (Adapter.Buffer.SyncRoot)

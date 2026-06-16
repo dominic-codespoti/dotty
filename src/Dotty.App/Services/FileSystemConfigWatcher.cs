@@ -34,7 +34,7 @@ public sealed class FileSystemConfigWatcher : IDisposable
                 return null;
 
             var json = File.ReadAllText(_configPath);
-            return JsonSerializer.Deserialize<RuntimeSettingsData>(json);
+            return JsonSerializer.Deserialize(json, RuntimeSettingsJsonContext.Default.RuntimeSettingsData);
         }
         catch (Exception ex)
         {
@@ -48,7 +48,7 @@ public sealed class FileSystemConfigWatcher : IDisposable
         try
         {
             Directory.CreateDirectory(_configDir);
-            var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(settings, RuntimeSettingsJsonContext.Default.RuntimeSettingsData);
             File.WriteAllText(_configPath, json);
         }
         catch (Exception ex)

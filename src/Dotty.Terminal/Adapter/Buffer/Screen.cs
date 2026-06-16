@@ -552,7 +552,7 @@ public unsafe class Screen : IDisposable
         }
     }
 
-    public void ReadSnapshot(ref CellHot[] cellsSnapshot, ref ColdCell[] coldSnapshot, ref int[]? rowMapSnapshot)
+    public void ReadSnapshot(ref CellHot[] cellsSnapshot, ref ColdCell[] coldSnapshot, ref int[] rowMapSnapshot)
     {
         int hotByteCount = _cellCount * Unsafe.SizeOf<CellHot>();
         int coldByteCount = _cellCount * Unsafe.SizeOf<ColdCell>();
@@ -561,6 +561,11 @@ public unsafe class Screen : IDisposable
             cellsSnapshot = new CellHot[_cellCount];
         if (coldSnapshot == null || coldSnapshot.Length != _cellCount)
             coldSnapshot = new ColdCell[_cellCount];
+        if (rowMapSnapshot == null || rowMapSnapshot.Length != Rows)
+            rowMapSnapshot = new int[Rows];
+
+        for (int row = 0; row < Rows; row++)
+            rowMapSnapshot[row] = GetPhysicalRow(row);
 
         fixed (CellHot* pCells = cellsSnapshot)
         fixed (ColdCell* pCold = coldSnapshot)

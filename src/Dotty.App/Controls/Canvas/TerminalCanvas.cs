@@ -79,7 +79,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			if (_selectionRange == value) return;
 			_selectionRange = value;
-			_bitmapDirty = true;
 			InvalidateVisual();
 		}
 	}
@@ -93,7 +92,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			if (_searchMatches == value) return;
 			_searchMatches = value ?? Array.Empty<SearchMatch>();
-			_bitmapDirty = true;
 			InvalidateVisual();
 		}
 	}
@@ -165,7 +163,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	};
 	
 	private WriteableBitmap? _bitmap;
-	private bool _bitmapDirty = true;
 	private SKPaint? _debugTextPaint;
 	private SKPaint? _debugBgPaint;
 
@@ -199,7 +196,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			if (_showCursor != value)
 			{
 				_showCursor = value;
-				_bitmapDirty = true;
 				InvalidateVisual();
 			}
 		} 
@@ -220,12 +216,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
         set
         {
             if (_offset != value)
-            {
+			{
 			_offset = value;
 			ScrollInvalidated?.Invoke(this, EventArgs.Empty);
-			_bitmapDirty = true;
 			InvalidateVisual();
-            }
+			}
         } 
     }
 
@@ -482,7 +477,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		if (ShowDebugOverlay && SkPaint != null)
 		{
 			canvas.Save();
-			if (_debugTextPaint == null)
+			if (_debugTextPaint == null || _debugBgPaint == null)
 			{
 				_debugTextPaint = new SKPaint
 				{
@@ -497,10 +492,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					Color = new SKColor(0, 0, 0, 200),
 				};
 			}
+
+			var debugTextPaint = _debugTextPaint!;
+			var debugBgPaint = _debugBgPaint!;
 			var debugInfo = buffer.GetDebugInfo();
 			float y = 4f;
-			canvas.DrawRect(0, 0, canvas.DeviceClipBounds.Width, 20, _debugBgPaint);
-			canvas.DrawText(debugInfo, 4, y + 14, _debugTextPaint);
+			canvas.DrawRect(0, 0, canvas.DeviceClipBounds.Width, 20, debugBgPaint);
+			canvas.DrawText(debugInfo, 4, y + 14, debugTextPaint);
 			canvas.Restore();
 		}
 
@@ -548,7 +546,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				_glyphDiscovery.EnqueueRow(r);
 		}
 
-		_bitmapDirty = true;
 		InvalidateVisual();
 	}
 
@@ -576,7 +573,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		if (!IsVisible) return;
 		ProcessGlyphDiscoverySlice();
-		_bitmapDirty = true;
 		InvalidateVisual();
 	}
 
@@ -585,7 +581,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		base.OnAttachedToVisualTree(e);
 		RuntimeSettings.Changed += OnRuntimeSettingsChanged;
 		OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
-		_bitmapDirty = true;
 		InvalidateVisual();
 	}
 
@@ -626,7 +621,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 
 		_metricsDirty = true;
-		_bitmapDirty = true;
 		InvalidateMeasure();
 		InvalidateVisual();
 	}
@@ -747,7 +741,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			_metricsDirty = true;
 			InvalidateMeasure();
-			_bitmapDirty = true;
 			InvalidateVisual();
 		}
 

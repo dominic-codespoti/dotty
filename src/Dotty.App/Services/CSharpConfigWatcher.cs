@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -37,6 +38,10 @@ public sealed class CSharpConfigWatcher : IDisposable
         try { _lastPollWrite = File.GetLastWriteTimeUtc(_configPath); } catch { _lastPollWrite = DateTime.MinValue; }
     }
 
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Runtime C# config intentionally compiles and loads user code dynamically.")]
+    [UnconditionalSuppressMessage("Trimming", "IL2072", Justification = "The dynamically compiled config type is only reflected over immediately after compilation.")]
+    [UnconditionalSuppressMessage("AOT", "IL3050", Justification = "Runtime C# config intentionally compiles and loads user code dynamically.")]
+    [UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Assembly locations are needed only for Roslyn metadata references in non-single-file runtime config loading.")]
     public RuntimeSettingsData? CompileAndLoad()
     {
         if (!File.Exists(_configPath))
@@ -57,8 +62,10 @@ public sealed class CSharpConfigWatcher : IDisposable
             void AddAssembly(Assembly asm)
             {
                 if (asm == null || asm.IsDynamic) return;
-                if (!loadedAsm.Add(asm.Location)) return;
-                try { references.Add(MetadataReference.CreateFromFile(asm.Location)); } catch { }
+                var location = asm.Location;
+                if (string.IsNullOrEmpty(location)) return;
+                if (!loadedAsm.Add(location)) return;
+                try { references.Add(MetadataReference.CreateFromFile(location)); } catch { }
                 foreach (var r in asm.GetReferencedAssemblies())
                 {
                     try { AddAssembly(Assembly.Load(r)); } catch { }
@@ -109,6 +116,7 @@ public sealed class CSharpConfigWatcher : IDisposable
                 }
             }
 
+            Console.Error.WriteLine("[CSharpConfig] No IDottyConfig implementor found");
             Error?.Invoke(this, "No IDottyConfig implementor found");
             return null;
         }

@@ -58,6 +58,7 @@
     <PackageVersion Include="System.IO.Pipelines" Version="10.0.7" />
     <PackageVersion Include="System.Memory" Version="4.6.3" />
     <PackageVersion Include="System.Text.Json" Version="10.0.7" />
+    <PackageVersion Include="Tmds.DBus.Protocol" Version="0.21.3" />
   </ItemGroup>
 
   <!-- Other -->

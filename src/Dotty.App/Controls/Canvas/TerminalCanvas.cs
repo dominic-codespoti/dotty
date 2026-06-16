@@ -165,6 +165,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private WriteableBitmap? _bitmap;
 	private SKPaint? _debugTextPaint;
 	private SKPaint? _debugBgPaint;
+	private SKPaint? _selectionPaint;
 
 	public bool ShowDebugOverlay { get; set; }
 	
@@ -437,6 +438,48 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}
 		}
 
+		// Draw selection overlay
+		if (!_selectionRange.IsEmpty)
+		{
+			int visStart = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
+			int visEnd = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
+			visStart = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, visStart));
+			visEnd = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, visEnd));
+
+			int drawStart = Math.Max(_selectionRange.StartRow, visStart);
+			int drawEnd = Math.Min(_selectionRange.EndRow, visEnd);
+
+			if (drawStart <= drawEnd)
+			{
+				if (_selectionPaint == null)
+				{
+					var selColor = SKColors.White.WithAlpha(95);
+					if (SelectionBrush is ISolidColorBrush scb)
+						selColor = new SKColor(scb.Color.R, scb.Color.G, scb.Color.B, scb.Color.A);
+					_selectionPaint = new SKPaint
+					{
+						Color = selColor,
+						Style = SKPaintStyle.Fill,
+						IsAntialias = false
+					};
+				}
+
+				float cellH = (float)_cellHeight;
+				float cellW = (float)_cellWidth;
+				int cols = buffer.Columns;
+
+				for (int r = drawStart; r <= drawEnd; r++)
+				{
+					int sCol = r == _selectionRange.StartRow ? _selectionRange.StartColumn : 0;
+					int eCol = r == _selectionRange.EndRow ? _selectionRange.EndColumn : cols - 1;
+					float x = sCol * cellW;
+					float y = r * cellH;
+					float rectW = (eCol - sCol + 1) * cellW;
+					canvas.DrawRect(new SKRect(x, y, x + rectW, y + cellH), _selectionPaint);
+				}
+			}
+		}
+
 		// Draw cursor
 		if (_showCursor && buffer != null)
 		{
@@ -618,6 +661,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			ParseHexColor(rs.SelectionColor, out var sel);
 			SelectionBrush = new SolidColorBrush(
 				global::Avalonia.Media.Color.FromArgb(sel.Alpha, sel.Red, sel.Green, sel.Blue));
+			_selectionPaint = null;
 		}
 
 		_metricsDirty = true;

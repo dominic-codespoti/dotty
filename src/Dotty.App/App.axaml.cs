@@ -32,12 +32,14 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        Program.BenchTimer?.Stage("avalon_framework_init");
+
         try
         {
             // Initialize theme manager (loads built-in + user themes)
             _themeManager = new ThemeManager();
             _themeManager.ThemeChanged += OnThemeChanged;
-            Console.WriteLine($"[App] ThemeManager initialized with {_themeManager.AvailableThemes.Count} themes");
+            Program.BenchTimer?.Stage("theme_manager_done");
 
             // Watch and compile the user's Config.cs at runtime.
             // Changes to ~/.config/dotty/Dotty.UserConfig/Config.cs are
@@ -50,13 +52,34 @@ public partial class App : Application
                     RuntimeSettings.Apply(settings);
                 });
             };
-            // Compile existing config on startup (if any), then watch for changes
-            var startupSettings = s_configWatcher.CompileAndLoad();
-            if (startupSettings != null)
-                RuntimeSettings.Apply(startupSettings);
+            // Defer initial compilation to background so the window appears first.
+            // The watcher hot-reload will apply any subsequent changes instantly.
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DOTTY_SKIP_CONFIG_COMPILE")))
+            {
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    var startupSettings = s_configWatcher.CompileAndLoad();
+                    if (startupSettings != null)
+                    {
+                        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                        {
+                            RuntimeSettings.Apply(startupSettings);
+                        });
+                    }
+                    Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    {
+                        Program.BenchTimer?.Stage("config_watcher_done");
+                    });
+                });
+            }
+            else
+            {
+                Program.BenchTimer?.Stage("config_watcher_done");
+            }
             s_configWatcher.Start();
 
             ApplyDefaultsToResources();
+            Program.BenchTimer?.Stage("defaults_applied");
 
             // Re-apply resources when runtime settings change (font, colors, etc.)
             RuntimeSettings.Changed += (_, _) =>
@@ -76,6 +99,11 @@ public partial class App : Application
         {
             desktop.MainWindow = new MainWindow();
         }
+
+        Program.BenchTimer?.Stage("avalon_window_created");
+
+        // Deferred: check for config NuGet version updates on a background thread.
+        Program.RunDeferredConfigCheck();
 
         base.OnFrameworkInitializationCompleted();
     }

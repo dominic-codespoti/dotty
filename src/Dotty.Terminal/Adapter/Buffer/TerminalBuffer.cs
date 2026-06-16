@@ -749,6 +749,14 @@ public class TerminalBuffer
         _writer.WriteText(text, in attributes);
     }
 
+    /// <summary>
+    /// Fast path: writes ASCII bytes directly to the buffer without a char conversion.
+    /// </summary>
+    internal void WriteAscii(ReadOnlySpan<byte> text, in CellAttributes attributes)
+    {
+        _writer.WriteAscii(text, in attributes);
+    }
+
     internal void ScrollUp(int lines)
     {
         if (lines <= 0) return;

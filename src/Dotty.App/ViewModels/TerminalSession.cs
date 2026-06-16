@@ -54,6 +54,8 @@ public class TerminalSession : IDisposable
         if (_isStarted) return;
         _isStarted = true;
 
+        Program.BenchTimer?.Stage("session_start");
+
         if (!PtyFactory.IsSupported)
             throw new PtyException(PtyFactory.GetUnsupportedReason() ?? "PTY is not supported on this platform.");
 
@@ -181,21 +183,20 @@ public class TerminalSession : IDisposable
             FullMode = BoundedChannelFullMode.Wait
         });
 
-        // Reader: reads from PTY, writes to channel (never blocks on processing)
+        // Reader: reads from PTY, writes to channel (never blocks on processing).
+        // Uses ArrayPool directly to avoid the intermediate read-buffer copy.
         _ = Task.Run(async () =>
         {
-            byte[] buffer = new byte[131072];
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
+                    byte[] chunk = ArrayPool<byte>.Shared.Rent(131072);
                     int bytesRead;
-                    try { bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length, cancellationToken); }
-                    catch { break; }
-                    if (bytesRead <= 0) break;
+                    try { bytesRead = await reader.ReadAsync(chunk, 0, chunk.Length, cancellationToken); }
+                    catch { ArrayPool<byte>.Shared.Return(chunk); break; }
+                    if (bytesRead <= 0) { ArrayPool<byte>.Shared.Return(chunk); break; }
 
-                    byte[] chunk = ArrayPool<byte>.Shared.Rent(bytesRead);
-                    Buffer.BlockCopy(buffer, 0, chunk, 0, bytesRead);
                     await channel.Writer.WriteAsync((chunk, bytesRead), cancellationToken);
                 }
             }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
@@ -143,6 +144,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private TerminalFrameComposer? _frameComposer;
 	private TextShaper? _textShaper;
 	private static readonly ShapedRunCache SharedShapedRunCache = new();
+
+	// Global font resolution cache shared across all TerminalCanvas instances.
+	// Key is "{FontFamily}|{TextSize:F1}".  Invalidated when font settings change.
+	private static readonly ConcurrentDictionary<string, SKTypeface> CachedPrimaryTypeface = new();
+	private static readonly ConcurrentDictionary<string, List<SKTypeface>> CachedFallbackTypefaces = new();
+	private static string? s_lastFontCacheKey;
+
 	private bool _lastBufferWasAlternate = false;
 	private int _lastKnownBufferRows = -1;
 	private int _lastKnownBufferColumns = -1;
@@ -695,9 +703,17 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var rs = RuntimeSettings.Current;
 
 		if (rs.FontFamily != null)
+		{
 			FontFamily = new FontFamily(rs.FontFamily);
+			CachedPrimaryTypeface.Clear();
+			CachedFallbackTypefaces.Clear();
+		}
 		if (rs.FontSize.HasValue)
+		{
 			FontSize = rs.FontSize.Value;
+			CachedPrimaryTypeface.Clear();
+			CachedFallbackTypefaces.Clear();
+		}
 		if (rs.CellPadding.HasValue)
 			CellPadding = rs.CellPadding.Value;
 		if (rs.ContentPaddingLeft.HasValue || rs.ContentPaddingTop.HasValue ||
@@ -963,21 +979,29 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		return fallback;
 	}
 
+	private static string BuildFontCacheKey()
+	{
+		var fontFamily = RuntimeSettings.Current.FontFamily;
+		var size = RuntimeSettings.Current.FontSize ?? double.NaN;
+		return $"{fontFamily ?? "default"}|{size:F1}";
+	}
+
 	private SKTypeface ResolveTerminalTypeface()
 	{
+		var key = BuildFontCacheKey();
+		if (CachedPrimaryTypeface.TryGetValue(key, out var cached))
+			return cached;
+
 		var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		SKTypeface? result = null;
 
 		foreach (var candidate in EnumerateFontCandidates())
 		{
 			if (string.IsNullOrWhiteSpace(candidate) || !seen.Add(candidate))
-			{
 				continue;
-			}
 
 			if (!TryResolveTypeface(candidate, out var typeface))
-			{
 				continue;
-			}
 
 			if (FontHelpers.IsLikelySymbolFontName(candidate) || FontHelpers.IsLikelySymbolFontName(typeface.FamilyName))
 			{
@@ -985,18 +1009,25 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				continue;
 			}
 
-			return typeface;
+			result = typeface;
+			break;
 		}
 
-		return SKTypeface.Default;
+		result ??= SKTypeface.Default;
+		CachedPrimaryTypeface[key] = result;
+		s_lastFontCacheKey = key;
+		return result;
 	}
 
 	private List<SKTypeface> ResolveAllTypefaces(float textSize)
 	{
+		var key = BuildFontCacheKey();
+		if (CachedFallbackTypefaces.TryGetValue(key, out var cached))
+			return cached;
+
 		var result = new List<SKTypeface>();
 		var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-		// Resolve monospace fonts from the fallback chain first
 		foreach (var candidate in EnumerateFontCandidates())
 		{
 			if (string.IsNullOrWhiteSpace(candidate) || !seen.Add(candidate))
@@ -1011,7 +1042,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			result.Add(typeface);
 		}
 
-		// Add emoji fonts at the end of the fallback chain
 		foreach (var emojiName in EmojiFontFamilies)
 		{
 			if (!seen.Add(emojiName))
@@ -1020,6 +1050,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				result.Add(typeface);
 		}
 
+		CachedFallbackTypefaces[key] = result;
+		s_lastFontCacheKey = key;
 		return result;
 	}
 

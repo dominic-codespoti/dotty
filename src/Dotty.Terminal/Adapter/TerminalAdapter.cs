@@ -89,6 +89,19 @@ public class TerminalAdapter : ITerminalHandler
         RequestRender();
     }
 
+    /// <summary>
+    /// Fast path: writes ASCII bytes directly to the buffer, bypassing the
+    /// byte→char conversion that the public ITerminalHandler interface requires.
+    /// Called from BasicAnsiParser when it detects a pure-ASCII run.
+    /// </summary>
+    internal void OnPrintAscii(ReadOnlySpan<byte> text)
+    {
+        _buffer.WriteAscii(text, _currentAttributes);
+        if (!text.IsEmpty)
+            _lastPrintedChar = (char)text[text.Length - 1];
+        RequestRender();
+    }
+
 
     public void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload)
     {

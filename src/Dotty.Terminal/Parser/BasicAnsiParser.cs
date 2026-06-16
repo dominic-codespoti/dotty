@@ -291,18 +291,26 @@ namespace Dotty.Terminal.Parser
 
             if (!hasNonAscii && _charset != Charset.DecSpecialGraphics)
             {
-                Span<char> asc = GetScratch(run.Length, out char[]? rented);
-                try
+                // Fast path: avoid byte→char conversion for pure ASCII runs.
+                // TerminalAdapter provides an internal byte-based path; fall back to
+                // the char-based interface for any other ITerminalHandler implementor.
+                if (Handler is Terminal.Adapter.TerminalAdapter adapter)
                 {
-                    for (int j = 0; j < run.Length; j++)
-                    {
-                        asc[j] = (char)run[j];
-                    }
-                    Handler?.OnPrint(asc);
+                    adapter.OnPrintAscii(run);
                 }
-                finally
+                else
                 {
-                    ReturnScratch(rented);
+                    Span<char> asc = GetScratch(run.Length, out char[]? rented);
+                    try
+                    {
+                        for (int j = 0; j < run.Length; j++)
+                            asc[j] = (char)run[j];
+                        Handler?.OnPrint(asc);
+                    }
+                    finally
+                    {
+                        ReturnScratch(rented);
+                    }
                 }
             }
             else

@@ -105,6 +105,20 @@ internal sealed class BufferTextWriter
         }
     }
 
+    /// <summary>
+    /// Writes a pure-ASCII byte span directly to the buffer, skipping all
+    /// control-character / non-ASCII / grapheme dispatch that WriteText performs.
+    /// The parser already validated every byte is in [0x20, 0x7E].
+    /// </summary>
+    internal void WriteAscii(ReadOnlySpan<byte> text, in CellAttributes attributes)
+    {
+        if (text.IsEmpty) return;
+
+        ushort styleId = _styleSet.GetOrCreateId(in attributes);
+        ushort hyperlinkId = attributes.HyperlinkId;
+        WriteAsciiRunBulk(text, styleId, hyperlinkId);
+    }
+
     private static void ApplyCellTemplate(ref CellHot cell, ushort styleId)
     {
         cell.StyleId = styleId;
@@ -195,17 +209,166 @@ internal sealed class BufferTextWriter
                 }
             }
 
-            // Reset cold cells for the chunk (rare, only when cells had hyperlinks/graphemes)
-            for (int j = 0; j < chunkLen; j++)
+            // Reset cold cells for the chunk (skip when row has no hyperlinks/graphemes).
+            if (buf.RowColdFlags[rowMapIdx])
             {
-                ref var cold = ref Unsafe.Add(ref coldData, baseIdx + j);
-                if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
-                    cold.Reset();
+                for (int j = 0; j < chunkLen; j++)
+                {
+                    ref var cold = ref Unsafe.Add(ref coldData, baseIdx + j);
+                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                        cold.Reset();
+                }
             }
 
             // If the previous contents ended with a wide glyph that extended past
             // this ASCII overwrite, clear its trailing continuation cells so stale
             // fragments do not survive at the right edge of the rewritten run.
+            int trailingCol = endCol + 1;
+            while (trailingCol < cols)
+            {
+                ref var trailing = ref buf.GetCellRef(row, trailingCol);
+                if (!trailing.IsContinuation)
+                    break;
+
+                trailing.Reset();
+                buf.GetColdCellRef(row, trailingCol).Reset();
+                trailingCol++;
+            }
+
+            buf.RecalculateRowMaxCol(row);
+
+            if (hyperlinkId != 0)
+            {
+                for (int j = 0; j < chunkLen; j++)
+                    buf.SetColdHyperlink(row, col + j, hyperlinkId);
+            }
+
+            buf.UpdateRowMaxCol(row, endCol);
+            RequestMarkRowDirty(row);
+
+            remaining -= chunkLen;
+            offset += chunkLen;
+
+            if (remaining > 0)
+            {
+                _cursor.Set(row, cols - 1, _ctx.Rows, cols);
+                _cursor.SetWrapPending(true);
+            }
+            else
+            {
+                if (_ctx._autoWrap && endCol >= cols - 1)
+                {
+                    _cursor.Set(row, cols - 1, _ctx.Rows, cols);
+                    _cursor.SetWrapPending(true);
+                }
+                else
+                {
+                    _cursor.Set(row, endCol + 1, _ctx.Rows, cols);
+                    _cursor.SetWrapPending(false);
+                }
+            }
+        }
+    }
+
+    // Byte-based overload: for pure-ASCII calls from TerminalAdapter.OnPrintAscii.
+    // The body is identical to the char overload because (uint)byte and (uint)char
+    // produce the same value for ASCII and both index identically.
+    private unsafe void WriteAsciiRunBulk(ReadOnlySpan<byte> run, ushort styleId, ushort hyperlinkId)
+    {
+        if (run.IsEmpty) return;
+
+        int remaining = run.Length;
+        int offset = 0;
+
+        while (remaining > 0)
+        {
+            int row = _cursor.Row;
+            int col = _cursor.Col;
+            int cols = _ctx.Columns;
+
+            if (_ctx._autoWrap && _cursor.WrapPending)
+            {
+                _ctx.LineFeed();
+                _ctx.CarriageReturn();
+                _cursor.SetWrapPending(false);
+                row = _cursor.Row;
+                col = 0;
+            }
+
+            if (col < 0 || col >= cols) return;
+
+            int spaceOnRow = cols - col;
+            int chunkLen = Math.Min(remaining, spaceOnRow);
+
+            var buf = _ctx.ActiveBuffer;
+            int rowMapIdx = buf.GetPhysicalRow(row);
+            int baseIdx = rowMapIdx * cols + col;
+            int endCol = col + chunkLen - 1;
+            ref CellHot cellData = ref Unsafe.AsRef<CellHot>((void*)buf.CellsPtr);
+            ref ColdCell coldData = ref Unsafe.AsRef<ColdCell>((void*)buf.ColdCellsPtr);
+
+            // Check first cell for continuation/width (rare, only at row start)
+            {
+                ref CellHot first = ref Unsafe.Add(ref cellData, baseIdx);
+                if (first.IsContinuation || first.Width > 1)
+                {
+                    buf.ClearCell(row, col);
+                }
+            }
+
+            int i = 0;
+            uint styleUint = styleId;
+
+            // AVX2: process 4 cells per vector store
+            if (Avx2.IsSupported)
+            {
+                int vecLimit = chunkLen - 3;
+                for (; i < vecLimit; i += 4)
+                {
+                    var v = Vector256.Create(
+                        (uint)run[offset + i], styleUint,
+                        (uint)run[offset + i + 1], styleUint,
+                        (uint)run[offset + i + 2], styleUint,
+                        (uint)run[offset + i + 3], styleUint);
+                    ref byte dst = ref Unsafe.As<CellHot, byte>(
+                        ref Unsafe.Add(ref cellData, baseIdx + i));
+                    Unsafe.WriteUnaligned(ref dst, v);
+                }
+            }
+
+            // Process remaining cells (2 at a time)
+            for (; i < chunkLen; i += 2)
+            {
+                int left = chunkLen - i;
+                if (left >= 2)
+                {
+                    Unsafe.WriteUnaligned(
+                        ref Unsafe.As<CellHot, byte>(ref Unsafe.Add(ref cellData, baseIdx + i)),
+                        (uint)run[offset + i] | ((ulong)styleUint << 32));
+                    Unsafe.WriteUnaligned(
+                        ref Unsafe.As<CellHot, byte>(ref Unsafe.Add(ref cellData, baseIdx + i + 1)),
+                        (uint)run[offset + i + 1] | ((ulong)styleUint << 32));
+                }
+                else
+                {
+                    ref CellHot cell = ref Unsafe.Add(ref cellData, baseIdx + i);
+                    ApplyCellTemplate(ref cell, styleId);
+                    cell.Rune = run[offset + i];
+                }
+            }
+
+            // Reset cold cells for the chunk (skip when row has no hyperlinks/graphemes).
+            if (buf.RowColdFlags[rowMapIdx])
+            {
+                for (int j = 0; j < chunkLen; j++)
+                {
+                    ref var cold = ref Unsafe.Add(ref coldData, baseIdx + j);
+                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                        cold.Reset();
+                }
+            }
+
+            // Clear trailing continuation cells from previous content
             int trailingCol = endCol + 1;
             while (trailingCol < cols)
             {

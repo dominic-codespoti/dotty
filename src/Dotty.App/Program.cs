@@ -9,12 +9,16 @@ namespace Dotty.App;
 
 static class Program
 {
+    internal static StartupTimer? BenchTimer;
+
     public static void Main(string[] args)
     {
-        // Optional global silencing of Console output to avoid flooding the
-        // terminal when debugging/logging is still present in code. Set
-        // DOTTY_DISABLE_LOGGING=1 in your environment to enable this.
-        // Environment-driven global silencing removed; keep Console as-is.
+        // Start optional benchmark timer.
+        var logPath = Environment.GetEnvironmentVariable("DOTTY_BENCH_STARTUP_LOG");
+        if (!string.IsNullOrWhiteSpace(logPath))
+            BenchTimer = new StartupTimer(logPath);
+
+        BenchTimer?.Stage("main_entry");
 
         // Handle --version flag
         if (args.Contains("--version") || args.Contains("-v"))
@@ -37,21 +41,27 @@ static class Program
             return;
         }
 
-        // Generate default config on first run
-        HandleFirstRunConfig();
+        // Generate default config on first run (fast file existence check).
+        // The version-update check is deferred to a background task below so it
+        // does not block window creation during benchmarks.
+        HandleFirstRunConfig(quickOnly: true);
+        BenchTimer?.Stage("config_check_done");
 
         BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        BenchTimer?.Stage("avalon_exit");
+        BenchTimer?.Dispose();
     }
 
     /// <summary>
     /// Handles automatic config file generation on first startup.
-    /// Creates a full .csproj with NuGet reference for LSP support.
+    /// When quickOnly is true, skips the version-update check (deferred to
+    /// a background task so it does not block window creation).
     /// </summary>
-    private static void HandleFirstRunConfig()
+    private static void HandleFirstRunConfig(bool quickOnly = false)
     {
         // Handle --generate-config flag to force regeneration
-        var args = Environment.GetCommandLineArgs();
-        bool forceRegenerate = args.Contains("--generate-config");
+        var cmdArgs = Environment.GetCommandLineArgs();
+        bool forceRegenerate = cmdArgs.Contains("--generate-config");
 
         if (ConfigGeneratorService.EnsureConfigExists(forceRegenerate))
         {
@@ -84,11 +94,27 @@ static class Program
             Console.WriteLine($"✓ Regenerated config at: {ConfigGeneratorService.ConfigPath}");
             Console.WriteLine($"  Project: {ConfigGeneratorService.ProjectPath}");
         }
-        else
+        else if (!quickOnly)
         {
             // Check for package updates on existing configs
             ConfigGeneratorService.UpdatePackageVersionIfNeeded();
         }
+    }
+
+    /// <summary>
+    /// Runs the deferred config version check on a background thread so it
+    /// does not delay window creation.
+    /// </summary>
+    internal static void RunDeferredConfigCheck()
+    {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DOTTY_SKIP_CONFIG_CHECK")))
+            return;
+
+        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try { ConfigGeneratorService.UpdatePackageVersionIfNeeded(); }
+            catch { }
+        });
     }
 
     /// <summary>

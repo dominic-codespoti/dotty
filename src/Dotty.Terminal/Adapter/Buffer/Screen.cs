@@ -18,6 +18,10 @@ public unsafe class Screen : IDisposable
 
     public int[] RowMaxCol => _rowMaxCol;
     private int[] _rowMaxCol;
+    // Per-physical-row flag: tracks whether any cell has hyperlinks or graphemes.
+    // Allows BufferTextWriter to skip the per-cell cold-reset loop entirely on clean rows.
+    public bool[] RowColdFlags => _rowColdFlags;
+    private bool[] _rowColdFlags;
 
     public int GetRowMaxCol(int logicalRow)
     {
@@ -60,6 +64,7 @@ public unsafe class Screen : IDisposable
             coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
         _rowMaxCol = new int[total];
         Array.Fill(_rowMaxCol, -1);
+        _rowColdFlags = new bool[total];
     }
 
     public void Dispose()
@@ -151,16 +156,20 @@ public unsafe class Screen : IDisposable
 
     public void SetColdHyperlink(int logicalRow, int col, ushort hyperlinkId)
     {
-        int offset = GetPhysicalRow(logicalRow) * Columns + col;
+        int pRow = GetPhysicalRow(logicalRow);
+        int offset = pRow * Columns + col;
         UnsafeAsRef<ColdCell>(_coldCellsPtr, offset).HyperlinkId = hyperlinkId;
         UnsafeAsRef<CellHot>(_cellsPtr, offset).HasHyperlink = hyperlinkId != 0;
+        if (hyperlinkId != 0) _rowColdFlags[pRow] = true;
     }
 
     public void SetColdGraphemeIndex(int logicalRow, int col, short graphemeIndex)
     {
-        int offset = GetPhysicalRow(logicalRow) * Columns + col;
+        int pRow = GetPhysicalRow(logicalRow);
+        int offset = pRow * Columns + col;
         UnsafeAsRef<ColdCell>(_coldCellsPtr, offset).GraphemeIndex = graphemeIndex;
         UnsafeAsRef<CellHot>(_cellsPtr, offset).HasGrapheme = graphemeIndex > 0;
+        if (graphemeIndex >= 0) _rowColdFlags[pRow] = true;
     }
 
     public CellHot[] ExtractRow(int logicalRow)
@@ -225,6 +234,7 @@ public unsafe class Screen : IDisposable
         for (int i = 0; i < Columns; i++)
             coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
         _rowMaxCol[physicalRow] = -1;
+        _rowColdFlags[physicalRow] = false;
     }
 
     public void ClearRow(int logicalRow)
@@ -240,6 +250,7 @@ public unsafe class Screen : IDisposable
         for (int i = 0; i < _cellCount; i++)
             coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
         Array.Fill(_rowMaxCol, -1);
+        Array.Fill(_rowColdFlags, false);
     }
 
     public void RecalculateRowMaxCol(int logicalRow)
@@ -551,6 +562,7 @@ public unsafe class Screen : IDisposable
                 (void*)(destination._coldCellsPtr + dstPhys * destination.Columns * Unsafe.SizeOf<ColdCell>()),
                 coldRowSizeBytes, coldRowSizeBytes);
             destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], cols - 1);
+            destination._rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
         }
 
         // Preserve scrollback ring buffer across all resize shapes.
@@ -583,6 +595,7 @@ public unsafe class Screen : IDisposable
                     coldRowBytes, coldRowBytes);
                 // Clamp maxCol to the new width in case we just truncated the row.
                 destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], destination.Columns - 1);
+                destination._rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
             }
         }
     }

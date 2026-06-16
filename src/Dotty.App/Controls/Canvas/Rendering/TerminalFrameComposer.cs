@@ -81,21 +81,12 @@ public sealed class TerminalFrameComposer : IDisposable
 
         int safeEndRow = endRow ?? (buffer.Rows - 1);
 
-        // Themeable metrics derived from appearance settings.
-        float horizontalPadding = _appearance.HorizontalPadding;
-        float verticalPadding = _appearance.GetVerticalPadding(cellH);
-        float radius = _appearance.GetRadius(cellH, verticalPadding);
-
-        int computedRows = safeEndRow - startRow + 1;
-        float surfaceW = buffer.Columns * cellW;
-        float surfaceH = computedRows * cellH;
-
         // Cell classification will handle per-row sizing/flags.
         EnsureCellClasses(buffer.Columns);
 
         // ---- background regions ----
         CollectBackgroundRegions(buffer, startRow, safeEndRow);
-        DrawBackgroundRegions(target, cellW, cellH, surfaceW, surfaceH, horizontalPadding, verticalPadding, radius);
+        DrawBackgroundRegions(target, cellW, cellH, exactCellBackgrounds: buffer.IsAlternateScreenActive);
 
         // ---- glyphs ----
         SyncGlyphPaint(paint);
@@ -226,12 +217,12 @@ public sealed class TerminalFrameComposer : IDisposable
         SKCanvas canvas,
         float cellW,
         float cellH,
-        float surfaceW,
-        float surfaceH,
-        float horizontalPadding,
-        float verticalPadding,
-        float baseRadius)
+        bool exactCellBackgrounds)
     {
+        float horizontalPadding = exactCellBackgrounds ? 0f : _appearance.HorizontalPadding;
+        float verticalPadding = exactCellBackgrounds ? 0f : _appearance.GetVerticalPadding(cellH);
+        float radius = exactCellBackgrounds ? 0f : _appearance.GetRadius(cellH, verticalPadding);
+
         foreach (var r in _regions)
         {
             float left = r.X0 * cellW - horizontalPadding;
@@ -242,13 +233,16 @@ public sealed class TerminalFrameComposer : IDisposable
             if (right <= left || bottom <= top) continue;
 
             var rect = SKRect.Create(left, top, right - left, bottom - top);
+            if (exactCellBackgrounds)
+            {
+                _backgroundFill.Style = SKPaintStyle.Fill;
+                _backgroundFill.Color = r.Color;
+                canvas.DrawRect(rect, _backgroundFill);
+                continue;
+            }
 
-            // BuildCapsuleSafe already clamps the capsule radius; keep the
-            // requested radius but clamp it to the available rect size.
-            var rectRadius = Math.Min(baseRadius, Math.Min(rect.Width, rect.Height) * 0.5f);
-
+            var rectRadius = Math.Min(radius, Math.Min(rect.Width, rect.Height) * 0.5f);
             bool canInset = rect.Width >= rect.Height + 2f;
-
             DrawPill(canvas, rect, r.Color, canInset, rectRadius);
         }
     }
@@ -1078,9 +1072,6 @@ public sealed class TerminalFrameComposer : IDisposable
             (byte)Math.Max(0, c.Green - 32),
             (byte)Math.Max(0, c.Blue - 32),
             c.Alpha);
-
-    // Capsules are drawn with DrawRoundRect and ClipRoundRect now; the
-    // SKPath-based helper was removed to avoid SKPath allocations.
 
     // ============================================================
     // DATA TYPES

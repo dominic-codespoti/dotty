@@ -158,6 +158,88 @@ public class TerminalFrameComposerRenderingTests
     }
 
     [Fact]
+    public void RenderTo_BackgroundSpans_FillExactCellRectanglesWithoutStyling()
+    {
+        using var composer = new TerminalFrameComposer();
+        var buffer = new TerminalBuffer(rows: 2, columns: 3);
+        buffer.SetAlternateScreen(true);
+        var attributes = new CellAttributes
+        {
+            Background = SgrColorArgb.FromRgb(0x20, 0x40, 0x60)
+        };
+
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("   ".AsSpan(), attributes);
+        buffer.SetCursor(1, 0);
+        buffer.WriteText(" ".AsSpan(), attributes);
+
+        const int cellW = 8;
+        const int cellH = 10;
+        using var bitmap = new SKBitmap(cellW * 3, cellH * 2, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Black);
+
+        using var paint = new SKPaint
+        {
+            Typeface = SKTypeface.Default,
+            TextSize = 8f,
+            Color = SKColors.White,
+            IsAntialias = true
+        };
+
+        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 1);
+
+        var expectedBackground = new SKColor(0x20, 0x40, 0x60, 0xFF);
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                var expected = y < cellH || x < cellW ? expectedBackground : SKColors.Black;
+                Assert.Equal(expected, bitmap.GetPixel(x, y));
+            }
+        }
+    }
+
+    [Fact]
+    public void RenderTo_MainScreenBackgroundSpans_UsePillStyling()
+    {
+        using var composer = new TerminalFrameComposer();
+        var buffer = new TerminalBuffer(rows: 1, columns: 3);
+        var attributes = new CellAttributes
+        {
+            Background = SgrColorArgb.FromRgb(0x20, 0x40, 0x60)
+        };
+
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("   ".AsSpan(), attributes);
+
+        const int cellW = 8;
+        const int cellH = 10;
+        using var bitmap = new SKBitmap(cellW * 3, cellH, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Clear(SKColors.Black);
+
+        using var paint = new SKPaint
+        {
+            Typeface = SKTypeface.Default,
+            TextSize = 8f,
+            Color = SKColors.White,
+            IsAntialias = true
+        };
+
+        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 0);
+
+        var expectedBackground = new SKColor(0x20, 0x40, 0x60, 0xFF);
+        var corner = bitmap.GetPixel(0, 0);
+
+        var center = bitmap.GetPixel(cellW, cellH / 2);
+        Assert.True(
+            center.Red > 0 || center.Green > 0 || center.Blue > 0,
+            "Expected main-screen pill background to draw through the row center.");
+        Assert.NotEqual(expectedBackground, corner);
+    }
+
+    [Fact]
     public void RenderTo_UsesFontAscentBaselineWithoutRowCenteringGap()
     {
         using var composer = new TerminalFrameComposer();

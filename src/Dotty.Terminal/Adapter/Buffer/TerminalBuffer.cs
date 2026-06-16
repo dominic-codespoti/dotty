@@ -29,6 +29,11 @@ public class TerminalBuffer
     private int _scrollBottom;
     private bool _originMode;
     private bool _isAlternate;
+    private int _savedTotalScrolled = 0;
+    private bool _hasAlternateSavedCursor = false;
+    private int _alternateSavedCursorRow;
+    private int _alternateSavedCursorCol;
+    private bool _alternateSavedCursorVisible;
 
     private ulong[] _rowGenerations = Array.Empty<ulong>();
     private ulong _globalGeneration;
@@ -71,8 +76,41 @@ public class TerminalBuffer
 
     public void SetAlternateScreen(bool active)
     {
-        _isAlternate = active;
+        if (active == _isAlternate)
+            return;
+
+        if (active)
+        {
+            _hasAlternateSavedCursor = true;
+            _alternateSavedCursorRow = _cursor.Row;
+            _alternateSavedCursorCol = _cursor.Col;
+            _alternateSavedCursorVisible = _cursor.Visible;
+
+            // Save main screen scrollback count and reset for alt screen.
+            // Alt screen has no scrollback, so any LineFeed/ScrollUpLines
+            // calls while in alt mode must not corrupt the main screen count.
+            _savedTotalScrolled = _totalScrolled;
+            _totalScrolled = 0;
+        }
+
         _screens.SetAlternate(active);
+        _isAlternate = active;
+
+        if (!active)
+        {
+            // Restore main screen scrollback count and cursor, discarding
+            // whatever accumulated while the alt screen was active.
+            _totalScrolled = _savedTotalScrolled;
+            if (_hasAlternateSavedCursor)
+            {
+                _cursor.Set(Math.Clamp(_alternateSavedCursorRow, 0, Rows - 1),
+                    Math.Clamp(_alternateSavedCursorCol, 0, Columns - 1), Rows, Columns);
+                _cursor.SetVisible(_alternateSavedCursorVisible);
+                _hasAlternateSavedCursor = false;
+            }
+        }
+
+        MarkAllRowsDirty();
     }
 
     public bool IsAlternateScreenActive => _isAlternate;

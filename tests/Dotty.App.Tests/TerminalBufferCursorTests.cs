@@ -84,4 +84,54 @@ public class TerminalBufferCursorTests
         Assert.Equal("abcdef", buffer.GetRowText(0).TrimEnd());
         Assert.Equal("xywxyz", buffer.GetRowText(1).TrimEnd());
     }
+
+    [Fact]
+    public void AlternateScreen_RestoresMainCursorPosition()
+    {
+        var buffer = new TerminalBuffer(rows: 10, columns: 20);
+
+        buffer.SetCursor(1, 2);
+        buffer.SetAlternateScreen(true);
+        buffer.SetCursor(9, 0);
+        buffer.SetAlternateScreen(false);
+
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(2, buffer.CursorCol);
+    }
+
+    [Fact]
+    public void AlternateScreen_RestoresCursorSeparatelyFromDecSaveCursor()
+    {
+        var buffer = new TerminalBuffer(rows: 10, columns: 20);
+
+        buffer.SetCursor(1, 2);
+        buffer.SetAlternateScreen(true);
+        buffer.SetCursor(5, 6);
+        buffer.SaveCursor();
+        buffer.SetCursor(8, 9);
+        buffer.RestoreCursor();
+        buffer.SetAlternateScreen(false);
+
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(2, buffer.CursorCol);
+    }
+
+    [Fact]
+    public void AlternateScreen_DoesNotLeakScrollbackCountToMainScreen()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 10);
+        buffer.SetCursor(2, 0);
+        buffer.LineFeed();
+        Assert.Equal(1, buffer.ScrollbackCount);
+
+        buffer.SetAlternateScreen(true);
+        buffer.SetCursor(2, 0);
+        for (int i = 0; i < 5; i++)
+            buffer.LineFeed();
+        Assert.Equal(5, buffer.ScrollbackCount);
+
+        buffer.SetAlternateScreen(false);
+
+        Assert.Equal(1, buffer.ScrollbackCount);
+    }
 }

@@ -47,7 +47,14 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 4:
-                    attributes.Underline = true;
+                    // SGR 4 with colon subparameter: 4 → single, 4:3 → curl, 4:4 → dotted, 4:5 → dashed
+                    attributes.UnderlineStyle = enumerator.SubParameter switch
+                    {
+                        3 => UnderlineStyle.Curl,
+                        4 => UnderlineStyle.Dotted,
+                        5 => UnderlineStyle.Dashed,
+                        _ => UnderlineStyle.Single,
+                    };
                     hasMore = enumerator.MoveNext();
                     break;
                 case 5:
@@ -67,7 +74,7 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 21:
-                    attributes.DoubleUnderline = true;
+                    attributes.UnderlineStyle = UnderlineStyle.Double;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 22:
@@ -80,8 +87,7 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 24:
-                    attributes.Underline = false;
-                    attributes.DoubleUnderline = false;
+                    attributes.UnderlineStyle = UnderlineStyle.None;
                     hasMore = enumerator.MoveNext();
                     break;
                 case 25:
@@ -214,11 +220,13 @@ public static class SgrParserArgb
     {
         private ReadOnlySpan<char> _span;
         public int Current { get; private set; }
+        public int SubParameter { get; private set; }
 
         public ParametersEnumerator(ReadOnlySpan<char> span)
         {
             _span = span;
             Current = -1;
+            SubParameter = -1;
         }
 
         public bool MoveNext()
@@ -243,27 +251,47 @@ public static class SgrParserArgb
 
         private void ParseCurrent(ReadOnlySpan<char> slice)
         {
+            SubParameter = -1;
             if (slice.IsEmpty)
             {
                 Current = 0;
                 return;
             }
 
+            // Check for colon subparameter (e.g. "4:3" → code=4, sub=3).
+            int colon = slice.IndexOf(':');
+            ReadOnlySpan<char> main = colon >= 0 ? slice.Slice(0, colon) : slice;
+            ReadOnlySpan<char> sub = colon >= 0 ? slice.Slice(colon + 1) : default;
+
             int val = 0;
-            for (int i = 0; i < slice.Length; i++)
+            for (int i = 0; i < main.Length; i++)
             {
-                char c = slice[i];
+                char c = main[i];
                 if (c >= '0' && c <= '9')
                 {
                     val = val * 10 + (c - '0');
                 }
                 else
                 {
-                    Current = 0; // fallback just in case
+                    Current = 0;
                     return;
                 }
             }
             Current = val;
+
+            if (!sub.IsEmpty)
+            {
+                int subVal = 0;
+                for (int i = 0; i < sub.Length; i++)
+                {
+                    char c = sub[i];
+                    if (c >= '0' && c <= '9')
+                        subVal = subVal * 10 + (c - '0');
+                    else
+                        return;
+                }
+                SubParameter = subVal;
+            }
         }
     }
 }

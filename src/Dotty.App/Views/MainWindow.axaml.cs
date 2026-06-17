@@ -19,6 +19,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Dotty;
 using Dotty.Abstractions.Config;
 using Dotty.App.Configuration;
 using Dotty.App.Services;
@@ -45,25 +46,54 @@ namespace Dotty.App.Views;
         private bool _isHyprland = false;
         private TabViewModel? _windowTitleSubscribedTab;
 
-        public MainWindow()
+    public MainWindow()
+    {
+        InitializeComponent();
+        _viewModel = new MainViewModel();
+        DataContext = _viewModel;
+
+        // Focus reporting (DEC 1004): forward window focus events to the PTY.
+        Activated += (_, _) => SendFocusEventToActiveTab(true);
+        Deactivated += (_, _) => SendFocusEventToActiveTab(false);
+
+        // Window pixel size tracking for CSI 14 t queries.
+        LayoutUpdated += (_, _) => BroadcastWindowPixelSize();
+
+        UpdateWindowTitle();
+        ConfigureTransparency();
+
+        RuntimeSettings.Changed += OnRuntimeSettingsChanged;
+        SgrColorArgb.AnsiPaletteChanged += OnAnsiPaletteChanged;
+        OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
+
+        KeyDown += OnWindowKeyDown;
+        Closed += OnClosed;
+        Opened += OnOpened;
+
+        StartTestCommandListener();
+    }
+
+    private void BroadcastWindowPixelSize()
+    {
+        var size = ClientSize;
+        int w = Math.Max(1, (int)size.Width);
+        int h = Math.Max(1, (int)size.Height);
+        foreach (var tab in _viewModel.Tabs)
         {
-            InitializeComponent();
-            
-            _viewModel = new MainViewModel();
-            DataContext = _viewModel;
-            
-            UpdateWindowTitle();
-            ConfigureTransparency();
-            
-            RuntimeSettings.Changed += OnRuntimeSettingsChanged;
-            SgrColorArgb.AnsiPaletteChanged += OnAnsiPaletteChanged;
-            OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
-            
-            KeyDown += OnWindowKeyDown;
-            Closed += OnClosed;
-            Opened += OnOpened;
-            
-            StartTestCommandListener();
+            if (tab.Session?.Adapter is Terminal.Adapter.TerminalAdapter a)
+                a.SetWindowPixelSize(w, h);
+        }
+    }
+
+    private void SendFocusEventToActiveTab(bool focused)
+        {
+            var tab = _viewModel.ActiveTab;
+            if (tab?.Session?.Adapter is Terminal.Adapter.TerminalAdapter adapter && adapter.FocusReportingEnabled)
+            {
+                tab.Session.WriteInput(focused
+                    ? new byte[] { 0x1b, (byte)'[', (byte)'I' }
+                    : new byte[] { 0x1b, (byte)'[', (byte)'O' });
+            }
         }
 
         private void OnRuntimeSettingsChanged(object? sender, EventArgs e)
@@ -350,7 +380,24 @@ namespace Dotty.App.Views;
         terminalView.NewTabRequested += OnNewTabRequested;
         
         _terminalViews[tab] = terminalView;
-        
+
+        // Configure the adapter: theme colors, terminal identity.
+        if (tab.Session.Adapter is Terminal.Adapter.TerminalAdapter adapter)
+        {
+            adapter.SetDefaultColors(
+                $"#{Dotty.Generated.Config.Colors.Foreground & 0xFFFFFF:X6}",
+                $"#{Dotty.Generated.Config.Colors.Background & 0xFFFFFF:X6}");
+            // DA2: Dotty 1.x.y => encoded as major*10000 + minor*100 + patch
+            var v = VersionInfo.AssemblyVersion;
+            var parts = v.Split('.');
+            int da2Ver = 0;
+            if (parts.Length >= 3 && int.TryParse(parts[0], out var maj) &&
+                int.TryParse(parts[1], out var min) &&
+                int.TryParse(parts[2], out var pat))
+                da2Ver = maj * 10000 + min * 100 + pat;
+            adapter.SetTerminalIdentity($"\u001b[>1;{da2Ver};0c");
+        }
+
         // Note: Caller is responsible for showing the tab via ShowTab()
         // We don't call ShowTab here to avoid re-entrant calls
     }

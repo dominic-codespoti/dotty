@@ -589,6 +589,8 @@ public class Osc8ParserTests
         void ITerminalHandler.OnSetKittyKeyboardMode(int mode) { }
         void ITerminalHandler.OnQueryKittyKeyboard() { }
         void ITerminalHandler.FlushRender() { }
+        void ITerminalHandler.OnSetFocusReporting(bool enabled) { }
+        void ITerminalHandler.OnWindowReport(int command) { }
     }
 
     #endregion

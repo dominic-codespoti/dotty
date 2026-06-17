@@ -90,6 +90,8 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnSetKittyKeyboardMode(int mode) => Events.Add($"KITTY:{mode}");
         void ITerminalHandler.OnQueryKittyKeyboard() => Events.Add("KITTY_QUERY");
         void ITerminalHandler.FlushRender() { }
+        void ITerminalHandler.OnSetFocusReporting(bool enabled) { }
+        void ITerminalHandler.OnWindowReport(int command) { }
     }
 
     private static (BasicAnsiParser, CaptureHandler) Setup()

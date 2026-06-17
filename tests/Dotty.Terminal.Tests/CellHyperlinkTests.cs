@@ -166,7 +166,7 @@ public class CellHyperlinkTests
     {
         var buffer = new TerminalBuffer(rows: 10, columns: 80);
         var styleSet = buffer.StyleSet;
-        var attrs = new CellAttributes { Underline = true, HyperlinkId = 5 };
+        var attrs = new CellAttributes { UnderlineStyle = UnderlineStyle.Single, HyperlinkId = 5 };
         ushort styleId = styleSet.GetOrCreateId(in attrs);
         var hot = new CellHot();
         hot.SetAscii('A');
@@ -212,7 +212,7 @@ public class CellHyperlinkTests
         var attrs = new CellAttributes
         {
             Bold = true,
-            Underline = true,
+            UnderlineStyle = UnderlineStyle.Single,
             Foreground = new SgrColorArgb(0xFF0000FF),
             HyperlinkId = 10
         };
@@ -411,7 +411,7 @@ public class CellHyperlinkTests
         {
             Bold = true,
             Italic = true,
-            Underline = true,
+            UnderlineStyle = UnderlineStyle.Single,
             Foreground = new SgrColorArgb(0xFFFF0000),
             Background = new SgrColorArgb(0xFF00FF00)
         };

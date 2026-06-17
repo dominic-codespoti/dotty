@@ -474,6 +474,10 @@ namespace Dotty.Terminal.Parser
                     case 's':
                         Handler?.OnSaveCursor();
                         break;
+                    case 't':
+                        // Window manipulation: CSI Ps t
+                        Handler?.OnWindowReport(paramCount > 0 ? parsedParams[0] : 0);
+                        break;
                     case 'u':
                         if (isPrivate && paramCount > 0)
                         {
@@ -503,6 +507,7 @@ namespace Dotty.Terminal.Parser
                                 else if (code == 1) Handler?.OnSetApplicationCursorKeys(enable);
                                 else if (code == 7) Handler?.OnSetAutoWrap(enable);
                                 else if (code == 2004) Handler?.OnSetBracketedPasteMode(enable);
+                                else if (code == 1004) Handler?.OnSetFocusReporting(enable);
                                 else if (code == 1000 || code == 1002 || code == 1003 || code == 1005 || code == 1006 || code == 1015) 
                                     Handler?.OnSetMouseMode(code, enable);
                                 else if (code == 2026) 

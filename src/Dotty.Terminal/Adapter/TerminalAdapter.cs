@@ -29,6 +29,11 @@ public class TerminalAdapter : ITerminalHandler
     private readonly TerminalBuffer _buffer;
     private CellAttributes _currentAttributes = CellAttributes.Default;
     private CellAttributes _savedAttributes = CellAttributes.Default;
+    private string _defaultFgHex = "#CCCCCC";
+    private string _defaultBgHex = "#1E1E1E";
+    private string _da2Response = "\u001b[>1;0;0c";
+    private int _windowPixelWidth = 800;
+    private int _windowPixelHeight = 600;
     private bool _hasSavedAttributes;
     private string? _windowTitle;
     private char _lastPrintedChar;
@@ -66,6 +71,55 @@ public class TerminalAdapter : ITerminalHandler
     public Action<string, TerminalBuffer>? Trace { get; set; }
 
     public string? WindowTitle => _windowTitle;
+
+    /// <summary>
+    /// Sets the default foreground and background hex colors (without #) for
+    /// OSC 10/11 queries. Called by the app layer on startup and theme change.
+    /// </summary>
+    public void SetDefaultColors(string fgHex, string bgHex)
+    {
+        if (!string.IsNullOrWhiteSpace(fgHex)) _defaultFgHex = fgHex.StartsWith('#') ? fgHex : "#" + fgHex;
+        if (!string.IsNullOrWhiteSpace(bgHex)) _defaultBgHex = bgHex.StartsWith('#') ? bgHex : "#" + bgHex;
+    }
+
+    /// <summary>
+    /// Sets the DA2 (Secondary Device Attributes) response string, e.g.
+    /// "\x1b[>1;300;0c" for Dotty 0.3.0. Called by the app layer on startup.
+    /// </summary>
+    public void SetTerminalIdentity(string da2Response)
+    {
+        if (!string.IsNullOrWhiteSpace(da2Response)) _da2Response = da2Response;
+    }
+
+    /// <summary>
+    /// Sets the window pixel dimensions for CSI 14 t queries.
+    /// Called by the app layer when the window is resized.
+    /// </summary>
+    public void SetWindowPixelSize(int width, int height)
+    {
+        _windowPixelWidth = Math.Max(1, width);
+        _windowPixelHeight = Math.Max(1, height);
+    }
+
+    public void OnWindowReport(int command)
+    {
+        switch (command)
+        {
+            case 14:
+                // CSI 14 t → report window pixel size: CSI 4 ; height ; width t
+                ReplyRequested?.Invoke($"\u001b[4;{_windowPixelHeight};{_windowPixelWidth}t");
+                break;
+            case 18:
+                // CSI 18 t → report window cell size: CSI 8 ; rows ; cols t
+                ReplyRequested?.Invoke($"\u001b[8;{_buffer.Rows};{_buffer.Columns}t");
+                break;
+            case 20:
+            case 21:
+                // Icon title (20) / window title (21) — respond with empty for now.
+                ReplyRequested?.Invoke($"\u001b]0;\u001b\\");
+                break;
+        }
+    }
 
     public void ResizeBuffer(int rows, int columns)
     {
@@ -140,6 +194,16 @@ public class TerminalAdapter : ITerminalHandler
                     } catch { }
                 }
             }
+        }
+        else if (code == 10 || code == 11 || code == 12)
+        {
+            var hex = code switch
+            {
+                10 => _defaultFgHex,
+                11 => _defaultBgHex,
+                _ => "#FFFFFF",
+            };
+            ReplyRequested?.Invoke($"\x1b]{code};{hex}\a");
         }
         else if (code == 133)
         {
@@ -515,7 +579,7 @@ public class TerminalAdapter : ITerminalHandler
                 ReplyRequested?.Invoke("\u001b[?1;0c");
                 break;
             case 2:
-                ReplyRequested?.Invoke("\u001b[>0;0;0c");
+                ReplyRequested?.Invoke(_da2Response);
                 break;
         }
     }
@@ -558,6 +622,15 @@ public class TerminalAdapter : ITerminalHandler
         _synchronizedUpdateActive = enabled;
         if (!enabled) FlushRender();
     }
+
+    private bool _focusReportingEnabled;
+
+    public void OnSetFocusReporting(bool enabled)
+    {
+        _focusReportingEnabled = enabled;
+    }
+
+    public bool FocusReportingEnabled => _focusReportingEnabled;
 
     public int KittyKeyboardMode { get; private set; }
 

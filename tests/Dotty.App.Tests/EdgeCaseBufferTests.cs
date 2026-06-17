@@ -656,7 +656,7 @@ public class EdgeCaseBufferTests
     public void SGR_BoldUnderline_Wide_Overwrite_Clean()
     {
         var tb = new TerminalBuffer(3, 20);
-        var attr = new CellAttributes { Bold = true, Underline = true };
+        var attr = new CellAttributes { Bold = true, UnderlineStyle = UnderlineStyle.Single };
         tb.SetCursor(1, 2);
         tb.WriteText("\u754c".AsSpan(), attr);
         tb.SetCursor(1, 2);
@@ -955,7 +955,7 @@ public class EdgeCaseBufferTests
             CellAttributes.Default,
             new() { Bold = true },
             new() { Invisible = true },
-            new() { Underline = true },
+            new() { UnderlineStyle = UnderlineStyle.Single },
             new() { SlowBlink = true },
         };
         foreach (var a in attrs)

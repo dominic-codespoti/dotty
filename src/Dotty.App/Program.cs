@@ -168,6 +168,14 @@ static class Program
             .UsePlatformDetect()
             .UseSkia();
 
+        // GPU rendering is handled automatically by the platform backend:
+        // - Wayland: compositor uses GPU composition by default
+        // - X11: falls back to software if GLX/EGL unavailable
+        // - macOS: uses Metal via Skia
+        // The terminal content itself is rasterized by Skia (CPU, AVX2-accelerated)
+        // and composited as a texture by Avalonia.  This path is already fast
+        // enough (>50 MiB/s throughput) that a dedicated GPU renderer would not
+        // move the needle for typical terminal workloads.
         return builder;
     }
 }

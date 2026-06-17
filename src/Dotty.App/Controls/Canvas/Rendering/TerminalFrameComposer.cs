@@ -490,6 +490,7 @@ public sealed class TerminalFrameComposer : IDisposable
                 bool hasHyperlink = cc.HyperlinkId != 0;
                 var fgColor = cc.HasFg ? cc.Fg : defaultColor;
                 if (hasHyperlink) fgColor = HyperlinkColor;
+                if (cc.Faint) fgColor = fgColor.WithAlpha((byte)(fgColor.Alpha / 2));
 
                 bool disableSmoothing = IsPixelGridRune(cc.FirstRune);
 
@@ -652,24 +653,74 @@ public sealed class TerminalFrameComposer : IDisposable
         float lineW,
         in CellClass cc)
     {
-        bool hasLine = cc.Underline || cc.DoubleUnderline || cc.Strikethrough || cc.Overline || hasHyperlink;
-        if (!hasLine) return;
+        var style = cc.CellUnderlineStyle;
+        if (style == UnderlineStyle.None && !cc.Strikethrough && !cc.Overline && !hasHyperlink)
+            return;
 
-        if (hasHyperlink) _linePaint.Color = HyperlinkUnderlineColor;
-        else _linePaint.Color = (cc.UnderlineColorArgb != 0) ? new SKColor(cc.UnderlineColorArgb) : fgColor;
+        SKColor lineColor = hasHyperlink ? HyperlinkUnderlineColor
+            : (cc.UnderlineColorArgb != 0) ? new SKColor(cc.UnderlineColorArgb) : fgColor;
+        _linePaint.Color = lineColor;
 
-        if (cc.Underline || hasHyperlink)
+        // Underline variants.
+        if (style != UnderlineStyle.None || hasHyperlink)
         {
             float y = baseline + fm.Descent * 0.5f;
-            canvas.DrawLine(x, y, x + lineW, y, _linePaint);
+            float w = Math.Max(1f, _linePaint.StrokeWidth);
+
+            switch (style)
+            {
+                case UnderlineStyle.Curl:
+                {
+                    using var path = new SKPath();
+                    float amp = w * 2.5f;
+                    float period = Math.Max(4f, w * 6f);
+                    int steps = Math.Max(2, (int)(lineW / 2f));
+                    path.MoveTo(x, y);
+                    for (int i = 1; i <= steps; i++)
+                    {
+                        float t = i / (float)steps;
+                        float px = x + lineW * t;
+                        float py = y + amp * (float)Math.Sin(t * Math.PI * 2 * (lineW / period));
+                        path.LineTo(px, py);
+                    }
+                    canvas.DrawPath(path, _linePaint);
+                    break;
+                }
+                case UnderlineStyle.Dotted:
+                {
+                    float dotSpacing = Math.Max(3f, w * 4f);
+                    float dotR = w * 0.6f;
+                    for (float px = x; px < x + lineW; px += dotSpacing)
+                    {
+                        canvas.DrawCircle(px, y, dotR, _linePaint);
+                    }
+                    break;
+                }
+                case UnderlineStyle.Dashed:
+                {
+                    float dashLen = Math.Max(4f, w * 6f);
+                    float gapLen = Math.Max(2f, w * 3f);
+                    for (float px = x; px < x + lineW; )
+                    {
+                        float end = Math.Min(px + dashLen, x + lineW);
+                        canvas.DrawLine(px, y, end, y, _linePaint);
+                        px = end + gapLen;
+                    }
+                    break;
+                }
+                default: // Single, Double, or hyperlink fallback
+                {
+                    canvas.DrawLine(x, y, x + lineW, y, _linePaint);
+                    if (style == UnderlineStyle.Double)
+                    {
+                        float y2 = baseline + fm.Descent * 0.8f;
+                        canvas.DrawLine(x, y2, x + lineW, y2, _linePaint);
+                    }
+                    break;
+                }
+            }
         }
-        if (cc.DoubleUnderline)
-        {
-            float y1 = baseline + fm.Descent * 0.3f;
-            float y2 = baseline + fm.Descent * 0.8f;
-            canvas.DrawLine(x, y1, x + lineW, y1, _linePaint);
-            canvas.DrawLine(x, y2, x + lineW, y2, _linePaint);
-        }
+
         if (cc.Strikethrough)
         {
             float y = baseline - (fm.Ascent * -0.3f);
@@ -742,8 +793,10 @@ public sealed class TerminalFrameComposer : IDisposable
 
         // Resolved style fields
         public bool Bold;
+        public bool Faint;
         public bool Underline;
         public bool DoubleUnderline;
+        public UnderlineStyle CellUnderlineStyle;
         public bool Strikethrough;
         public bool Overline;
         public bool Invisible;
@@ -779,8 +832,10 @@ public sealed class TerminalFrameComposer : IDisposable
             cc.Fg = style.Foreground.Argb != 0 ? ToSkColor(style.Foreground.Argb) : default;
 
             cc.Bold = style.Bold;
+            cc.Faint = style.Faint;
             cc.Underline = style.Underline;
             cc.DoubleUnderline = style.DoubleUnderline;
+            cc.CellUnderlineStyle = style.UnderlineStyle;
             cc.Strikethrough = style.Strikethrough;
             cc.Overline = style.Overline;
             cc.Invisible = style.Invisible;

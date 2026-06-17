@@ -135,7 +135,7 @@ public class MemoryBenchmarks : PerformanceTestBase
     {
         var grid = new CellGrid(24, 80);
         var styleSet = new StyleSet();
-        ushort styleId = styleSet.GetOrCreateId(new CellAttributes { Bold = true, Italic = true, Underline = true });
+        ushort styleId = styleSet.GetOrCreateId(new CellAttributes { Bold = true, Italic = true, UnderlineStyle = UnderlineStyle.Single });
         
         for (int row = 0; row < 24; row++)
         {

@@ -169,7 +169,7 @@ public class HyperlinkRenderingTests
             HyperlinkId = linkId,
             Bold = true,
             Italic = true,
-            Underline = true,
+            UnderlineStyle = UnderlineStyle.Single,
             Foreground = new SgrColorArgb(0xFF0000),
             Background = new SgrColorArgb(0xFFFFFF)
         };

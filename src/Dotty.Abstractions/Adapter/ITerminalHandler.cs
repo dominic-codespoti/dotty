@@ -93,6 +93,12 @@ namespace Dotty.Abstractions.Adapter
         void OnSetKittyKeyboardMode(int mode);
         void OnQueryKittyKeyboard();
 
+        // Focus reporting (DEC 1004)
+        void OnSetFocusReporting(bool enabled);
+
+        // Window manipulation / report (CSI Ps t)
+        void OnWindowReport(int command);
+
         // Render batching
         void FlushRender();
     }

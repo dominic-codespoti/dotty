@@ -11,8 +11,8 @@ public class StyleSet
 
     public ushort GetOrCreateId(in CellAttributes attrs)
     {
-        if (attrs.IsDefaultColors && !attrs.Bold && !attrs.Italic && !attrs.Underline
-            && !attrs.DoubleUnderline && !attrs.Faint && !attrs.Inverse
+        if (attrs.IsDefaultColors && !attrs.Bold && !attrs.Italic && attrs.UnderlineStyle == UnderlineStyle.None
+            && !attrs.Faint && !attrs.Inverse
             && !attrs.Strikethrough && !attrs.Overline && !attrs.Invisible
             && !attrs.SlowBlink && attrs.HyperlinkId == 0)
             return 0;

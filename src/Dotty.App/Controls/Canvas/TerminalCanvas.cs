@@ -145,6 +145,12 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private TextShaper? _textShaper;
 	private static readonly ShapedRunCache SharedShapedRunCache = new();
 
+	// Incremental render tracking: avoids full redraw when only the scroll
+	// offset changed (user scrolling).  Instead, the existing bitmap content
+	// is shifted with memmove and only newly-exposed rows are re-rendered.
+	private double _lastRenderOffsetY = double.NaN;
+	private int _lastRenderSbCount = -1;
+
 	// Global font resolution cache shared across all TerminalCanvas instances.
 	// Key is "{FontFamily}|{TextSize:F1}".  Invalidated when font settings change.
 	private static readonly ConcurrentDictionary<string, SKTypeface> CachedPrimaryTypeface = new();
@@ -446,6 +452,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			{
 				_bitmap?.Dispose();
 				_bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888);
+				_lastRenderOffsetY = double.NaN; // force full render on new bitmap
 			}
 
 			try
@@ -462,15 +469,108 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
 		var canvas = surface.Canvas;
 
+		float newScrollTranslate = (float)(sbCount * _cellHeight - _offset.Y);
+
+		// Detect pure-scroll: same scrollback count, different offset (user scrolling),
+		// same bitmap dimensions.  Shift the existing pixel data instead of re-rendering
+		// every cell, then only render the newly-exposed band.
+		bool pureScroll = !double.IsNaN(_lastRenderOffsetY) &&
+		                  _lastRenderSbCount == sbCount &&
+		                  Math.Abs(_offset.Y - _lastRenderOffsetY) > 0.5 &&
+		                  _selectionRange.IsEmpty;
+
+		if (pureScroll)
+		{
+			double deltaY = _lastRenderOffsetY - _offset.Y;
+			int pixelDelta = (int)Math.Round(deltaY);
+			if (pixelDelta != 0 && Math.Abs(pixelDelta) < h)
+			{
+				int stride = locked.RowBytes;
+
+				unsafe
+				{
+					byte* pixels = (byte*)locked.Address;
+					if (pixelDelta > 0)
+					{
+						// Content moved down: copy pixels down, clear top band.
+						System.Buffer.MemoryCopy(pixels, pixels + pixelDelta * stride, (ulong)((h - pixelDelta) * stride), (ulong)((h - pixelDelta) * stride));
+						new Span<byte>(pixels, pixelDelta * stride).Clear();
+					}
+					else
+					{
+						// Content moved up: copy pixels up, clear bottom band.
+						int shiftUp = -pixelDelta;
+						System.Buffer.MemoryCopy(pixels + shiftUp * stride, pixels, (ulong)((h - shiftUp) * stride), (ulong)((h - shiftUp) * stride));
+						new Span<byte>(pixels + (h - shiftUp) * stride, shiftUp * stride).Clear();
+					}
+				}
+
+				// Set up the canvas translate so subsequent rendering goes to the right place.
+				var m = SKMatrix.Identity;
+				canvas.SetMatrix(m);
+				if (ContentPadding.Left != 0 || ContentPadding.Top != 0)
+					canvas.Translate((float)ContentPadding.Left, (float)ContentPadding.Top);
+				canvas.Translate(0, newScrollTranslate);
+
+				// Render the exposed band.
+				if (_frameComposer != null)
+				{
+					int startRow = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
+					int endRow = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
+					startRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, startRow));
+					endRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, endRow));
+
+					// Determine which rows are newly exposed (the band that was cleared).
+					double oldTop = _lastRenderOffsetY;
+					double newTop = _offset.Y;
+					double exposeTop = Math.Min(oldTop, newTop);
+					double exposeBottom = Math.Max(oldTop, newTop);
+					int exposeStartRow = (int)Math.Floor(exposeTop / _cellHeight) - sbCount;
+					int exposeEndRow = (int)Math.Ceiling((exposeBottom + Math.Abs(deltaY)) / _cellHeight) - sbCount;
+					exposeStartRow = Math.Max(startRow, exposeStartRow);
+					exposeEndRow = Math.Min(endRow, exposeEndRow);
+
+					// Render only the exposed rows for visible grid.
+					int compStart = Math.Max(0, exposeStartRow);
+					int compEnd = Math.Max(0, Math.Min(buffer.Rows - 1, exposeEndRow));
+					if (compStart <= compEnd && SkPaint != null)
+						_frameComposer.RenderTo(canvas, buffer, SkPaint, (float)_cellWidth, (float)_cellHeight, compStart, compEnd);
+
+					// Render exposed scrollback rows.
+					int sbStart = Math.Max(-sbCount, exposeStartRow);
+					int sbEnd = Math.Min(-1, exposeEndRow);
+					if (sbStart <= sbEnd && SkPaint != null)
+					{
+						var paint = SkPaint;
+						var fm = paint.FontMetrics;
+						float glyphH = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
+						float blOffset = (float)(_cellHeight * 0.5f) + (glyphH * 0.5f) - Math.Abs(fm.Descent);
+						for (int r = sbStart; r <= sbEnd; r++)
+						{
+							int idx = r + sbCount;
+							idx = Math.Max(0, Math.Min(sbCount - 1, idx));
+							var line = buffer.GetScrollbackLine(idx);
+							if (line.Length <= 0) continue;
+							float y = (float)(r * _cellHeight + blOffset);
+							canvas.DrawText(line.Text ?? string.Empty, 0, y, paint);
+						}
+					}
+				}
+
+				goto renderOverlays;
+			}
+		}
+
+		// Full render path: clear bitmap and re-render everything.
 		canvas.Clear(bgColor);
 
-		var m = SKMatrix.Identity;
-		canvas.SetMatrix(m);
+		var mFull = SKMatrix.Identity;
+		canvas.SetMatrix(mFull);
 
 		if (ContentPadding.Left != 0 || ContentPadding.Top != 0)
 			canvas.Translate((float)ContentPadding.Left, (float)ContentPadding.Top);
 
-		canvas.Translate(0, (float)(sbCount * _cellHeight - _offset.Y));
+		canvas.Translate(0, newScrollTranslate);
 
 		if (_frameComposer != null)
 		{
@@ -507,6 +607,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				}
 			}
 		}
+
+	renderOverlays:
+		_lastRenderOffsetY = _offset.Y;
+		_lastRenderSbCount = sbCount;
 
 		// Draw selection overlay
 		if (!_selectionRange.IsEmpty)

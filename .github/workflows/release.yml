@@ -14,7 +14,7 @@ on:
 env:
   DOTNET_VERSION: '10.0.x'
   PROJECT_PATH: 'src/Dotty.App/Dotty.App.csproj'
-  SOLUTION_PATH: 'Dotty.sln'
+  SOLUTION_PATH: 'Dotty.slnx'
 
 jobs:
   validate-release:

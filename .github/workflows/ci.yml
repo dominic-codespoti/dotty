@@ -16,7 +16,7 @@ on:
 
 env:
   DOTNET_VERSION: '10.0.x'
-  SOLUTION_PATH: 'Dotty.sln'
+  SOLUTION_PATH: 'Dotty.slnx'
 
 jobs:
   build-and-test:

@@ -301,7 +301,8 @@ public sealed class TestApplicationHost : IAsyncDisposable
             }
             
             // Also check for solution files
-            if (File.Exists(Path.Combine(currentDir, "Dotty.sln")) ||
+            if (File.Exists(Path.Combine(currentDir, "Dotty.slnx")) ||
+                File.Exists(Path.Combine(currentDir, "Dotty.sln")) ||
                 File.Exists(Path.Combine(currentDir, "dotnet-term.sln")))
             {
                 solutionDir = currentDir;
@@ -381,7 +382,8 @@ public sealed class TestApplicationHost : IAsyncDisposable
             }
             
             // Also check for solution files
-            if (File.Exists(Path.Combine(currentDir, "Dotty.sln")) ||
+            if (File.Exists(Path.Combine(currentDir, "Dotty.slnx")) ||
+                File.Exists(Path.Combine(currentDir, "Dotty.sln")) ||
                 File.Exists(Path.Combine(currentDir, "dotnet-term.sln")))
             {
                 solutionDir = currentDir;

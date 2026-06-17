@@ -102,7 +102,8 @@ The parser handles all standard CSI sequences:
 | `m` | `[attrs]` | SGR (Graphics) | `OnSetGraphicsRendition(attrs)` |
 | `n` | `[code]` | Device Status Report | `OnDeviceStatusReport(code)` |
 | `q` | `[shape]` | Set Cursor Shape | `OnSetCursorShape(shape)` |
-| `r` | `[top;bottom]` | Set Scroll Region | `OnSetScrollRegion(top, bottom)` |
+| `r` | `[top;bottom]` | Set Scroll Region (DECSTBM) | `OnSetScrollRegion(top, bottom)` |
+| | | | Note: DECSTBM now interacts correctly with alternate screen and DECOM (origin mode) |
 | `s` | none | Save Cursor (SCO) | `OnSaveCursor()` |
 | `u` | none | Restore Cursor (SCO) | `OnRestoreCursor()` |
 | `h`/`l` | `?<mode>` | Set/Reset Mode | `OnSetAlternateScreen()`, etc. |
@@ -288,6 +289,7 @@ The parser supports OSC sequences for:
 | 10-19 | Set foreground/background/highlight colors | (future) |
 | 52 | Manipulate selection/data | (future) |
 | 777 | rxvt extension notifications | (future) |
+| 1337 | PromptMark (shell integration) | `OnPromptMark(level)` — tracks shell prompt start/end via `OSC 1337 ; A` / `OSC 1337 ; B` |
 
 **Implementation details:**
 
@@ -502,5 +504,13 @@ Typical performance on modern hardware:
 
 ---
 
-*Document version: 1.0*  
-*Last updated: 2026-04-04*
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Updated OSC table: OSC 1337 PromptMark (shell integration) |
+| 2026-06-05 | Updated DECSTBM/DECOM interaction with alternate screen and origin mode |
+| 2026-06-05 | Documented PromptMark OSC 1337 sequence support |
+
+*Document version: 1.1*  
+*Last updated: 2026-06-17*

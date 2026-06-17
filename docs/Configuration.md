@@ -487,6 +487,92 @@ See `/home/dom/projects/dotnet-term/samples/Config.cs` for complete examples:
 - Custom key bindings
 - Cursor settings
 
+## Runtime Configuration Hot-Reload
+
+Dotty supports **runtime configuration hot-reload** via the `CSharpConfigWatcher` service, which monitors your config file for changes and applies them without restarting the application.
+
+### How It Works
+
+```
+Config.cs edit → FileSystemWatcher → CSharpConfigWatcher →
+  dotnet build (background) → GeneratedConfigAssembly (load) →
+    RuntimeSettings (web socket push) → App applies new settings
+```
+
+1. **File Monitoring**: `CSharpConfigWatcher` watches `~/.config/dotty/Dotty.UserConfig/Config.cs` for changes
+2. **Background Build**: On change, triggers `dotnet build` on the user config project
+3. **Assembly Load**: The compiled assembly is loaded via `GeneratedConfigAssembly`
+4. **Web Socket Push**: New config values are pushed to the running application through a web socket channel
+5. **Live Apply**: `RuntimeSettings` applies the new configuration (fonts, colors, cursor, etc.) instantly
+
+### Supported Hot-Reload Changes
+
+| Setting | Hot-Reload Support |
+|---------|-------------------|
+| Theme / colors | ✅ Live update |
+| Font size | ✅ Live update |
+| Font family | ✅ Live update |
+| Cursor shape/blink | ✅ Live update |
+| Window opacity | ✅ Live update |
+| Scrollback lines | ✅ On next buffer operation |
+| Key bindings | ⚠️ Restart recommended |
+| Window dimensions | ⚠️ Restart recommended |
+
+### Limitations
+
+- Key bindings and window dimensions require a restart
+- Very rapid successive edits may be debounced
+- Build errors in config are reported in application logs
+
+## ANSI Color Palette Live-Update
+
+The 16 ANSI terminal colors (black, red, green, yellow, blue, magenta, cyan, white + bright variants) can be updated at runtime through `RuntimeSettings`.
+
+### Color Resolution Chain
+
+When the terminal needs an ANSI color, it resolves through this fallback chain:
+
+```
+ApplyAnsiColorPalette():
+  1. RuntimeSettings.Current.Ansi{0-15}   (hot-reloadable hex strings from
+     ↓                                     settings.json or websocket push)
+  2. theme IColorScheme (if provided)      (the active theme object)
+  3. Generated.Config.Colors              (compile-time defaults)
+```
+
+This allows the palette to be updated live — an automation script or config edit
+can push new ANSI colors without restarting the terminal.
+
+### Color Fallback for Default Foreground/Background
+
+The default terminal foreground and background colors follow a similar chain:
+
+```
+ApplyDefaultsToResources():
+  1. RuntimeSettings.Current.Background / Foreground  (persisted hex strings)
+  2. Defaults.DefaultBackground / Defaults.DefaultForeground (generated config)
+```
+
+Previously the default foreground was hardcoded to `SKColors.White` in the canvas
+paint setup, which made text invisible with light themes. Now `EnsureMetrics()`
+reads `RuntimeSettings.Current.Foreground` at paint creation time.
+
+### Persistence via settings.json
+
+Runtime color overrides are persisted to `~/.config/dotty/settings.json` by
+`FileSystemConfigWatcher`. The JSON file uses a source-generated serializer
+context (`RuntimeSettingsJsonContext`) for AOT compatibility:
+
+```json
+{
+  "Background": "#1a1b26",
+  "Foreground": "#c0caf5",
+  "AnsiBlack": "#1d202f",
+  "AnsiRed": "#f7768e",
+  ...
+}
+```
+
 ## Troubleshooting
 
 ### Config changes not reflecting
@@ -494,6 +580,7 @@ See `/home/dom/projects/dotnet-term/samples/Config.cs` for complete examples:
 1. Ensure your config class implements `IDottyConfig`
 2. Make the class `partial`
 3. Rebuild the project to trigger source generation
+4. For runtime hot-reload, check the application logs for build errors
 
 ### IntelliSense not working
 
@@ -517,6 +604,14 @@ Ensure you're using constant values (literals) in your config class. The source 
 - Make sure colors are in ARGB format (0xAARRGGBB)
 - For fully opaque colors, use 0xFF as the alpha component
 - Check that your theme implements all 18 color properties (Background, Foreground, 16 ANSI colors)
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Documented ANSI color palette live-update mechanism, default fg/bg color fallback chain, `settings.json` persistence via `FileSystemConfigWatcher` |
+| 2026-06-15 | Added runtime hot-reload section (`CSharpConfigWatcher`, `GeneratedConfigAssembly`, websocket config push) |
+| 2026-06-10 | Initial documentation of source-generator-based config system |
 
 ---
 

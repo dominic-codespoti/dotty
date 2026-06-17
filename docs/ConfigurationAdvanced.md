@@ -1,7 +1,9 @@
 # Dotty Configuration: Advanced Features
 
-> **Status**: These features are documented as future possibilities for the Dotty configuration system. They represent potential enhancements that could be enabled by the Source Generator architecture, but are **not yet implemented**.
->
+> **Status**: These features are documented as future possibilities for the Dotty configuration system. Some have been implemented, while others remain potential enhancements.
+> 
+> **Implemented**: Runtime hot-reload (CSharpConfigWatcher + web socket config push), ligature shaping, underline rendering, rounded corner clipping.
+> 
 > The current configuration system (v1) is production-ready and stable. These advanced features are roadmap items that may be added in future releases.
 
 ---
@@ -829,6 +831,16 @@ These advanced features demonstrate the extensibility of Dotty's Source Generato
 - **Compile-time evaluation** of complex logic
 - **AOT-compatible** code generation
 - **Type-safe** configuration with IntelliSense support
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Updated status note: runtime hot-reload, ligatures, underline styles, rounded corners now implemented |
+
+---
+
 - **Zero runtime overhead** for configuration decisions
 
 Users can start with simple configurations and gradually adopt advanced features as needed. The simple configuration API remains stable and supported even as these advanced features are added.
+
+*Last updated: 2026-06-17*

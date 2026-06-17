@@ -190,6 +190,16 @@ dotnet test Dotty.sln --filter "FullyQualifiedName~Parser"
 |-----------|-------------|----------|
 | Buffer Tests | Terminal buffer correctness | `BasicAnsiParserTests.cs`, `SgrColorTests.cs` |
 | Rendering Tests | Visual state assertions | `AsciiArtRenderTests.cs`, `PermutationScrollRenderTests.cs` |
+| Ligature Tests | HarfBuzz shaping verification | `LigatureRenderTests.cs` |
+| Underline Tests | Undercurl, dotted, dashed rendering | `UnderlineRenderTests.cs` |
+| Rounded Corner Tests | Clip region correctness | `RoundedCornerRenderTests.cs` |
+| Scroll Region Tests | DECSTBM/DECOM behavior | `ScrollRegionTests.cs` |
+| PromptMark Tests | Shell integration markers | `PromptMarkTests.cs` |
+| Ligature Tests | HarfBuzz shaping verification | `LigatureRenderTests.cs` |
+| Underline Tests | Undercurl, dotted, dashed rendering | `UnderlineRenderTests.cs` |
+| Rounded Corner Tests | Clip region correctness | `RoundedCornerRenderTests.cs` |
+| Scroll Region Tests | DECSTBM/DECOM behavior | `ScrollRegionTests.cs` |
+| PromptMark Tests | Shell integration markers | `PromptMarkTests.cs` |
 | Fuzz/Stress Tests | Boundary and safety testing | `StressFuzzReproTests.cs`, `NeovimReplayTests.cs` |
 | Integration Tests | End-to-end scenarios | `EndToEndTests.cs` |
 

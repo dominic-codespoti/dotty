@@ -21,7 +21,9 @@ Both Ghostty and Wezterm are written in low-level systems programming languages 
 *   **Wezterm:** Uses a native OpenGL/EGL hardware-accelerated rendering pipeline. It heavily supports complex text shaping (Harfbuzz), ligatures, and fallback fonts.
 
 **Where Dotty Differs/Misses:**
-*   **Complex Text Layout (CTL):** Dotty's basic `GlyphAtlas` likely lacks robust support for advanced typography like Arabic/Indic script shaping, programming ligatures (e.g., `=>`, `!=`), and widespread color emoji fallback, which are first-class citizens in Wezterm and Ghostty.
+*   **Complex Text Layout (CTL):** Dotty now supports programming ligatures via HarfBuzz (`TextShaper`/`ShapedRun`) for patterns like `=>`, `!=`, `::`. Arabic/Indic script shaping and color emoji fallback remain areas for improvement compared to Wezterm and Ghostty.
+*   **Underline Styles:** Dotty now supports undercurl (wavy), dotted, and dashed underline styles in addition to standard underline — matching the rendering capabilities of Wezterm and Ghostty for editor diagnostics.
+*   **Rounded Corners:** Dotty applies `ClipRoundRect()` for rounded terminal frame corners, a modern aesthetic feature present in Ghostty and kitty.
 *   **Direct GPU Control:** Dotty is bound by Avalonia's abstractions. Ghostty and Wezterm interface much closer to the GPU, allowing for specialized shaders (e.g., CRT effects in Wezterm) and tighter VSync/latency control.
 
 ## 3. Platform & PTY Integration
@@ -45,6 +47,17 @@ Both Ghostty and Wezterm are written in low-level systems programming languages 
 ## 5. Strategic Recommendations for Dotty
 
 If Dotty aims to compete or find a specific niche against these giants, it should focus on:
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Updated CTL section: ligatures via HarfBuzz now implemented; added underline styles and rounded corners to comparison |
+| 2026-06-15 | Updated roadmap: ligature item re-scoped to emoji/script shaping |
+
+---
+
 1.  **Exploiting the .NET Ecosystem:** Offer deep integrations for .NET developers (e.g., built-in structured logging parsing, intelligent C# repl integrations, MSBuild hot-links).
 2.  **Windows Port:** Implement Windows `ConPty` via P/Invoke to make Dotty optionally cross-platform.
-3.  **Complex Text Shaping:** Investigate integrating HarfBuzz via advanced Avalonia text formatting APIs to support ligatures and emojis, closing the visual gap with Wezterm.
+3.  **Emoji & Script Shaping:** Build on the existing HarfBuzz integration to support color emoji and complex script (Arabic/Indic) shaping, further closing the visual gap with Wezterm.
+
+*Last updated: 2026-06-17*

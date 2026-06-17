@@ -44,6 +44,10 @@ Successfully implemented a C# Source Generator-based configuration system for th
 
 - **DefaultConfig.cs** - Default implementation of IDottyConfig with values matching the original hardcoded defaults
 - **ConfigBridge.cs** - Helper class to convert generated configuration values to Avalonia types (Color, Brush, Thickness, FontFamily)
+- **RuntimeSettings.cs** - Web socket-based channel for pushing runtime configuration updates
+- **GeneratedConfigAssembly.cs** - Dynamic assembly loading for hot-reloaded config
+
+**Also**: `src/Dotty.App/Services/CSharpConfigWatcher.cs` - File watcher + background dotnet build, triggers hot-reload on Config.cs edits
 
 ### 4. Sample Configuration
 **Path**: `/home/dom/projects/dotnet-term/samples/Config.cs`
@@ -220,7 +224,7 @@ AOT-Compiled Binary
 Potential improvements:
 1. Multi-target support (detect and merge multiple config classes)
 2. Configuration validation (emit diagnostics for invalid values)
-3. Hot reload support for development
+3. ~~Hot reload support for development~~ ✅ Implemented (CSharpConfigWatcher)
 4. JSON serialization helpers for config import/export
 5. Environment variable overrides at runtime
 
@@ -229,6 +233,16 @@ Potential improvements:
 The Source Generator-based configuration system is fully implemented and working. It provides:
 - Type-safe configuration
 - Compile-time validation
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Added `RuntimeSettings.cs`, `GeneratedConfigAssembly.cs`, `CSharpConfigWatcher.cs` to implemented files list; marked hot-reload as completed |
+
+---
+
 - AOT compatibility
 - Excellent IntelliSense support
 - Zero runtime overhead
+
+*Last updated: 2026-06-17*

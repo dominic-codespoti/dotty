@@ -7,6 +7,8 @@ A high-performance terminal emulator for .NET, built with Avalonia UI and optimi
 
 ## Overview
 
+*Last updated: 2026-06-17*
+
 Dotty is a modern terminal emulator composed of:
 - **Dotty.App** — Avalonia-based GUI application with hardware-accelerated rendering
 - **Dotty.Terminal** — High-performance terminal core with zero-allocation parsing
@@ -15,10 +17,15 @@ Dotty is a modern terminal emulator composed of:
 
 ### Key Features
 
-- Hardware-accelerated rendering via SkiaSharp
+- Hardware-accelerated rendering via SkiaSharp (ligatures, underline styles, rounded corners)
 - Optimized ANSI/VT parser with minimal allocations
 - Native PTY support on Linux/Unix systems
 - Efficient buffer management with scrollback support
+- Ligature support via HarfBuzz font shaping
+- Undercurl, dotted, and dashed underline rendering
+- Rounded rectangle clip regions for modern terminal aesthetics
+- Runtime C# configuration hot-reload via CSharpConfigWatcher
+- PromptMark (OSC 1337) shell integration for prompt tracking
 
 ## Quick Start
 
@@ -53,7 +60,7 @@ dotnet test tests/Dotty.App.Tests
 
 ## Configuration
 
-Dotty uses a **compile-time configuration system** that delivers type-safe, high-performance settings with zero runtime overhead. Instead of parsing JSON at startup, Dotty generates optimized code from your C# configuration class during build.
+Dotty features a **dual configuration system**: compile-time C# source generation for zero-overhead defaults, plus runtime C# hot-reload for live configuration changes without restarting.
 
 ### Quick Start
 
@@ -103,6 +110,17 @@ public partial class MyDottyConfig : IDottyConfig
 }
 ```
 
+### Runtime Configuration Hot-Reload
+
+Dotty watches your `Config.cs` file and automatically rebuilds + hot-reloads configuration without restarting the application:
+
+```bash
+# Edit config — changes apply live
+code ~/.config/dotty/Dotty.UserConfig/Config.cs
+```
+
+The `CSharpConfigWatcher` monitors your config file for changes, triggers a background build via the .NET SDK, and pushes the new configuration to the running application through a web socket channel. No restart needed.
+
 ### Key Features
 
 | Feature | Benefit |
@@ -111,6 +129,8 @@ public partial class MyDottyConfig : IDottyConfig
 | **Zero reflection** | All values resolved at compile time—no startup overhead |
 | **AOT compatible** | Works with .NET Native AOT publishing |
 | **Full IntelliSense** | IDE autocomplete and error checking via NuGet package |
+| **Runtime hot-reload** | Edit Config.cs and see changes instantly — no restart |
+| **Web socket config push** | New assemblies loaded live via CSharpConfigWatcher |
 | **11 built-in themes** | DarkPlus, Dracula, TokyoNight, Catppuccin, Gruvbox, and more |
 | **Custom themes** | Create your own color schemes by extending `ColorSchemeBase` |
 | **Transparency support** | Window opacity, blur, and acrylic effects |

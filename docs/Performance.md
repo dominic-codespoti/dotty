@@ -64,7 +64,14 @@ Tests allocation patterns and GC impact:
 
 ### Startup Performance
 
-Tests initialization times:
+Tests initialization times. Dotty includes a `StartupTimer` utility that profiles cold-start phases:
+
+| Phase | Description | Target |
+|-------|-------------|--------|
+| App constructor | App initialization | <50ms |
+| Native PTY init | PTY creation and shell start | <100ms |
+| First frame render | Initial terminal parse + display | <50ms |
+| Config load | Source generator config resolution | <10ms |
 
 | Benchmark | Description | Target |
 |-----------|-------------|--------|
@@ -294,6 +301,13 @@ Configure Slack/email notifications for regressions:
 2. **Span<T>**: Stack-allocate small buffers
 3. **Object pooling**: Reuse objects instead of creating new
 4. **Struct types**: Use value types for hot paths
+5. **BufferTextWriter**: Optimized bulk cell write path — reduces per-cell overhead by batching writes and minimizing buffer flushes
+
+### Cold-Start Optimization
+
+1. **StartupTimer**: Built-in phase profiler that logs elapsed time per initialization step
+2. **Lazy glyph atlas population**: Only renders glyphs when first seen, not at startup
+3. **Deferred session creation**: Background tabs don't create sessions until activated
 
 ### Common Optimizations
 
@@ -376,6 +390,17 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 
 - [BenchmarkDotNet Documentation](https://benchmarkdotnet.org/)
 - [Dotty Architecture](../Architecture.md)
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Added BufferTextWriter optimization, StartupTimer cold-start phase profiling, lazy glyph atlas population |
+| 2026-06-15 | Added cold-start optimization section with StartupTimer phases |
+
+---
+
 - [Dotty Rendering Performance](../Rendering.md)
 - [Dotty Parsing Performance](../Parsing.md)
 - [.NET Performance Best Practices](https://docs.microsoft.com/en-us/dotnet/framework/performance/)
+
+*Last updated: 2026-06-17*

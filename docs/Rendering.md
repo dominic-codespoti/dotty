@@ -50,6 +50,8 @@ The rendering architecture follows a **composition-based, deferred rendering mod
 | Component | Responsibility | Performance Goal |
 |-----------|----------------|------------------|
 | **TerminalBuffer** | Stores cell grid with attributes | O(1) cell access, minimal locking |
+| **TextShaper** | HarfBuzz-based ligature shaping | Produces `ShapedRun` clusters |
+| **ShapedRunCache** | Caches shaped ligature runs | Avoids re-shaping identical text |
 | **GlyphDiscovery** | Identifies new glyphs, enqueues for atlas | Slice-based processing (5 rows/frame) |
 | **GlyphAtlas** | GPU texture with pre-rendered glyphs | Shared across tabs, lazy population |
 | **TerminalFrameComposer** | Background region synthesis, glyph batching | Zero-allocation per frame |
@@ -63,27 +65,35 @@ The rendering architecture follows a **composition-based, deferred rendering mod
 │                    Frame Lifecycle                           │
 ├────────────────────────────────────────────────────────────┤
 │                                                              │
-│  1. MUTATION          TerminalAdapter writes to buffer     │
+│  1. MUTATION          TerminalAdapter writes to buffer       │
+│     │                  BufferTextWriter optimizes bulk writes │
 │     ↓                                                        │
 │  2. INVALIDATION      Buffer signals change, enqueues frame  │
 │     ↓                                                        │
-│  3. DISCOVERY           GlyphDiscovery.ProcessSlice(5)       │
-│     │                      (runs a slice of pending rows)    │
+│  3. TEXT SHAPING      TextShaper processes glyph runs        │
+│     │                  (HarfBuzz ligature detection/shaping)  │
+│     │                  ShapedRunCache caches results          │
 │     ↓                                                        │
-│  4. DEBOUNCE            1ms timer coalesces rapid changes    │
+│  4. DISCOVERY         GlyphDiscovery.ProcessSlice(5)         │
+│     │                  (runs a slice of pending rows)         │
 │     ↓                                                        │
-│  5. COMPOSITION         TerminalFrameComposer builds regions  │
-│     │                      - CollectBackgroundRegions()       │
-│     │                      - ClassifyRowCells()               │
-│     │                      - MergeRowSpans()                  │
+│  5. DEBOUNCE          1ms timer coalesces rapid changes      │
 │     ↓                                                        │
-│  6. RENDER              TerminalVisualHandler draws to GPU    │
-│     │                      - Clear canvas                    │
-│     │                      - DrawBackgroundRegions()         │
-│     │                      - DrawGlyphs()                    │
-│     │                      - DrawSelection/Search overlays   │
+│  6. COMPOSITION       TerminalFrameComposer builds regions    │
+│     │                  - CollectBackgroundRegions()           │
+│     │                  - ClassifyRowCells()                   │
+│     │                  - MergeRowSpans()                      │
+│     │                  - ClipRoundedRect()                    │
 │     ↓                                                        │
-│  7. PRESENT             Avalonia composition presents frame  │
+│  7. RENDER            TerminalVisualHandler draws to GPU      │
+│     │                  - Clear canvas                        │
+│     │                  - DrawBackgroundRegions()              │
+│     │                  - DrawGlyphs() / DrawLigatures()       │
+│     │                  - DrawUnderlineStyles() (undercurl,    │
+│     │                    dotted, dashed)                     │
+│     │                  - DrawSelection/Search overlays       │
+│     ↓                                                        │
+│  8. PRESENT           Avalonia composition presents frame    │
 │                                                              │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -144,14 +154,29 @@ public override void OnRender(ImmediateDrawingContext context)
 |---------|----------|---------|
 | **Texture atlas** | `SKImage` from bitmap | Pre-rendered glyph cache |
 | **Round rectangles** | `DrawRoundRect()` | Terminal "pill" backgrounds |
+| **Rounded clip regions** | `ClipRoundRect()` | Rounded corners for canvas frame |
 | **Text rendering** | `DrawText()` | Glyph drawing with subpixel LCD |
+| **Ligature rendering** | `DrawText()` via `ShapedRun` | HarfBuzz-shaped ligature clusters |
+| **Underline styles** | `DrawPath()` / custom paths | Undercurl, dotted, dashed underlines |
 | **Clipping** | `ClipRoundRect()` | Clean rounded region edges |
 | **Matrix transforms** | `Concat(ref SKMatrix)` | Virtual scroll offset |
 | **Anti-aliasing** | `IsAntialias = true` | Smooth edges for UI elements |
+| **Hex color parsing** | `ParseHexColor(string, out SKColor)` | Safe hex-to-SKColor for live theme colors |
 
 ---
 
 ## Canvas Management
+
+### Cursor Rendering Fix
+
+The cursor rendering in `TerminalCanvas.EnsureMetrics()` previously hardcoded `SKColors.White`
+for its `SKPaint` foreground color when drawing the cursor block or beam. When switching to a
+light theme where `RuntimeSettings.Current.Foreground` carried a dark color, the cursor
+paint still used white — making the cursor invisible against a light background.
+
+**Fix**: `EnsureMetrics()` now reads `RuntimeSettings.Current.Foreground` at paint creation
+time, falling back to the generated config's foreground if null. The `ParseHexColor` helper
+converts the hex string to `SKColor`. This ensures the cursor respects live theme changes.
 
 ### Surface Isolation
 
@@ -310,9 +335,15 @@ private struct CellClass
 ### Drawing Strategy
 
 1. **Background Regions**: Draw merged regions as rounded rectangles ("pills")
-2. **Glyphs**: Draw text on top of backgrounds
-3. **Decorations**: Underline, strikethrough, overline, hyperlink underlines
-4. **Overlays**: Selection highlight, search match highlights
+2. **Canvas Clipping**: Apply `ClipRoundRect()` for rounded frame corners
+3. **Ligature Shaping**: `TextShaper` processes runs through HarfBuzz, producing `ShapedRun` clusters (supports `=>`, `!=`, `::`, etc.)
+4. **Glyphs**: Draw text on top of backgrounds, using pre-shaped runs where ligatures are detected
+5. **Decorations**:
+   - Standard underline, strikethrough, overline
+   - Undercurl (wavy underline for spelling/style errors)
+   - Dotted and dashed underline styles
+   - Hyperlink underlines (dashed, colored)
+6. **Overlays**: Selection highlight, search match highlights
 
 ---
 
@@ -487,6 +518,9 @@ if (buffer.ScrollGeneration != _lastRenderedGeneration)
 | **Region pooling** | `Stack<ActiveRegion>` for reuse |
 | **Scratch buffers** | Reusable arrays for classification |
 | **Lazy atlas population** | Only render glyphs when first seen |
+| **BufferTextWriter** | Optimized bulk cell write path, fewer buffer flushes |
+| **ShapedRunCache** | Caches ligature runs; avoids re-shaping identical text |
+| **StartupTimer** | Cold-start phase profiling to identify bottlenecks |
 
 ### Performance Targets
 
@@ -595,6 +629,9 @@ public struct Cell
     public bool Italic;
     public bool Underline;
     public bool DoubleUnderline;
+    public bool Undercurl;         // Wavy underline style
+    public bool DottedUnderline;   // Dotted underline style
+    public bool DashedUnderline;   // Dashed underline style
     public bool Strikethrough;
     public bool Overline;
     public bool SlowBlink;
@@ -615,9 +652,12 @@ public struct Cell
 | File | Description |
 |------|-------------|
 | `src/Dotty.App/Controls/Canvas/TerminalCanvas.cs` | Main control integrating with Avalonia, handling scrolling and composition |
-| `src/Dotty.App/Controls/Canvas/Rendering/TerminalVisualHandler.cs` | GPU rendering handler, SkiaSharp draw commands |
-| `src/Dotty.App/Controls/Canvas/Rendering/TerminalFrameComposer.cs` | Background synthesis and glyph batching |
+| `src/Dotty.App/Controls/Canvas/Rendering/TerminalVisualHandler.cs` | GPU rendering handler, SkiaSharp draw commands (ligature/underline support) |
+| `src/Dotty.App/Controls/Canvas/Rendering/TerminalFrameComposer.cs` | Background synthesis, glyph batching, rounded rect clipping |
 | `src/Dotty.App/Controls/Canvas/Rendering/BackgroundSynth.cs` | Background region merging algorithm |
+| `src/Dotty.App/Controls/Canvas/Rendering/TextShaper.cs` | HarfBuzz ligature shaping pipeline |
+| `src/Dotty.App/Controls/Canvas/Rendering/ShapedRun.cs` | Shaped glyph run data type |
+| `src/Dotty.App/Controls/Canvas/Rendering/ShapedRunCache.cs` | Ligature run result cache |
 
 ### Glyph and Font Management
 
@@ -642,6 +682,8 @@ public struct Cell
 | `src/Dotty.Terminal/Adapter/Buffer/ScreenManager.cs` | Primary/alternate screen handling |
 | `src/Dotty.Terminal/Adapter/Buffer/CellGrid.cs` | 2D cell storage |
 | `src/Dotty.Terminal/Adapter/Buffer/Cell.cs` | Cell structure definition |
+| `src/Dotty.Terminal/Adapter/Buffer/BufferTextWriter.cs` | Optimized bulk cell write path |
+| `src/Dotty.Terminal/Adapter/Buffer/PromptMark.cs` | Shell prompt tracking markers |
 
 ### Appearance and Styling
 
@@ -660,6 +702,9 @@ public struct Cell
 | `tests/Dotty.App.Tests/ScrollbackRenderTest.cs` | Scrollback integration tests |
 | `tests/Dotty.App.Tests/HyperlinkRenderingTests.cs` | Hyperlink rendering tests |
 | `tests/Dotty.App.Tests/SearchHighlightRenderingTests.cs` | Search highlight rendering tests |
+| `tests/Dotty.App.Tests/LigatureRenderTests.cs` | Ligature shaping and rendering tests |
+| `tests/Dotty.App.Tests/UnderlineRenderTests.cs` | Undercurl, dotted, dashed underline tests |
+| `tests/Dotty.App.Tests/RoundedCornerRenderTests.cs` | Rounded rectangle clip region tests |
 
 ---
 
@@ -672,5 +717,18 @@ public struct Cell
 
 ---
 
-*Document version: 1.0*  
-*Last updated: 2026-04-04*
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-16 | **Cursor fix**: `EnsureMetrics()` reads `RuntimeSettings.Current.Foreground` for SKPaint color instead of hardcoded `SKColors.White` |
+| 2026-06-15 | **Ligature shaping**: HarfBuzz `TextShaper` pipeline with `ShapedRun`/`ShapedRunCache` |
+| 2026-06-15 | **Underline styles**: Undercurl, dotted, dashed underline rendering via `DrawPath()` |
+| 2026-06-15 | **Rounded corners**: `ClipRoundRect()` applied for modern terminal frame appearance |
+| 2026-06-10 | **BufferTextWriter**: Optimized bulk cell write path reducing buffer flushes |
+| 2026-06-10 | **PromptMark**: OSC 1337 shell integration markers for prompt tracking |
+| 2026-06-05 | **Scroll optimization**: Fixed DECSTBM/DECOM interaction with alternate screen |
+| 2026-05-28 | **StartupTimer**: Cold-start phase profiling for performance bottleneck identification |
+
+*Document version: 2.0*  
+*Last updated: 2026-06-17*

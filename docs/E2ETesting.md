@@ -70,10 +70,13 @@ The application exposes a TCP command interface when the `DOTTY_TEST_PORT` envir
 | `SCROLL:<lines>` | Scroll buffer | `OK` |
 | `COPY` | Copy selection | `OK` |
 | `PASTE` | Paste clipboard | `OK` |
-| `NEW_TAB` | Create tab | `OK` |
+| `NEW_TAB` | Create tab (active) | `OK` |
+| `NEW_TAB_BG` | Create tab (background, lazy) | `OK` |
 | `CLOSE_TAB` | Close tab | `OK` |
 | `NEXT_TAB` | Next tab | `OK` |
 | `PREV_TAB` | Previous tab | `OK` |
+| `CAPTURE` | Capture window screenshot | Binary PNG |
+| `CAPTURE_CANVAS` | Capture terminal canvas | Binary PNG |
 | `STATS` | Get statistics | JSON stats |
 
 ### Example Command Flow
@@ -364,6 +367,16 @@ If tests are running slowly:
 ### Memory Issues
 
 For memory-intensive tests:
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Added `NEW_TAB_BG` command, `CAPTURE`/`CAPTURE_CANVAS` commands for screenshot capture |
+
+---
+
 1. Increase test timeout
 2. Run tests sequentially: `--parallel none`
 3. Monitor memory usage in logs
+
+*Last updated: 2026-06-17*

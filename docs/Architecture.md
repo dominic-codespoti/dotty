@@ -206,29 +206,35 @@ Dotty.NativePty ───┘
 │  Input  │ ReadOnlySpan  │         │ ITerminalHandler│         │
 └─────────┘               └─────────┘               └────┬────┘
                                                          │
-                                                         │ Mutations
+                                                    │ Mutations
+                                                    │ (BufferTextWriter)
+                                                    ▼
+                                                ┌─────────────────┐
+                                                │  TerminalBuffer │
+                                                │  - Cell grid    │
+                                                │  - Scrollback   │
+                                                │  - PromptMark   │
+                                                └────────┬────────┘
+                                                         │
+                                                         │ Render State
                                                          ▼
-                                               ┌─────────────────┐
-                                               │  TerminalBuffer │
-                                               │  - Cell grid    │
-                                               │  - Scrollback   │
-                                               └────────┬────────┘
-                                                        │
-                                                        │ Render State
-                                                        ▼
-                                               ┌─────────────────┐
-                                               │  FrameComposer  │
-                                               │  - Background   │
-                                               │  - Glyphs       │
-                                               └────────┬────────┘
-                                                        │
-                                                        │ GPU Commands
-                                                        ▼
-                                               ┌─────────────────┐
-                                               │ VisualHandler   │
-                                               │  - Skia Canvas  │
-                                               │  - Draw calls   │
-                                               └─────────────────┘
+                                                ┌─────────────────┐
+                                                │  FrameComposer  │
+                                                │  - Background   │
+                                                │  - Glyphs       │
+                                                │  - Rounded rect │
+                                                │  - Underlines   │
+                                                └────────┬────────┘
+                                                         │
+                                                         │ GPU Commands
+                                                         ▼
+                                                ┌─────────────────┐
+                                                │ VisualHandler   │
+                                                │  - Skia Canvas  │
+                                                │  - Ligature     │
+                                                │    (TextShaper) │
+                                                │  - Draw calls   │
+                                                └─────────────────┘
 ```
 
 ---
@@ -269,10 +275,11 @@ Dotty.NativePty ───┘
                          ▼
 
 4. BUFFER MUTATION
-   ┌───────────────┐
-   │ Terminal      │  Update cells, cursor, scrollback
-   │ Adapter       │
-   └───────┬───────┘
+   ┌───────────────────┐
+   │ Terminal          │  Update cells, cursor, scrollback
+   │ Adapter           │  PromptMark tracking
+   │ BufferTextWriter  │  Optimized bulk write path
+   └───────┬───────────┘
            │
            ▼
 
@@ -281,19 +288,26 @@ Dotty.NativePty ───┘
    │ Terminal      │  SyncRoot lock
    │ Buffer        │  ScrollGeneration++
    │               │  MarkDirty()
+   │               │  PromptMark markers
    └───────┬───────┘
            │
            ▼
 
 6. RENDER INVALIDATION
    ┌───────────────┐
-   │ TerminalCanvas  │  RequestFrame()
+   │ TerminalCanvas│  RequestFrame()
    │               │  DispatcherTimer (1ms debounce)
    └───────┬───────┘
            │
            ▼
 
 7. RENDER COMPOSITION
+   ┌───────────────┐
+   │ TextShaper    │  HarfBuzz shaping for ligatures
+   │ (HarfBuzz)    │  Produces ShapedRun cluster
+   └───────┬───────┘
+           │
+           ▼
    ┌───────────────┐
    │ Glyph         │  ProcessSlice(5 rows)
    │ Discovery     │  Enqueue new glyphs
@@ -304,6 +318,8 @@ Dotty.NativePty ───┘
    │ FrameComposer │  CollectBackgroundRegions()
    │               │  ClassifyRowCells()
    │               │  BuildRowSpans()
+   │               │  ClipRoundedRect()
+   │               │  DrawUnderlineStyles()
    └───────┬───────┘
            │
            ▼
@@ -313,6 +329,8 @@ Dotty.NativePty ───┘
    │ TerminalVisual│  OnRender()
    │ Handler       │  SkiaSharp canvas
    │               │  DrawRoundRect(), DrawText()
+   │               │  DrawLigatures(ShapedRun)
+   │               │  DrawUndercurl()
    └───────────────┘
 ```
 
@@ -365,8 +383,8 @@ Dotty.NativePty ───┘
 1. COMPILE TIME
    UserConfig.cs ──▶ ConfigGenerator ──▶ Generated/*.g.cs
    (IDottyConfig)    (Source Generator)   - Config.g.cs
-                                        - ColorScheme.g.cs
-                                        - KeyBindings.g.cs
+                                         - ColorScheme.g.cs
+                                         - KeyBindings.g.cs
 
 2. RUNTIME INITIALIZATION
    Dotty.Generated.Config ──▶ ConfigBridge ──▶ Avalonia Resources
@@ -374,7 +392,24 @@ Dotty.NativePty ───┘
                              conversion)    - Fonts
                                               - Thickness
 
-3. CONSUMPTION
+3. RUNTIME OVERRIDE (PERSISTED)
+   settings.json ◀──▶ FileSystemConfigWatcher ──▶ RuntimeSettings
+   (JSON on disk)     (reads/writes)               (in-memory singleton)
+
+   RuntimeSettings fallback chain: RuntimeSettingsData → Generated.Config
+
+4. HOT-RELOAD
+   Config.cs edit ──▶ CSharpConfigWatcher ──▶ dotnet build ──▶
+     GeneratedConfigAssembly (load) ──▶ RuntimeSettings (websocket push)
+
+5. ANSI COLOR PALETTE FALLBACK
+   ApplyAnsiColorPalette() resolves in order:
+     RuntimeSettings.Current.Ansi{0-15} (hot-reloadable hex strings)
+     → theme IColorScheme (if provided)
+     → Generated.Config.Colors (compile-time defaults)
+   Result is pushed to SgrColorArgb.SetAnsiPalette() for the parser.
+
+6. CONSUMPTION
    Avalonia Resources ──▶ TerminalCanvas, Controls, Styles
 ```
 
@@ -425,11 +460,14 @@ Dotty.Terminal/
 │   └── BasicAnsiParser.cs         # ANSI/VT parser
 ├── Adapter/
 │   ├── TerminalAdapter.cs         # ITerminalHandler impl
+│   │                              # (PromptMark OSC 1337, DECSTBM/DECOM)
 │   ├── Buffer/
 │   │   ├── TerminalBuffer.cs      # Main buffer
 │   │   ├── ScreenManager.cs       # Primary/Alternate screens
 │   │   ├── CellGrid.cs            # 2D cell storage
-│   │   └── Cell.cs                # Cell structure
+│   │   ├── Cell.cs                # Cell structure
+│   │   ├── BufferTextWriter.cs    # Optimized bulk cell write
+│   │   └── PromptMark.cs          # Shell prompt tracking markers
 │   ├── SgrParserArgb.cs           # SGR attribute parser
 │   ├── SgrColorArgb.cs            # Color handling
 │   └── UnicodeWidth.cs            # Character width calc
@@ -489,10 +527,20 @@ Dotty.App/
 │           └── GlyphDiscovery.cs          # Async glyph load
 ├── Services/
 │   ├── GlyphAtlasService.cs         # Shared atlas
-│   └── HyperlinkService.cs          # URL handling
+│   ├── HyperlinkService.cs          # URL handling
+│   ├── CSharpConfigWatcher.cs       # Runtime config hot-reload
+│   ├── FileSystemConfigWatcher.cs   # JSON file-based settings persistence
+│   ├── RuntimeSettingsJsonContext.cs# Source-generated JSON serializer context
+│   └── StartupTimer.cs              # Cold-start profiling
 ├── Configuration/
 │   ├── ConfigBridge.cs              # Config → Avalonia
-│   └── DefaultConfig.cs             # Fallback config
+│   ├── DefaultConfig.cs             # Fallback config
+│   ├── RuntimeSettings.cs           # Central settings hub with fallback chain
+│   └── GeneratedConfigAssembly.cs   # Dynamic assembly loading
+├── Rendering/
+│   ├── TextShaper.cs                # HarfBuzz ligature shaping
+│   ├── ShapedRun.cs                 # Shaped glyph run
+│   └── ShapedRunCache.cs            # Ligature run cache
 └── App.axaml.cs                     # App lifecycle
 ```
 
@@ -662,6 +710,31 @@ public class LoggingHandler : ITerminalHandler
 5. **Bridge**: `ConfigBridge` converts to Avalonia types
 6. **Application**: Resources applied at app startup
 
+### Default Foreground/Background Color Sourcing
+
+The terminal's default colors are no longer hardcoded. They resolve through a fallback chain:
+
+```
+ApplyDefaultsToResources():
+  1. RuntimeSettings.Current.Background / Foreground (hot-reloaded hex strings)
+  2. ↓ (if null)
+  3. Defaults.DefaultBackground / Defaults.DefaultForeground (from generated config)
+```
+
+This ensures light themes work correctly — when `RuntimeSettings` carries a value from
+a hot-reload or persisted settings, it takes precedence over the build-time default.
+`TerminalCanvas.EnsureMetrics()` also reads `RuntimeSettings.Current.Foreground` for its
+`SKPaint` color rather than using a hardcoded `SKColors.White`, fixing readability with
+light themes.
+
+Utility helpers for hex-to-ARGB conversion:
+
+| Helper | Location | Purpose |
+|--------|----------|---------|
+| `ParseHexColor(string, out SKColor)` | `TerminalCanvas.cs:1212` | Canvas paint color conversion |
+| `SafeParseHex(string?): uint` | `App.axaml.cs:293` | ANSI palette fallback with null safety |
+| `TryParseHexColor(string?, out SKColor)` | `TerminalFrameComposer.cs:1268` | Safe SKColor parsing in renderer |
+
 ### Detailed Configuration Documentation
 
 For comprehensive configuration system documentation, see:
@@ -809,10 +882,12 @@ internal sealed class WindowsPty : IPty
 | File | Description |
 |------|-------------|
 | `src/Dotty.Terminal/Parser/BasicAnsiParser.cs` | ANSI parser implementation |
-| `src/Dotty.Terminal/Adapter/TerminalAdapter.cs` | Handler implementation |
+| `src/Dotty.Terminal/Adapter/TerminalAdapter.cs` | Handler implementation (PromptMark, scroll regions) |
 | `src/Dotty.Terminal/Adapter/Buffer/TerminalBuffer.cs` | Terminal buffer |
-| `src/Dotty.Terminal/Adapter/Buffer/ScreenManager.cs` | Screen management |
+| `src/Dotty.Terminal/Adapter/Buffer/ScreenManager.cs` | Screen management (DECSTBM/DECOM fix) |
 | `src/Dotty.Terminal/Adapter/Buffer/CellGrid.cs` | Cell storage |
+| `src/Dotty.Terminal/Adapter/Buffer/BufferTextWriter.cs` | Optimized bulk cell writer |
+| `src/Dotty.Terminal/Adapter/Buffer/PromptMark.cs` | Shell prompt tracking markers |
 | `src/Dotty.Terminal/Adapter/SgrParserArgb.cs` | SGR parser |
 | `src/Dotty.Terminal/Adapter/SgrColorArgb.cs` | Color handling |
 
@@ -832,10 +907,19 @@ internal sealed class WindowsPty : IPty
 | `src/Dotty.App/App.axaml.cs` | Application startup |
 | `src/Dotty.App/Controls/TerminalControl.axaml` | Main terminal UI |
 | `src/Dotty.App/Controls/Canvas/TerminalCanvas.cs` | Canvas control |
-| `src/Dotty.App/Controls/Canvas/Rendering/TerminalVisualHandler.cs` | GPU rendering |
-| `src/Dotty.App/Controls/Canvas/Rendering/TerminalFrameComposer.cs` | Frame composition |
+| `src/Dotty.App/Controls/Canvas/Rendering/TerminalVisualHandler.cs` | GPU rendering (ligature/underline support) |
+| `src/Dotty.App/Controls/Canvas/Rendering/TerminalFrameComposer.cs` | Frame composition (rounded rect clipping) |
+| `src/Dotty.App/Controls/Canvas/Rendering/TextShaper.cs` | HarfBuzz ligature shaping |
+| `src/Dotty.App/Controls/Canvas/Rendering/ShapedRun.cs` | Shaped glyph run type |
+| `src/Dotty.App/Controls/Canvas/Rendering/ShapedRunCache.cs` | Ligature run cache |
+| `src/Dotty.App/Services/CSharpConfigWatcher.cs` | Runtime config hot-reload |
+| `src/Dotty.App/Services/FileSystemConfigWatcher.cs` | JSON file-based settings persistence (reads/writes settings.json) |
+| `src/Dotty.App/Services/RuntimeSettingsJsonContext.cs` | Source-generated JSON serializer context for RuntimeSettingsData |
+| `src/Dotty.App/Services/StartupTimer.cs` | Cold-start profiling |
 | `src/Dotty.App/Configuration/ConfigBridge.cs` | Config bridge |
 | `src/Dotty.App/Configuration/DefaultConfig.cs` | Default configuration |
+| `src/Dotty.App/Configuration/RuntimeSettings.cs` | Central settings hub with fallback chain (RuntimeSettingsData → Generated.Config) |
+| `src/Dotty.App/Configuration/GeneratedConfigAssembly.cs` | Dynamic assembly loading |
 
 ### Source Generator Layer
 
@@ -862,5 +946,15 @@ internal sealed class WindowsPty : IPty
 
 ---
 
-*Document version: 1.0*  
-*Last updated: 2026-04-04*
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Documented `FileSystemConfigWatcher`, `RuntimeSettingsJsonContext`, default fg color fallback chain, ANSI palette resolution, `ParseHexColor`/`SafeParseHex` helpers |
+| 2026-06-15 | Added `TextShaper`/`ShapedRun`/`ShapedRunCache` to component diagram and file references |
+| 2026-06-15 | Updated frame lifecycle to include ligature shaping, underline styles, rounded rect clipping |
+| 2026-06-10 | Added `BufferTextWriter`, `PromptMark`, `CSharpConfigWatcher`, `StartupTimer`, `RuntimeSettings`, `GeneratedConfigAssembly` to layer docs |
+| 2026-06-05 | Updated DECSTBM/DECOM scroll region semantics |
+
+*Document version: 2.0*  
+*Last updated: 2026-06-17*

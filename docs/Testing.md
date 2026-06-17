@@ -92,6 +92,11 @@ tests/
 │   ├── BackgroundSynthTests.cs
 │   ├── ScrollbackRenderTest.cs
 │   ├── PermutationScrollRenderTests.cs
+│   ├── LigatureRenderTests.cs
+│   ├── UnderlineRenderTests.cs
+│   ├── RoundedCornerRenderTests.cs
+│   ├── PromptMarkTests.cs
+│   ├── ScrollRegionTests.cs
 │   ├── ThemeTests.cs
 │   ├── ThemeManagerTests.cs
 │   ├── EndToEndTests.cs
@@ -770,6 +775,11 @@ internal static class NativeMethods
 | `tests/Dotty.App.Tests/ScrollbackRenderTest.cs` | Scrollback rendering tests |
 | `tests/Dotty.App.Tests/ScrollbackMinimalTest.cs` | Minimal scrollback scenarios |
 | `tests/Dotty.App.Tests/SimpleScrollbackTest.cs` | Basic scrollback tests |
+| `tests/Dotty.App.Tests/LigatureRenderTests.cs` | Ligature shaping and rendering tests |
+| `tests/Dotty.App.Tests/UnderlineRenderTests.cs` | Undercurl, dotted, dashed underline tests |
+| `tests/Dotty.App.Tests/RoundedCornerRenderTests.cs` | Rounded rectangle clip region tests |
+| `tests/Dotty.App.Tests/PromptMarkTests.cs` | PromptMark shell integration tests |
+| `tests/Dotty.App.Tests/ScrollRegionTests.cs` | DECSTBM/DECOM scroll region tests |
 
 ### PTY Tests
 
@@ -848,5 +858,12 @@ internal static class NativeMethods
 
 ---
 
-*Document version: 1.0*  
-*Last updated: 2026-04-04*
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Added test files for ligatures, underlines, rounded corners, prompt marks, scroll regions |
+| 2026-06-05 | Updated test directory listing with new test categories |
+
+*Document version: 1.1*  
+*Last updated: 2026-06-17*

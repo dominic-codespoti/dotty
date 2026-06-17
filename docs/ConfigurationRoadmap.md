@@ -38,6 +38,12 @@ Core features that provide a solid foundation for all users:
   - Color format helpers (ARGB → Avalonia Color)
   - Font family resolution
 
+- [x] **Runtime configuration hot-reload**
+  - `CSharpConfigWatcher` monitors Config.cs for changes
+  - Background build on file change
+  - Web socket channel pushes new config to running app
+  - Live apply for theme, font, cursor, opacity
+
 ---
 
 ## Phase 2: Quality of Life (Next - v1.1-1.2)
@@ -420,6 +426,16 @@ This roadmap is a living document. To propose new features:
 1. Consider AOT compatibility requirements
 2. Assess complexity impact
 3. Provide use case examples
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-06-17 | Marked runtime configuration hot-reload as completed (Phase 1) |
+
+---
+
 4. Note any breaking changes
 
 The focus remains on maintaining the simplicity of the current system while enabling power users to do more.
+
+*Last updated: 2026-06-17*

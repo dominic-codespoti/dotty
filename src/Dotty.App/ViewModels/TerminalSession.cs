@@ -34,7 +34,21 @@ public class TerminalSession : IDisposable
     public event Action<string>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
     public event Action? RenderScheduled;
-    public int TargetFps { get; set; } = 144;
+
+    private TimeSpan _refreshInterval = TimeSpan.FromMilliseconds(16);
+
+    public TimeSpan RefreshInterval
+    {
+        get => _refreshInterval;
+        set
+        {
+            if (value < TimeSpan.FromMilliseconds(4))
+                value = TimeSpan.FromMilliseconds(4);
+            else if (value > TimeSpan.FromMilliseconds(33))
+                value = TimeSpan.FromMilliseconds(33);
+            _refreshInterval = value;
+        }
+    }
 
     public TerminalSession(int rows = 24, int columns = 80)
     {
@@ -237,15 +251,16 @@ public class TerminalSession : IDisposable
             catch { }
         }, cancellationToken);
 
-        // Dedicated render timer: polls at 60 FPS, decoupled from data processing.
-        // Flushes pending renders at a fixed cadence regardless of chunk arrival rate.
+        // Dedicated render timer: polls at the measured display refresh interval,
+        // decoupled from data processing. Flushes pending renders at a fixed
+        // cadence regardless of chunk arrival rate.
         _ = Task.Run(async () =>
         {
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    await Task.Delay(16, cancellationToken);
+                    await Task.Delay(_refreshInterval, cancellationToken);
                     Adapter.FlushRender();
                 }
             }

@@ -9,8 +9,8 @@
       <controls:TerminalGrid Name="PART_Grid"
                              FontFamily="{DynamicResource TerminalFontFamily}"
                              FontSize="{DynamicResource TerminalFontSize}"
-                             RenderOptions.BitmapInterpolationMode="HighQuality"
-                             RenderOptions.EdgeMode="Antialias" />
+                             RenderOptions.BitmapInterpolationMode="None"
+                             RenderOptions.EdgeMode="Aliased" />
     </Border>
 
     <!-- Search Overlay -->

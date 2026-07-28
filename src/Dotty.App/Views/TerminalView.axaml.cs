@@ -175,12 +175,10 @@ namespace Dotty.App.Views
             {
                 if (_lastFrameTime != TimeSpan.Zero && currentTime > _lastFrameTime)
                 {
-                    var delta = (currentTime - _lastFrameTime).TotalSeconds;
-                    if (delta > 0 && delta < 0.25) // Ignore suspensions/huge gaps
+                    var frameDuration = currentTime - _lastFrameTime;
+                    if (frameDuration > TimeSpan.Zero && frameDuration < TimeSpan.FromSeconds(0.25))
                     {
-                        // Set TargetFps based on the RequestAnimationFrame interval
-                        // E.g. 1 / 0.01666... = ~60 FPS
-                        _session.TargetFps = (int)Math.Round(1.0 / delta);
+                        _session.RefreshInterval = frameDuration;
                     }
                 }
 

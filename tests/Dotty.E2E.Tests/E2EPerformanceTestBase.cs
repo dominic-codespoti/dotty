@@ -7,7 +7,6 @@ using System.Threading.Tasks;
 using Dotty.E2E.Tests.Infrastructure;
 using Microsoft.Extensions.Logging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Dotty.E2E.Tests;
 
@@ -76,7 +75,7 @@ public abstract class E2EPerformanceTestBase : E2ETestBase
     /// <summary>
     /// Initializes the test environment with performance monitoring.
     /// </summary>
-    public override async Task InitializeAsync()
+    public override async ValueTask InitializeAsync()
     {
         await base.InitializeAsync();
         
@@ -102,7 +101,7 @@ public abstract class E2EPerformanceTestBase : E2ETestBase
     /// <summary>
     /// Cleans up the test environment.
     /// </summary>
-    public override async Task DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         // Stop any ongoing monitoring
         if (_isMonitoring)

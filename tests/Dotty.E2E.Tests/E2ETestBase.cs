@@ -9,7 +9,6 @@ using Dotty.E2E.Tests.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Dotty.E2E.Tests;
 
@@ -71,7 +70,7 @@ public abstract class E2ETestBase : IAsyncLifetime
     /// Initializes the test environment.
     /// Starts the application if not already running (shared across test classes).
     /// </summary>
-    public virtual async Task InitializeAsync()
+    public virtual async ValueTask InitializeAsync()
     {
         // Create artifacts directories
         var artifactsDir = Path.Combine(AppContext.BaseDirectory, "artifacts", _testName);
@@ -181,7 +180,7 @@ public abstract class E2ETestBase : IAsyncLifetime
     /// <summary>
     /// Cleans up the test environment.
     /// </summary>
-    public virtual async Task DisposeAsync()
+    public virtual async ValueTask DisposeAsync()
     {
         if (_isDisposed)
             return;

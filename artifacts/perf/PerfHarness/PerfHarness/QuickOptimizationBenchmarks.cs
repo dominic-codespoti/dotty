@@ -85,6 +85,7 @@ public class QuickOptimizationBenchmarks
     private TerminalFrameComposer _composer = null!;
     private SKPaint _paint = null!;
     private SKBitmap _bitmap = null!;
+    private SKFont _font = null!;
     private SKCanvas _canvas = null!;
 
     [GlobalSetup]
@@ -95,10 +96,10 @@ public class QuickOptimizationBenchmarks
 
         _paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
-            IsAntialias = true
+            IsAntialias = true,
         };
+        _font = new SKFont(SKTypeface.Default, 14f);
+        _bitmap = new SKBitmap(1600, 900, SKColorType.Rgba8888, SKAlphaType.Premul);
 
         // Fill with ASCII content - optimization benefits this
         var asciiLine = new string('A', 80);
@@ -112,15 +113,13 @@ public class QuickOptimizationBenchmarks
             }
         }
 
-        _bitmap = new SKBitmap(1600, 900, SKColorType.Rgba8888, SKAlphaType.Premul);
-        _canvas = new SKCanvas(_bitmap);
     }
 
     [Benchmark]
     public void RenderFrame()
     {
         var buffer = _adapter.Buffer!;
-        _composer.RenderTo(_canvas, buffer, _paint, 9f, 18f, 0, buffer.Rows - 1);
+        _composer.RenderTo(_canvas, buffer, _paint, _font, 9f, 18f, 0, buffer.Rows - 1);
     }
 
     // --- Full stack with heavy graphemes ---

@@ -21,15 +21,17 @@ public sealed class TerminalFrameComposer : IDisposable
         Style = SKPaintStyle.Stroke,
         StrokeWidth = 1f
     };
-    private readonly SKPaint _linePaint = new() { Style = SKPaintStyle.Stroke, IsAntialias = true };
     private readonly SKPaint _glyphPaint = new()
     {
         IsAntialias = false,
-        FilterQuality = SKFilterQuality.None,
-        IsLinearText = false,
-        IsAutohinted = false,
-        SubpixelText = false,
-        LcdRenderText = false
+    };
+
+    private readonly SKFont _glyphFont = new();
+    private readonly SKPaint _linePaint = new()
+    {
+        IsAntialias = true,
+        Style = SKPaintStyle.Stroke,
+        StrokeCap = SKStrokeCap.Round
     };
 
     // --- background synthesis state ---
@@ -92,6 +94,7 @@ public sealed class TerminalFrameComposer : IDisposable
         _backgroundFill.Dispose();
         _backgroundStroke.Dispose();
         _glyphPaint.Dispose();
+        _glyphFont.Dispose();
         _linePaint.Dispose();
         _activeRegionPool.Clear();
     }
@@ -104,6 +107,7 @@ public sealed class TerminalFrameComposer : IDisposable
         SKCanvas target,
         TerminalBuffer buffer,
         SKPaint paint,
+        SKFont font,
         float cellW,
         float cellH,
         int startRow = 0,
@@ -112,6 +116,7 @@ public sealed class TerminalFrameComposer : IDisposable
         if (target == null) throw new ArgumentNullException(nameof(target));
         if (buffer == null) throw new ArgumentNullException(nameof(buffer));
         if (paint == null) throw new ArgumentNullException(nameof(paint));
+        if (font == null) throw new ArgumentNullException(nameof(font));
         if (cellW <= 0 || cellH <= 0) return;
 
         int safeEndRow = endRow ?? (buffer.Rows - 1);
@@ -124,7 +129,7 @@ public sealed class TerminalFrameComposer : IDisposable
         DrawBackgroundRegions(target, cellW, cellH, exactCellBackgrounds: buffer.IsAlternateScreenActive);
 
         // ---- glyphs ----
-        SyncGlyphPaint(paint);
+        SyncGlyphPaint(paint, font);
 
         // The shader glyph path rebuilds a lossy per-frame cell texture and has
         // been observed to misrender clipped row ranges during scrolling.
@@ -408,7 +413,7 @@ public sealed class TerminalFrameComposer : IDisposable
         // Create or reuse the runtime effect
         if (_glyphShaderEffect == null)
         {
-            _glyphShaderEffect = SKRuntimeEffect.Create(s_glyphSkSL, out var errors);
+            _glyphShaderEffect = SKRuntimeEffect.CreateShader(s_glyphSkSL, out _);
             if (_glyphShaderEffect == null)
             {
                 DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow);
@@ -427,7 +432,7 @@ public sealed class TerminalFrameComposer : IDisposable
         children["atlas"] = atlasImage.ToShader();
         children["cellData"] = cellImage.ToShader();
 
-        using var shader = _glyphShaderEffect.ToShader(false, uniforms, children);
+        using var shader = _glyphShaderEffect.ToShader(uniforms, children);
         if (shader == null) { DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow); return; }
 
         using var shaderPaint = new SKPaint { Shader = shader };
@@ -453,15 +458,15 @@ public sealed class TerminalFrameComposer : IDisposable
         int startRow,
         int endRow)
     {
-        var fm = _glyphPaint.FontMetrics;
+        var fm = _glyphFont.Metrics;
         float baselineOffset = -fm.Ascent;
 
         var defaultColor = paint.Color;
         long ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         bool isBlinkVisible = (ms % 1000) < 500;
         bool baseAntialias = _glyphPaint.IsAntialias;
-        bool baseSubpixel = _glyphPaint.SubpixelText;
-        bool baseLcd = _glyphPaint.LcdRenderText;
+        bool baseSubpixel = _glyphFont.Subpixel;
+        var baseEdging = _glyphFont.Edging;
 
         _linePaint.StrokeWidth = Math.Max(1f, cellH * 0.05f);
         Span<SKRect> geometryRects = stackalloc SKRect[8];
@@ -510,8 +515,8 @@ public sealed class TerminalFrameComposer : IDisposable
                     {
                         _glyphPaint.Color = fgColor;
                         _glyphPaint.IsAntialias = disableSmoothing ? false : baseAntialias;
-                        _glyphPaint.SubpixelText = disableSmoothing ? false : baseSubpixel;
-                        _glyphPaint.LcdRenderText = disableSmoothing ? false : baseLcd;
+                        _glyphFont.Subpixel = disableSmoothing ? false : baseSubpixel;
+                        _glyphFont.Edging = disableSmoothing ? SKFontEdging.Alias : baseEdging;
                         _glyphPaint.Style = SKPaintStyle.Fill;
                         _glyphPaint.StrokeWidth = 0f;
                         for (int i = 0; i < rectCount; i++)
@@ -568,7 +573,7 @@ public sealed class TerminalFrameComposer : IDisposable
 
                             string combined = sb.ToString();
                             var runTypeface = GetTypefaceForIndex(runTypefaceIdx);
-                            float textSize = _glyphPaint.TextSize;
+                            float textSize = _glyphFont.Size;
 
                             ShapedRun shaped;
                             if (_shapedRunCache == null || !_shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped))
@@ -612,25 +617,25 @@ public sealed class TerminalFrameComposer : IDisposable
                     // Single cell (or shaping unavailable): direct DrawText
                     _glyphPaint.Color = fgColor;
                     _glyphPaint.IsAntialias = disableSmoothing ? false : baseAntialias;
-                    _glyphPaint.SubpixelText = disableSmoothing ? false : baseSubpixel;
-                    _glyphPaint.LcdRenderText = disableSmoothing ? false : baseLcd;
+                    _glyphFont.Subpixel = disableSmoothing ? false : baseSubpixel;
+                    _glyphFont.Edging = disableSmoothing ? SKFontEdging.Alias : baseEdging;
                     _glyphPaint.StrokeWidth = cc.Bold ? 0.8f : 0f;
                     _glyphPaint.Style = SKPaintStyle.Fill;
 
                     // Use fallback typeface if this cell needs a different font
-                    var savedTypeface = _glyphPaint.Typeface;
+                    var savedTypeface = _glyphFont.Typeface;
                     if (cc.TypefaceIndex != 0)
                     {
                         var cellTf = GetTypefaceForIndex(cc.TypefaceIndex);
                         if (cellTf != null)
-                            _glyphPaint.Typeface = cellTf;
+                            _glyphFont.Typeface = cellTf;
                     }
 
-                    canvas.DrawText(cc.Grapheme, x, baseline, _glyphPaint);
+                    canvas.DrawText(cc.Grapheme, x, baseline, _glyphFont, _glyphPaint);
 
                     // Restore primary typeface
                     if (cc.TypefaceIndex != 0)
-                        _glyphPaint.Typeface = savedTypeface;
+                        _glyphFont.Typeface = savedTypeface;
                 }
 
                 // Draw per-cell decorations
@@ -737,7 +742,7 @@ public sealed class TerminalFrameComposer : IDisposable
     {
         if (_fallbackTypefaces != null && index >= 0 && index < _fallbackTypefaces.Count)
             return _fallbackTypefaces[index];
-        return _glyphPaint.Typeface;
+        return _glyphFont.Typeface;
     }
 
     private static SKColor ToSkColor(uint argb)
@@ -1251,18 +1256,14 @@ public sealed class TerminalFrameComposer : IDisposable
         return count;
     }
 
-    private void SyncGlyphPaint(SKPaint source)
+    private void SyncGlyphPaint(SKPaint source, SKFont sourceFont)
     {
-        _glyphPaint.Typeface = source.Typeface;
-        _glyphPaint.TextSize = source.TextSize;
-        _glyphPaint.TextEncoding = source.TextEncoding;
-        _glyphPaint.TextScaleX = source.TextScaleX;
-        _glyphPaint.TextSkewX = source.TextSkewX;
+        _glyphFont.Typeface = sourceFont.Typeface;
+        _glyphFont.Size = sourceFont.Size;
+        _glyphFont.Subpixel = sourceFont.Subpixel;
+        _glyphFont.Edging = sourceFont.Edging;
+        _glyphFont.Hinting = sourceFont.Hinting;
         _glyphPaint.IsAntialias = source.IsAntialias;
-        _glyphPaint.IsLinearText = source.IsLinearText;
-        _glyphPaint.SubpixelText = source.SubpixelText;
-        _glyphPaint.LcdRenderText = source.LcdRenderText;
-        _glyphPaint.IsAutohinted = source.IsAutohinted;
     }
 
     private static unsafe bool TryParseHexColor(string? hex, out SKColor color)

@@ -29,9 +29,8 @@
   <ItemGroup>
     <!-- Test framework -->
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
-    <PackageReference Include="xunit.extensibility.core" />
     
     <!-- Avalonia UI testing -->
     <PackageReference Include="Avalonia" />

@@ -13,7 +13,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <!-- Avalonia packages are required for types like Typeface/GlyphTypeface used indirectly by the app code. -->
     <PackageReference Include="Avalonia" />

@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Threading.Tasks;
 using Dotty.E2E.Tests.Assertions;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Dotty.E2E.Tests.Scenarios;
 

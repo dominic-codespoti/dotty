@@ -22,17 +22,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 18f,
             Color = SKColors.White,
             IsAntialias = true,
-            IsLinearText = true,
-            SubpixelText = true,
-            LcdRenderText = true,
-            IsAutohinted = true
         };
+        using var font = new SKFont(SKTypeface.Default, 18f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: 24f, cellH: 24f, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: 24f, cellH: 24f, startRow: 0, endRow: 0);
 
         var glyphPaintField = typeof(TerminalFrameComposer).GetField("_glyphPaint", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(glyphPaintField);
@@ -40,11 +36,13 @@ public class TerminalFrameComposerRenderingTests
         var glyphPaint = glyphPaintField!.GetValue(composer) as SKPaint;
         Assert.NotNull(glyphPaint);
 
+        var glyphFontField = typeof(TerminalFrameComposer).GetField("_glyphFont", BindingFlags.NonPublic | BindingFlags.Instance);
+        var glyphFont = glyphFontField!.GetValue(composer) as SKFont;
+        Assert.NotNull(glyphFont);
+
         Assert.Equal(paint.IsAntialias, glyphPaint!.IsAntialias);
-        Assert.Equal(paint.IsLinearText, glyphPaint.IsLinearText);
-        Assert.Equal(paint.SubpixelText, glyphPaint.SubpixelText);
-        Assert.Equal(paint.LcdRenderText, glyphPaint.LcdRenderText);
-        Assert.Equal(paint.IsAutohinted, glyphPaint.IsAutohinted);
+        Assert.Equal(font.Subpixel, glyphFont!.Subpixel);
+        Assert.Equal(font.Edging, glyphFont!.Edging);
     }
 
     [Fact]
@@ -64,15 +62,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 26f,
             Color = SKColors.White,
-            IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 26f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW, cellH, startRow: 0, endRow: 0);
 
         int insideRowPixels = 0;
         int outsideRowPixels = 0;
@@ -121,15 +117,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 26f,
             Color = SKColors.White,
-            IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 26f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 1, endRow: 1);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW, cellH, startRow: 1, endRow: 1);
 
         int targetRowPixels = 0;
         int otherRowPixels = 0;
@@ -181,13 +175,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 8f,
             Color = SKColors.White,
             IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 8f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 1);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW, cellH, startRow: 0, endRow: 1);
 
         var expectedBackground = new SKColor(0x20, 0x40, 0x60, 0xFF);
         for (int y = 0; y < bitmap.Height; y++)
@@ -221,13 +215,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 8f,
             Color = SKColors.White,
             IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 8f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW, cellH, startRow: 0, endRow: 0);
 
         var expectedBackground = new SKColor(0x20, 0x40, 0x60, 0xFF);
         var corner = bitmap.GetPixel(0, 0);
@@ -256,15 +250,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 16f,
             Color = SKColors.White,
-            IsAntialias = false,
-            LcdRenderText = false,
-            SubpixelText = false
+            IsAntialias = false
         };
+        using var font = new SKFont(SKTypeface.Default, 16f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW, cellH, startRow: 0, endRow: 0);
 
         int topDrawnY = -1;
         for (int y = 0; y < bitmap.Height; y++)
@@ -286,9 +278,9 @@ public class TerminalFrameComposerRenderingTests
 
         Assert.True(topDrawnY >= 0, "Expected block glyph to draw pixels.");
 
-        var fm = paint.FontMetrics;
+        var fm = font.Metrics;
         var bounds = new SKRect();
-        paint.MeasureText("█", ref bounds);
+        font.MeasureText("█", out bounds);
         float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
 
         float ascentBaselineTop = (-fm.Ascent) + bounds.Top;
@@ -317,25 +309,26 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 18f,
             Color = SKColors.White,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 18f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: 24f, cellH: 24f, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: 24f, cellH: 24f, startRow: 0, endRow: 0);
 
         var glyphPaintField = typeof(TerminalFrameComposer).GetField("_glyphPaint", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(glyphPaintField);
 
         var glyphPaint = glyphPaintField!.GetValue(composer) as SKPaint;
-        Assert.NotNull(glyphPaint);
+
+        var glyphFontField = typeof(TerminalFrameComposer).GetField("_glyphFont", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(glyphFontField);
+        var glyphFont = glyphFontField!.GetValue(composer) as SKFont;
+        Assert.NotNull(glyphFont);
 
         Assert.False(glyphPaint!.IsAntialias);
-        Assert.False(glyphPaint.SubpixelText);
-        Assert.False(glyphPaint.LcdRenderText);
+        Assert.Equal(SKFontEdging.Alias, glyphFont!.Edging);
     }
 
     [Fact]
@@ -353,15 +346,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             Color = SKColors.White,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 14f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: cell, cellH: cell, startRow: 0, endRow: 1);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: cell, cellH: cell, startRow: 0, endRow: 1);
 
         for (int y = 0; y < cell; y++)
         {
@@ -409,15 +400,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             Color = SKColors.White,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 14f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
 
         int topHalfInk = 0;
         int bottomHalfInk = 0;
@@ -459,15 +448,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             Color = SKColors.White,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 14f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
 
         int rowsWithAnyInk = 0;
         int fullInkRows = 0;
@@ -513,15 +500,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             Color = SKColors.White,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 14f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
 
         int colsWithAnyInk = 0;
         int fullInkCols = 0;
@@ -585,15 +570,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             Color = SKColors.White,
-            IsAntialias = true,
-            SubpixelText = true,
-            LcdRenderText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 14f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: cell, cellH: cell, startRow: 0, endRow: 0);
 
         int totalInk = 0;
         bool topQuarterHasFullWidthBand = false;
@@ -641,15 +624,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 24f,
             Color = SKColors.White,
-            IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 24f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW: 20f, cellH: cellH, startRow: 1, endRow: 1);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW: 20f, cellH: cellH, startRow: 1, endRow: 1);
 
         int middleRowInk = 0;
         int topRowInk = 0;
@@ -694,15 +675,13 @@ public class TerminalFrameComposerRenderingTests
 
         using var paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 34f,
             Color = SKColors.White,
-            IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true
+            IsAntialias = true
         };
+        using var font = new SKFont(SKTypeface.Default, 34f);
 
-        composer.RenderTo(canvas, buffer, paint, cellW, cellH, startRow: 0, endRow: 0);
+
+        composer.RenderTo(canvas, buffer, paint, font, cellW, cellH, startRow: 0, endRow: 0);
 
         int row0Ink = 0;
         int row1Ink = 0;

@@ -88,10 +88,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can start with default shell.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_WithDefaultShell()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -106,10 +106,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can start with cmd.exe.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_WithCmd()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -124,17 +124,17 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can start with PowerShell.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_WithPowerShell()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         var psPath = Path.Combine(
             Environment.GetEnvironmentVariable("windir") ?? "C:\\Windows",
             "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
         
-        Skip.IfNot(File.Exists(psPath), "PowerShell not available");
+        Assert.SkipUnless(File.Exists(psPath), "PowerShell not available");
 
         _pty = new Windows.WindowsPty();
 
@@ -148,10 +148,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can start with custom dimensions.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_WithCustomDimensions()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -175,10 +175,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can start with working directory.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_WithWorkingDirectory()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -194,10 +194,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can start with environment variables.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_WithEnvironmentVariables()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -213,10 +213,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that Start() throws InvalidOperationException when already started.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_ThrowsWhenAlreadyStarted()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -292,10 +292,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can write input.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_Write_SendsInputToProcess()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -319,10 +319,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can read output.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_Read_ReturnsProcessOutput()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -378,10 +378,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty input/output streams are functional.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Streams_AreFunctional()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -405,10 +405,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can resize.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Resize_ChangesConsoleSize()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -422,10 +422,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty supports multiple resize operations.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Resize_MultipleOperations()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -482,10 +482,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can kill the process gracefully.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Kill_GracefulTermination()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -506,10 +506,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can force kill the process.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Kill_ForceTermination()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -530,10 +530,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that Kill() is idempotent.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Kill_IsIdempotent()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -556,10 +556,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that ProcessExited event fires when process exits.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_ProcessExited_FiresOnProcessTermination()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -594,10 +594,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that ProcessExited fires with non-zero exit code on error.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_ProcessExited_FiresWithNonZeroExitCode()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -626,10 +626,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WaitForExitAsync returns exit code.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_WaitForExitAsync_ReturnsExitCode()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -645,10 +645,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WaitForExitAsync returns correct exit code.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_WaitForExitAsync_ReturnsCorrectExitCode()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         var exitCodes = new[] { 0, 1, 42 };
@@ -672,10 +672,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WaitForExitAsync respects cancellation token.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_WaitForExitAsync_RespectsCancellation()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -694,10 +694,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that WindowsPty can handle large output.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public async Task WindowsPty_Read_LargeOutput()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -746,10 +746,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that Dispose() cleans up resources.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Dispose_CleansUpResources()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -770,10 +770,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that Dispose() is idempotent.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Dispose_IsIdempotent()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();
@@ -796,10 +796,10 @@ public class WindowsPtyTests : IDisposable
     /// <summary>
     /// Verifies that invalid shell path throws PtyException.
     /// </summary>
-    [SkippableFact]
+    [Fact]
     public void WindowsPty_Start_ThrowsOnInvalidShell()
     {
-        Skip.IfNot(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
         // Arrange
         _pty = new Windows.WindowsPty();

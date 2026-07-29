@@ -12,6 +12,7 @@ public class GuiRenderBenchmarks
     private TerminalAdapter _adapter = null!;
     private TerminalFrameComposer _composer = null!;
     private SKPaint _paint = null!;
+    private SKFont _font = null!;
     private SKBitmap _bitmap = null!;
     private SKCanvas _canvas = null!;
 
@@ -27,13 +28,13 @@ public class GuiRenderBenchmarks
 
         _paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true,
-            IsLinearText = true,
-            IsAutohinted = true
+        };
+        _font = new SKFont(SKTypeface.Default, 14f)
+        {
+            Edging = SKFontEdging.SubpixelAntialias,
+            Subpixel = true,
+            Hinting = SKFontHinting.Full
         };
 
         SeedActiveViewport(_adapter.Buffer!);
@@ -55,7 +56,7 @@ public class GuiRenderBenchmarks
         var buffer = _adapter.Buffer!;
         int endRow = buffer.Rows - 1;
         int startRow = Math.Max(0, endRow - ScrollbackVisibleLines + 1);
-        _composer.RenderTo(_canvas, buffer, _paint, CellWidth, CellHeight, startRow, endRow);
+        _composer.RenderTo(_canvas, buffer, _paint, _font, CellWidth, CellHeight, startRow, endRow);
     }
 
     [Benchmark]
@@ -64,7 +65,7 @@ public class GuiRenderBenchmarks
         var buffer = _adapter.Buffer!;
         int sbCount = buffer.ScrollbackCount;
         int start = Math.Max(0, sbCount - ScrollbackVisibleLines);
-        var fm = _paint.FontMetrics;
+        var fm = _font.Metrics;
         float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
         float baselineOffset = (CellHeight * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
 
@@ -75,7 +76,7 @@ public class GuiRenderBenchmarks
 
             string text = line.Text ?? string.Empty;
             float y = ((i - start) * CellHeight) + baselineOffset;
-            _canvas.DrawText(text, 0, y, _paint);
+            _canvas.DrawText(SKTextBlob.Create(text, _font), 0, y, _paint);
         }
     }
 

@@ -71,20 +71,23 @@ public class GlyphAtlas : IDisposable
             // Rasterise the glyph into a temporary surface to measure it
             using var paint = new SKPaint
             {
-                Typeface = _typeface,
-                TextSize = _textSize,
                 IsAntialias = _rasterizationOptions.IsAntialias,
-                IsLinearText = _rasterizationOptions.IsLinearText,
-                SubpixelText = _rasterizationOptions.SubpixelText,
-                IsAutohinted = _rasterizationOptions.IsAutohinted,
-                LcdRenderText = _rasterizationOptions.LcdRenderText,
                 Color = ResolveForegroundColor(key.ForegroundHex),
+            };
+
+            using var font = new SKFont
+            {
+                Typeface = _typeface,
+                Size = _textSize,
+                Subpixel = _rasterizationOptions.SubpixelText,
+                Edging = _rasterizationOptions.LcdRenderText ? SKFontEdging.SubpixelAntialias : SKFontEdging.Alias,
+                Hinting = _rasterizationOptions.IsAutohinted ? SKFontHinting.Full : SKFontHinting.None,
             };
 
             var text = key.Grapheme ?? string.Empty;
             var bounds = new SKRect();
-            paint.MeasureText(text, ref bounds);
-            var fmLocal = paint.FontMetrics;
+            font.MeasureText(text, out bounds);
+            var fmLocal = font.Metrics;
             int w = Math.Max(1, (int)Math.Ceiling(bounds.Width)) + _padding * 2;
             // Use ascent+descent to determine vertical space so we don't cut glyphs
             int h = Math.Max(1, (int)Math.Ceiling(Math.Abs(fmLocal.Ascent) + Math.Abs(fmLocal.Descent))) + _padding * 2;
@@ -109,7 +112,7 @@ public class GlyphAtlas : IDisposable
             var fm = fmLocal;
             var baseline = _nextY + _padding + Math.Abs(fm.Ascent);
 
-            _canvas.DrawText(text, destX, baseline, paint);
+            _canvas.DrawText(text, destX, baseline, font, paint);
 
             var info = new GlyphInfo
             {
@@ -167,7 +170,7 @@ public class GlyphAtlas : IDisposable
         var newBmp = new SKBitmap(newW, newH, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var newCanvas = new SKCanvas(newBmp);
         newCanvas.Clear(SKColors.Transparent);
-        newCanvas.DrawBitmap(_bitmap, 0, 0);
+        newCanvas.DrawBitmap(_bitmap, 0, 0, new SKSamplingOptions(SKFilterMode.Nearest));
 
         _canvas.Dispose();
         try { _bitmap.Dispose(); } catch { }

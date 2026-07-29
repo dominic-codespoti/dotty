@@ -15,6 +15,7 @@ public class ChunkedUpdateBenchmarks
     private TerminalAdapter _adapter = null!;
     private TerminalFrameComposer _composer = null!;
     private SKPaint _paint = null!;
+    private SKFont _font = null!;
     private SKBitmap _bitmap = null!;
     private SKCanvas _canvas = null!;
     private byte[] _payload = null!;
@@ -31,13 +32,13 @@ public class ChunkedUpdateBenchmarks
 
         _paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true,
-            IsLinearText = true,
-            IsAutohinted = true
+        };
+        _font = new SKFont(SKTypeface.Default, 14f)
+        {
+            Edging = SKFontEdging.SubpixelAntialias,
+            Subpixel = true,
+            Hinting = SKFontHinting.Full
         };
 
         var sb = new StringBuilder();
@@ -72,7 +73,7 @@ public class ChunkedUpdateBenchmarks
             int len = Math.Min(ChunkSize, _payload.Length - offset);
             _parser.Feed(_payload.AsSpan(offset, len));
 
-            _composer.RenderTo(_canvas, buffer, _paint, 9f, 18f, startRow, endRow);
+            _composer.RenderTo(_canvas, buffer, _paint, _font, 9f, 18f, startRow, endRow);
         }
     }
 
@@ -94,7 +95,7 @@ public class ChunkedUpdateBenchmarks
             if (batchLength + len > batch.Length)
             {
                 _parser.Feed(batch.Slice(0, batchLength));
-                _composer.RenderTo(_canvas, buffer, _paint, 9f, 18f, startRow, endRow);
+                _composer.RenderTo(_canvas, buffer, _paint, _font, 9f, 18f, startRow, endRow);
                 batchLength = 0;
             }
 
@@ -104,7 +105,7 @@ public class ChunkedUpdateBenchmarks
             if (batchLength >= 32768)
             {
                 _parser.Feed(batch.Slice(0, batchLength));
-                _composer.RenderTo(_canvas, buffer, _paint, 9f, 18f, startRow, endRow);
+                _composer.RenderTo(_canvas, buffer, _paint, _font, 9f, 18f, startRow, endRow);
                 batchLength = 0;
             }
         }
@@ -112,7 +113,7 @@ public class ChunkedUpdateBenchmarks
         if (batchLength > 0)
         {
             _parser.Feed(batch.Slice(0, batchLength));
-            _composer.RenderTo(_canvas, buffer, _paint, 9f, 18f, startRow, endRow);
+            _composer.RenderTo(_canvas, buffer, _paint, _font, 9f, 18f, startRow, endRow);
         }
     }
 }

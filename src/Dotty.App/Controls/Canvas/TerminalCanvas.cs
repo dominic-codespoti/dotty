@@ -189,12 +189,14 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	
 	private WriteableBitmap? _bitmap;
 	private SKPaint? _debugTextPaint;
+	private SKFont? _debugFont;
 	private SKPaint? _debugBgPaint;
 	private SKPaint? _selectionPaint;
 
 	public bool ShowDebugOverlay { get; set; }
 	
 	public SKPaint? SkPaint { get; private set; }
+	public SKFont? SkFont { get; private set; }
 	public double CellWidth
 	{
 		get
@@ -533,16 +535,16 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					// Render only the exposed rows for visible grid.
 					int compStart = Math.Max(0, exposeStartRow);
 					int compEnd = Math.Max(0, Math.Min(buffer.Rows - 1, exposeEndRow));
-					if (compStart <= compEnd && SkPaint != null)
-						_frameComposer.RenderTo(canvas, buffer, SkPaint, (float)_cellWidth, (float)_cellHeight, compStart, compEnd);
+					if (compStart <= compEnd && SkPaint != null && SkFont != null)
+						_frameComposer.RenderTo(canvas, buffer, SkPaint, SkFont, (float)_cellWidth, (float)_cellHeight, compStart, compEnd);
 
 					// Render exposed scrollback rows.
 					int sbStart = Math.Max(-sbCount, exposeStartRow);
 					int sbEnd = Math.Min(-1, exposeEndRow);
-					if (sbStart <= sbEnd && SkPaint != null)
+					if (sbStart <= sbEnd && SkPaint != null && SkFont != null)
 					{
-						var paint = SkPaint;
-						var fm = paint.FontMetrics;
+						var font = SkFont;
+						var fm = font.Metrics;
 						float glyphH = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
 						float blOffset = (float)(_cellHeight * 0.5f) + (glyphH * 0.5f) - Math.Abs(fm.Descent);
 						for (int r = sbStart; r <= sbEnd; r++)
@@ -552,7 +554,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 							var line = buffer.GetScrollbackLine(idx);
 							if (line.Length <= 0) continue;
 							float y = (float)(r * _cellHeight + blOffset);
-							canvas.DrawText(line.Text ?? string.Empty, 0, y, paint);
+							canvas.DrawText(SKTextBlob.Create(line.Text ?? string.Empty, font), 0, y, SkPaint);
 						}
 					}
 				}
@@ -582,16 +584,16 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			int composerStart = Math.Max(0, startVisibleRow);
 			int composerEnd = Math.Max(0, Math.Min(buffer.Rows - 1, endVisibleRow));
 
-			if (composerStart <= composerEnd && SkPaint != null)
-				_frameComposer.RenderTo(canvas, buffer, SkPaint, (float)_cellWidth, (float)_cellHeight, composerStart, composerEnd);
+			if (composerStart <= composerEnd && SkPaint != null && SkFont != null)
+				_frameComposer.RenderTo(canvas, buffer, SkPaint, SkFont, (float)_cellWidth, (float)_cellHeight, composerStart, composerEnd);
 
 			int sbStart = Math.Max(-sbCount, startVisibleRow);
 			int sbEnd = Math.Min(-1, endVisibleRow);
 
-			if (sbStart <= sbEnd && SkPaint != null)
+			if (sbStart <= sbEnd && SkPaint != null && SkFont != null)
 			{
-				var paint = SkPaint;
-				var fm = paint.FontMetrics;
+				var font = SkFont;
+				var fm = font.Metrics;
 				float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
 				float baselineOffset = (float)(_cellHeight * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
 
@@ -603,7 +605,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					if (line.Length <= 0) continue;
 					float y = (float)(r * _cellHeight + baselineOffset);
 					var text = line.Text ?? string.Empty;
-					canvas.DrawText(text, 0, y, paint);
+					canvas.DrawText(SKTextBlob.Create(text, font), 0, y, SkPaint);
 				}
 			}
 		}
@@ -694,15 +696,14 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		if (ShowDebugOverlay && SkPaint != null)
 		{
 			canvas.Save();
-			if (_debugTextPaint == null || _debugBgPaint == null)
+			if (_debugTextPaint == null || _debugBgPaint == null || _debugFont == null)
 			{
 				_debugTextPaint = new SKPaint
 				{
-					Typeface = SKTypeface.Default,
-					TextSize = 13f,
 					Color = SKColors.Lime,
 					IsAntialias = true,
 				};
+				_debugFont = new SKFont(SKTypeface.Default, 13f);
 				_debugBgPaint = new SKPaint
 				{
 					Style = SKPaintStyle.Fill,
@@ -710,12 +711,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				};
 			}
 
+			var debugFont = _debugFont!;
 			var debugTextPaint = _debugTextPaint!;
 			var debugBgPaint = _debugBgPaint!;
 			var debugInfo = buffer.GetDebugInfo();
 			float y = 4f;
 			canvas.DrawRect(0, 0, canvas.DeviceClipBounds.Width, 20, debugBgPaint);
-			canvas.DrawText(debugInfo, 4, y + 14, debugTextPaint);
+			canvas.DrawText(SKTextBlob.Create(debugInfo, debugFont), 4, y + 14, debugTextPaint);
 			canvas.Restore();
 		}
 
@@ -890,26 +892,23 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		SkPaint = new SKPaint
 		{
-			Typeface = typeface,
-			TextSize = scaledFontSize,
 			IsAntialias = true,
-			IsLinearText = true,
-			SubpixelText = true,
-			IsAutohinted = true,
-			LcdRenderText = true,
 			Color = defaultFg,
 		};
 
-		var fm = SkPaint.FontMetrics;
-		float glyphHeight = Math.Max(scaledFontSize, Math.Abs(fm.Descent) + Math.Abs(fm.Ascent));
-		float glyphAdvance;
-		using (var font = new SKFont(SkPaint.Typeface, SkPaint.TextSize))
+		SkFont?.Dispose();
+		SkFont = new SKFont(typeface, scaledFontSize)
 		{
-			var fontMetrics = font.Metrics;
-			glyphAdvance = Math.Max(0.5f, fontMetrics.AverageCharacterWidth);
-			var measuredW = Math.Max(1f, SkPaint.MeasureText("W"));
-			glyphAdvance = Math.Max(glyphAdvance, measuredW);
-		}
+			Subpixel = true,
+			Hinting = SKFontHinting.Full,
+			Edging = SKFontEdging.SubpixelAntialias,
+		};
+
+		var fm = SkFont.Metrics;
+		float glyphHeight = Math.Max(scaledFontSize, Math.Abs(fm.Descent) + Math.Abs(fm.Ascent));
+		float glyphAdvance = Math.Max(0.5f, fm.AverageCharacterWidth);
+		var measuredW = Math.Max(1f, SkFont.MeasureText("W"));
+		glyphAdvance = Math.Max(glyphAdvance, measuredW);
 
 		var padding = Math.Max(0.0, CellPadding);
 		_cellWidth = (float)Math.Round(Math.Max(4, glyphAdvance / (float)scale + (float)(padding * 2.0)));
@@ -926,7 +925,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		
 		// Get or create a shared atlas for this font configuration
 		// Multiple tabs with same font will share the same atlas
-		var newAtlas = GlyphAtlasService.GetOrCreateAtlas(SkPaint.Typeface, SkPaint.TextSize, _glyphRasterizationOptions);
+		var newAtlas = GlyphAtlasService.GetOrCreateAtlas(SkFont!.Typeface, SkFont.Size, _glyphRasterizationOptions);
 		
 		// Only update our reference if it's a different atlas
 		if (_glyphAtlas != newAtlas)
@@ -986,7 +985,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				if (_glyphAtlas == null)
 				{
 					_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
-					_glyphAtlas = GlyphAtlasService.GetOrCreateAtlas(SkPaint?.Typeface ?? SKTypeface.Default, SkPaint?.TextSize ?? 12f, _glyphRasterizationOptions);
+					_glyphAtlas = GlyphAtlasService.GetOrCreateAtlas(SkFont?.Typeface ?? SKTypeface.Default, SkFont?.Size ?? 12f, _glyphRasterizationOptions);
 				}
 				// Ensure discovery and composer are created only once so we preserve
 				// front-buffer and row caches across buffer swaps. If sizes differ,
@@ -1056,12 +1055,19 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			try { SkPaint.Dispose(); } catch { }
 			SkPaint = null;
 		}
+		if (SkFont != null)
+		{
+			try { SkFont.Dispose(); } catch { }
+			SkFont = null;
+		}
 		
 		// Dispose debug overlay paints
 		_debugTextPaint?.Dispose();
 		_debugTextPaint = null;
 		_debugBgPaint?.Dispose();
 		_debugBgPaint = null;
+		_debugFont?.Dispose();
+		_debugFont = null;
 
 		// Dispose bitmap
 		_bitmap?.Dispose();
@@ -1206,7 +1212,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 	private double GetRenderScaling()
 	{
-		return VisualRoot?.RenderScaling ?? 1.0;
+		return TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
 	}
 
 	private static bool ParseHexColor(string hex, out SKColor color)

@@ -95,6 +95,9 @@ public class OptimizationBenchmarks
     private TerminalAdapter _adapter = null!;
     private TerminalFrameComposer _composer = null!;
     private SKPaint _paint = null!;
+    private SKFont _font = null!;
+    private SKPaint _unicodePaint = null!;
+    private SKFont _unicodeFont = null!;
     private SKBitmap _bitmap = null!;
     private SKCanvas _canvas = null!;
 
@@ -106,13 +109,13 @@ public class OptimizationBenchmarks
 
         _paint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true,
-            IsLinearText = true,
-            IsAutohinted = true
+        };
+        _font = new SKFont(SKTypeface.Default, 14f)
+        {
+            Edging = SKFontEdging.SubpixelAntialias,
+            Subpixel = true,
+            Hinting = SKFontHinting.Full
         };
 
         // Fill buffer with ASCII content
@@ -137,15 +140,15 @@ public class OptimizationBenchmarks
         _adapter = new TerminalAdapter(24, 80);
         _composer = new TerminalFrameComposer();
 
-        _paint = new SKPaint
+        _unicodePaint = new SKPaint
         {
-            Typeface = SKTypeface.Default,
-            TextSize = 14f,
             IsAntialias = true,
-            LcdRenderText = true,
-            SubpixelText = true,
-            IsLinearText = true,
-            IsAutohinted = true
+        };
+        _unicodeFont = new SKFont(SKTypeface.Default, 14f)
+        {
+            Edging = SKFontEdging.SubpixelAntialias,
+            Subpixel = true,
+            Hinting = SKFontHinting.Full
         };
 
         // Fill buffer with Unicode content
@@ -187,14 +190,14 @@ public class OptimizationBenchmarks
     public void RenderAsciiBenchmark()
     {
         var buffer = _adapter.Buffer!;
-        _composer.RenderTo(_canvas, buffer, _paint, 9f, 18f, 0, buffer.Rows - 1);
+        _composer.RenderTo(_canvas, buffer, _paint, _font, 9f, 18f, 0, buffer.Rows - 1);
     }
 
     [Benchmark]
     public void RenderUnicodeBenchmark()
     {
         var buffer = _adapter.Buffer!;
-        _composer.RenderTo(_canvas, buffer, _paint, 9f, 18f, 0, buffer.Rows - 1);
+        _composer.RenderTo(_canvas, buffer, _paint, _font, 9f, 18f, 0, buffer.Rows - 1);
     }
 
     // --- Full stack benchmarks with various workloads ---

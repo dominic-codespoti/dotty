@@ -17,13 +17,9 @@ public sealed class TextShaper : IDisposable
             _shaperCache[typeface] = shaper;
         }
 
-        using var paint = new SKPaint
-        {
-            Typeface = typeface,
-            TextSize = textSize,
-        };
+        using var font = new SKFont(typeface, textSize);
 
-        var result = shaper.Shape(text, paint);
+        var result = shaper.Shape(text, font);
 
         var indices = new ushort[result.Codepoints.Length];
         for (int i = 0; i < result.Codepoints.Length; i++)

@@ -543,13 +543,15 @@ solution/
   <OutputItemType>Analyzer</OutputItemType>
 </ProjectReference>
 
-<!-- Optional: User config from ~/.config/dotty/ -->
+<!-- Ordinary C# user config, included only when present -->
 <PropertyGroup>
-  <UserConfigPath>$(HOME)/.config/dotty/Dotty.UserConfig/Config.cs</UserConfigPath>
+  <UserConfigPath>$(HOME)/.config/dotty/Config.cs</UserConfigPath>
+  <LegacyUserConfigPath>$(HOME)/.config/dotty/Dotty.UserConfig/Config.cs</LegacyUserConfigPath>
 </PropertyGroup>
 
 <ItemGroup>
   <Compile Include="$(UserConfigPath)" Condition="Exists('$(UserConfigPath)')" />
+  <Compile Include="$(LegacyUserConfigPath)" Condition="!Exists('$(UserConfigPath)') and Exists('$(LegacyUserConfigPath)')" />
 </ItemGroup>
 ```
 

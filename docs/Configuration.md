@@ -25,57 +25,25 @@ dotnet add package Dotty.Abstractions --version 0.1.0
 
 ### 1. First Run (Automatic Config Generation)
 
-On first startup, Dotty automatically creates a default configuration project:
+On first startup, Dotty automatically creates:
 
-- **Linux/macOS**: `~/.config/dotty/Dotty.UserConfig/` (XDG Base Directory)
-- **Windows**: `%APPDATA%/dotty/Dotty.UserConfig/`
+- **Linux/macOS**: `~/.config/dotty/Config.cs`
+- **Windows**: `%APPDATA%/dotty/Config.cs`
 
-The project structure includes:
-```
-~/.config/dotty/Dotty.UserConfig/
-├── Dotty.UserConfig.csproj    # Project file with NuGet reference
-├── Config.cs                  # Your configuration file
-└── obj/                       # Build artifacts
-```
+The generated file is **ordinary C#** (not a `.csx` script). `using Dotty.Abstractions.*;` and similar are standard C# directives — Dotty uses `CSharpSyntaxTree.ParseText` for runtime compilation, which requires valid C# syntax, not file-based-app `#:` directives.
 
-You'll see a message:
-```
-✓ Created default config project: /home/username/.config/dotty/Dotty.UserConfig/
+Dotty also creates `Dotty.UserConfig.csproj` beside it when missing; that project exists only to give C# language servers package-backed IntelliSense and go-to-definition. Dotty never builds or restores it at runtime. The flat file is conditionally included as a `Compile` item during application builds.
 
-Open in your IDE for IntelliSense support:
-  code ~/.config/dotty/Dotty.UserConfig/     # VS Code
-  rider ~/.config/dotty/Dotty.UserConfig/    # JetBrains Rider
+Existing `Dotty.UserConfig/Config.cs` installations are copied to the flat path on first startup. The legacy directory is preserved for manual cleanup.
 
-Then edit Config.cs and rebuild dotty to apply changes.
-```
-
-The generated file contains:
-- Sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
-- Helpful comments explaining all options
-- Uncomment examples for easy customization
-- Full IntelliSense via the NuGet package reference
-- Exact current defaults (never out of sync with code)
-
-### 2. Open in Your IDE (Recommended)
-
-For the best experience with IntelliSense, syntax highlighting, and LSP support:
+### 2. Open the File
 
 ```bash
-# VS Code
-code ~/.config/dotty/Dotty.UserConfig/
-
-# JetBrains Rider
-rider ~/.config/dotty/Dotty.UserConfig/
-
-# Or any editor that supports C# LSP
+code ~/.config/dotty/Config.cs
+# or: rider ~/.config/dotty/Config.cs
 ```
 
-The `.csproj` file includes the `Dotty.Abstractions` NuGet package, giving you:
-- Full IntelliSense for all configuration options
-- Real-time error detection
-- Go-to-definition for types and themes
-- Theme preview in tooltips
-
+Any editor with C# language support can edit the file. Open `Dotty.UserConfig.csproj` when you want project-backed references and definition navigation.
 ### 3. Customizing Your Configuration
 
 Edit the `Config.cs` file in your IDE:
@@ -103,11 +71,11 @@ dotnet build -c Release
 
 The Source Generator will pick up your changes and generate a new static `Config` class.
 
-> **Note:** You only need to rebuild the main Dotty application. The configuration project (`Dotty.UserConfig`) is compiled automatically as part of the build process.
+> **Note:** You only need to rebuild the main Dotty application. The flat config file is included conditionally as an ordinary `Compile` item.
 
 ### 5. Regenerating Config (Optional)
 
-To regenerate a fresh config project:
+To regenerate the flat config file:
 
 ```bash
 dotty --generate-config
@@ -495,15 +463,14 @@ Dotty supports **runtime configuration hot-reload** via the `CSharpConfigWatcher
 
 ```
 Config.cs edit → FileSystemWatcher → CSharpConfigWatcher →
-  dotnet build (background) → GeneratedConfigAssembly (load) →
-    RuntimeSettings (web socket push) → App applies new settings
+  CSharpSyntaxTree.ParseText → in-memory assembly load →
+    RuntimeSettings → App applies new settings
 ```
 
-1. **File Monitoring**: `CSharpConfigWatcher` watches `~/.config/dotty/Dotty.UserConfig/Config.cs` for changes
-2. **Background Build**: On change, triggers `dotnet build` on the user config project
-3. **Assembly Load**: The compiled assembly is loaded via `GeneratedConfigAssembly`
-4. **Web Socket Push**: New config values are pushed to the running application through a web socket channel
-5. **Live Apply**: `RuntimeSettings` applies the new configuration (fonts, colors, cursor, etc.) instantly
+1. **File Monitoring**: `CSharpConfigWatcher` watches `~/.config/dotty/Config.cs` (or the preserved legacy path when migration cannot write).
+2. **In-memory Compilation**: On change, the ordinary C# file is compiled directly with Roslyn; the editor project is not involved.
+3. **Assembly Load**: The compiled assembly is loaded into a collectible context.
+4. **Live Apply**: `RuntimeSettings` applies the new configuration (fonts, colors, cursor, etc.) instantly.
 
 ### Supported Hot-Reload Changes
 
@@ -584,17 +551,9 @@ context (`RuntimeSettingsJsonContext`) for AOT compatibility:
 
 ### IntelliSense not working
 
-The generated code will have IntelliSense after the first successful build. For full LSP support:
+The generated file uses ordinary C# syntax. Dotty creates `Dotty.UserConfig.csproj` beside it for project-backed IntelliSense and go-to-definition.
 
-1. Open the `~/.config/dotty/Dotty.UserConfig/` folder in your IDE (not just the single file)
-2. Ensure the `Dotty.Abstractions` NuGet package is restored: `dotnet restore`
-3. The source generator runs at compile-time and the generated files are included in the compilation
-
-If IntelliSense is still not working:
-- Check that your IDE supports C# LSP (VS Code with C# extension, Rider, etc.)
-- Verify the `.csproj` file has the NuGet package reference
-- Try running `dotnet build` once from the `Dotty.UserConfig` directory
-
+Open that project in your IDE, or open `~/.config/dotty/Config.cs` directly for standalone editing. The project is editor-only; Dotty's runtime compiler does not use or restore it.
 ### AOT build errors
 
 Ensure you're using constant values (literals) in your config class. The source generator needs to be able to extract these values at build time.

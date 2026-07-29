@@ -102,8 +102,6 @@ public partial class App : Application
 
         Program.BenchTimer?.Stage("avalon_window_created");
 
-        // Deferred: check for config NuGet version updates on a background thread.
-        Program.RunDeferredConfigCheck();
 
         base.OnFrameworkInitializationCompleted();
     }

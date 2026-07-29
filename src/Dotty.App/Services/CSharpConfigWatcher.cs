@@ -33,8 +33,8 @@ public sealed class CSharpConfigWatcher : IDisposable
 
     public CSharpConfigWatcher()
     {
-        _configDir = ConfigGeneratorService.ProjectDir;
-        _configPath = ConfigGeneratorService.ConfigPath;
+        _configPath = ConfigGeneratorService.GetExistingConfigPath() ?? ConfigGeneratorService.ConfigPath;
+        _configDir = Path.GetDirectoryName(_configPath)!;
         try { _lastPollWrite = File.GetLastWriteTimeUtc(_configPath); } catch { _lastPollWrite = DateTime.MinValue; }
     }
 

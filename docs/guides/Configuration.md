@@ -18,19 +18,16 @@ Welcome to the Dotty Configuration Guide! This guide will help you customize you
 
 ### Creating Your First Custom Config
 
-Dotty automatically creates a default configuration on first run. To customize it:
+Dotty automatically creates a standalone ordinary C# configuration file on first run. To customize it:
 
 1. **Locate your config file:**
-   - **Linux/macOS**: `~/.config/dotty/Dotty.UserConfig/Config.cs`
-   - **Windows**: `%APPDATA%/dotty/Dotty.UserConfig/Config.cs`
+   - **Linux/macOS**: `~/.config/dotty/Config.cs`
+   - **Windows**: `%APPDATA%/dotty/Config.cs`
 
-2. **Open in your IDE** (recommended for IntelliSense):
+2. **Open the file in your editor:**
    ```bash
-   # VS Code:
-   code ~/.config/dotty/Dotty.UserConfig/
-   
-   # JetBrains Rider:
-   rider ~/.config/dotty/Dotty.UserConfig/
+   code ~/.config/dotty/Config.cs
+   # or: rider ~/.config/dotty/Config.cs
    ```
 
 3. **Make a simple change** - uncomment and modify a property:
@@ -42,7 +39,7 @@ Dotty automatically creates a default configuration on first run. To customize i
    public double? FontSize => 16.0;
    ```
 
-4. **Rebuild Dotty** to apply changes (see [Rebuild Instructions](#rebuild-instructions))
+4. **Restart Dotty** to apply changes. Edits are also picked up by runtime hot reload.
 
 That's it! Your terminal will now use Dracula theme with a larger font size.
 
@@ -50,23 +47,16 @@ That's it! Your terminal will now use Dracula theme with a larger font size.
 
 ## Configuration Location
 
-### Where to Put the Config.cs File
-
 Dotty uses the **XDG Base Directory Specification** on Linux/macOS and standard Windows paths:
 
 | Platform | Location |
 |----------|----------|
-| **Linux/macOS** | `~/.config/dotty/Dotty.UserConfig/Config.cs` |
-| **Windows** | `%APPDATA%/dotty/Dotty.UserConfig/Config.cs` |
+| **Linux/macOS** | `~/.config/dotty/Config.cs` |
+| **Windows** | `%APPDATA%/dotty/Config.cs` |
 
-### Project Structure
+`Config.cs` is compiled as ordinary C# in memory for runtime loading and is conditionally included as a `Compile` item when Dotty itself is built. Dotty also creates `Dotty.UserConfig.csproj` beside it for editor IntelliSense and go-to-definition; the project is never used or restored by the runtime.
 
-```
-~/.config/dotty/Dotty.UserConfig/
-├── Dotty.UserConfig.csproj    # Project file with NuGet reference
-├── Config.cs                  # Your configuration (edit this!)
-└── obj/                       # Build artifacts (auto-generated)
-```
+Existing installations with `Dotty.UserConfig/Config.cs` are copied to the flat path during first startup. The legacy directory and file are intentionally preserved for manual cleanup.
 
 ### What the Config.cs Contains
 
@@ -76,7 +66,9 @@ The generated file includes:
 - Pre-written examples you can uncomment
 - Full IntelliSense support via the NuGet package
 
-> **Tip:** The Dotty.Abstractions NuGet package is already referenced in your project, giving you full IntelliSense and error checking in your IDE!
+> **Note:** The generated file uses ordinary C# syntax — `using Dotty.Abstractions.Config;` and similar are standard C# directives, not script syntax. Dotty feeds the file directly to Roslyn's `CSharpSyntaxTree.ParseText` for runtime compilation; this requires valid C# declarations, not `.csx` script or file-based-app `#:` directives.
+>
+> **Tip:** The Dotty.Abstractions NuGet package is already referenced in your editor project, giving you full IntelliSense and error checking in your IDE!
 
 ---
 
@@ -748,22 +740,12 @@ dotnet clean && dotnet build
 **Symptom:** No autocomplete or error detection in your IDE.
 
 **Solutions:**
-1. Make sure you opened the entire folder, not just the file:
+1. Open the standalone file directly:
    ```bash
-   code ~/.config/dotty/Dotty.UserConfig/  # Correct
-   code ~/.config/dotty/Dotty.UserConfig/Config.cs  # Wrong
+   code ~/.config/dotty/Config.cs
    ```
 
-2. Check that the project restored successfully:
-   ```bash
-   cd ~/.config/dotty/Dotty.UserConfig/
-   dotnet restore
-   ```
-
-3. Verify the NuGet package is referenced in `.csproj`:
-   ```xml
-   <PackageReference Include="Dotty.Abstractions" Version="0.1.0" />
-   ```
+2. Open `Dotty.UserConfig.csproj` for project-backed IntelliSense and go-to-definition, or edit `Config.cs` directly for standalone syntax support.
 
 #### Issue: Config Not Found
 
@@ -773,10 +755,10 @@ dotnet clean && dotnet build
 1. Check the config location:
    ```bash
    # Linux/macOS
-   ls -la ~/.config/dotty/Dotty.UserConfig/Config.cs
+   ls -la ~/.config/dotty/Config.cs
    
    # Windows
-   dir %APPDATA%/dotty/Dotty.UserConfig/Config.cs
+   dir %APPDATA%/dotty/Config.cs
    ```
 
 2. Verify the namespace is correct:
@@ -999,7 +981,7 @@ dotty-rebuild
 If you encounter issues not covered here:
 
 1. Check the [troubleshooting section](#troubleshooting) above
-2. Review the sample configuration in `~/.config/dotty/Dotty.UserConfig/Config.cs`
+2. Review the sample configuration in `~/.config/dotty/Config.cs`
 3. Look at working examples in the `samples/` directory
 4. Enable debug logging: `DOTTY_LOG_LEVEL=Debug dotnet run`
 

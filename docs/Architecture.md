@@ -399,8 +399,8 @@ Dotty.NativePty ───┘
    RuntimeSettings fallback chain: RuntimeSettingsData → Generated.Config
 
 4. HOT-RELOAD
-   Config.cs edit ──▶ CSharpConfigWatcher ──▶ dotnet build ──▶
-     GeneratedConfigAssembly (load) ──▶ RuntimeSettings (websocket push)
+   Config.cs edit ──▶ CSharpConfigWatcher ──▶ CSharpSyntaxTree.ParseText ──▶
+     in-memory assembly load ──▶ RuntimeSettings
 
 5. ANSI COLOR PALETTE FALLBACK
    ApplyAnsiColorPalette() resolves in order:

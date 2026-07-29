@@ -1,189 +1,195 @@
 using System;
 using System.IO;
-using System.Reflection;
-using System.Text.RegularExpressions;
 
 namespace Dotty.App.Services;
 
 /// <summary>
-/// Service responsible for generating a default user configuration project
-/// on first run of Dotty terminal. Creates a full .csproj with NuGet reference
-/// for full LSP support and IntelliSense.
+/// Service responsible for generating the user's standalone C# configuration file.
 /// </summary>
 public static class ConfigGeneratorService
 {
-    private static readonly string BaseConfigDir = 
+    private static readonly string ApplicationDataConfigDir =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dotty");
-    
-    /// <summary>
-    /// The project directory where user config lives.
-    /// </summary>
-    public static readonly string ProjectDir = Path.Combine(BaseConfigDir, "Dotty.UserConfig");
-    
-    /// <summary>
-    /// The main config file path.
-    /// </summary>
-    public static readonly string ConfigPath = Path.Combine(ProjectDir, "Config.cs");
-    
-    /// <summary>
-    /// The project file path.
-    /// </summary>
-    public static readonly string ProjectPath = Path.Combine(ProjectDir, "Dotty.UserConfig.csproj");
 
     /// <summary>
-    /// The current/latest version of Dotty.Abstractions package.
-    /// Always matches the running Dotty binary version.
+    /// The directory where the user configuration file lives.
     /// </summary>
-    public static readonly string LatestPackageVersion = Dotty.VersionInfo.NuGetPackageVersion;
+    public static readonly string ConfigDir = ApplicationDataConfigDir;
+
+    /// <summary>
+    /// The canonical configuration file path.
+    /// </summary>
+    public static readonly string ConfigPath = Path.Combine(ConfigDir, "Config.cs");
+    
+    /// <summary>
+    /// Optional editor project path. Dotty never uses this project at runtime.
+    /// </summary>
+    public static readonly string EditorProjectPath = Path.Combine(ConfigDir, "Dotty.UserConfig.csproj");
+
+    /// <summary>
+    /// True when the editor project was freshly created (not just version-updated)
+    /// during the most recent EnsureConfigExists call.
+    /// </summary>
+    internal static bool EditorProjectWasCreated { get; private set; }
+
+    /// <summary>
+    /// Reset the editor-created flag at the start of EnsureConfigExists.
+    /// </summary>
+    private static void ResetEditorCreatedFlag() => EditorProjectWasCreated = false;
+
+    private static bool EditorProjectIsCurrent(string editorProjectPath)
+    {
+        if (!File.Exists(editorProjectPath))
+            return false;
+        var content = File.ReadAllText(editorProjectPath);
+        return content.Contains($"Version=\"{Dotty.VersionInfo.NuGetPackageVersion}\"");
+    }
+
+    private static string GenerateEditorProject() =>
+        $"<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
+        $"  <PropertyGroup>\n" +
+        $"    <TargetFramework>net10.0</TargetFramework>\n" +
+        $"    <Nullable>enable</Nullable>\n" +
+        $"    <ImplicitUsings>enable</ImplicitUsings>\n" +
+        $"    <LangVersion>latest</LangVersion>\n" +
+        $"  </PropertyGroup>\n" +
+        $"  <ItemGroup>\n" +
+        $"    <Compile Include=\"Config.cs\" />\n" +
+        $"    <PackageReference Include=\"Dotty.Abstractions\" Version=\"{Dotty.VersionInfo.NuGetPackageVersion}\" />\n" +
+        $"  </ItemGroup>\n" +
+        $"</Project>\n";
+
+    private static string GetLegacyNestedConfigPath(string configDir) =>
+        Path.Combine(configDir, "Dotty.UserConfig", "Config.cs");
 
     /// <summary>
     /// Checks common configuration file locations and returns the path if found.
+    /// A nested legacy configuration is migrated to the canonical flat path when possible.
     /// </summary>
     public static string? GetExistingConfigPath()
     {
-        // Check new project structure first
-        if (File.Exists(ConfigPath))
-            return ConfigPath;
-        
-        // Check legacy locations
+        return GetExistingConfigPath(ConfigDir) ?? GetExternalLegacyConfigPath();
+    }
+
+    private static string? GetExternalLegacyConfigPath()
+    {
         var legacyPaths = new[]
         {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dotty", "Config.cs"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "dotty", "Config.cs"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "dotty", "Config.cs"),
         };
-        
+
         foreach (var path in legacyPaths)
         {
             if (File.Exists(path))
                 return path;
         }
-        
+
         return null;
     }
 
-    /// <summary>
-    /// Checks if the user's config project is using an outdated NuGet package version
-    /// and updates it if necessary.
-    /// </summary>
-    /// <returns>True if an update was performed, false otherwise</returns>
-    public static bool UpdatePackageVersionIfNeeded()
+    internal static string? GetExistingConfigPath(string configDir)
     {
-        try
+        var configPath = Path.Combine(configDir, "Config.cs");
+        if (File.Exists(configPath))
+            return configPath;
+
+        var nestedLegacyPath = GetLegacyNestedConfigPath(configDir);
+        if (File.Exists(nestedLegacyPath))
         {
-            // Check if project file exists
-            if (!File.Exists(ProjectPath))
-                return false;
-            
-            var csprojContent = File.ReadAllText(ProjectPath);
-            
-            // Check if Dotty.Abstractions is referenced
-            if (!csprojContent.Contains("Dotty.Abstractions"))
-                return false;
-            
-            // Extract current version using regex
-            var versionMatch = Regex.Match(
-                csprojContent, 
-                @"<PackageReference Include=""Dotty.Abstractions"" Version=""(\d+\.\d+\.\d+)""");
-            
-            if (!versionMatch.Success)
+            try
             {
-                // Package reference exists but we can't parse version
-                // Might be an older format, suggest manual update
-                Console.WriteLine("⚠ Your config project uses an outdated format.");
-                Console.WriteLine("  Consider running with --update-config to regenerate.");
-                return false;
+                Directory.CreateDirectory(configDir);
+                File.Copy(nestedLegacyPath, configPath);
+                return configPath;
             }
-            
-            var currentVersion = versionMatch.Groups[1].Value;
-            
-            // Compare versions
-            if (Version.TryParse(currentVersion, out var current) && 
-                Version.TryParse(LatestPackageVersion, out var latest))
+            catch (Exception ex)
             {
-                if (current < latest)
-                {
-                    // Update the version in the csproj
-                    var updatedContent = Regex.Replace(
-                        csprojContent,
-                        @"(<PackageReference Include=""Dotty.Abstractions"" Version="")(\d+\.\d+\.\d+)("")",
-                        "${1}" + LatestPackageVersion + "${3}");
-                    
-                    File.WriteAllText(ProjectPath, updatedContent);
-                    
-                    Console.WriteLine($"✓ Updated Dotty.Abstractions from {currentVersion} to {LatestPackageVersion}");
-                    Console.WriteLine("  Run 'dotnet restore' in your config folder to apply changes.");
-                    return true;
-                }
+                Console.Error.WriteLine($"Could not migrate legacy config: {ex.Message}");
+                return nestedLegacyPath;
             }
-            
-            return false;
         }
-        catch (Exception ex)
+
+        var legacyPaths = new[]
         {
-            Console.Error.WriteLine($"⚠ Could not check for package updates: {ex.Message}");
-            return false;
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "dotty", "Config.cs"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "dotty", "Config.cs"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "dotty", "Config.cs"),
+        };
+
+        foreach (var path in legacyPaths)
+        {
+            if (File.Exists(path))
+                return path;
         }
+
+        return null;
     }
 
-    /// <summary>
-    /// Ensures a configuration project exists for the user.
-    /// If no config exists, creates one with sensible defaults.
-    /// </summary>
-    /// <param name="force">If true, overwrites existing config (use with caution)</param>
-    /// <returns>True if a config was created, false if one already exists</returns>
-    public static bool EnsureConfigExists(bool force = false)
+    public static bool EnsureConfigExists(bool force = false) =>
+        EnsureConfigExists(ConfigDir, force);
+
+    internal static bool EnsureConfigExists(string configDir, bool force = false)
     {
-        if (!force && GetExistingConfigPath() != null)
-            return false; // Config already exists
-        
+        var configPath = Path.Combine(configDir, "Config.cs");
+
         try
         {
-            // Create project directory
-            Directory.CreateDirectory(ProjectDir);
-            
-            // Write Config.cs
-            File.WriteAllText(ConfigPath, GenerateDefaultConfig());
-            
-            // Write .csproj with NuGet reference
-            File.WriteAllText(ProjectPath, GenerateProjectFile());
-            
-            return true;
+            Directory.CreateDirectory(configDir);
+            var configCreated = false;
+
+            // Check only the canonical flat path — don't call GetExistingConfigPath
+            // (it can do a side-effect migration copy that might fail).
+            if (force || !File.Exists(configPath))
+            {
+                if (force)
+                {
+                    // Force overwrite — always regenerate the default config.
+                    File.WriteAllText(configPath, GenerateDefaultConfig(configPath));
+                    configCreated = true;
+                }
+                else
+                {
+                    // Creating fresh: migrate from legacy nested config if present.
+                    var nestedLegacyPath = GetLegacyNestedConfigPath(configDir);
+                    if (!File.Exists(configPath) && File.Exists(nestedLegacyPath))
+                    {
+                        try { File.Copy(nestedLegacyPath, configPath, overwrite: false); }
+                        catch { /* migration failed — generate default below */ }
+                    }
+
+                    if (!File.Exists(configPath))
+                    {
+                        File.WriteAllText(configPath, GenerateDefaultConfig(configPath));
+                        configCreated = true;
+                    }
+                }
+            }
+
+            ResetEditorCreatedFlag();
+            var editorProjectPath = Path.Combine(configDir, "Dotty.UserConfig.csproj");
+            if (force || !EditorProjectIsCurrent(editorProjectPath))
+            {
+                var newlyCreated = !File.Exists(editorProjectPath);
+                File.WriteAllText(editorProjectPath, GenerateEditorProject());
+                if (newlyCreated) EditorProjectWasCreated = true;
+            }
+
+            return configCreated;
         }
         catch (Exception ex)
         {
-            // Log error but don't crash the app
             Console.Error.WriteLine($"Failed to create config: {ex.Message}");
             return false;
         }
     }
 
-    /// <summary>
-    /// Generates the .csproj file with NuGet package reference.
-    /// </summary>
-    private static string GenerateProjectFile()
-    {
-        return $"<Project Sdk=\"Microsoft.NET.Sdk\">\n" +
-               "\n" +
-               "  <PropertyGroup>\n" +
-               "    <TargetFramework>net10.0</TargetFramework>\n" +
-               "    <Nullable>enable</Nullable>\n" +
-               "    <ImplicitUsings>enable</ImplicitUsings>\n" +
-               "    <LangVersion>latest</LangVersion>\n" +
-               "    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>\n" +
-               "  </PropertyGroup>\n" +
-               "\n" +
-               "  <ItemGroup>\n" +
-               $"    <PackageReference Include=\"Dotty.Abstractions\" Version=\"{LatestPackageVersion}\" />\n" +
-               "  </ItemGroup>\n" +
-               "\n" +
-               "</Project>";
-    }
 
     /// <summary>
     /// Generates the default configuration file content with current defaults.
     /// </summary>
-    private static string GenerateDefaultConfig()
+    private static string GenerateDefaultConfig(string configPath)
     {
         var date = DateTime.Now.ToString("yyyy-MM-dd");
         var defaultFontFamily = DefaultConstants.FontFamily;
@@ -198,10 +204,8 @@ public static class ConfigGeneratorService
                $"// This file was auto-generated on first run ({date}).\n" +
                $"// Edit these values and restart Dotty to see changes.\n" +
                $"//\n" +
-               $"// Full IntelliSense available when you open this folder in VS Code or Rider!\n" +
-               $"// The Dotty.Abstractions package provides all types and themes.\n" +
-               $"//\n" +
-               $"// Project: {ProjectPath}\n" +
+               $"// Dotty compiles this ordinary C# file in memory for runtime configuration.\n" +
+               $"// Dotty.UserConfig.csproj is generated beside this file for editor IntelliSense only.\n" +
                $"// Documentation: https://github.com/dominic-codespoti/dotty/blob/main/docs/CONFIGURATION.md\n" +
                $"\n" +
                $"using Dotty.Abstractions.Config;\n" +

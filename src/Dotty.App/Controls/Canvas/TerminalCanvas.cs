@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -162,6 +163,14 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private int _lastKnownBufferColumns = -1;
 	private int _lastKnownScrollbackCount = -1;
 	private ulong[]? _lastRowGenerations;
+
+	// Mirror of buffer.RowScrollEpochs as last rendered. Scroll replays rotate
+	// this identically to the buffer so moved rows keep bufferEpoch == mirror
+	// (pixels were memmoved) while exposed/written rows differ and are
+	// re-rendered by RenderDirty.
+	private ulong[]? _renderEpochs;
+	private readonly List<int> _dirtyRowScratch = new();
+	private SKPaint? _exposedBgPaint;
 	private double _renderScaling = 1.0;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
 	private static readonly string[] MonospaceFallbackFamilies =
@@ -429,6 +438,134 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 	}
 
+	/// <summary>
+	/// Computes the buffer rows newly exposed by a pure-scroll frame, i.e. the rows
+	/// that the memmove cleared and that therefore must be re-rendered. The cleared
+	/// band is the edge the content moved away from: the top when scrolling back
+	/// (content shifts down), the bottom when scrolling forward (content shifts up).
+	/// Rows are in buffer coordinates (negative = scrollback), not yet clamped to the
+	/// visible range.
+	/// </summary>
+	internal static void ComputeExposedRows(
+		double oldTop,
+		double newTop,
+		double viewportHeight,
+		double cellHeight,
+		int scrollbackCount,
+		out int exposeStartRow,
+		out int exposeEndRow)
+	{
+		double deltaY = oldTop - newTop;
+		if (deltaY > 0)
+		{
+			// Content moved down: cleared band is the top |deltaY| px of the viewport.
+			exposeStartRow = (int)Math.Floor(newTop / cellHeight) - scrollbackCount;
+			exposeEndRow = (int)Math.Ceiling(oldTop / cellHeight) - 1 - scrollbackCount;
+		}
+		else
+		{
+			// Content moved up: cleared band is the bottom |deltaY| px of the viewport.
+			double clearTop = newTop + viewportHeight - Math.Abs(deltaY);
+			exposeStartRow = (int)Math.Floor(clearTop / cellHeight) - scrollbackCount;
+			exposeEndRow = (int)Math.Ceiling((newTop + viewportHeight) / cellHeight) - 1 - scrollbackCount;
+		}
+	}
+
+	/// <summary>
+	/// Shifts the entire cached bitmap by pixelDelta (positive = content moved
+	/// down), clearing the newly-exposed band. Mirrors the viewport pureScroll.
+	/// </summary>
+	internal static unsafe void MemmoveWholeFrame(byte* pixels, int stride, int height, int pixelDelta)
+	{
+		if (pixelDelta > 0)
+		{
+			// Content moved down: copy pixels down, clear top band.
+			System.Buffer.MemoryCopy(pixels, pixels + pixelDelta * stride, (ulong)((height - pixelDelta) * stride), (ulong)((height - pixelDelta) * stride));
+			new Span<byte>(pixels, pixelDelta * stride).Clear();
+		}
+		else
+		{
+			// Content moved up: copy pixels up, clear bottom band.
+			int shiftUp = -pixelDelta;
+			System.Buffer.MemoryCopy(pixels + shiftUp * stride, pixels, (ulong)((height - shiftUp) * stride), (ulong)((height - shiftUp) * stride));
+			new Span<byte>(pixels + (height - shiftUp) * stride, shiftUp * stride).Clear();
+		}
+	}
+
+	/// <summary>
+	/// Shifts the pixel band of logical rows [topRow..bottomRow] by
+	/// delta * cellHeight (positive = content moved down) in the cached bitmap.
+	/// The exposed band (the edge the content moved away from) is left with its
+	/// stale pixels — the caller sentinels those rows and RenderDirty repaints
+	/// them (base background + regions + glyphs). Callers must ensure the region
+	/// is fully visible; otherwise rows entering from outside the bitmap cannot
+	/// be memmoved and must be re-rendered instead.
+	/// </summary>
+	internal static unsafe void MemmoveRegionRows(byte* pixels, int stride, int height, float translate, int topRow, int bottomRow, int delta, float cellH)
+	{
+		int y0 = (int)Math.Round(topRow * cellH + translate);
+		int y1 = (int)Math.Round((bottomRow + 1) * cellH + translate);
+		int rowPx = (int)Math.Round(delta * cellH);
+		if (rowPx == 0) return;
+		y0 = Math.Max(0, Math.Min(height, y0));
+		y1 = Math.Max(0, Math.Min(height, y1));
+		int band = y1 - y0;
+		if (band <= 0) return;
+
+		if (rowPx > 0)
+		{
+			// Content down: copy [y0, y1-rowPx) -> [y0+rowPx, y1).
+			int copyLen = band - rowPx;
+			if (copyLen > 0)
+				System.Buffer.MemoryCopy(pixels + y0 * stride, pixels + (y0 + rowPx) * stride, (ulong)(copyLen * stride), (ulong)(copyLen * stride));
+		}
+		else
+		{
+			// Content up: copy [y0-rowPx, y1) -> [y0, y1+rowPx).
+			int copyLen = band + rowPx;
+			if (copyLen > 0)
+				System.Buffer.MemoryCopy(pixels + (y0 - rowPx) * stride, pixels + y0 * stride, (ulong)(copyLen * stride), (ulong)(copyLen * stride));
+		}
+	}
+
+	/// <summary>
+	/// Applies one recorded buffer scroll to the renderer's epoch mirror.
+	/// Fully-visible regions rotate the mirror identically to the buffer and
+	/// sentinel the exposed band (the caller memmoves the pixels). Partially or
+	/// non-visible regions cannot be memmoved (content entered from outside the
+	/// bitmap), so every visible row of the region is sentineled instead.
+	/// </summary>
+	internal static void ApplyScrollToMirror(ulong[] mirror, int top, int bottom, int delta, int visStart, int visEnd, out bool memmoved)
+	{
+		if (top >= visStart && bottom <= visEnd)
+		{
+			ScrollEpochMath.RotateRange(mirror, top, bottom, delta);
+			ScrollEpochMath.MarkExposedRows(mirror, top, bottom, delta);
+			memmoved = true;
+		}
+		else
+		{
+			for (int r = Math.Max(top, visStart); r <= Math.Min(bottom, visEnd); r++)
+				mirror[r] = ulong.MaxValue;
+			memmoved = false;
+		}
+	}
+
+	/// <summary>
+	/// Rows whose pixels were not moved into place: exposed bands (sentineled
+	/// in the mirror) and rows written since the last render (epoch mismatch).
+	/// </summary>
+	internal static void ComputeDirtyRows(ReadOnlySpan<ulong> bufferEpochs, ReadOnlySpan<ulong> mirror, int visStart, int visEnd, List<int> dirty)
+	{
+		dirty.Clear();
+		int end = Math.Min(visEnd, Math.Min(bufferEpochs.Length, mirror.Length) - 1);
+		for (int r = visStart; r <= end; r++)
+		{
+			if (bufferEpochs[r] != mirror[r])
+				dirty.Add(r);
+		}
+	}
+
 	private void RenderToBitmap(TerminalBuffer buffer)
 	{
 		bool lockTaken = false;
@@ -473,76 +610,104 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		float newScrollTranslate = (float)(sbCount * _cellHeight - _offset.Y);
 
-		// Detect pure-scroll: same scrollback count, different offset (user scrolling),
-		// same bitmap dimensions.  Shift the existing pixel data instead of re-rendering
-		// every cell, then only render the newly-exposed band.
-		bool pureScroll = !double.IsNaN(_lastRenderOffsetY) &&
-		                  _lastRenderSbCount == sbCount &&
-		                  Math.Abs(_offset.Y - _lastRenderOffsetY) > 0.5 &&
-		                  _selectionRange.IsEmpty;
+		// ---- Incremental path decision -------------------------------------
+		// The cached bitmap can be updated without a full re-render when the
+		// frame is a pure viewport shift (pureScroll), a buffer scroll replay,
+		// and/or a small set of written rows. Full render whenever the cached
+		// state can't be reconciled: bitmap recreated, grid geometry changed,
+		// scrollback changed (main-screen output flow), selection active
+		// (conservative), or a viewport shift AND buffer scrolls arrived in the
+		// same frame (ordering would be ambiguous).
+		bool offsetChanged = !double.IsNaN(_lastRenderOffsetY) &&
+		                     Math.Abs(_offset.Y - _lastRenderOffsetY) > 0.5;
+		bool sbChanged = _lastRenderSbCount != sbCount;
+		bool selectionActive = !_selectionRange.IsEmpty;
+		bool hasPending = buffer.PendingScrollCount > 0;
+		bool mirrorInvalid = _renderEpochs == null || _renderEpochs.Length != buffer.Rows;
 
-		if (pureScroll)
+		bool doFull = double.IsNaN(_lastRenderOffsetY) ||
+		              mirrorInvalid ||
+		              sbChanged ||
+		              selectionActive ||
+		              (offsetChanged && hasPending);
+
+		if (!doFull && _frameComposer != null && SkPaint != null && SkFont != null)
 		{
-			double deltaY = _lastRenderOffsetY - _offset.Y;
-			int pixelDelta = (int)Math.Round(deltaY);
-			if (pixelDelta != 0 && Math.Abs(pixelDelta) < h)
-			{
-				int stride = locked.RowBytes;
+			int startVisibleRow = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
+			int endVisibleRow = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
+			startVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, startVisibleRow));
+			endVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, endVisibleRow));
+			int visStart = Math.Max(0, startVisibleRow);
+			int visEnd = Math.Min(buffer.Rows - 1, endVisibleRow);
+			var mirror = _renderEpochs!;
 
+			// Set up the canvas translate so subsequent rendering goes to the right place.
+			var m = SKMatrix.Identity;
+			canvas.SetMatrix(m);
+			if (ContentPadding.Left != 0 || ContentPadding.Top != 0)
+				canvas.Translate((float)ContentPadding.Left, (float)ContentPadding.Top);
+			canvas.Translate(0, newScrollTranslate);
+
+			// 1) Replay pending buffer scrolls as region memmoves. Moved rows'
+			//    pixels are shifted in place and their mirror epochs travel with
+			//    them; the exposed band is sentineled so the dirty pass repaints it.
+			if (hasPending)
+			{
 				unsafe
 				{
 					byte* pixels = (byte*)locked.Address;
-					if (pixelDelta > 0)
+					int stride = locked.RowBytes;
+					while (buffer.TryDequeuePendingScroll(out var s))
 					{
-						// Content moved down: copy pixels down, clear top band.
-						System.Buffer.MemoryCopy(pixels, pixels + pixelDelta * stride, (ulong)((h - pixelDelta) * stride), (ulong)((h - pixelDelta) * stride));
-						new Span<byte>(pixels, pixelDelta * stride).Clear();
-					}
-					else
-					{
-						// Content moved up: copy pixels up, clear bottom band.
-						int shiftUp = -pixelDelta;
-						System.Buffer.MemoryCopy(pixels + shiftUp * stride, pixels, (ulong)((h - shiftUp) * stride), (ulong)((h - shiftUp) * stride));
-						new Span<byte>(pixels + (h - shiftUp) * stride, shiftUp * stride).Clear();
+						ApplyScrollToMirror(mirror, s.Top, s.Bottom, s.Delta, visStart, visEnd, out bool memmoved);
+						if (memmoved)
+							MemmoveRegionRows(pixels, stride, h, newScrollTranslate, s.Top, s.Bottom, s.Delta, (float)_cellHeight);
 					}
 				}
+			}
 
-				// Set up the canvas translate so subsequent rendering goes to the right place.
-				var m = SKMatrix.Identity;
-				canvas.SetMatrix(m);
-				if (ContentPadding.Left != 0 || ContentPadding.Top != 0)
-					canvas.Translate((float)ContentPadding.Left, (float)ContentPadding.Top);
-				canvas.Translate(0, newScrollTranslate);
-
-				// Render the exposed band.
-				if (_frameComposer != null)
+			// 2) Pure-scroll viewport shift (no pending buffer scrolls). Shift
+			//    the whole frame and sentinel the exposed band so the dirty pass
+			//    re-renders it (RenderDirty re-applies the base background, so
+			//    the memmove's zero-cleared band is fully overwritten).
+			if (offsetChanged && !hasPending)
+			{
+				double deltaY = _lastRenderOffsetY - _offset.Y;
+				int pixelDelta = (int)Math.Round(deltaY);
+				if (pixelDelta != 0 && Math.Abs(pixelDelta) < h)
 				{
-					int startRow = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
-					int endRow = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
-					startRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, startRow));
-					endRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, endRow));
+					unsafe
+					{
+						MemmoveWholeFrame((byte*)locked.Address, locked.RowBytes, h, pixelDelta);
+					}
 
-					// Determine which rows are newly exposed (the band that was cleared).
-					double oldTop = _lastRenderOffsetY;
-					double newTop = _offset.Y;
-					double exposeTop = Math.Min(oldTop, newTop);
-					double exposeBottom = Math.Max(oldTop, newTop);
-					int exposeStartRow = (int)Math.Floor(exposeTop / _cellHeight) - sbCount;
-					int exposeEndRow = (int)Math.Ceiling((exposeBottom + Math.Abs(deltaY)) / _cellHeight) - sbCount;
-					exposeStartRow = Math.Max(startRow, exposeStartRow);
-					exposeEndRow = Math.Min(endRow, exposeEndRow);
+					// Determine which rows are newly exposed: the memmove cleared the
+					// band at the edge the content moved away from — the top when
+					// scrolling back (content shifts down), the bottom when scrolling
+					// forward (content shifts up). Re-render exactly those rows; the
+					// rest of the frame is already correct from the pixel shift and
+					// must not be redrawn (redrawing over shifted pixels doubles
+					// antialiased edges and clobbers the wrong rows).
+					ComputeExposedRows(oldTop: _lastRenderOffsetY, newTop: _offset.Y,
+						viewportHeight: h, cellHeight: _cellHeight, scrollbackCount: sbCount,
+						out int exposeStartRow, out int exposeEndRow);
+					exposeStartRow = Math.Max(startVisibleRow, exposeStartRow);
+					exposeEndRow = Math.Min(endVisibleRow, exposeEndRow);
 
-					// Render only the exposed rows for visible grid.
-					int compStart = Math.Max(0, exposeStartRow);
-					int compEnd = Math.Max(0, Math.Min(buffer.Rows - 1, exposeEndRow));
-					if (compStart <= compEnd && SkPaint != null && SkFont != null)
-						_frameComposer.RenderTo(canvas, buffer, SkPaint, SkFont, (float)_cellWidth, (float)_cellHeight, compStart, compEnd);
+					for (int r = Math.Max(exposeStartRow, visStart); r <= Math.Min(exposeEndRow, visEnd); r++)
+						mirror[r] = ulong.MaxValue;
 
-					// Render exposed scrollback rows.
+					// Exposed scrollback rows (negative): text over the shifted
+					// pixels, with the base background re-applied first (the
+					// memmove cleared them to zeros).
 					int sbStart = Math.Max(-sbCount, exposeStartRow);
 					int sbEnd = Math.Min(-1, exposeEndRow);
-					if (sbStart <= sbEnd && SkPaint != null && SkFont != null)
+					if (sbStart <= sbEnd)
 					{
+						_exposedBgPaint ??= new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = false };
+						_exposedBgPaint.Color = bgColor;
+						canvas.DrawRect(SKRect.Create(0, sbStart * (float)_cellHeight, buffer.Columns * (float)_cellWidth, (sbEnd - sbStart + 1) * (float)_cellHeight), _exposedBgPaint);
+
 						var font = SkFont;
 						var fm = font.Metrics;
 						float glyphH = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
@@ -558,9 +723,17 @@ public class TerminalCanvas : Control, ILogicalScrollable
 						}
 					}
 				}
-
-				goto renderOverlays;
 			}
+
+			// 3) Dirty rows: everything whose pixels were not moved into place —
+			//    exposed bands (sentineled) and rows written since the last render.
+			ComputeDirtyRows(buffer.RowScrollEpochs, mirror, visStart, visEnd, _dirtyRowScratch);
+
+			if (_dirtyRowScratch.Count > 0)
+				_frameComposer.RenderDirty(canvas, buffer, SkPaint, SkFont, (float)_cellWidth, (float)_cellHeight, bgColor, visStart, visEnd, CollectionsMarshal.AsSpan(_dirtyRowScratch));
+
+			_renderEpochs = buffer.RowScrollEpochs.ToArray();
+			goto renderOverlays;
 		}
 
 		// Full render path: clear bitmap and re-render everything.
@@ -610,10 +783,14 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}
 		}
 
+		// The full pass re-rendered everything: the mirror now equals the buffer
+		// epochs and any queued scrolls are obsolete (their content was painted).
+		_renderEpochs = buffer.RowScrollEpochs.ToArray();
+		while (buffer.TryDequeuePendingScroll(out _)) { }
+
 	renderOverlays:
 		_lastRenderOffsetY = _offset.Y;
 		_lastRenderSbCount = sbCount;
-
 		// Draw selection overlay
 		if (!_selectionRange.IsEmpty)
 		{
@@ -940,6 +1117,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		_metricsDirty = false;
 
+		// Font/typeface changes invalidate the composer's per-row classification
+		// cache (TypefaceIndex resolution depends on the current font list).
+		try { _frameComposer?.ResetCaches(); } catch { }
+
 		// Optionally disable glyph discovery (atlas population) to avoid heavy
 		// UI-thread work on resource-constrained systems. Set env var
 		// DOTTY_DISABLE_GLYPH_DISCOVERY=1 to disable.
@@ -1072,6 +1253,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		// Dispose bitmap
 		_bitmap?.Dispose();
 		_bitmap = null;
+		_exposedBgPaint?.Dispose();
+		_exposedBgPaint = null;
 		
 		// Reset metrics to ensure fresh calculation on reattach
 		_metricsDirty = true;

@@ -82,6 +82,16 @@ public sealed class TerminalFrameComposer : IDisposable
     // Legacy `_cellInfos` removed in favor of a single `CellClass` pass.
     private CellClass[] _cellClasses = Array.Empty<CellClass>();
 
+    // Per-row classification cache, keyed by the buffer's identity generation
+    // (which bumps on every content change but is never rotated, so a hit
+    // guarantees the row's content is byte-identical to what was classified).
+    // Lets full-range background synthesis skip unchanged rows.
+    private CellClass[][]? _rowClassCache;
+    private ulong[]? _rowClassGen;
+
+    // Dirty-row mask reused across RenderDirty calls to avoid per-frame allocs.
+    private bool[] _dirtyRowMask = Array.Empty<bool>();
+
     private readonly TerminalAppearanceSettings _appearance;
 
     public TerminalFrameComposer(TerminalAppearanceSettings? appearance = null)
@@ -148,6 +158,80 @@ public sealed class TerminalFrameComposer : IDisposable
         }
         _activeRegions.Clear();
         _rowSpans.Clear();
+        // Classification depends on the current font/typeface resolution;
+        // force a re-classify on the next pass.
+        if (_rowClassGen != null)
+            Array.Clear(_rowClassGen, 0, _rowClassGen.Length);
+    }
+
+    /// <summary>
+    /// Incremental render: repaints exactly the rows whose pixels were NOT
+    /// already moved into place by a scroll replay. Background regions are
+    /// synthesized over the full visible range (so pills are never split at
+    /// dirty-band edges), the base background is re-applied under dirty rows
+    /// (the incremental caller does not clear the bitmap), regions touching
+    /// dirty rows are redrawn (opaque → identity on clean rows), and glyphs
+    /// are drawn for dirty rows only.
+    /// </summary>
+    /// <param name="bgColor">Terminal base background, applied under dirty rows.</param>
+    /// <param name="visStartRow">First visible grid row (inclusive).</param>
+    /// <param name="visEndRow">Last visible grid row (inclusive).</param>
+    /// <param name="dirtyRows">Rows whose pixels are stale; must be within [visStartRow..visEndRow].</param>
+    public void RenderDirty(
+        SKCanvas target,
+        TerminalBuffer buffer,
+        SKPaint paint,
+        SKFont font,
+        float cellW,
+        float cellH,
+        SKColor bgColor,
+        int visStartRow,
+        int visEndRow,
+        ReadOnlySpan<int> dirtyRows)
+    {
+        if (target == null) throw new ArgumentNullException(nameof(target));
+        if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+        if (paint == null) throw new ArgumentNullException(nameof(paint));
+        if (font == null) throw new ArgumentNullException(nameof(font));
+        if (cellW <= 0 || cellH <= 0) return;
+
+        EnsureCellClasses(buffer.Columns);
+        EnsureRowClassCache(buffer);
+
+        visStartRow = Math.Max(0, visStartRow);
+        visEndRow = Math.Min(buffer.Rows - 1, visEndRow);
+        if (visStartRow > visEndRow) return;
+
+        // Build the dirty mask.
+        Array.Clear(_dirtyRowMask, 0, Math.Min(_dirtyRowMask.Length, buffer.Rows));
+        foreach (var row in dirtyRows)
+        {
+            if (row >= 0 && row < buffer.Rows)
+                _dirtyRowMask[row] = true;
+        }
+
+        // Full visible-range synthesis from the (cache-backed) classification.
+        CollectBackgroundRegions(buffer, visStartRow, visEndRow);
+
+        // Re-apply the base background under stale rows (no canvas.Clear in the
+        // incremental path). Non-AA hard rects so no-bg cells get the exact
+        // Clear color and no bleed into neighboring cells.
+        _backgroundFill.Style = SKPaintStyle.Fill;
+        _backgroundFill.IsAntialias = false;
+        _backgroundFill.Color = bgColor;
+        foreach (var row in dirtyRows)
+        {
+            if (row < visStartRow || row > visEndRow) continue;
+            target.DrawRect(SKRect.Create(0, row * cellH, buffer.Columns * cellW, cellH), _backgroundFill);
+        }
+        _backgroundFill.IsAntialias = true;
+
+        // Regions touching dirty rows (opaque → identity elsewhere).
+        DrawBackgroundRegions(target, cellW, cellH, exactCellBackgrounds: buffer.IsAlternateScreenActive, _dirtyRowMask);
+
+        // Glyphs for dirty rows only.
+        SyncGlyphPaint(paint, font);
+        DrawGlyphs(target, buffer, paint, cellW, cellH, visStartRow, visEndRow, _dirtyRowMask);
     }
 
     // ============================================================
@@ -163,7 +247,7 @@ public sealed class TerminalFrameComposer : IDisposable
         {
             // Classify the row once and let the span builder and glyph
             // renderer consume that single source of truth.
-            ClassifyRowCells(buffer, row);
+            ClassifyRowCellsCached(buffer, row);
             BuildRowSpans(_cellClasses, row);
             MergeRowSpans(row);
         }
@@ -257,7 +341,8 @@ public sealed class TerminalFrameComposer : IDisposable
         SKCanvas canvas,
         float cellW,
         float cellH,
-        bool exactCellBackgrounds)
+        bool exactCellBackgrounds,
+        bool[]? dirtyRowMask = null)
     {
         float horizontalPadding = exactCellBackgrounds ? 0f : _appearance.HorizontalPadding;
         float verticalPadding = exactCellBackgrounds ? 0f : _appearance.GetVerticalPadding(cellH);
@@ -265,6 +350,13 @@ public sealed class TerminalFrameComposer : IDisposable
 
         foreach (var r in _regions)
         {
+            // Incremental passes draw only regions that touch a dirty row.
+            // Regions are opaque, so skipping the untouched ones is a pure
+            // perf win; redrawing an intersecting region over already-correct
+            // pixels is the identity (opaque fill, same geometry).
+            if (dirtyRowMask != null && !RegionIntersectsDirty(r, dirtyRowMask))
+                continue;
+
             float left = r.X0 * cellW - horizontalPadding;
             float right = r.X1 * cellW + horizontalPadding;
             float top = r.TopRow * cellH + verticalPadding;
@@ -285,6 +377,16 @@ public sealed class TerminalFrameComposer : IDisposable
             bool canInset = rect.Width >= rect.Height + 2f;
             DrawPill(canvas, rect, r.Color, canInset, rectRadius);
         }
+    }
+
+    private static bool RegionIntersectsDirty(in Region r, bool[] dirtyRowMask)
+    {
+        int end = Math.Min(r.BottomRow, dirtyRowMask.Length);
+        for (int row = Math.Max(0, r.TopRow); row < end; row++)
+        {
+            if (dirtyRowMask[row]) return true;
+        }
+        return false;
     }
 
     private void DrawPill(SKCanvas canvas, SKRect rect, SKColor color, bool drawInnerStroke, float radius)
@@ -456,7 +558,8 @@ public sealed class TerminalFrameComposer : IDisposable
         float cellW,
         float cellH,
         int startRow,
-        int endRow)
+        int endRow,
+        bool[]? dirtyRowMask = null)
     {
         var fm = _glyphFont.Metrics;
         float baselineOffset = -fm.Ascent;
@@ -474,7 +577,9 @@ public sealed class TerminalFrameComposer : IDisposable
 
         for (int row = startRow; row <= endRow; row++)
         {
-            ClassifyRowCells(buffer, row);
+            if (dirtyRowMask != null && !dirtyRowMask[row]) continue;
+
+            ClassifyRowCellsCached(buffer, row);
 
             float rowTop = row * cellH;
             float baseline = MathF.Round(rowTop + baselineOffset);
@@ -760,6 +865,50 @@ public sealed class TerminalFrameComposer : IDisposable
     {
         if (_cellClasses.Length < columns)
             _cellClasses = new CellClass[columns];
+    }
+
+    /// <summary>
+    /// Classifies one row into <see cref="_cellClasses"/>, reusing the cached
+    /// per-row classification when the buffer's identity generation is
+    /// unchanged. The cache is keyed on generations that are bumped on every
+    /// content change but never rotated by scrolls, so a hit is always sound.
+    /// </summary>
+    private void ClassifyRowCellsCached(TerminalBuffer buffer, int row)
+    {
+        EnsureCellClasses(buffer.Columns);
+        EnsureRowClassCache(buffer);
+
+        ulong gen = buffer.GetRowGeneration(row);
+        var cached = _rowClassCache![row];
+        if (cached != null && cached.Length >= buffer.Columns && _rowClassGen![row] == gen)
+        {
+            Array.Copy(cached, _cellClasses, buffer.Columns);
+            return;
+        }
+
+        ClassifyRowCells(buffer, row);
+        if (cached == null || cached.Length < buffer.Columns)
+            cached = _rowClassCache[row] = new CellClass[buffer.Columns];
+        Array.Copy(_cellClasses, cached, buffer.Columns);
+        _rowClassGen![row] = gen;
+    }
+
+    private void EnsureRowClassCache(TerminalBuffer buffer)
+    {
+        if (_rowClassCache != null && _rowClassCache.Length >= buffer.Rows) return;
+        int rows = Math.Max(buffer.Rows, 1);
+        var cache = new CellClass[rows][];
+        var gens = new ulong[rows];
+        if (_rowClassCache != null)
+            Array.Copy(_rowClassCache, cache, Math.Min(_rowClassCache.Length, rows));
+        if (_rowClassGen != null)
+            Array.Copy(_rowClassGen, gens, Math.Min(_rowClassGen.Length, rows));
+        // Fresh slots keep null row arrays so they always miss (re-classify).
+        _rowClassCache = cache;
+        _rowClassGen = gens;
+
+        if (_dirtyRowMask.Length < rows)
+            _dirtyRowMask = new bool[rows];
     }
 
     private static unsafe int GetFirstRune(string? s)

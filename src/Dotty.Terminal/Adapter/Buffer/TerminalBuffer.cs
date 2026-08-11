@@ -19,6 +19,23 @@ public class TerminalBuffer
 
     internal Screen ActiveScreenForTests => ActiveBuffer;
 
+    /// <summary>
+    /// A buffer scroll that the renderer can replay as a region memmove on its
+    /// cached bitmap. <see cref="Delta"/> is the signed row offset the content
+    /// moved (positive = down, negative = up); the exposed band is at the top
+    /// for positive deltas and the bottom for negative deltas.
+    /// </summary>
+    public readonly record struct PendingScroll(int Top, int Bottom, int Delta);
+
+    /// <summary>Number of scrolls recorded since the last render drained the queue.</summary>
+    public int PendingScrollCount => _pendingScrolls.Count;
+
+    /// <summary>
+    /// Dequeues the oldest recorded scroll. Called by the renderer under
+    /// <see cref="SyncRoot"/> while replaying pending scrolls in FIFO order.
+    /// </summary>
+    public bool TryDequeuePendingScroll(out PendingScroll scroll) => _pendingScrolls.TryDequeue(out scroll);
+
     public StyleSet StyleSet { get; } = new();
 
     private readonly ScreenManager _screens;
@@ -37,6 +54,22 @@ public class TerminalBuffer
 
     private ulong[] _rowGenerations = Array.Empty<ulong>();
     private ulong _globalGeneration;
+
+    // Motion epochs: travel with content across scrolls (rotated like the
+    // Screen ring) and are bumped only for rows whose content actually changed
+    // in place (writes, erases) or was newly exposed by a scroll. The renderer
+    // mirrors this array and re-renders only rows where bufferEpoch != mirror,
+    // i.e. rows whose pixels were NOT already moved into place by a memmove.
+    // Distinct from _rowGenerations (identity; bumped on every content change)
+    // so the composer's per-row classification cache can key on identity
+    // without false hits after a scroll rotation.
+    private ulong[] _rowScrollEpochs = Array.Empty<ulong>();
+
+    // Scrolls recorded since the last render. The renderer replays these as
+    // region memmoves on its cached bitmap. Cleared whenever the grid identity
+    // is blown away (full invalidation / resize), because replaying a scroll
+    // against unrelated content would corrupt pixels.
+    private readonly Queue<PendingScroll> _pendingScrolls = new();
     private List<string> _hyperlinks = new List<string> { string.Empty };
     private Dictionary<string, ushort> _hyperlinkLookup = new Dictionary<string, ushort>();
 
@@ -45,6 +78,7 @@ public class TerminalBuffer
         Rows = rows;
         Columns = columns;
         _rowGenerations = new ulong[rows];
+        _rowScrollEpochs = new ulong[rows];
         _screens = new ScreenManager(rows, columns, scrollbackCapacity);
         _writer = CreateWriter();
         _scrollBottom = rows - 1;
@@ -71,6 +105,11 @@ public class TerminalBuffer
         _scrollTop = Math.Min(_scrollTop, _scrollBottom);
 
         Array.Resize(ref _rowGenerations, rows);
+        Array.Resize(ref _rowScrollEpochs, rows);
+        // Reflow scrambles row identity; queued scrolls must not be replayed
+        // against the new layout. The canvas does a full render on geometry
+        // change anyway.
+        _pendingScrolls.Clear();
         unchecked { _globalGeneration++; }
     }
 
@@ -341,24 +380,61 @@ public class TerminalBuffer
 
     public void ScrollUpLines(int n)
     {
-        if (n <= 0) return;
-        ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, n);
-        if (_scrollTop == 0)
-            unchecked { _totalScrolled += Math.Min(n, _scrollBottom - _scrollTop + 1); }
-        MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+        ScrollRegionUp(_scrollTop, _scrollBottom, n);
     }
 
     public void ScrollDownLines(int n)
     {
+        ScrollRegionDown(_scrollTop, _scrollBottom, n);
+    }
+
+    /// <summary>
+    /// Shared SU/CSI-S/LF-at-region-bottom implementation: scrolls content up
+    /// by n rows inside [top..bottom], rotates motion epochs with the content,
+    /// bumps the exposed bottom band, and records the scroll for the renderer.
+    /// </summary>
+    private void ScrollRegionUp(int top, int bottom, int n)
+    {
         if (n <= 0) return;
-        int clampedLines = Math.Min(n, _scrollBottom - _scrollTop + 1);
+        ActiveBuffer.ScrollUpRegion(top, bottom, n);
+        int height = bottom - top + 1;
+        int delta = Math.Min(n, height);
+        if (top == 0)
+            unchecked { _totalScrolled += delta; }
+
+        // Motion epochs travel with content: row r now holds the content that
+        // was at row r+delta, so its epoch moves down the array. The exposed
+        // (blanked) bottom band gets fresh epochs.
+        ScrollEpochMath.RotateRange(_rowScrollEpochs, top, bottom, -delta);
+        for (int r = bottom - delta + 1; r <= bottom; r++)
+            unchecked { _rowScrollEpochs[r]++; }
+
+        // Identity generations: the whole region changed; classification and
+        // glyph caches must re-examine every row.
+        BumpIdentity(top, height);
+
+        // A whole-region replacement clears rows instead of moving content —
+        // no memmove to replay; the epoch bumps above render every row.
+        if (delta < height)
+            _pendingScrolls.Enqueue(new PendingScroll(top, bottom, -delta));
+    }
+
+    /// <summary>
+    /// Shared SD/CSI-T/RI-at-region-top implementation: scrolls content down by
+    /// n rows inside [top..bottom], rotating motion epochs and bumping the
+    /// exposed top band (which holds restored scrollback or blanked rows).
+    /// </summary>
+    private void ScrollRegionDown(int top, int bottom, int n)
+    {
+        if (n <= 0) return;
+        int clampedLines = Math.Min(n, bottom - top + 1);
         int restoredFromScrollback = 0;
-        bool isFullScreenRegion = _scrollTop == 0 && _scrollBottom == Rows - 1;
+        bool isFullScreenRegion = top == 0 && bottom == Rows - 1;
         if (isFullScreenRegion)
             restoredFromScrollback = Math.Min(_totalScrolled, clampedLines);
 
-        ActiveBuffer.ScrollDownRegion(_scrollTop, _scrollBottom, n);
-        if (_scrollTop == 0 && _totalScrolled > 0)
+        ActiveBuffer.ScrollDownRegion(top, bottom, n);
+        if (top == 0 && _totalScrolled > 0)
             unchecked { _totalScrolled = Math.Max(0, _totalScrolled - clampedLines); }
 
         // Full-screen reverse scrolling should reveal history until scrollback is
@@ -370,7 +446,19 @@ public class TerminalBuffer
                 ActiveBuffer.ClearRow(row);
         }
 
-        MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+        // Content moved down: row r now holds the content that was at row
+        // r-delta; epochs rotate up the array. The exposed top band gets fresh
+        // epochs (its content is restored-from-scrollback or blanked — new to
+        // the renderer either way).
+        int height = bottom - top + 1;
+        ScrollEpochMath.RotateRange(_rowScrollEpochs, top, bottom, clampedLines);
+        for (int r = top; r < top + clampedLines; r++)
+            unchecked { _rowScrollEpochs[r]++; }
+
+        BumpIdentity(top, height);
+
+        if (clampedLines < height)
+            _pendingScrolls.Enqueue(new PendingScroll(top, bottom, clampedLines));
     }
 
     public void SetCursor(int row, int col)
@@ -505,11 +593,7 @@ public class TerminalBuffer
         // like Neovim.
         if (_cursor.Row == _scrollBottom)
         {
-            ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, 1);
-            if (_scrollTop == 0)
-                unchecked { _totalScrolled++; }
-
-            MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+            ScrollRegionUp(_scrollTop, _scrollBottom, 1);
             return;
         }
 
@@ -641,7 +725,7 @@ public class TerminalBuffer
         int regionHeight = bottom - row + 1;
         if (count >= regionHeight)
         {
-            // clear region
+            // clear region: every row is exposed; plain identity+epoch bump.
             for (int r = row; r <= bottom; r++)
             for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
             MarkRowRangeDirty(row, bottom - row + 1);
@@ -662,7 +746,11 @@ public class TerminalBuffer
         // clear inserted lines
         for (int r = row; r < row + count; r++)
         for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
-        MarkRowRangeDirty(row, bottom - row + 1);
+        ScrollEpochMath.RotateRange(_rowScrollEpochs, row, bottom, count);
+        for (int r = row; r < row + count; r++)
+            unchecked { _rowScrollEpochs[r]++; }
+        BumpIdentity(row, regionHeight);
+        _pendingScrolls.Enqueue(new PendingScroll(row, bottom, count));
     }
 
     public void DeleteLines(int count)
@@ -674,7 +762,7 @@ public class TerminalBuffer
         int regionHeight = bottom - row + 1;
         if (count >= regionHeight)
         {
-            // clear region
+            // clear region: every row is exposed; plain identity+epoch bump.
             for (int r = row; r <= bottom; r++)
             for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
             MarkRowRangeDirty(row, bottom - row + 1);
@@ -695,7 +783,11 @@ public class TerminalBuffer
         // clear trailing lines
         for (int r = bottom - count + 1; r <= bottom; r++)
         for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
-        MarkRowRangeDirty(row, bottom - row + 1);
+        ScrollEpochMath.RotateRange(_rowScrollEpochs, row, bottom, -count);
+        for (int r = bottom - count + 1; r <= bottom; r++)
+            unchecked { _rowScrollEpochs[r]++; }
+        BumpIdentity(row, regionHeight);
+        _pendingScrolls.Enqueue(new PendingScroll(row, bottom, -count));
     }
 
     public void EraseDisplay(int mode)
@@ -759,12 +851,7 @@ public class TerminalBuffer
 
     internal void ScrollUp(int lines)
     {
-        if (lines <= 0) return;
-
-        ActiveBuffer.ScrollUpRegion(_scrollTop, _scrollBottom, lines);
-        if (_scrollTop == 0)
-            unchecked { _totalScrolled += Math.Min(lines, _scrollBottom - _scrollTop + 1); }
-        MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+        ScrollRegionUp(_scrollTop, _scrollBottom, lines);
     }
 
     public string GetRowText(int row)
@@ -807,6 +894,7 @@ public class TerminalBuffer
     {
         if (row < 0 || row >= _rowGenerations.Length) return;
         unchecked { _rowGenerations[row]++; }
+        if (row < _rowScrollEpochs.Length) unchecked { _rowScrollEpochs[row]++; }
         unchecked { _globalGeneration++; }
     }
 
@@ -815,15 +903,39 @@ public class TerminalBuffer
         if (start < 0) start = 0;
         int end = Math.Min(start + count, _rowGenerations.Length);
         for (int i = start; i < end; i++)
+        {
             unchecked { _rowGenerations[i]++; }
+            if (i < _rowScrollEpochs.Length) unchecked { _rowScrollEpochs[i]++; }
+        }
         unchecked { _globalGeneration += (ulong)(end - start); }
     }
 
     private void MarkAllRowsDirty()
     {
         for (int i = 0; i < _rowGenerations.Length; i++)
+        {
             unchecked { _rowGenerations[i]++; }
+            if (i < _rowScrollEpochs.Length) unchecked { _rowScrollEpochs[i]++; }
+        }
         unchecked { _globalGeneration += (ulong)_rowGenerations.Length; }
+        // Full invalidation (alt-screen toggle, reset, clear) means the grid
+        // identity changed wholesale; queued scrolls reference old content.
+        _pendingScrolls.Clear();
+    }
+
+    /// <summary>
+    /// Bumps only the identity generations for [start, start+count). Used by
+    /// scroll operations, which must invalidate the classification/glyph
+    /// caches for the whole region while handling motion epochs themselves
+    /// (rotation + exposed-row bump) so the renderer can skip moved rows.
+    /// </summary>
+    private void BumpIdentity(int start, int count)
+    {
+        if (start < 0) start = 0;
+        int end = Math.Min(start + count, _rowGenerations.Length);
+        for (int i = start; i < end; i++)
+            unchecked { _rowGenerations[i]++; }
+        unchecked { _globalGeneration += (ulong)(end - start); }
     }
 
     public ulong GetRowGeneration(int row)
@@ -833,6 +945,16 @@ public class TerminalBuffer
     }
 
     public ReadOnlySpan<ulong> RowGenerations => _rowGenerations;
+
+    /// <summary>Motion epoch of one logical row (see <c>_rowScrollEpochs</c>).</summary>
+    public ulong GetRowEpoch(int row)
+    {
+        if (row < 0 || row >= _rowScrollEpochs.Length) return 0;
+        return _rowScrollEpochs[row];
+    }
+
+    /// <summary>The full motion-epoch array; the renderer mirrors this.</summary>
+    public ReadOnlySpan<ulong> RowScrollEpochs => _rowScrollEpochs;
 
     /// <summary>
     /// Notify the active screen that a render cycle is starting so it can

@@ -1,6 +1,8 @@
 # Incremental Scroll Rendering
 
-Status: **Implemented and verified.** All phases shipped; see Section 6 for measured results.
+Status: **Reverted from the render hot path after live testing found correctness bugs beyond
+the four field fixes below (Section 9); the tested primitives remain in the codebase for a
+future, more rigorously verified re-attempt.**
 
 ## TL;DR
 
@@ -530,6 +532,39 @@ All shipped; every acceptance criterion met.
 > that the full render's `canvas.Clear` covers. Fixed by filling the full clip width in
 > `RenderDirty` (and the pureScroll scrollback-band fill). Regression test
 > `Clear_WithContentPadding_FullyErasesPromptSegmentPill`.
+
+## 9. Reverted (post-ship)
+
+Two additional bugs surfaced under live desktop testing (real mouse wheel + real window, not
+just the synthetic pixel-diff harness) that the four field fixes above didn't touch:
+
+1. **Manual scroll pixel corruption.** A wheel scroll through the pureScroll (viewport-shift
+   memmove) path produced a row with visibly corrupted glyphs (`LINE` rendered as `LTNF`) — a
+   horizontal smear consistent with a stale/partial repaint at a fractional-pixel scroll
+   boundary. Root cause not isolated before the decision below.
+2. **Autoscroll never following new output**, unrelated to this design's own logic: the canvas
+   posts `UpdateScrollState` and the render-scheduling `SetBuffer` callback via
+   `Dispatcher.UIThread.Post` at `DispatcherPriority.Background`/default respectively. Both are
+   *lower* priority than `DispatcherPriority.Render` (the compositor's own pass, scheduled every
+   frame); under continuous rendering both posts were starved indefinitely, so new output never
+   scrolled into view regardless of the render path used. Fixed independently by moving both
+   posts to `DispatcherPriority.Render` — unrelated to the incremental design, but found while
+   investigating why fixing this design's bugs didn't fix the user's reported symptom.
+
+Given three correctness bugs found in this feature during one session — none caught by the
+pixel-diff harness, which exercises the primitives synthetically but not through a real
+`ScrollViewer` + real wheel/window-manager integration — the canvas's `RenderToBitmap` was
+reverted to always take the full-render path (`TerminalCanvas.cs`, "Always full render" comment
+block). Full render is ~11.7ms at 73×136 (Section 6), well within a frame budget, so this trades
+the incremental design's performance upside for correctness until it can be re-verified with
+real interactive testing, not just synthetic scenarios.
+
+**Kept, not deleted:** `ScrollEpochMath`, `ComputeExposedRows`, `ApplyScrollToMirror`,
+`MemmoveRegionRows`, `MemmoveWholeFrame`, `ComputeDirtyRows` (all `internal static` in
+`TerminalCanvas.cs`), `TerminalFrameComposer.RenderDirty`, and the buffer-side `PendingScroll`
+queue/epoch bookkeeping (`TerminalBuffer.cs`) — all still exercised by their own unit tests
+(`ScrollExposedRowsTests`, `ScrollEpochTests`, `IncrementalRenderTests`, `LfBurst_*`), just no
+longer wired into the canvas's render call site.
 
 | Phase | Scope | Outcome |
 |-------|-------|---------|

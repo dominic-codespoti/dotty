@@ -146,12 +146,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private TextShaper? _textShaper;
 	private static readonly ShapedRunCache SharedShapedRunCache = new();
 
-	// Incremental render tracking: avoids full redraw when only the scroll
-	// offset changed (user scrolling).  Instead, the existing bitmap content
-	// is shifted with memmove and only newly-exposed rows are re-rendered.
-	private double _lastRenderOffsetY = double.NaN;
-	private int _lastRenderSbCount = -1;
-
 	// Global font resolution cache shared across all TerminalCanvas instances.
 	// Key is "{FontFamily}|{TextSize:F1}".  Invalidated when font settings change.
 	private static readonly ConcurrentDictionary<string, SKTypeface> CachedPrimaryTypeface = new();
@@ -164,13 +158,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private int _lastKnownScrollbackCount = -1;
 	private ulong[]? _lastRowGenerations;
 
-	// Mirror of buffer.RowScrollEpochs as last rendered. Scroll replays rotate
-	// this identically to the buffer so moved rows keep bufferEpoch == mirror
-	// (pixels were memmoved) while exposed/written rows differ and are
-	// re-rendered by RenderDirty.
-	private ulong[]? _renderEpochs;
-	private readonly List<int> _dirtyRowScratch = new();
-	private SKPaint? _exposedBgPaint;
 	private double _renderScaling = 1.0;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
 	private static readonly string[] MonospaceFallbackFamilies =
@@ -600,9 +587,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 			if (_bitmap == null || _bitmap.PixelSize.Width != w || _bitmap.PixelSize.Height != h)
 			{
-				_bitmap?.Dispose();
-				_bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888);
-				_lastRenderOffsetY = double.NaN; // force full render on new bitmap
+			_bitmap?.Dispose();
+			_bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888);
 			}
 
 			try
@@ -612,7 +598,17 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			catch { }
 
 			int sbCount = buffer.ScrollbackCount;
-		Dispatcher.UIThread.Post(() => UpdateScrollState(sbCount), DispatcherPriority.Background);
+		// Posted, not synchronous: UpdateScrollState can invalidate a visual
+		// (via ScrollInvalidated -> ScrollContentPresenter -> InvalidateMeasure),
+		// and Avalonia throws if a visual is invalidated while a render pass is
+		// in progress (this method runs inside one). Must defer to after this
+		// pass completes. But Background is the *lowest* active dispatcher
+		// priority and Render (the compositor's own pass, scheduled every
+		// frame) is the *highest* - under continuous rendering a Background
+		// post is starved indefinitely, so the "follow to bottom" offset
+		// adjustment never ran and new output never scrolled into view. Render
+		// priority gets a fair turn alongside the render work instead.
+		Dispatcher.UIThread.Post(() => UpdateScrollState(sbCount), DispatcherPriority.Render);
 
 		using var locked = _bitmap.Lock();
 		var info = new SKImageInfo(locked.Size.Width, locked.Size.Height);
@@ -621,156 +617,18 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		float newScrollTranslate = (float)(sbCount * _cellHeight - _offset.Y);
 
-		// ---- Incremental path decision -------------------------------------
-		// The cached bitmap can be updated without a full re-render when the
-		// frame is a pure viewport shift (pureScroll), a buffer scroll replay,
-		// and/or a small set of written rows. Full render whenever the cached
-		// state can't be reconciled: bitmap recreated, grid geometry changed,
-		// scrollback changed (main-screen output flow), selection active
-		// (conservative), or a viewport shift AND buffer scrolls arrived in the
-		// same frame (ordering would be ambiguous).
-		bool offsetChanged = !double.IsNaN(_lastRenderOffsetY) &&
-		                     Math.Abs(_offset.Y - _lastRenderOffsetY) > 0.5;
-		bool sbChanged = _lastRenderSbCount != sbCount;
-		bool selectionActive = !_selectionRange.IsEmpty;
-		bool hasPending = buffer.PendingScrollCount > 0;
-		bool mirrorInvalid = _renderEpochs == null || _renderEpochs.Length != buffer.Rows;
-
-		bool doFull = double.IsNaN(_lastRenderOffsetY) ||
-		              mirrorInvalid ||
-		              sbChanged ||
-		              selectionActive ||
-		              (offsetChanged && hasPending);
-
-		if (!doFull && _frameComposer != null && SkPaint != null && SkFont != null)
-		{
-			int startVisibleRow = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
-			int endVisibleRow = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
-			startVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, startVisibleRow));
-			endVisibleRow = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, endVisibleRow));
-			int visStart = Math.Max(0, startVisibleRow);
-			int visEnd = Math.Min(buffer.Rows - 1, endVisibleRow);
-			var mirror = _renderEpochs!;
-
-			// Set up the canvas translate so subsequent rendering goes to the right place.
-			var m = SKMatrix.Identity;
-			canvas.SetMatrix(m);
-			if (ContentPadding.Left != 0 || ContentPadding.Top != 0)
-				canvas.Translate((float)ContentPadding.Left, (float)ContentPadding.Top);
-			canvas.Translate(0, newScrollTranslate);
-
-			// 1) Replay pending buffer scrolls as region memmoves. Moved rows'
-			//    pixels are shifted in place and their mirror epochs travel with
-			//    them; the exposed band is sentineled so the dirty pass repaints it.
-			//    Replay is cheap only while the total memmove volume stays small:
-			//    a burst like `yes` queues thousands of scrolls per chunk (each LF
-			//    enqueues one), and replaying all of them is gigabytes of copying.
-			//    Cap the total region height and fall back to a full render (with
-			//    the queue drained) when exceeded — the pre-incremental behavior.
-			bool replayOverflow = false;
-			if (hasPending)
-			{
-				unsafe
-				{
-					byte* pixels = (byte*)locked.Address;
-					int stride = locked.RowBytes;
-					long replayCost = 0;
-					long maxReplayCost = 8L * Math.Max(1, buffer.Rows);
-					while (buffer.TryDequeuePendingScroll(out var s))
-					{
-						int regionHeight = s.Bottom - s.Top + 1;
-						replayCost += regionHeight;
-						if (replayCost > maxReplayCost)
-						{
-							while (buffer.TryDequeuePendingScroll(out _)) { }
-							replayOverflow = true;
-							break;
-						}
-						ApplyScrollToMirror(mirror, s.Top, s.Bottom, s.Delta, visStart, visEnd, out bool memmoved);
-						if (memmoved)
-							MemmoveRegionRows(pixels, stride, h, newScrollTranslate, s.Top, s.Bottom, s.Delta, (float)_cellHeight);
-					}
-				}
-			}
-
-			if (replayOverflow)
-				goto FullRenderPath;
-
-			// 2) Pure-scroll viewport shift (no pending buffer scrolls). Shift
-			//    the whole frame and sentinel the exposed band so the dirty pass
-			//    re-renders it (RenderDirty re-applies the base background, so
-			//    the memmove's zero-cleared band is fully overwritten).
-			if (offsetChanged && !hasPending)
-			{
-				double deltaY = _lastRenderOffsetY - _offset.Y;
-				int pixelDelta = (int)Math.Round(deltaY);
-				if (pixelDelta != 0 && Math.Abs(pixelDelta) < h)
-				{
-					unsafe
-					{
-						MemmoveWholeFrame((byte*)locked.Address, locked.RowBytes, h, pixelDelta);
-					}
-
-					// Determine which rows are newly exposed: the memmove cleared the
-					// band at the edge the content moved away from — the top when
-					// scrolling back (content shifts down), the bottom when scrolling
-					// forward (content shifts up). Re-render exactly those rows; the
-					// rest of the frame is already correct from the pixel shift and
-					// must not be redrawn (redrawing over shifted pixels doubles
-					// antialiased edges and clobbers the wrong rows).
-					ComputeExposedRows(oldTop: _lastRenderOffsetY, newTop: _offset.Y,
-						viewportHeight: h, cellHeight: _cellHeight, scrollbackCount: sbCount,
-						out int exposeStartRow, out int exposeEndRow);
-					exposeStartRow = Math.Max(startVisibleRow, exposeStartRow);
-					exposeEndRow = Math.Min(endVisibleRow, exposeEndRow);
-
-					for (int r = Math.Max(exposeStartRow, visStart); r <= Math.Min(exposeEndRow, visEnd); r++)
-						mirror[r] = ulong.MaxValue;
-
-					// Exposed scrollback rows (negative): text over the shifted
-					// pixels, with the base background re-applied first (the
-					// memmove cleared them to zeros).
-					int sbStart = Math.Max(-sbCount, exposeStartRow);
-					int sbEnd = Math.Min(-1, exposeEndRow);
-					if (sbStart <= sbEnd)
-					{
-						_exposedBgPaint ??= new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = false };
-						_exposedBgPaint.Color = bgColor;
-						// Full clip width: the content-padding gutters are part
-						// of the base background (canvas.Clear in the full path).
-						var clip = canvas.LocalClipBounds;
-						canvas.DrawRect(SKRect.Create(clip.Left, sbStart * (float)_cellHeight, clip.Width, (sbEnd - sbStart + 1) * (float)_cellHeight), _exposedBgPaint);
-
-						var font = SkFont;
-						var fm = font.Metrics;
-						float glyphH = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
-						float blOffset = (float)(_cellHeight * 0.5f) + (glyphH * 0.5f) - Math.Abs(fm.Descent);
-						for (int r = sbStart; r <= sbEnd; r++)
-						{
-							int idx = r + sbCount;
-							idx = Math.Max(0, Math.Min(sbCount - 1, idx));
-							var line = buffer.GetScrollbackLine(idx);
-							if (line.Length <= 0) continue;
-							float y = (float)(r * _cellHeight + blOffset);
-							canvas.DrawText(SKTextBlob.Create(line.Text ?? string.Empty, font), 0, y, SkPaint);
-						}
-					}
-				}
-			}
-
-			// 3) Dirty rows: everything whose pixels were not moved into place —
-			//    exposed bands (sentineled) and rows written since the last render.
-			ComputeDirtyRows(buffer.RowScrollEpochs, mirror, visStart, visEnd, _dirtyRowScratch);
-
-			if (_dirtyRowScratch.Count > 0)
-				_frameComposer.RenderDirty(canvas, buffer, SkPaint, SkFont, (float)_cellWidth, (float)_cellHeight, bgColor, visStart, visEnd, CollectionsMarshal.AsSpan(_dirtyRowScratch));
-
-			_renderEpochs = buffer.RowScrollEpochs.ToArray();
-			goto renderOverlays;
-		}
-
-	FullRenderPath:
-		// Full render path: clear bitmap and re-render everything.
+		// Always full render: clear the bitmap and re-render everything. An
+		// earlier incremental path here (viewport-shift memmove, buffer-scroll
+		// replay, dirty-row culling) traded this full redraw for partial
+		// updates, but proved unsafe in practice - it corrupted glyphs on
+		// manual scroll and, separately, its offset-tracking starved the
+		// "follow new output to bottom" update (see UpdateScrollState's
+		// caller above). Full render is ~11.7ms at 73x136 (bench-verified),
+		// well within a frame budget. The primitives it would have reused
+		// (ComputeExposedRows, ApplyScrollToMirror, MemmoveRegionRows,
+		// MemmoveWholeFrame, ComputeDirtyRows, TerminalFrameComposer.RenderDirty)
+		// stay in place with their own tests for a future, more carefully
+		// verified re-attempt.
 		canvas.Clear(bgColor);
 
 		var mFull = SKMatrix.Identity;
@@ -817,14 +675,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}
 		}
 
-		// The full pass re-rendered everything: the mirror now equals the buffer
-		// epochs and any queued scrolls are obsolete (their content was painted).
-		_renderEpochs = buffer.RowScrollEpochs.ToArray();
+		// Drain queued scroll records: buffer-side scroll ops still enqueue
+		// them (their own tests cover that bookkeeping), but this render path
+		// doesn't consume them - left unqueued they'd grow without bound.
 		while (buffer.TryDequeuePendingScroll(out _)) { }
 
-	renderOverlays:
-		_lastRenderOffsetY = _offset.Y;
-		_lastRenderSbCount = sbCount;
 		// Draw selection overlay
 		if (!_selectionRange.IsEmpty)
 		{
@@ -1287,8 +1142,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		// Dispose bitmap
 		_bitmap?.Dispose();
 		_bitmap = null;
-		_exposedBgPaint?.Dispose();
-		_exposedBgPaint = null;
 		
 		// Reset metrics to ensure fresh calculation on reattach
 		_metricsDirty = true;

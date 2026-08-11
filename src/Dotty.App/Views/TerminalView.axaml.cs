@@ -193,6 +193,11 @@ namespace Dotty.App.Views
         {
             if (_renderUpdatePending) return;
             _renderUpdatePending = true;
+            // Render priority: Default (this post's implicit priority) is
+            // lower than Render (the compositor's own pass, scheduled every
+            // frame) - under continuous rendering a Default-priority post is
+            // starved indefinitely, so new PTY output never reached the
+            // canvas (no InvalidateVisual -> no repaint -> no autoscroll).
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 _renderUpdatePending = false;
@@ -202,7 +207,7 @@ namespace Dotty.App.Views
                     CursorShape = _session.Adapter.CursorShape;
                     SetBuffer(_session.Adapter.Buffer);
                 }
-            });
+            }, Avalonia.Threading.DispatcherPriority.Render);
         }
         
         private void UpdateSize()

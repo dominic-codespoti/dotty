@@ -260,6 +260,32 @@ public class ScrollEpochTests
     }
 
     [Fact]
+    public void RenderBoundary_ResetsWriterCoalescing_SoTypingAlwaysBumpsEpoch()
+    {
+        // The writer coalesces consecutive writes to the same row (one dirty
+        // call per row per burst). The renderer's epoch mirror depends on a
+        // bump per render cycle, so the canvas must reset that coalescing at
+        // every render boundary — otherwise keystrokes in the same row never
+        // mark the row dirty and the display goes stale.
+        var buf = CreateBuffer();
+        buf.SetCursor(0, 0);
+        buf.WriteText("a", default);
+        ulong afterFirst = buf.GetRowEpoch(0);
+        buf.SetCursor(0, 1);
+        buf.WriteText("b", default);
+        // Same row, no render between: coalesced into the first bump.
+        Assert.Equal(afterFirst, buf.GetRowEpoch(0));
+
+        // The canvas calls MarkRender at the start of every RenderToBitmap.
+        buf.MarkRender();
+
+        buf.SetCursor(0, 2);
+        buf.WriteText("c", default);
+        Assert.True(buf.GetRowEpoch(0) > afterFirst, "write after a render must bump the epoch");
+        Assert.True(buf.GetRowGeneration(0) > 1, "identity generation must bump too (cache invalidation)");
+    }
+
+    [Fact]
     public void SetAlternateScreenToggle_ClearsPendingScrolls()
     {
         var buf = CreateBuffer();

@@ -316,6 +316,12 @@ Key points:
   reset, clear — and `Resize`), because queued scrolls reference the old grid identity.
 - `_totalScrolled` changes (full-screen scrolls) still force a full render via the `sbCount`
   rule (4.6), so the queue entries for those are drained and discarded harmlessly.
+- **Writer coalescing must not span renders:** `BufferTextWriter` coalesces consecutive same-row
+  writes into one dirty call. That was harmless when every frame was a full render (which reads
+  current content), but the epoch mirror depends on a bump per render cycle — consecutive
+  keystrokes in one row would never mark it dirty and the display would go stale. `MarkRender()`
+  (called by the canvas at the start of every render) resets the coalescing so each post-render
+  write bumps.
 - The rotation helper lives in `ScrollEpochMath` (shared by buffer and renderer so both sides
   apply the identical transformation).
 
@@ -485,6 +491,12 @@ All shipped; every acceptance criterion met.
 ---
 
 ## 7. Phasing — all shipped
+
+> **Field fix (post-ship):** typing showed stale text because the writer's same-row write
+> coalescing suppressed generation/epoch bumps across renders. Fixed by resetting the coalescing
+> in `MarkRender()` (the canvas's render boundary); regression tests
+> `RenderBoundary_ResetsWriterCoalescing_SoTypingAlwaysBumpsEpoch` and
+> `Typing_ConsecutiveSameRowKeystrokes_RendersEach`.
 
 | Phase | Scope | Outcome |
 |-------|-------|---------|

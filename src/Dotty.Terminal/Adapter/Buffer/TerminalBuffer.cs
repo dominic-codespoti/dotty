@@ -963,6 +963,13 @@ public class TerminalBuffer
     /// </summary>
     public void MarkRender()
     {
+        // The renderer's dirty-row detection keys on generation/epoch bumps.
+        // The text writer coalesces consecutive same-row writes into one bump;
+        // resetting that coalescing here guarantees every write that lands
+        // after a render is visible to the next one (typing in a single row
+        // would otherwise never mark the row dirty and the display would go
+        // stale).
+        _writer.ResetRowDirtyCoalescing();
         ActiveBuffer.MarkRender();
     }
 

@@ -411,6 +411,40 @@ public class IncrementalRenderTests
         }, translate: 0, startVisibleRow: 0, endVisibleRow: Rows - 1);
     }
 
+    [Fact]
+    public void Typing_ConsecutiveSameRowKeystrokes_RendersEach()
+    {
+        // Replicates the real typing loop: keystroke -> buffer write -> render
+        // (which calls MarkRender and resets the writer's same-row coalescing)
+        // -> next keystroke in the SAME row -> incremental render. Without the
+        // MarkRender reset, the second keystroke never bumps the row's epoch,
+        // the row is not dirty, and the display stays on the first character.
+        var buffer = CreateBuffer(alt: true);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("h".PadRight(Cols), CellAttributes.Default);
+        buffer.MarkRender(); // render boundary before the next keystroke
+
+        using var composer = new TerminalFrameComposer();
+        using var paint = new SKPaint { Color = SKColors.White, IsAntialias = true };
+        using var font = new SKFont(SKTypeface.Default, 13f);
+
+        var frame1 = NewBitmap();
+        FullRender(frame1, buffer, composer, paint, font, 0, 0, Rows - 1);
+        var mirror = buffer.RowScrollEpochs.ToArray();
+
+        // Second keystroke, same row, after a render boundary.
+        buffer.SetCursor(0, 1);
+        buffer.WriteText("e", CellAttributes.Default);
+        buffer.MarkRender();
+
+        var reference = NewBitmap();
+        FullRender(reference, buffer, composer, paint, font, 0, 0, Rows - 1);
+
+        var inc = frame1.Copy();
+        IncrementalRender(inc, buffer, composer, paint, font, mirror, 0, 0, Rows - 1);
+        AssertPixelIdentical(reference, inc, "typing-same-row");
+    }
+
     // ------------------------------------------------------------------
     // Main screen with scrollback + viewport offset (fallback path)
     // ------------------------------------------------------------------

@@ -629,6 +629,19 @@ internal sealed class BufferTextWriter
         _ctx.MarkRowDirty(row);
     }
 
+    /// <summary>
+    /// Resets the consecutive-same-row write coalescing. The canvas calls this
+    /// at every render boundary (via <see cref="TerminalBuffer.MarkRender"/>)
+    /// so that writes arriving after a render always bump the row's generation
+    /// and motion epoch — the incremental renderer depends on a bump per render
+    /// cycle; without it, consecutive keystrokes in the same row would never
+    /// mark the row dirty and the display would go stale.
+    /// </summary>
+    internal void ResetRowDirtyCoalescing()
+    {
+        _lastDirtyRow = -1;
+    }
+
     private (int row, int col) GetPreviousBaseCell()
     {
         int row = _cursor.Row;

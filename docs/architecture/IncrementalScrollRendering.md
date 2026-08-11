@@ -492,11 +492,19 @@ All shipped; every acceptance criterion met.
 
 ## 7. Phasing — all shipped
 
-> **Field fix (post-ship):** typing showed stale text because the writer's same-row write
+> **Field fix 1 (post-ship):** typing showed stale text because the writer's same-row write
 > coalescing suppressed generation/epoch bumps across renders. Fixed by resetting the coalescing
 > in `MarkRender()` (the canvas's render boundary); regression tests
 > `RenderBoundary_ResetsWriterCoalescing_SoTypingAlwaysBumpsEpoch` and
 > `Typing_ConsecutiveSameRowKeystrokes_RendersEach`.
+>
+> **Field fix 2 (post-ship):** after a full-screen clear, cleared rows kept the old prompt
+> segment's pixels in the left content-padding gutter. The canvas's `ContentPadding` is bound to
+> the grid's `CanvasPadding` (16/24/16 even with a null config), so the content is translated
+> 16px right — the incremental base-background fill started at local x=0 and missed the gutter
+> that the full render's `canvas.Clear` covers. Fixed by filling the full clip width in
+> `RenderDirty` (and the pureScroll scrollback-band fill). Regression test
+> `Clear_WithContentPadding_FullyErasesPromptSegmentPill`.
 
 | Phase | Scope | Outcome |
 |-------|-------|---------|

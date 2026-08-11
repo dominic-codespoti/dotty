@@ -706,7 +706,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					{
 						_exposedBgPaint ??= new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = false };
 						_exposedBgPaint.Color = bgColor;
-						canvas.DrawRect(SKRect.Create(0, sbStart * (float)_cellHeight, buffer.Columns * (float)_cellWidth, (sbEnd - sbStart + 1) * (float)_cellHeight), _exposedBgPaint);
+						// Full clip width: the content-padding gutters are part
+						// of the base background (canvas.Clear in the full path).
+						var clip = canvas.LocalClipBounds;
+						canvas.DrawRect(SKRect.Create(clip.Left, sbStart * (float)_cellHeight, clip.Width, (sbEnd - sbStart + 1) * (float)_cellHeight), _exposedBgPaint);
 
 						var font = SkFont;
 						var fm = font.Metrics;

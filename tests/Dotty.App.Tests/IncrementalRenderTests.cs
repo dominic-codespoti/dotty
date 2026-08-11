@@ -54,11 +54,11 @@ public class IncrementalRenderTests
     private static SKBitmap NewBitmap() => new(W, H, SKColorType.Rgba8888, SKAlphaType.Premul);
 
     /// <summary>Replicates the canvas full path: Clear + content translate + RenderTo + scrollback text.</summary>
-    private static void FullRender(SKBitmap bmp, TerminalBuffer buffer, TerminalFrameComposer composer, SKPaint paint, SKFont font, float translate, int startVisibleRow, int endVisibleRow)
+    private static void FullRender(SKBitmap bmp, TerminalBuffer buffer, TerminalFrameComposer composer, SKPaint paint, SKFont font, float translate, int startVisibleRow, int endVisibleRow, float padX = 0)
     {
         using var canvas = new SKCanvas(bmp);
         canvas.Clear(Bg);
-        canvas.SetMatrix(SKMatrix.CreateTranslation(0, translate));
+        canvas.SetMatrix(SKMatrix.CreateTranslation(padX, translate));
 
         int visStart = Math.Max(0, startVisibleRow);
         int visEnd = Math.Min(buffer.Rows - 1, endVisibleRow);
@@ -92,14 +92,14 @@ public class IncrementalRenderTests
     /// memmoves (+ mirror rotation) or fallback sentinels, then RenderDirty for
     /// the rows whose pixels were not moved into place.
     /// </summary>
-    private static void IncrementalRender(SKBitmap bmp, TerminalBuffer buffer, TerminalFrameComposer composer, SKPaint paint, SKFont font, ulong[] mirror, float translate, int startVisibleRow, int endVisibleRow)
+    private static void IncrementalRender(SKBitmap bmp, TerminalBuffer buffer, TerminalFrameComposer composer, SKPaint paint, SKFont font, ulong[] mirror, float translate, int startVisibleRow, int endVisibleRow, float padX = 0)
     {
         int visStart = Math.Max(0, startVisibleRow);
         int visEnd = Math.Min(buffer.Rows - 1, endVisibleRow);
         if (visStart > visEnd) return;
 
         using var canvas = new SKCanvas(bmp);
-        canvas.SetMatrix(SKMatrix.CreateTranslation(0, translate));
+        canvas.SetMatrix(SKMatrix.CreateTranslation(padX, translate));
 
         unsafe
         {
@@ -227,14 +227,14 @@ public class IncrementalRenderTests
         }
     }
 
-    private static void RunScenario(string name, TerminalBuffer buffer, Action<TerminalBuffer> mutate, float translate, int startVisibleRow, int endVisibleRow)
+    private static void RunScenario(string name, TerminalBuffer buffer, Action<TerminalBuffer> mutate, float translate, int startVisibleRow, int endVisibleRow, float padX = 0)
     {
         using var composer = new TerminalFrameComposer();
         using var paint = new SKPaint { Color = SKColors.White, IsAntialias = true };
         using var font = new SKFont(SKTypeface.Default, 13f);
 
         var pre = NewBitmap();
-        FullRender(pre, buffer, composer, paint, font, translate, startVisibleRow, endVisibleRow);
+        FullRender(pre, buffer, composer, paint, font, translate, startVisibleRow, endVisibleRow, padX);
 
         // Mirror of the state the pre frame was rendered from.
         var mirror = buffer.RowScrollEpochs.ToArray();
@@ -242,10 +242,10 @@ public class IncrementalRenderTests
         mutate(buffer);
 
         var reference = NewBitmap();
-        FullRender(reference, buffer, composer, paint, font, translate, startVisibleRow, endVisibleRow);
+        FullRender(reference, buffer, composer, paint, font, translate, startVisibleRow, endVisibleRow, padX);
 
         var inc = pre.Copy();
-        IncrementalRender(inc, buffer, composer, paint, font, mirror, translate, startVisibleRow, endVisibleRow);
+        IncrementalRender(inc, buffer, composer, paint, font, mirror, translate, startVisibleRow, endVisibleRow, padX);
 
         AssertPixelIdentical(reference, inc, name);
     }
@@ -409,6 +409,47 @@ public class IncrementalRenderTests
             b.SetCursor(2, 0);
             b.WriteText("another write ".PadRight(Cols), CellAttributes.Default);
         }, translate: 0, startVisibleRow: 0, endVisibleRow: Rows - 1);
+    }
+
+    [Fact]
+    public void Clear_WithContentPadding_FullyErasesPromptSegmentPill()
+    {
+        // The real canvas runs with ContentPadding bound to the grid's
+        // CanvasPadding (16/24/16 even when the config leaves it null), so the
+        // content is translated 16px right and the incremental fill must cover
+        // the full canvas width — the full render's canvas.Clear covers the
+        // gutter, and the prompt segment pill (with its 4px horizontal padding)
+        // juts into it. After a full-screen clear the left gutter must not keep
+        // the old segment's pixels.
+        const float padX = 16f;
+        var buffer = CreateBuffer(alt: false);
+        var blue = new CellAttributes
+        {
+            Background = SgrColorArgb.FromRgb(0x89, 0xB4, 0xFA), // CatppuccinMocha blue
+            Foreground = SgrColorArgb.FromRgb(0x1E, 0x1E, 0x2E),
+        };
+        void Prompt(TerminalBuffer b, int row)
+        {
+            b.SetCursor(row, 0);
+            b.WriteText("~ " + new string('x', 20), blue);
+            b.SetCursor(row, 24);
+            b.WriteText(new string(' ', Cols - 24), CellAttributes.Default);
+        }
+        Prompt(buffer, 5);
+        for (int r = 0; r < Rows; r++)
+        {
+            if (r == 5) continue;
+            buffer.SetCursor(r, 0);
+            buffer.WriteText($"line {r:D2} content ".PadRight(Cols), CellAttributes.Default);
+        }
+
+        RunScenario("clear-with-padding", buffer, b =>
+        {
+            // Shell `clear`: ED2 (erase all) + home + fresh prompt.
+            b.EraseDisplay(2);
+            b.SetCursor(0, 0);
+            Prompt(b, 5);
+        }, translate: 0, startVisibleRow: 0, endVisibleRow: Rows - 1, padX);
     }
 
     [Fact]

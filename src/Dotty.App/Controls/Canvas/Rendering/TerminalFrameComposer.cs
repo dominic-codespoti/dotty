@@ -215,14 +215,19 @@ public sealed class TerminalFrameComposer : IDisposable
 
         // Re-apply the base background under stale rows (no canvas.Clear in the
         // incremental path). Non-AA hard rects so no-bg cells get the exact
-        // Clear color and no bleed into neighboring cells.
+        // Clear color and no bleed into neighboring cells. The rect spans the
+        // FULL canvas width (clip bounds), not just the cell grid: the full
+        // render's canvas.Clear covers the content-padding gutters, and pills
+        // (with their horizontal padding) jut into them — a narrow fill would
+        // leave stale pixels there after a clear.
+        var clip = target.LocalClipBounds;
         _backgroundFill.Style = SKPaintStyle.Fill;
         _backgroundFill.IsAntialias = false;
         _backgroundFill.Color = bgColor;
         foreach (var row in dirtyRows)
         {
             if (row < visStartRow || row > visEndRow) continue;
-            target.DrawRect(SKRect.Create(0, row * cellH, buffer.Columns * cellW, cellH), _backgroundFill);
+            target.DrawRect(SKRect.Create(clip.Left, row * cellH, clip.Width, cellH), _backgroundFill);
         }
         _backgroundFill.IsAntialias = true;
 

@@ -651,20 +651,39 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// 1) Replay pending buffer scrolls as region memmoves. Moved rows'
 			//    pixels are shifted in place and their mirror epochs travel with
 			//    them; the exposed band is sentineled so the dirty pass repaints it.
+			//    Replay is cheap only while the total memmove volume stays small:
+			//    a burst like `yes` queues thousands of scrolls per chunk (each LF
+			//    enqueues one), and replaying all of them is gigabytes of copying.
+			//    Cap the total region height and fall back to a full render (with
+			//    the queue drained) when exceeded — the pre-incremental behavior.
+			bool replayOverflow = false;
 			if (hasPending)
 			{
 				unsafe
 				{
 					byte* pixels = (byte*)locked.Address;
 					int stride = locked.RowBytes;
+					long replayCost = 0;
+					long maxReplayCost = 8L * Math.Max(1, buffer.Rows);
 					while (buffer.TryDequeuePendingScroll(out var s))
 					{
+						int regionHeight = s.Bottom - s.Top + 1;
+						replayCost += regionHeight;
+						if (replayCost > maxReplayCost)
+						{
+							while (buffer.TryDequeuePendingScroll(out _)) { }
+							replayOverflow = true;
+							break;
+						}
 						ApplyScrollToMirror(mirror, s.Top, s.Bottom, s.Delta, visStart, visEnd, out bool memmoved);
 						if (memmoved)
 							MemmoveRegionRows(pixels, stride, h, newScrollTranslate, s.Top, s.Bottom, s.Delta, (float)_cellHeight);
 					}
 				}
 			}
+
+			if (replayOverflow)
+				goto FullRenderPath;
 
 			// 2) Pure-scroll viewport shift (no pending buffer scrolls). Shift
 			//    the whole frame and sentinel the exposed band so the dirty pass
@@ -739,6 +758,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			goto renderOverlays;
 		}
 
+	FullRenderPath:
 		// Full render path: clear bitmap and re-render everything.
 		canvas.Clear(bgColor);
 

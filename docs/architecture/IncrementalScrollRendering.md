@@ -390,14 +390,14 @@ Multiple scrolls between renders are common (e.g. an app scrolling a region whil
 timer is paused). Replay costs O(region height) per scroll — a few KB of memmove plus a few dozen
 `ulong` copies — essentially independent of *how many* scrolls are queued.
 
-A flat scroll-**count** cap (the first draft used `MaxPendingScrolls = 16`) bounds the wrong
-resource: it forces a full render on a legitimate burst of cheap single-line scrolls while doing
-nothing to bound one pathologically large region. If a safety valve is wanted at all, bound
-**total estimated replay cost** — e.g. a running sum of region heights across the queue — and
-fall back to a full render only when that sum exceeds a threshold well below one full-render's
-cost. Validate the threshold against an adversarial workload (a program toggling scroll regions
-in a tight loop) rather than picking a round number; it's plausible no cap is needed at all given
-how cheap each replay is.
+**Shipped as a hard cap, not a guideline.** The first draft reasoned "no cap is needed because
+each replay is cheap" — wrong for bursts: `yes` queues one scroll per `LF` (tens of thousands per
+64 KB chunk), and replaying them all is gigabytes of memmove (each full-screen replay copies the
+whole region), freezing the UI and leaving mid-replay frames shifted. The canvas therefore caps
+the **total region height** replayed per frame (8×rows); beyond it the queue is drained and the
+frame falls back to a full render — the pre-incremental behavior, bounded at one full-render
+cost. A flat scroll-count cap would be the wrong resource (a page-down burst of 3×72 rows should
+still replay); the height sum is the memmove volume.
 
 ### 4.5 Step 3 — Per-row culling with exact background synthesis (shipped)
 
@@ -497,6 +497,11 @@ All shipped; every acceptance criterion met.
 > in `MarkRender()` (the canvas's render boundary); regression tests
 > `RenderBoundary_ResetsWriterCoalescing_SoTypingAlwaysBumpsEpoch` and
 > `Typing_ConsecutiveSameRowKeystrokes_RendersEach`.
+>
+> **Field fix 3 (post-ship):** `yes`-style output bursts queued tens of thousands of scrolls per
+> chunk and the replay (one region memmove each) became gigabytes of copying — frozen UI, no
+> autoscroll, no wheel. Fixed with a replay cost cap (total region height ≤ 8×rows, else drain +
+> full render). Regression test `LfBurst_OverReplayCap_FallsBackToFullRender`.
 >
 > **Field fix 2 (post-ship):** after a full-screen clear, cleared rows kept the old prompt
 > segment's pixels in the left content-padding gutter. The canvas's `ContentPadding` is bound to

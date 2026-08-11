@@ -101,16 +101,37 @@ public class IncrementalRenderTests
         using var canvas = new SKCanvas(bmp);
         canvas.SetMatrix(SKMatrix.CreateTranslation(padX, translate));
 
+        // Replay cost cap mirrors the canvas: bursts (e.g. `yes`) queue
+        // thousands of scrolls; replaying them all is gigabytes of memmove.
+        bool overflow = false;
         unsafe
         {
             byte* pixels = (byte*)bmp.GetPixels();
             int stride = bmp.RowBytes;
+            long replayCost = 0;
+            long maxReplayCost = 8L * Math.Max(1, buffer.Rows);
             while (buffer.TryDequeuePendingScroll(out var s))
             {
+                int regionHeight = s.Bottom - s.Top + 1;
+                replayCost += regionHeight;
+                if (replayCost > maxReplayCost)
+                {
+                    while (buffer.TryDequeuePendingScroll(out _)) { }
+                    overflow = true;
+                    break;
+                }
                 TerminalCanvas.ApplyScrollToMirror(mirror, s.Top, s.Bottom, s.Delta, visStart, visEnd, out bool memmoved);
                 if (memmoved)
                     TerminalCanvas.MemmoveRegionRows(pixels, stride, H, translate, s.Top, s.Bottom, s.Delta, CellH);
             }
+        }
+
+        if (overflow)
+        {
+            // Canvas fallback: full render into the same bitmap, including the
+            // scrollback text (the real full path draws it).
+            FullRender(bmp, buffer, composer, paint, font, translate, startVisibleRow, endVisibleRow, padX);
+            return;
         }
 
         var dirty = new List<int>();
@@ -235,6 +256,11 @@ public class IncrementalRenderTests
 
         var pre = NewBitmap();
         FullRender(pre, buffer, composer, paint, font, translate, startVisibleRow, endVisibleRow, padX);
+
+        // The real canvas drains the queue at every render; do the same here so
+        // scrolls produced by the setup (e.g. LF history) don't leak into the
+        // scenario's replay.
+        while (buffer.TryDequeuePendingScroll(out _)) { }
 
         // Mirror of the state the pre frame was rendered from.
         var mirror = buffer.RowScrollEpochs.ToArray();
@@ -450,6 +476,25 @@ public class IncrementalRenderTests
             b.SetCursor(0, 0);
             Prompt(b, 5);
         }, translate: 0, startVisibleRow: 0, endVisibleRow: Rows - 1, padX);
+    }
+
+    [Fact]
+    public void LfBurst_OverReplayCap_FallsBackToFullRender()
+    {
+        // `yes`-style bursts queue thousands of scrolls per chunk; replaying
+        // them all would memmove gigabytes. Over the cap the canvas must drain
+        // the queue and full-render, staying pixel-identical.
+        var buffer = CreateBuffer(alt: false);
+        Fill(buffer);
+        RunScenario("lf-burst-overflow", buffer, b =>
+        {
+            b.SetScrollRegion(2, Rows); // region [1..29]: no scrollback growth
+            for (int i = 0; i < 200; i++)
+            {
+                b.SetCursor(Rows - 1, 0);
+                b.LineFeed(); // LF at region bottom -> one queued scroll each
+            }
+        }, translate: 0, startVisibleRow: 0, endVisibleRow: Rows - 1);
     }
 
     [Fact]

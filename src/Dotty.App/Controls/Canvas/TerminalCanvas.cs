@@ -571,7 +571,18 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		bool lockTaken = false;
 		try
 		{
-			System.Threading.Monitor.Enter(buffer.SyncRoot, ref lockTaken);
+			// Never block the UI thread indefinitely on this lock: under a
+			// sustained output firehose (e.g. `yes`), the PTY-write thread
+			// re-acquires the same lock immediately after releasing it (there's
+			// always a next chunk ready), and Monitor's lock isn't FIFO-fair —
+			// the writer can starve this thread for as long as the burst lasts,
+			// freezing the entire UI (input, resize, everything runs on this
+			// thread). Bound the wait and skip this frame (the caller redraws
+			// the last cached bitmap) if the buffer is busy; the dedicated
+			// render timer retries on the next tick.
+			System.Threading.Monitor.TryEnter(buffer.SyncRoot, 4, ref lockTaken);
+			if (!lockTaken)
+				return;
 
 			if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
 			{

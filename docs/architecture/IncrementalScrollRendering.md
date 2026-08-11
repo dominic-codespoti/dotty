@@ -503,6 +503,26 @@ All shipped; every acceptance criterion met.
 > autoscroll, no wheel. Fixed with a replay cost cap (total region height ≤ 8×rows, else drain +
 > full render). Regression test `LfBurst_OverReplayCap_FallsBackToFullRender`.
 >
+> **Field fix 4 (post-ship, the actual freeze):** the replay cap above bounds render *cost*, but
+> the true freeze was upstream of rendering entirely. `RenderToBitmap` runs on the UI thread and
+> did `Monitor.Enter(buffer.SyncRoot)` — an *unbounded* blocking wait. The PTY-write thread holds
+> the same lock per chunk (`lock (Adapter.Buffer.SyncRoot) { Parser.Feed(chunk); }`) and, under a
+> firehose (`yes`), always has a next chunk ready — it re-acquires the lock immediately after
+> releasing it. `Monitor` isn't FIFO-fair, so the writer can win every re-acquisition race and
+> starve the UI thread for as long as the burst lasts. Since Avalonia's entire dispatcher/input
+> loop runs on that same thread, the whole app — not just the terminal view — froze: no repaint,
+> no autoscroll, no wheel, no window response. Confirmed live via `dotnet-dump`: the UI thread's
+> stack was parked in `Monitor.Enter` inside `RenderToBitmap` while a thread-pool worker was
+> actively inside `LineFeed → ScrollRegionUp → ClearPhysicalRow`, for 70+ seconds straight
+> (cursor position read via `GET_STATE` — no lock needed — was static the entire time).
+> Fixed: `RenderToBitmap` now uses `Monitor.TryEnter(buffer.SyncRoot, 4, ...)`; on failure it
+> skips the frame (the caller redraws the last cached bitmap) instead of blocking. The dedicated
+> render timer retries every tick, so the view catches up the instant a gap opens. Verified live:
+> before the fix, `GET_STATE`'s cursor was frozen for 70s+ under a real `yes` flood while
+> `dotnet-dump` showed the UI thread parked in `Monitor.Enter`; after the fix, the same flood
+> keeps the scrollback ring visibly live (torn reads show it overwriting mid-write) and a fresh
+> dump shows the UI thread actively executing inside `RenderToBitmap` instead of blocked.
+>
 > **Field fix 2 (post-ship):** after a full-screen clear, cleared rows kept the old prompt
 > segment's pixels in the left content-padding gutter. The canvas's `ContentPadding` is bound to
 > the grid's `CanvasPadding` (16/24/16 even with a null config), so the content is translated

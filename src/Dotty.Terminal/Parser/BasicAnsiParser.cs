@@ -10,7 +10,7 @@ namespace Dotty.Terminal.Parser
     public sealed class BasicAnsiParser : ITerminalParser
     {
         private const byte ESC = 0x1b;
-        private readonly byte[] _leftover = new byte[32];
+        private byte[] _leftover = new byte[32];
         private char[] _charScratch = new char[512];
         private int _leftoverLen = 0;
         private Charset _charset = Charset.Ascii;
@@ -121,25 +121,17 @@ namespace Dotty.Terminal.Parser
                                     var final = (char)cb;
                                     var paramSpan = inputSpan.Slice(paramsStart, i - paramsStart);
 
-                                    if (final == 'M' && paramSpan.Length == 0)
-                                    {
-                                        if (i + 3 < inputSpan.Length)
-                                        {
-                                            int cbByte = inputSpan[i + 1] - 32;
-                                            int cxByte = inputSpan[i + 2] - 32;
-                                            int cyByte = inputSpan[i + 3] - 32;
-                                            bool isPress = (cbByte & 3) != 3;
-                                            Handler?.OnMouseEvent(cbByte, cxByte, cyByte, isPress);
-                                            i += 4;
-                                            break;
-                                        }
-                                        else
-                                        {
-                                            SaveLeftover(inputSpan.Slice(seqStart));
-                                            return;
-                                        }
-                                    }
-
+                                    // CSI M with no parameters is Delete Line (DL, ECMA-48
+                                    // default count 1) - always, unconditionally. Mouse
+                                    // reports (X10/X11: ESC[M Cb Cx Cy) never appear here:
+                                    // they flow terminal -> application as PTY *input*
+                                    // (generated from real mouse clicks), never through the
+                                    // application's *output* stream that this parser reads.
+                                    // An app enabling mouse tracking (e.g. Neovim's default
+                                    // `mouse=a`) doesn't change that - Neovim's terminfo-driven
+                                    // "dl1" capability for TERM=xterm-256color is unconditionally
+                                    // ESC[M, used whenever it scrolls a DECSTBM region regardless
+                                    // of its own mouse state.
                                     HandleCsi(final, paramSpan);
                                     i++;
                                     break;
@@ -793,9 +785,16 @@ namespace Dotty.Terminal.Parser
 
         private void SaveLeftover(ReadOnlySpan<byte> bytes)
         {
-            int len = Math.Min(bytes.Length, _leftover.Length);
-            bytes.Slice(0, len).CopyTo(_leftover.AsSpan());
-            _leftoverLen = len;
+            // Grow rather than silently truncate: dropping bytes here corrupts
+            // every subsequent sequence in the stream (wrong CSI params, text
+            // written at the wrong cursor position, etc). Escape sequences are
+            // normally short, but nothing in the VT spec bounds them (long OSC
+            // 8 hyperlink URIs, Kitty graphics APC payloads), and a chunk
+            // boundary can fall anywhere inside one.
+            if (bytes.Length > _leftover.Length)
+                _leftover = new byte[bytes.Length];
+            bytes.CopyTo(_leftover.AsSpan());
+            _leftoverLen = bytes.Length;
         }
 
         private void ApplyCharsetSelection(char selector)

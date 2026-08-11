@@ -233,7 +233,6 @@ public class TerminalSession : IDisposable
                     var rawInputReceived = RawInputReceived;
                     if (rawInputReceived != null)
                         rawInputReceived(chunk.AsSpan(0, length).ToArray());
-
                     try
                     {
                         lock (Adapter.Buffer.SyncRoot)

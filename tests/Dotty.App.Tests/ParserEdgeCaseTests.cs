@@ -28,6 +28,8 @@ public class ParserEdgeCaseTests
         public List<string> SgrCalls { get; } = new();
         public int CursorNextLine, CursorPreviousLine;
         public List<(int shape, int count)> CursorShapeCalls { get; } = new();
+        public int MouseEventCount;
+        public string PrintedText = "";
 
         object? ITerminalHandler.Buffer => null;
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
@@ -37,7 +39,7 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnHyperlink(string uri) { }
         void ITerminalHandler.RequestRenderExtern() { }
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }
-        void ITerminalHandler.OnPrint(ReadOnlySpan<char> text) { }
+        void ITerminalHandler.OnPrint(ReadOnlySpan<char> text) => PrintedText += text.ToString();
         void ITerminalHandler.OnEraseDisplay(int mode) { }
         void ITerminalHandler.OnClearScrollback() { }
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> p) => SgrCalls.Add(p.ToString());
@@ -84,7 +86,7 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnRepeatCharacter(int n) => Events.Add($"REP:{n}");
         void ITerminalHandler.OnTab() => Events.Add("HT");
         void ITerminalHandler.OnBackTab(int n) => Events.Add($"CBT:{n}");
-        void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) { }
+        void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) => MouseEventCount++;
         void ITerminalHandler.OnSetSynchronizedUpdate(bool en) => Events.Add($"SYNC:{en}");
         void ITerminalHandler.OnSetMouseMode(int mode, bool en) => Events.Add($"MOUSE:{mode}:{en}");
         void ITerminalHandler.OnSetKittyKeyboardMode(int mode) => Events.Add($"KITTY:{mode}");
@@ -110,6 +112,49 @@ public class ParserEdgeCaseTests
     public void CsiInsertLines_Wired() { var (p, h) = Setup(); p.Feed("\x1b[3L"u8); Assert.Equal(3, h.InsertLinesCount); }
     [Fact]
     public void CsiDeleteLines_Wired() { var (p, h) = Setup(); p.Feed("\x1b[4M"u8); Assert.Equal(4, h.DeleteLinesCount); }
+
+    [Fact]
+    public void CsiDeleteLines_NoParams_DefaultsToOne()
+    {
+        // CSI M with no parameters is always Delete Line (default count 1,
+        // ECMA-48) - never a legacy X10 mouse report (ESC[M Cb Cx Cy). Mouse
+        // reports flow terminal -> application as PTY *input* (from real
+        // mouse clicks); they never appear in the application's *output*
+        // stream that this parser reads, so there's no ambiguity to resolve.
+        var (p, h) = Setup();
+        p.Feed("\x1b[M"u8);
+        Assert.Equal(1, h.DeleteLinesCount);
+        Assert.Equal(0, h.MouseEventCount);
+    }
+
+    [Fact]
+    public void CsiDeleteLines_NoParams_DefaultsToOne_EvenWhenAppMouseModeIsOn()
+    {
+        // Regression: Neovim's default `mouse=a` turns mouse tracking on via
+        // its own output stream (CSI ?1000h) yet still relies on the
+        // terminfo "dl1" capability (ESC[M) - unconditionally, regardless of
+        // its own mouse setting - whenever it scrolls a DECSTBM region.
+        // Gating Delete-Line on "is mouse mode enabled" reintroduces the
+        // exact corruption this parser must avoid.
+        var (p, h) = Setup();
+        p.Feed("\x1b[?1000h"u8);
+        p.Feed("\x1b[M"u8);
+        Assert.Equal(1, h.DeleteLinesCount);
+        Assert.Equal(0, h.MouseEventCount);
+    }
+
+    [Fact]
+    public void CsiDeleteLines_NoParams_DoesNotCorruptFollowingStream()
+    {
+        // The buggy behavior didn't just skip Delete Line - it also consumed
+        // the next 3 bytes as fake mouse coordinates, desyncing everything
+        // after. Verify text immediately following CSI M parses intact.
+        var (p, h) = Setup();
+        p.Feed("\x1b[Mabcdef"u8);
+        Assert.Equal(1, h.DeleteLinesCount);
+        Assert.Equal(0, h.MouseEventCount);
+        Assert.Equal("abcdef", h.PrintedText);
+    }
     [Fact]
     public void CsiInsertChars_Wired() { var (p, h) = Setup(); p.Feed("\x1b[5@"u8); Assert.Equal(5, h.InsertCharsCount); }
     [Fact]

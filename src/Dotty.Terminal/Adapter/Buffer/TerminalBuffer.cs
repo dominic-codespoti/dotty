@@ -158,7 +158,6 @@ public class TerminalBuffer
     {
         int newTop = Math.Max(0, top1Based - 1);
         int newBottom = Math.Clamp(bottom1Based - 1, 0, Rows - 1);
-
         if (newTop < newBottom)
         {
             _scrollTop = newTop;

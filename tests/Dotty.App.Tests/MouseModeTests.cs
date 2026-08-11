@@ -144,84 +144,6 @@ public class MouseModeTests
     }
 
     [Fact]
-    public void MouseEvent_X11_LeftClick_Press()
-    {
-        var parser = new BasicAnsiParser();
-        var handler = new RecordingHandler();
-        parser.Handler = handler;
-
-        // X11 format: ESC [ M [button+32] [col+32] [row+32]
-        // Button 0 (left press) at column 10, row 5
-        byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 32, 42, 37 };
-        parser.Feed(mouseSeq);
-
-        Assert.Single(handler.MouseEventCalls);
-        var evt = handler.MouseEventCalls[0];
-        Assert.Equal(0, evt.button);      // left button
-        Assert.Equal(10, evt.col);         // col = 42 - 32 = 10
-        Assert.Equal(5, evt.row);          // row = 37 - 32 = 5
-        Assert.True(evt.isPress);
-    }
-
-    [Fact]
-    public void MouseEvent_X11_LeftClick_Release()
-    {
-        var parser = new BasicAnsiParser();
-        var handler = new RecordingHandler();
-        parser.Handler = handler;
-
-        // X11 format: release is button with both bits 0-1 set (i.e., 0x03)
-        // Button 3 (release) at column 10, row 5
-        byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 35, 42, 37 }; // 35 = 32 + 3
-        parser.Feed(mouseSeq);
-
-        Assert.Single(handler.MouseEventCalls);
-        var evt = handler.MouseEventCalls[0];
-        Assert.Equal(3, evt.button);      // release button
-        Assert.Equal(10, evt.col);
-        Assert.Equal(5, evt.row);
-        Assert.False(evt.isPress);
-    }
-
-    [Fact]
-    public void MouseEvent_X11_RightClick_Press()
-    {
-        var parser = new BasicAnsiParser();
-        var handler = new RecordingHandler();
-        parser.Handler = handler;
-
-        // Right button press = button 2
-        byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 34, 50, 45 }; // 34 = 32 + 2
-        parser.Feed(mouseSeq);
-
-        Assert.Single(handler.MouseEventCalls);
-        var evt = handler.MouseEventCalls[0];
-        Assert.Equal(2, evt.button);      // right button
-        Assert.Equal(18, evt.col);        // col = 50 - 32 = 18
-        Assert.Equal(13, evt.row);        // row = 45 - 32 = 13
-        Assert.True(evt.isPress);
-    }
-
-    [Fact]
-    public void MouseEvent_X11_MiddleClick_Press()
-    {
-        var parser = new BasicAnsiParser();
-        var handler = new RecordingHandler();
-        parser.Handler = handler;
-
-        // Middle button press = button 1
-        byte[] mouseSeq = new byte[] { 0x1b, (byte)'[', (byte)'M', 33, 32, 32 }; // 33 = 32 + 1
-        parser.Feed(mouseSeq);
-
-        Assert.Single(handler.MouseEventCalls);
-        var evt = handler.MouseEventCalls[0];
-        Assert.Equal(1, evt.button);      // middle button
-        Assert.Equal(0, evt.col);         // col = 32 - 32 = 0
-        Assert.Equal(0, evt.row);         // row = 32 - 32 = 0
-        Assert.True(evt.isPress);
-    }
-
-    [Fact]
     public void MouseEvent_SGR_LeftClick_Press()
     {
         var parser = new BasicAnsiParser();
@@ -402,31 +324,23 @@ public class MouseModeTests
         var handler = new RecordingHandler();
         parser.Handler = handler;
 
-        // Send X11 event
-        parser.Feed(new byte[] { 0x1b, (byte)'[', (byte)'M', 32, 42, 37 });
-
         // Send SGR event
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[<2;20;15M"));
 
         // Send URXVT event
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[1;15;10M"));
 
-        Assert.Equal(3, handler.MouseEventCalls.Count);
-        
-        // X11
-        Assert.Equal(0, handler.MouseEventCalls[0].button);
-        Assert.Equal(10, handler.MouseEventCalls[0].col);
-        Assert.Equal(5, handler.MouseEventCalls[0].row);
+        Assert.Equal(2, handler.MouseEventCalls.Count);
 
         // SGR
-        Assert.Equal(2, handler.MouseEventCalls[1].button);
-        Assert.Equal(20, handler.MouseEventCalls[1].col);
-        Assert.Equal(15, handler.MouseEventCalls[1].row);
+        Assert.Equal(2, handler.MouseEventCalls[0].button);
+        Assert.Equal(20, handler.MouseEventCalls[0].col);
+        Assert.Equal(15, handler.MouseEventCalls[0].row);
 
         // URXVT
-        Assert.Equal(1, handler.MouseEventCalls[2].button);
-        Assert.Equal(15, handler.MouseEventCalls[2].col);
-        Assert.Equal(10, handler.MouseEventCalls[2].row);
+        Assert.Equal(1, handler.MouseEventCalls[1].button);
+        Assert.Equal(15, handler.MouseEventCalls[1].col);
+        Assert.Equal(10, handler.MouseEventCalls[1].row);
     }
 
     [Fact]

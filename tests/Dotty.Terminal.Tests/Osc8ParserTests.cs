@@ -507,7 +507,6 @@ public class Osc8ParserTests
         public List<(int code, string payload)> OscCalls { get; } = new();
 
         object? ITerminalHandler.Buffer => null;
-        
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }

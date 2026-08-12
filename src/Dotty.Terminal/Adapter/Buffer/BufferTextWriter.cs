@@ -549,11 +549,14 @@ internal sealed class BufferTextWriter
         cell.HasHyperlink = hyperlinkId != 0;
         cell.HasGrapheme = grapheme.Length > 1;
 
-        if (hyperlinkId != 0 || grapheme.Length > 1)
+        if (hyperlinkId != 0)
         {
-            ref var cold = ref buf.GetColdCellRef(_cursor.Row, startCol);
-            cold.HyperlinkId = hyperlinkId;
-            cold.GraphemeIndex = grapheme.Length > 1 ? GraphemeHelper.StoreGrapheme(grapheme) : (short)-1;
+            buf.SetColdHyperlink(currentRow, startCol, hyperlinkId);
+        }
+
+        if (grapheme.Length > 1)
+        {
+            buf.SetColdGraphemeIndex(currentRow, startCol, GraphemeHelper.StoreGrapheme(grapheme));
         }
 
         for (int i = 1; i < width; i++)

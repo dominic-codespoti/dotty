@@ -188,4 +188,21 @@ public class ReproAttemptsTests
         Assert.True(tb.GetCell(1, 4).IsEmpty, $"Expected stale continuation at col 4 to be cleared, got Rune={tb.GetCell(1, 4).Rune} cont={tb.GetCell(1, 4).IsContinuation}");
         AssertNoOrphanedBases(tb);
     }
+    [Fact]
+    public void AsciiOverwrite_ClearsStaleGraphemeMetadata()
+    {
+        var tb = new TerminalBuffer(rows: 1, columns: 20);
+
+        // A redraw can replace a previously rendered wide grapheme with an
+        // ASCII run at the same screen coordinates.
+        tb.SetCursor(0, 0);
+        tb.WriteText("abc❤️def".AsSpan(), CellAttributes.Default);
+        tb.SetCursor(0, 0);
+        tb.WriteText("abc123def".AsSpan(), CellAttributes.Default);
+
+        Assert.StartsWith("abc123def", tb.GetRowText(0));
+        Assert.False(tb.GetCell(0, 3).HasGrapheme);
+        Assert.Equal(-1, tb.GetColdCell(0, 3).GraphemeIndex);
+    }
+
 }

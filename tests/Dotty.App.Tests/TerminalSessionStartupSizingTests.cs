@@ -92,6 +92,72 @@ public class TerminalSessionStartupSizingTests
     }
 
     [Fact]
+    public void TerminalCanvas_FollowsBottomAsScrollbackGrows()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 40);
+        var canvas = new TerminalCanvas
+        {
+            Buffer = buffer,
+            FontSize = 20
+        };
+
+        canvas.Measure(new Size(1000, 1000));
+        canvas.Arrange(new Rect(0, 0, 400, canvas.CellHeight * buffer.Rows));
+        canvas.OnBufferUpdated(buffer);
+
+        // Replicates the renderer: each frame captures geometry under SyncRoot
+        // and applies it once via the coalesced posted update.
+        for (int i = 0; i < 20; i++)
+        {
+            buffer.SetCursor(buffer.Rows - 1, 0);
+            buffer.WriteText("streaming output".AsSpan(), CellAttributes.Default);
+            buffer.LineFeed();
+            canvas.ApplyExtent(canvas.ComputeExtent(buffer.Rows, buffer.ScrollbackCount));
+        }
+
+        double maxOffset = Math.Max(0, canvas.Extent.Height - canvas.Viewport.Height);
+        Assert.True(canvas.Viewport.Height > 0, "the canvas must have a measured viewport");
+        Assert.InRange(Math.Abs(canvas.Offset.Y - maxOffset), 0, 0.1);
+    }
+
+    [Fact]
+    public void TerminalCanvas_UserScrollUp_MidStream_CancelsFollow()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 40);
+        var canvas = new TerminalCanvas
+        {
+            Buffer = buffer,
+            FontSize = 20
+        };
+
+        canvas.Measure(new Size(1000, 1000));
+        canvas.Arrange(new Rect(0, 0, 400, canvas.CellHeight * buffer.Rows));
+        canvas.OnBufferUpdated(buffer);
+
+        for (int i = 0; i < 5; i++)
+        {
+            buffer.SetCursor(buffer.Rows - 1, 0);
+            buffer.WriteText("streaming output".AsSpan(), CellAttributes.Default);
+            buffer.LineFeed();
+            canvas.ApplyExtent(canvas.ComputeExtent(buffer.Rows, buffer.ScrollbackCount));
+        }
+
+        // User wheels up; the viewport leaves the bottom.
+        canvas.Offset = new Vector(0, 0);
+
+        // More output arrives; the follow must NOT yank the user back down.
+        for (int i = 0; i < 5; i++)
+        {
+            buffer.SetCursor(buffer.Rows - 1, 0);
+            buffer.WriteText("more output".AsSpan(), CellAttributes.Default);
+            buffer.LineFeed();
+            canvas.ApplyExtent(canvas.ComputeExtent(buffer.Rows, buffer.ScrollbackCount));
+        }
+
+        Assert.Equal(0, canvas.Offset.Y);
+    }
+
+    [Fact]
     public void SelectResizeViewport_PrefersCanvasViewportOverOuterBounds()
     {
         var viewport = TerminalView.SelectResizeViewport(

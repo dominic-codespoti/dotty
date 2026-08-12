@@ -155,7 +155,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private bool _lastBufferWasAlternate = false;
 	private int _lastKnownBufferRows = -1;
 	private int _lastKnownBufferColumns = -1;
-	private int _lastKnownScrollbackCount = -1;
 	private ulong[]? _lastRowGenerations;
 
 	private double _renderScaling = 1.0;
@@ -293,25 +292,36 @@ public class TerminalCanvas : Control, ILogicalScrollable
     private Size _lastExtent;
     private Size _lastViewport;
 
-    private void UpdateScrollState(int? explicitScrollbackCount = null)
-    {
-        Size extent;
-        var buf = Buffer;
-        if (buf == null) extent = _viewport;
-        else 
-        {
-            int sb = explicitScrollbackCount ?? buf.ScrollbackCount;
-            double height = (buf.Rows + sb) * _cellHeight + ContentPadding.Top + ContentPadding.Bottom;
-            double width = buf.Columns * _cellWidth + ContentPadding.Left + ContentPadding.Right;
-            extent = new Size(width, height);
-        }
+    // Latest buffer geometry captured under SyncRoot at render start, applied
+    // by a single coalesced posted delegate so the follow decision never races
+    // a newer scrollback count (the pre-R2 code re-read live state in the
+    // posted callback and ran the update twice per frame with mismatched data).
+    private int _pendingExtentRows;
+    private int _pendingExtentSbCount;
+    private bool _extentUpdatePosted;
 
+    internal Size ComputeExtent(int rows, int sbCount)
+    {
+        var buf = Buffer;
+        if (buf == null) return _viewport;
+        double height = (rows + sbCount) * _cellHeight + ContentPadding.Top + ContentPadding.Bottom;
+        double width = buf.Columns * _cellWidth + ContentPadding.Left + ContentPadding.Right;
+        return new Size(width, height);
+    }
+
+    /// <summary>
+    /// Applies a new extent, keeping the viewport glued to the bottom when it
+    /// already was (and the user has not scrolled away). User intent is read
+    /// from the live offset at apply time: a wheel-up that lands before this
+    /// runs breaks <c>wasAtBottom</c> and correctly cancels the follow.
+    /// </summary>
+    internal void ApplyExtent(Size extent)
+    {
         bool changed = false;
 
         if (extent != _lastExtent || _viewport != _lastViewport)
         {
             changed = true;
-            
             // if we were completely scrolled to bottom, track bottom
             bool wasAtBottom = Math.Abs(_offset.Y - Math.Max(0, _lastExtent.Height - _lastViewport.Height)) < 0.1;
             if (wasAtBottom && extent.Height > _lastExtent.Height)
@@ -336,6 +346,16 @@ public class TerminalCanvas : Control, ILogicalScrollable
             _lastViewport = _viewport;
             ScrollInvalidated?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    /// <summary>
+    /// Live-state extent update; used only for viewport (size) changes, which
+    /// happen on the UI thread and cannot race a frame capture.
+    /// </summary>
+    private void UpdateScrollState()
+    {
+        var buf = Buffer;
+        ApplyExtent(buf == null ? _viewport : ComputeExtent(buf.Rows, buf.ScrollbackCount));
     }
     // -----------------------------------------
 
@@ -425,134 +445,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 	}
 
-	/// <summary>
-	/// Computes the buffer rows newly exposed by a pure-scroll frame, i.e. the rows
-	/// that the memmove cleared and that therefore must be re-rendered. The cleared
-	/// band is the edge the content moved away from: the top when scrolling back
-	/// (content shifts down), the bottom when scrolling forward (content shifts up).
-	/// Rows are in buffer coordinates (negative = scrollback), not yet clamped to the
-	/// visible range.
-	/// </summary>
-	internal static void ComputeExposedRows(
-		double oldTop,
-		double newTop,
-		double viewportHeight,
-		double cellHeight,
-		int scrollbackCount,
-		out int exposeStartRow,
-		out int exposeEndRow)
-	{
-		double deltaY = oldTop - newTop;
-		if (deltaY > 0)
-		{
-			// Content moved down: cleared band is the top |deltaY| px of the viewport.
-			exposeStartRow = (int)Math.Floor(newTop / cellHeight) - scrollbackCount;
-			exposeEndRow = (int)Math.Ceiling(oldTop / cellHeight) - 1 - scrollbackCount;
-		}
-		else
-		{
-			// Content moved up: cleared band is the bottom |deltaY| px of the viewport.
-			double clearTop = newTop + viewportHeight - Math.Abs(deltaY);
-			exposeStartRow = (int)Math.Floor(clearTop / cellHeight) - scrollbackCount;
-			exposeEndRow = (int)Math.Ceiling((newTop + viewportHeight) / cellHeight) - 1 - scrollbackCount;
-		}
-	}
-
-	/// <summary>
-	/// Shifts the entire cached bitmap by pixelDelta (positive = content moved
-	/// down), clearing the newly-exposed band. Mirrors the viewport pureScroll.
-	/// </summary>
-	internal static unsafe void MemmoveWholeFrame(byte* pixels, int stride, int height, int pixelDelta)
-	{
-		if (pixelDelta > 0)
-		{
-			// Content moved down: copy pixels down, clear top band.
-			System.Buffer.MemoryCopy(pixels, pixels + pixelDelta * stride, (ulong)((height - pixelDelta) * stride), (ulong)((height - pixelDelta) * stride));
-			new Span<byte>(pixels, pixelDelta * stride).Clear();
-		}
-		else
-		{
-			// Content moved up: copy pixels up, clear bottom band.
-			int shiftUp = -pixelDelta;
-			System.Buffer.MemoryCopy(pixels + shiftUp * stride, pixels, (ulong)((height - shiftUp) * stride), (ulong)((height - shiftUp) * stride));
-			new Span<byte>(pixels + (height - shiftUp) * stride, shiftUp * stride).Clear();
-		}
-	}
-
-	/// <summary>
-	/// Shifts the pixel band of logical rows [topRow..bottomRow] by
-	/// delta * cellHeight (positive = content moved down) in the cached bitmap.
-	/// The exposed band (the edge the content moved away from) is left with its
-	/// stale pixels — the caller sentinels those rows and RenderDirty repaints
-	/// them (base background + regions + glyphs). Callers must ensure the region
-	/// is fully visible; otherwise rows entering from outside the bitmap cannot
-	/// be memmoved and must be re-rendered instead.
-	/// </summary>
-	internal static unsafe void MemmoveRegionRows(byte* pixels, int stride, int height, float translate, int topRow, int bottomRow, int delta, float cellH)
-	{
-		int y0 = (int)Math.Round(topRow * cellH + translate);
-		int y1 = (int)Math.Round((bottomRow + 1) * cellH + translate);
-		int rowPx = (int)Math.Round(delta * cellH);
-		if (rowPx == 0) return;
-		y0 = Math.Max(0, Math.Min(height, y0));
-		y1 = Math.Max(0, Math.Min(height, y1));
-		int band = y1 - y0;
-		if (band <= 0) return;
-
-		if (rowPx > 0)
-		{
-			// Content down: copy [y0, y1-rowPx) -> [y0+rowPx, y1).
-			int copyLen = band - rowPx;
-			if (copyLen > 0)
-				System.Buffer.MemoryCopy(pixels + y0 * stride, pixels + (y0 + rowPx) * stride, (ulong)(copyLen * stride), (ulong)(copyLen * stride));
-		}
-		else
-		{
-			// Content up: copy [y0-rowPx, y1) -> [y0, y1+rowPx).
-			int copyLen = band + rowPx;
-			if (copyLen > 0)
-				System.Buffer.MemoryCopy(pixels + (y0 - rowPx) * stride, pixels + y0 * stride, (ulong)(copyLen * stride), (ulong)(copyLen * stride));
-		}
-	}
-
-	/// <summary>
-	/// Applies one recorded buffer scroll to the renderer's epoch mirror.
-	/// Fully-visible regions rotate the mirror identically to the buffer and
-	/// sentinel the exposed band (the caller memmoves the pixels). Partially or
-	/// non-visible regions cannot be memmoved (content entered from outside the
-	/// bitmap), so every visible row of the region is sentineled instead.
-	/// </summary>
-	internal static void ApplyScrollToMirror(ulong[] mirror, int top, int bottom, int delta, int visStart, int visEnd, out bool memmoved)
-	{
-		if (top >= visStart && bottom <= visEnd)
-		{
-			ScrollEpochMath.RotateRange(mirror, top, bottom, delta);
-			ScrollEpochMath.MarkExposedRows(mirror, top, bottom, delta);
-			memmoved = true;
-		}
-		else
-		{
-			for (int r = Math.Max(top, visStart); r <= Math.Min(bottom, visEnd); r++)
-				mirror[r] = ulong.MaxValue;
-			memmoved = false;
-		}
-	}
-
-	/// <summary>
-	/// Rows whose pixels were not moved into place: exposed bands (sentineled
-	/// in the mirror) and rows written since the last render (epoch mismatch).
-	/// </summary>
-	internal static void ComputeDirtyRows(ReadOnlySpan<ulong> bufferEpochs, ReadOnlySpan<ulong> mirror, int visStart, int visEnd, List<int> dirty)
-	{
-		dirty.Clear();
-		int end = Math.Min(visEnd, Math.Min(bufferEpochs.Length, mirror.Length) - 1);
-		for (int r = visStart; r <= end; r++)
-		{
-			if (bufferEpochs[r] != mirror[r])
-				dirty.Add(r);
-		}
-	}
-
 	private void RenderToBitmap(TerminalBuffer buffer)
 	{
 		bool lockTaken = false;
@@ -598,7 +490,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			catch { }
 
 			int sbCount = buffer.ScrollbackCount;
-		// Posted, not synchronous: UpdateScrollState can invalidate a visual
+		// Posted, not synchronous: ApplyExtent can invalidate a visual
 		// (via ScrollInvalidated -> ScrollContentPresenter -> InvalidateMeasure),
 		// and Avalonia throws if a visual is invalidated while a render pass is
 		// in progress (this method runs inside one). Must defer to after this
@@ -608,7 +500,19 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		// post is starved indefinitely, so the "follow to bottom" offset
 		// adjustment never ran and new output never scrolled into view. Render
 		// priority gets a fair turn alongside the render work instead.
-		Dispatcher.UIThread.Post(() => UpdateScrollState(sbCount), DispatcherPriority.Render);
+		// Geometry is captured here under SyncRoot; the delegate applies the
+		// latest captured values, coalesced to at most one update per frame.
+		_pendingExtentRows = buffer.Rows;
+		_pendingExtentSbCount = sbCount;
+		if (!_extentUpdatePosted)
+		{
+			_extentUpdatePosted = true;
+			Dispatcher.UIThread.Post(() =>
+			{
+				_extentUpdatePosted = false;
+				ApplyExtent(ComputeExtent(_pendingExtentRows, _pendingExtentSbCount));
+			}, DispatcherPriority.Render);
+		}
 
 		using var locked = _bitmap.Lock();
 		var info = new SKImageInfo(locked.Size.Width, locked.Size.Height);
@@ -622,13 +526,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		// replay, dirty-row culling) traded this full redraw for partial
 		// updates, but proved unsafe in practice - it corrupted glyphs on
 		// manual scroll and, separately, its offset-tracking starved the
-		// "follow new output to bottom" update (see UpdateScrollState's
-		// caller above). Full render is ~11.7ms at 73x136 (bench-verified),
-		// well within a frame budget. The primitives it would have reused
-		// (ComputeExposedRows, ApplyScrollToMirror, MemmoveRegionRows,
-		// MemmoveWholeFrame, ComputeDirtyRows, TerminalFrameComposer.RenderDirty)
-		// stay in place with their own tests for a future, more carefully
-		// verified re-attempt.
+		// "follow new output to bottom" update. Full render is ~11.7ms at
+		// 73x136 (bench-verified), well within a frame budget. The incremental
+		// primitives were removed (see StateCoordinationPlan R3); the design
+		// doc IncrementalScrollRendering.md records how to rebuild them with
+		// the pixel-diff harness if a future attempt is made.
 		canvas.Clear(bgColor);
 
 		var mFull = SKMatrix.Identity;
@@ -674,11 +576,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				}
 			}
 		}
-
-		// Drain queued scroll records: buffer-side scroll ops still enqueue
-		// them (their own tests cover that bookkeeping), but this render path
-		// doesn't consume them - left unqueued they'd grow without bound.
-		while (buffer.TryDequeuePendingScroll(out _)) { }
 
 		// Draw selection overlay
 		if (!_selectionRange.IsEmpty)
@@ -838,11 +735,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		var geometryChanged = buffer.Rows != _lastKnownBufferRows ||
 			buffer.Columns != _lastKnownBufferColumns;
-		var scrollChanged = buffer.ScrollbackCount != _lastKnownScrollbackCount;
 
 		_lastKnownBufferRows = buffer.Rows;
 		_lastKnownBufferColumns = buffer.Columns;
-		_lastKnownScrollbackCount = buffer.ScrollbackCount;
 
 		if (geometryChanged)
 		{
@@ -850,8 +745,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			InvalidateArrange();
 		}
 
-		if (geometryChanged || scrollChanged)
-			UpdateScrollState(buffer.ScrollbackCount);
+		// No extent update here: the frame render captures geometry under
+		// SyncRoot and applies it via one coalesced posted update (see
+		// RenderToBitmap). The pre-R2 synchronous call here raced the posted
+		// one with a live re-read of ScrollbackCount.
 	}
 
 	public void RequestFrame()
@@ -1093,7 +990,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			{
 				_lastKnownBufferRows = -1;
 				_lastKnownBufferColumns = -1;
-				_lastKnownScrollbackCount = -1;
 				_glyphDiscovery = null;
 				// _glyphAtlas?.Dispose(); removed for safety
 				_glyphAtlas = null;

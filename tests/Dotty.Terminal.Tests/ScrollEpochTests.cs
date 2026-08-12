@@ -5,11 +5,12 @@ using Dotty.Terminal.Adapter;
 namespace Dotty.Terminal.Tests;
 
 /// <summary>
-/// Verifies the motion-epoch accounting added for incremental scroll rendering:
-/// scroll operations rotate epochs with content (moved rows keep their epoch so
-/// the renderer can skip them), bump only the exposed band, bump identity
-/// generations for the whole region (classification/glyph caches), and record
-/// a PendingScroll for the renderer to replay as a region memmove.
+/// Verifies the motion-epoch accounting: scroll operations rotate epochs with
+/// content (moved rows keep their epoch so a future incremental renderer can
+/// skip them), bump only the exposed band, and bump identity generations for
+/// the whole region (classification/glyph caches). The scroll-replay queue was
+/// removed with the incremental renderer (see StateCoordinationPlan R3); these
+/// tests cover the buffer-side contract that remains.
 /// </summary>
 public class ScrollEpochTests
 {
@@ -85,12 +86,6 @@ public class ScrollEpochTests
         for (int r = 2; r <= 8; r++)
             Assert.Equal(preGen[r] + 1, buf.GetRowGeneration(r));
         Assert.Equal(preGen[1], buf.GetRowGeneration(1));
-
-        // Queue: one scroll, content moved UP (negative delta).
-        Assert.Equal(1, buf.PendingScrollCount);
-        Assert.True(buf.TryDequeuePendingScroll(out var s));
-        Assert.Equal(new TerminalBuffer.PendingScroll(2, 8, -2), s);
-        Assert.Equal(0, buf.PendingScrollCount);
     }
 
     [Fact]
@@ -114,14 +109,10 @@ public class ScrollEpochTests
         // Exposed top band bumped by exactly 1.
         Assert.Equal(preEpoch[2] + 1, buf.GetRowEpoch(2));
         Assert.Equal(preEpoch[3] + 1, buf.GetRowEpoch(3));
-
-        Assert.Equal(1, buf.PendingScrollCount);
-        Assert.True(buf.TryDequeuePendingScroll(out var s));
-        Assert.Equal(new TerminalBuffer.PendingScroll(2, 8, 2), s);
     }
 
     [Fact]
-    public void LineFeed_AtRegionBottom_QueuesSingleRowScroll()
+    public void LineFeed_AtRegionBottom_BumpsExposedRow()
     {
         var buf = CreateBuffer();
         buf.SetScrollRegion(3, 9);
@@ -131,15 +122,12 @@ public class ScrollEpochTests
         buf.SetCursor(8, 0); // region bottom
         buf.LineFeed();
 
-        Assert.Equal(1, buf.PendingScrollCount);
-        Assert.True(buf.TryDequeuePendingScroll(out var s));
-        Assert.Equal(new TerminalBuffer.PendingScroll(2, 8, -1), s);
         // Exposed bottom row bumped.
         Assert.True(buf.GetRowEpoch(8) > buf.GetRowEpoch(7));
     }
 
     [Fact]
-    public void InsertLines_ShiftsEpochsDown_AndRecordsScroll()
+    public void InsertLines_ShiftsEpochsDown()
     {
         var buf = CreateBuffer();
         buf.SetScrollRegion(3, 9);
@@ -159,14 +147,10 @@ public class ScrollEpochTests
         // Inserted (exposed) rows bumped by exactly 1.
         Assert.Equal(preEpoch[3] + 1, buf.GetRowEpoch(3));
         Assert.Equal(preEpoch[4] + 1, buf.GetRowEpoch(4));
-
-        Assert.Equal(1, buf.PendingScrollCount);
-        Assert.True(buf.TryDequeuePendingScroll(out var s));
-        Assert.Equal(new TerminalBuffer.PendingScroll(3, 8, 2), s);
     }
 
     [Fact]
-    public void DeleteLines_ShiftsEpochsUp_AndRecordsScroll()
+    public void DeleteLines_ShiftsEpochsUp()
     {
         var buf = CreateBuffer();
         buf.SetScrollRegion(3, 9);
@@ -186,34 +170,10 @@ public class ScrollEpochTests
         // Trailing (exposed) rows bumped by exactly 1.
         Assert.Equal(preEpoch[7] + 1, buf.GetRowEpoch(7));
         Assert.Equal(preEpoch[8] + 1, buf.GetRowEpoch(8));
-
-        Assert.Equal(1, buf.PendingScrollCount);
-        Assert.True(buf.TryDequeuePendingScroll(out var s));
-        Assert.Equal(new TerminalBuffer.PendingScroll(3, 8, -2), s);
     }
 
     [Fact]
-    public void PendingScrolls_DequeueInFifoOrder()
-    {
-        var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9);
-        buf.ScrollUpLines(1);
-        buf.ScrollDownLines(2);
-        buf.ScrollUpLines(3);
-
-        Assert.Equal(3, buf.PendingScrollCount);
-        Assert.True(buf.TryDequeuePendingScroll(out var s1));
-        Assert.Equal(-1, s1.Delta);
-        Assert.True(buf.TryDequeuePendingScroll(out var s2));
-        Assert.Equal(2, s2.Delta);
-        Assert.True(buf.TryDequeuePendingScroll(out var s3));
-        Assert.Equal(-3, s3.Delta);
-        Assert.Equal(0, buf.PendingScrollCount);
-        Assert.False(buf.TryDequeuePendingScroll(out _));
-    }
-
-    [Fact]
-    public void FullScreenScroll_StillRecords_AndTouchesScrollback()
+    public void FullScreenScroll_GrowsScrollback()
     {
         var buf = CreateBuffer();
         WriteRows(buf, 0, 1);
@@ -221,13 +181,10 @@ public class ScrollEpochTests
         buf.ScrollUpLines(1); // full-screen region: top == 0
 
         Assert.True(buf.ScrollbackCount > 0, "full-screen SU must grow scrollback");
-        Assert.Equal(1, buf.PendingScrollCount);
-        Assert.True(buf.TryDequeuePendingScroll(out var s));
-        Assert.Equal(new TerminalBuffer.PendingScroll(0, 23, -1), s);
     }
 
     [Fact]
-    public void WholeRegionReplacement_DoesNotQueueScroll_ButBumpsAllEpochs()
+    public void WholeRegionReplacement_BumpsAllEpochs()
     {
         var buf = CreateBuffer();
         buf.SetScrollRegion(3, 9);
@@ -235,7 +192,6 @@ public class ScrollEpochTests
 
         buf.ScrollUpLines(100); // n >= region height -> clear, no content move
 
-        Assert.Equal(0, buf.PendingScrollCount);
         for (int r = 2; r <= 8; r++)
             Assert.True(buf.GetRowEpoch(r) > 0, "cleared rows must be re-rendered");
     }
@@ -286,23 +242,25 @@ public class ScrollEpochTests
     }
 
     [Fact]
-    public void SetAlternateScreenToggle_ClearsPendingScrolls()
+    public void SetAlternateScreenToggle_BumpsEveryRowEpoch()
     {
+        // R4 regression: toggling the alt screen must invalidate every row's
+        // generation and epoch so no stale classification/pixels survive a
+        // screen switch in any render path.
         var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9);
-        buf.ScrollUpLines(1);
-        Assert.Equal(1, buf.PendingScrollCount);
-
         buf.SetAlternateScreen(true);
-        Assert.Equal(0, buf.PendingScrollCount);
-        // Alt screen content is brand new: every row must be re-rendered.
         for (int r = 0; r < 24; r++)
+        {
             Assert.True(buf.GetRowEpoch(r) > 0, "toggle must bump every row's epoch");
+            Assert.True(buf.GetRowGeneration(r) > 0, "toggle must bump every row's generation");
+        }
 
-        buf.ScrollUpLines(1);
-        Assert.Equal(1, buf.PendingScrollCount);
         buf.SetAlternateScreen(false);
-        Assert.Equal(0, buf.PendingScrollCount);
+        for (int r = 0; r < 24; r++)
+        {
+            Assert.True(buf.GetRowEpoch(r) > 0, "toggle back must bump every row's epoch");
+            Assert.True(buf.GetRowGeneration(r) > 0, "toggle back must bump every row's generation");
+        }
     }
     [Fact]
     public void Resize_KeepsEpochArrayInSync()
@@ -312,7 +270,6 @@ public class ScrollEpochTests
 
         buf.Resize(30, 120);
 
-        Assert.Equal(0, buf.PendingScrollCount);
         Assert.Equal(30UL, (ulong)buf.RowScrollEpochs.Length);
         // New rows have epoch 0; existing rows keep their values.
         Assert.Equal(0UL, buf.GetRowEpoch(29));

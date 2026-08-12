@@ -6,7 +6,8 @@
 |----------|-------------|
 | [Architecture Overview](Architecture.md) | Layered architecture, component diagram, data flow, platform abstraction |
 | [Rendering Pipeline](Rendering.md) | GPU rendering via SkiaSharp, frame lifecycle, glyph atlas, performance optimizations |
-| [Incremental Scroll Rendering](architecture/IncrementalScrollRendering.md) | Scroll-aware dirty tracking + region-memmove rendering: implemented, pixel-verified |
+| [Incremental Scroll Rendering](architecture/IncrementalScrollRendering.md) | Scroll-aware dirty tracking + region-memmove rendering: reverted from the live path, primitives tested for a future re-attempt |
+| [State Coordination Hardening](architecture/StateCoordinationPlan.md) | Executed: library-owned buffer invariants, single-owner scroll state, dormant incremental machinery removed, alt-screen invalidation locked in |
 | [Parsing Engine](Parsing.md) | ANSI/VT parser state machine, escape sequences, handler dispatch |
 | [Source Generator Architecture](architecture/ConfigSourceGenerator.md) | Build-time C# code generation for zero-overhead configuration |
 

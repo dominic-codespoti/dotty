@@ -233,7 +233,6 @@ public class TerminalSession : IDisposable
                     var rawInputReceived = RawInputReceived;
                     if (rawInputReceived != null)
                         rawInputReceived(chunk.AsSpan(0, length).ToArray());
-                    try { System.IO.File.AppendAllText("/tmp/dotty-raw.log", Convert.ToBase64String(chunk.AsSpan(0, length).ToArray()) + "\n"); } catch { }
                     try
                     {
                         lock (Adapter.Buffer.SyncRoot)

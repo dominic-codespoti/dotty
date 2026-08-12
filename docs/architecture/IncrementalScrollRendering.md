@@ -1,8 +1,10 @@
 # Incremental Scroll Rendering
 
 Status: **Reverted from the render hot path after live testing found correctness bugs beyond
-the four field fixes below (Section 9); the tested primitives remain in the codebase for a
-future, more rigorously verified re-attempt.**
+the four field fixes below (Section 9). The primitives were removed in R3 of
+StateCoordinationPlan.md (2026-08-12) — the queue, canvas/composer primitives, and their tests
+are gone (recoverable from git); the buffer-side epoch bookkeeping and ScrollEpochTests remain
+as the documented contract for a future, more rigorously verified re-attempt.**
 
 ## TL;DR
 
@@ -333,10 +335,11 @@ Key points:
 and alt `Screen` objects — `ScreenManager` swaps the active `Screen` reference but not the epoch
 array. Under this design, a toggle must not leave the mirror believing rows are unchanged.
 
-**Verified safe:** `SetAlternateScreen` already ends with `MarkAllRowsDirty()`, which bumps every
-row's epoch (and now also clears the pending-scroll queue — added in Phase A). The renderer
-therefore sees every row differ from its mirror after a toggle, and the stale queued scrolls are
-dropped. No further change was needed beyond the queue clear.
+**Verified safe:** `SetAlternateScreen` ends with `MarkAllRowsDirty()`, which bumps every row's
+generation and epoch. The renderer therefore sees every row differ from its mirror after a
+toggle. Locked in by `SetAlternateScreenToggle_BumpsEveryRowEpoch` (R4 of
+StateCoordinationPlan.md, 2026-08-12) — any future "optimization" of the toggle that skips the
+full invalidation must move it to per-screen arrays first.
 
 ### 4.3 Step 2 — Renderer: replay scrolls as region memmove
 
@@ -562,9 +565,10 @@ real interactive testing, not just synthetic scenarios.
 **Kept, not deleted:** `ScrollEpochMath`, `ComputeExposedRows`, `ApplyScrollToMirror`,
 `MemmoveRegionRows`, `MemmoveWholeFrame`, `ComputeDirtyRows` (all `internal static` in
 `TerminalCanvas.cs`), `TerminalFrameComposer.RenderDirty`, and the buffer-side `PendingScroll`
-queue/epoch bookkeeping (`TerminalBuffer.cs`) — all still exercised by their own unit tests
-(`ScrollExposedRowsTests`, `ScrollEpochTests`, `IncrementalRenderTests`, `LfBurst_*`), just no
-longer wired into the canvas's render call site.
+queue (`TerminalBuffer.cs`) — **all removed in R3 of StateCoordinationPlan.md** (their tests
+`ScrollExposedRowsTests`, `IncrementalRenderTests` were removed with them; recoverable from
+git). The buffer-side epoch bookkeeping (`_rowScrollEpochs`, `ScrollEpochMath.RotateRange`) and
+`ScrollEpochTests` remain as the documented contract for a future re-attempt.
 
 | Phase | Scope | Outcome |
 |-------|-------|---------|

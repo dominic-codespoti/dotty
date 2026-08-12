@@ -10,31 +10,9 @@ public class PermutationScrollRenderTests
 {
     private static void AssertNoOrphanedBases(TerminalBuffer tb)
     {
-        int rows = tb.Rows;
-        int cols = tb.Columns;
-
-        for (int r = 0; r < rows; r++)
-        {
-            for (int c = 0; c < cols; c++)
-            {
-                var cell = tb.GetCell(r, c);
-                if (cell.IsContinuation)
-                {
-                    Assert.True(cell.Rune == 0, $"Continuation cell at {r},{c} unexpectedly has Rune '{cell.Rune}'");
-                }
-
-                if (!cell.IsContinuation && cell.Rune != 0)
-                {
-                    int width = Math.Max(1, (int)cell.Width);
-                    for (int i = 1; i < width; i++)
-                    {
-                        if (c + i >= cols) break;
-                        var cont = tb.GetCell(r, c + i);
-                        Assert.True(cont.IsContinuation, $"Base at {r},{c} width={width} expects continuation at {r},{c + i}");
-                    }
-                }
-            }
-        }
+        var violations = tb.ValidateInvariants();
+        Assert.True(violations.Count == 0,
+            "Buffer invariants violated:" + Environment.NewLine + string.Join(Environment.NewLine, violations));
     }
 
     private static CellHot[,] GetScreenCells(TerminalBuffer tb)

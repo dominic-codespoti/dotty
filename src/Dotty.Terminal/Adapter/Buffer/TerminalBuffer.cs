@@ -19,23 +19,6 @@ public class TerminalBuffer
 
     internal Screen ActiveScreenForTests => ActiveBuffer;
 
-    /// <summary>
-    /// A buffer scroll that the renderer can replay as a region memmove on its
-    /// cached bitmap. <see cref="Delta"/> is the signed row offset the content
-    /// moved (positive = down, negative = up); the exposed band is at the top
-    /// for positive deltas and the bottom for negative deltas.
-    /// </summary>
-    public readonly record struct PendingScroll(int Top, int Bottom, int Delta);
-
-    /// <summary>Number of scrolls recorded since the last render drained the queue.</summary>
-    public int PendingScrollCount => _pendingScrolls.Count;
-
-    /// <summary>
-    /// Dequeues the oldest recorded scroll. Called by the renderer under
-    /// <see cref="SyncRoot"/> while replaying pending scrolls in FIFO order.
-    /// </summary>
-    public bool TryDequeuePendingScroll(out PendingScroll scroll) => _pendingScrolls.TryDequeue(out scroll);
-
     public StyleSet StyleSet { get; } = new();
 
     private readonly ScreenManager _screens;
@@ -65,11 +48,6 @@ public class TerminalBuffer
     // without false hits after a scroll rotation.
     private ulong[] _rowScrollEpochs = Array.Empty<ulong>();
 
-    // Scrolls recorded since the last render. The renderer replays these as
-    // region memmoves on its cached bitmap. Cleared whenever the grid identity
-    // is blown away (full invalidation / resize), because replaying a scroll
-    // against unrelated content would corrupt pixels.
-    private readonly Queue<PendingScroll> _pendingScrolls = new();
     private List<string> _hyperlinks = new List<string> { string.Empty };
     private Dictionary<string, ushort> _hyperlinkLookup = new Dictionary<string, ushort>();
 
@@ -106,10 +84,6 @@ public class TerminalBuffer
 
         Array.Resize(ref _rowGenerations, rows);
         Array.Resize(ref _rowScrollEpochs, rows);
-        // Reflow scrambles row identity; queued scrolls must not be replayed
-        // against the new layout. The canvas does a full render on geometry
-        // change anyway.
-        _pendingScrolls.Clear();
         unchecked { _globalGeneration++; }
     }
 
@@ -411,11 +385,6 @@ public class TerminalBuffer
         // Identity generations: the whole region changed; classification and
         // glyph caches must re-examine every row.
         BumpIdentity(top, height);
-
-        // A whole-region replacement clears rows instead of moving content —
-        // no memmove to replay; the epoch bumps above render every row.
-        if (delta < height)
-            _pendingScrolls.Enqueue(new PendingScroll(top, bottom, -delta));
     }
 
     /// <summary>
@@ -455,9 +424,6 @@ public class TerminalBuffer
             unchecked { _rowScrollEpochs[r]++; }
 
         BumpIdentity(top, height);
-
-        if (clampedLines < height)
-            _pendingScrolls.Enqueue(new PendingScroll(top, bottom, clampedLines));
     }
 
     public void SetCursor(int row, int col)
@@ -741,6 +707,11 @@ public class TerminalBuffer
                 var srcCold = ActiveBuffer.GetColdCell(r - count, c);
                 ActiveBuffer.GetColdCellRef(r, c) = srcCold;
             }
+            // Row metadata travels with the content, not with the physical row.
+            int dstPhys = ActiveBuffer.GetPhysicalRow(r);
+            int srcPhys = ActiveBuffer.GetPhysicalRow(r - count);
+            ActiveBuffer.RowMaxCol[dstPhys] = ActiveBuffer.RowMaxCol[srcPhys];
+            ActiveBuffer.RowColdFlags[dstPhys] = ActiveBuffer.RowColdFlags[srcPhys];
         }
         // clear inserted lines
         for (int r = row; r < row + count; r++)
@@ -749,7 +720,6 @@ public class TerminalBuffer
         for (int r = row; r < row + count; r++)
             unchecked { _rowScrollEpochs[r]++; }
         BumpIdentity(row, regionHeight);
-        _pendingScrolls.Enqueue(new PendingScroll(row, bottom, count));
     }
 
     public void DeleteLines(int count)
@@ -778,6 +748,11 @@ public class TerminalBuffer
                 var srcCold = ActiveBuffer.GetColdCell(r + count, c);
                 ActiveBuffer.GetColdCellRef(r, c) = srcCold;
             }
+            // Row metadata travels with the content, not with the physical row.
+            int dstPhys = ActiveBuffer.GetPhysicalRow(r);
+            int srcPhys = ActiveBuffer.GetPhysicalRow(r + count);
+            ActiveBuffer.RowMaxCol[dstPhys] = ActiveBuffer.RowMaxCol[srcPhys];
+            ActiveBuffer.RowColdFlags[dstPhys] = ActiveBuffer.RowColdFlags[srcPhys];
         }
         // clear trailing lines
         for (int r = bottom - count + 1; r <= bottom; r++)
@@ -786,7 +761,6 @@ public class TerminalBuffer
         for (int r = bottom - count + 1; r <= bottom; r++)
             unchecked { _rowScrollEpochs[r]++; }
         BumpIdentity(row, regionHeight);
-        _pendingScrolls.Enqueue(new PendingScroll(row, bottom, -count));
     }
 
     public void EraseDisplay(int mode)
@@ -853,6 +827,12 @@ public class TerminalBuffer
         ScrollRegionUp(_scrollTop, _scrollBottom, lines);
     }
 
+    /// <summary>
+    /// Delegates to <see cref="Screen.ValidateInvariants"/> on the active screen.
+    /// Test/debug aid only; not called on the live path.
+    /// </summary>
+    public List<string> ValidateInvariants() => ActiveBuffer.ValidateInvariants();
+
     public string GetRowText(int row)
     {
         using var sb = ZStr.CreateStringBuilder(Columns);
@@ -917,9 +897,6 @@ public class TerminalBuffer
             if (i < _rowScrollEpochs.Length) unchecked { _rowScrollEpochs[i]++; }
         }
         unchecked { _globalGeneration += (ulong)_rowGenerations.Length; }
-        // Full invalidation (alt-screen toggle, reset, clear) means the grid
-        // identity changed wholesale; queued scrolls reference old content.
-        _pendingScrolls.Clear();
     }
 
     /// <summary>

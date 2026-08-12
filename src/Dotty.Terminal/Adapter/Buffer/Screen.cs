@@ -271,6 +271,62 @@ public unsafe class Screen : IDisposable
         _rowMaxCol[pRow] = maxCol;
     }
 
+    /// <summary>
+    /// Scans every physical row (visible + scrollback ring) for invariant violations:
+    /// 1. Continuation cells carry no rune.
+    /// 2. Every width-2 base cell has its continuation cells set.
+    /// 3. <see cref="RowColdFlags"/> is never false while cold metadata
+    ///    (hyperlink / grapheme index) is present — the property the bulk
+    ///    ASCII writer relies on to skip cold-cell cleanup.
+    /// 4. <see cref="RowMaxCol"/> is an upper bound on the row's last
+    ///    non-space content column.
+    /// Test/debug aid only; O(rows × columns), never called on the live path.
+    /// </summary>
+    public List<string> ValidateInvariants()
+    {
+        var violations = new List<string>();
+        int total = TotalRows;
+        for (int p = 0; p < total; p++)
+        {
+            int offset = p * Columns;
+            bool rowHasCold = false;
+            int lastContentCol = -1;
+            for (int c = 0; c < Columns; c++)
+            {
+                ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + c);
+                ref var cold = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + c);
+                if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                    rowHasCold = true;
+                if (cell.IsContinuation)
+                {
+                    if (cell.Rune != 0)
+                        violations.Add($"phys row {p} col {c}: continuation carries Rune=0x{cell.Rune:X}");
+                }
+                else if (cell.Rune != 0 && cell.Rune != 32)
+                {
+                    lastContentCol = c;
+                    int w = Math.Max(1, (int)cell.Width);
+                    for (int i = 1; i < w; i++)
+                    {
+                        int cc = c + i;
+                        if (cc >= Columns)
+                        {
+                            violations.Add($"phys row {p} col {c}: width {w} exceeds row bounds");
+                            break;
+                        }
+                        if (!UnsafeAsRef<CellHot>(_cellsPtr, offset + cc).IsContinuation)
+                            violations.Add($"phys row {p} col {c}: width {w} missing continuation at col {cc}");
+                    }
+                }
+            }
+            if (!_rowColdFlags[p] && rowHasCold)
+                violations.Add($"phys row {p}: cold metadata present while RowColdFlags is false");
+            if (lastContentCol >= 0 && _rowMaxCol[p] < lastContentCol)
+                violations.Add($"phys row {p}: RowMaxCol {_rowMaxCol[p]} below content max {lastContentCol}");
+        }
+        return violations;
+    }
+
     internal CellHot[,] GetCellsForTests()
     {
         var result = new CellHot[Rows, Columns];
@@ -395,6 +451,7 @@ public unsafe class Screen : IDisposable
                     (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
                     coldRowBytes, coldRowBytes);
                 _rowMaxCol[dstPhys] = _rowMaxCol[srcPhys];
+                _rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
             }
             int newBot = GetPhysicalRow(bottom);
             new Span<CellHot>((void*)(_cellsPtr + newBot * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
@@ -424,6 +481,7 @@ public unsafe class Screen : IDisposable
                 (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
                 coldRowBytes, coldRowBytes);
             _rowMaxCol[dstPhys] = _rowMaxCol[srcPhys];
+            _rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
         }
 
         for (int l = 0; l < lines; l++)
@@ -507,6 +565,7 @@ public unsafe class Screen : IDisposable
                 (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
                 coldRowSizeBytes, coldRowSizeBytes);
             _rowMaxCol[dstPhys] = _rowMaxCol[srcPhys];
+            _rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
         }
 
         for (int r = top; r < top + lines; r++)
@@ -563,6 +622,11 @@ public unsafe class Screen : IDisposable
                 coldRowSizeBytes, coldRowSizeBytes);
             destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], cols - 1);
             destination._rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
+            // Narrowing cuts the continuation column of a wide glyph at the new
+            // edge; drop the dangling base so no raw cell scan sees an
+            // unterminated width.
+            if (Columns > destination.Columns)
+                destination.ClearTruncatedWideGlyph(dstPhys, destination.Columns - 1);
         }
 
         // Preserve scrollback ring buffer across all resize shapes.
@@ -596,8 +660,59 @@ public unsafe class Screen : IDisposable
                 // Clamp maxCol to the new width in case we just truncated the row.
                 destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], destination.Columns - 1);
                 destination._rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
+                if (Columns > destination.Columns)
+                    destination.ClearTruncatedWideGlyph(dstPhys, destination.Columns - 1);
             }
         }
+    }
+
+    /// <summary>
+    /// Resize narrowing cuts the continuation column of a wide glyph whose
+    /// base sits on the new last column, leaving a dangling width-2 base.
+    /// Drop the whole glyph so raw cell scans (renderer, validator) never see
+    /// an unterminated width. Operates on a physical row directly.
+    /// </summary>
+    private void ClearTruncatedWideGlyph(int dstPhys, int edgeCol)
+    {
+        int offset = dstPhys * Columns;
+        ref var edge = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + edgeCol);
+        if (edge.IsContinuation)
+        {
+            // Defensive: a continuation survived at the edge — walk back to its
+            // base and clear the whole glyph.
+            int baseCol = edgeCol;
+            while (baseCol > 0 && UnsafeAsRef<CellHot>(_cellsPtr, offset + baseCol).IsContinuation)
+                baseCol--;
+            int c = baseCol;
+            while (c < Columns && (c == baseCol || UnsafeAsRef<CellHot>(_cellsPtr, offset + c).IsContinuation))
+            {
+                UnsafeAsRef<CellHot>(_cellsPtr, offset + c).Reset();
+                UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + c).Reset();
+                c++;
+            }
+        }
+        else if (edge.Rune != 0 && edge.Width > 1)
+        {
+            edge.Reset();
+            UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + edgeCol).Reset();
+        }
+        else
+        {
+            return;
+        }
+
+        // Recompute the physical row's max column (space counts as empty).
+        int maxCol = -1;
+        for (int j = Columns - 1; j >= 0; j--)
+        {
+            var cell = UnsafeAsRef<CellHot>(_cellsPtr, offset + j);
+            if (!cell.IsContinuation && cell.Rune != 0 && cell.Rune != 32)
+            {
+                maxCol = j;
+                break;
+            }
+        }
+        _rowMaxCol[dstPhys] = maxCol;
     }
 
     public void ReadSnapshot(ref CellHot[] cellsSnapshot, ref ColdCell[] coldSnapshot, ref int[] rowMapSnapshot)

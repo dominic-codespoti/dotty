@@ -87,7 +87,6 @@ namespace Dotty.App.Controls
         }
 
         internal TerminalCanvas? Canvas => this.FindControl<TerminalCanvas>("PART_Canvas");
-        private ScrollViewer? Scroll => this.FindControl<ScrollViewer>("PART_Scroll");
 
         public void ScrollToPreviousPrompt() => Canvas?.ScrollToPreviousPrompt();
         public void ScrollToNextPrompt() => Canvas?.ScrollToNextPrompt();
@@ -112,8 +111,6 @@ namespace Dotty.App.Controls
                     canvas.ShowCursor = _blinkOn;
                     try { canvas.OnBufferUpdated(buffer); } catch { }
                     try { canvas.RequestFrame(); } catch { }
-                    if (canvas.IsAtBottom)
-                        try { Scroll?.ScrollToEnd(); } catch { }
                 }
                 catch { }
             };

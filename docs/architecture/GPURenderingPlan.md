@@ -1,6 +1,6 @@
 # GPU Rendering Migration Plan
 
-Branch: `feat/gpu-rendering` · Status: **PHASE 0 COMPLETE — Phase 1 (A8 atlas) ready** · Last updated: 2026-08-13
+Branch: `feat/gpu-rendering` · Status: **PHASE 1 COMPLETE — Phase 2 (quad renderer) ready** · Last updated: 2026-08-13
 
 ## 1. Goal
 
@@ -78,6 +78,36 @@ flood under bare X11 (§6).
 | No bearings; shader centered by bounds width | Bearings + advance + baseline in `GlyphInfo` |
 | No wide-cell/continuation/fallback-typeface representation | Width, continuation, typeface identity in key/metadata |
 | Unbounded doubling growth, no per-atlas cap; `Dispose`/`AtlasBitmap` unsynchronized | Byte budget + eviction; locked lifetime |
+
+### 3.3 Implementation record — 2026-08-13
+
+Delivered: `src/Dotty.App/Rendering/GlyphAtlas.cs` (atlas + `GlyphKey` struct +
+`GlyphInfo`), `src/Dotty.App/Rendering/GlyphAtlasService.cs`, and 12 tests in
+`tests/Dotty.App.Tests/GlyphAtlasTests.cs` (all green; full app suite 641 passed).
+
+- **A8 verified.** `SKSurface.Create(Alpha8)` rasterizes text coverage correctly;
+  tight bounds are derived by scanning the temp surface's pixels, giving
+  `LeftBearing`/`TopBearing` relative to the baseline (draw contract:
+  `dest = (cellX + LeftBearing, baselineY + TopBearing)`).
+- **Bold applies.** Skia's `StrokeAndFill` + stroke-width does change text
+  rasterization (pixel-diff asserted in tests) — the old code's
+  stroke-width-on-fill was inert. Bold entries are distinct and visibly heavier.
+- **Wide glyphs.** CJK graphemes rasterize at ~1 em advance (test uses
+  `SKFontManager.Default.MatchCharacter(0x4E16)`; the default typeface lacks CJK).
+  Wide-cell placement is Phase 2's responsibility (cell Width drives positioning);
+  the atlas stores the natural advance.
+- **Packing.** Shelf packing with 2 px padding; growth doubles to a hard
+  `MaxAtlasSize` (4096, 16 MB); a full atlas returns false from `EnsureGlyph` so
+  Phase 2 can fall back to the direct path per glyph.
+- **Service.** Keyed by (typeface instance, size); refcount via
+  Acquire/Release; unreferenced LRU eviction over the 32 MB budget; `Dispose`
+  takes the atlas lock (the deleted predecessor's dispose race is gone).
+- **Key contract.** `(grapheme, typeface, size, bold)` struct with reference
+  typeface equality; no color component (asserted via the API surface).
+
+Phase 2 consumes: `EnsureGlyph(key, out GlyphInfo)` for placement +
+`AtlasBitmap` (A8) for texture upload, both under the atlas lock / service
+Acquire discipline.
 
 ## 4. Phase 2 — Quad renderer (5–8 days, the real work)
 

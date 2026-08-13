@@ -107,6 +107,13 @@ public partial class App : Application
     }
     
     /// <summary>
+    /// Raised after application resource brushes are replaced by a theme
+    /// change. Canvas controls subscribe to refresh cached brushes without
+    /// touching the resource dictionary during Render.
+    /// </summary>
+    public static event Action? ThemeUpdated;
+
+    /// <summary>
     /// Handles theme changes - updates application resources.
     /// </summary>
     private static void OnThemeChanged(object? sender, ThemeChangedEventArgs e)
@@ -127,6 +134,7 @@ public partial class App : Application
         ApplyAnsiColorPalette(theme);
         
         Console.WriteLine($"[App] Theme changed to background 0x{theme.Background:X8}");
+        ThemeUpdated?.Invoke();
     }
 
     private static readonly bool ShouldLogFontResolution =

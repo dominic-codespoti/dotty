@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
+using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -19,6 +20,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Dotty.App.Controls.Canvas.Rendering;
 using Dotty;
 using Dotty.Abstractions.Config;
 using Dotty.App.Configuration;
@@ -45,6 +47,7 @@ namespace Dotty.App.Views;
         private SolidColorBrush? _semiTransparentBrush;
         private bool _isHyprland = false;
         private TabViewModel? _windowTitleSubscribedTab;
+        private bool _renderTelemetryEnabled = TerminalRenderTelemetry.DefaultEnabled;
 
     public MainWindow()
     {
@@ -57,7 +60,11 @@ namespace Dotty.App.Views;
         Deactivated += (_, _) => SendFocusEventToActiveTab(false);
 
         // Window pixel size tracking for CSI 14 t queries.
+        // ClientSize is in DIPs; the protocol replies in physical pixels, so
+        // also re-broadcast on scale transitions (physical size changes even
+        // when the DIP size does not).
         LayoutUpdated += (_, _) => BroadcastWindowPixelSize();
+        ScalingChanged += (_, _) => BroadcastWindowPixelSize();
 
         UpdateWindowTitle();
         ConfigureTransparency();
@@ -76,8 +83,9 @@ namespace Dotty.App.Views;
     private void BroadcastWindowPixelSize()
     {
         var size = ClientSize;
-        int w = Math.Max(1, (int)size.Width);
-        int h = Math.Max(1, (int)size.Height);
+        double scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+        int w = Math.Max(1, (int)Math.Round(size.Width * scale));
+        int h = Math.Max(1, (int)Math.Round(size.Height * scale));
         foreach (var tab in _viewModel.Tabs)
         {
             if (tab.Session?.Adapter is Terminal.Adapter.TerminalAdapter a)
@@ -376,6 +384,7 @@ namespace Dotty.App.Views;
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch
         };
+        terminalView.RenderTelemetry.SetEnabled(_renderTelemetryEnabled);
         
         terminalView.NewTabRequested += OnNewTabRequested;
         
@@ -494,7 +503,10 @@ namespace Dotty.App.Views;
         
         try
         {
-            var pixelSize = new PixelSize((int)view.Bounds.Width, (int)view.Bounds.Height);
+            double scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+            var pixelSize = new PixelSize(
+                Math.Max(1, (int)Math.Round(view.Bounds.Width * scale)),
+                Math.Max(1, (int)Math.Round(view.Bounds.Height * scale)));
             if (pixelSize.Width <= 0 || pixelSize.Height <= 0) return;
             
             using var renderBitmap = new RenderTargetBitmap(pixelSize);
@@ -799,24 +811,187 @@ namespace Dotty.App.Views;
     private string GetHarnessStatsJson()
     {
         int activeTabIndex = _viewModel.ActiveTab == null ? -1 : _viewModel.Tabs.IndexOf(_viewModel.ActiveTab);
-        
-        // Get scrollback stats from active terminal
+
         string scrollbackStats = "null";
         if (_viewModel.ActiveTab != null && _terminalViews.TryGetValue(_viewModel.ActiveTab, out var activeView))
         {
             scrollbackStats = activeView.GetScrollbackStats();
         }
-        
-        return "{" +
-            $"\"totalTabs\":{_viewModel.Tabs.Count}," +
-            $"\"sessionsCreated\":{_viewModel.Tabs.Count(tab => tab.HasSession)}," +
-            $"\"sessionsStarted\":{_viewModel.Tabs.Count(tab => tab.IsSessionStarted)}," +
-            $"\"mountedViews\":{_terminalViews.Count}," +
-            $"\"inactiveTimers\":{_inactiveTabTimers.Count}," +
-            $"\"snapshots\":{_tabSnapshots.Count}," +
-            $"\"activeTabIndex\":{activeTabIndex}," +
-            $"\"scrollback\":{scrollbackStats}" +
-            "}";
+
+        var output = new StringBuilder();
+        output.Append('{')
+            .Append("\"totalTabs\":").Append(_viewModel.Tabs.Count)
+            .Append(",\"sessionsCreated\":").Append(_viewModel.Tabs.Count(tab => tab.HasSession))
+            .Append(",\"sessionsStarted\":").Append(_viewModel.Tabs.Count(tab => tab.IsSessionStarted))
+            .Append(",\"mountedViews\":").Append(_terminalViews.Count)
+            .Append(",\"inactiveTimers\":").Append(_inactiveTabTimers.Count)
+            .Append(",\"snapshots\":").Append(_tabSnapshots.Count)
+            .Append(",\"activeTabIndex\":").Append(activeTabIndex)
+            .Append(",\"scrollback\":").Append(scrollbackStats)
+            .Append(",\"renderTelemetry\":").Append(GetRenderTelemetryJson())
+            .Append('}');
+        return output.ToString();
+    }
+
+    private void StartRenderTelemetry()
+    {
+        _renderTelemetryEnabled = true;
+        foreach (var view in _terminalViews.Values)
+        {
+            view.RenderTelemetry.Start();
+        }
+    }
+
+    private void StopRenderTelemetry()
+    {
+        _renderTelemetryEnabled = false;
+        foreach (var view in _terminalViews.Values)
+        {
+            view.RenderTelemetry.Stop();
+        }
+    }
+
+    private void ResetRenderTelemetry()
+    {
+        foreach (var view in _terminalViews.Values)
+        {
+            view.RenderTelemetry.Reset();
+        }
+    }
+
+    private TerminalRenderTelemetrySnapshot[] CaptureRenderTelemetrySnapshots()
+    {
+        var snapshots = new TerminalRenderTelemetrySnapshot[_terminalViews.Count];
+        int index = 0;
+        foreach (var view in _terminalViews.Values)
+        {
+            snapshots[index++] = view.RenderTelemetry.Snapshot();
+        }
+        return snapshots;
+    }
+
+    private string GetRenderTelemetryJson()
+    {
+        var snapshots = CaptureRenderTelemetrySnapshots();
+        var aggregate = TerminalRenderTelemetry.Aggregate(snapshots);
+        var active = TerminalRenderTelemetrySnapshot.Empty;
+        if (_viewModel.ActiveTab != null &&
+            _terminalViews.TryGetValue(_viewModel.ActiveTab, out var activeView))
+        {
+            active = activeView.RenderTelemetry.Snapshot();
+        }
+
+        long heapSize = GC.GetGCMemoryInfo().HeapSizeBytes;
+        var output = new StringBuilder(2_048);
+        output.Append('{')
+            .Append("\"fps\":");
+        AppendJsonNumber(output, aggregate.RenderRate);
+        output.Append(",\"fpsMin\":0,\"fpsMax\":");
+        AppendJsonNumber(output, aggregate.RenderRate);
+        output.Append(",\"fpsAvg\":");
+        AppendJsonNumber(output, aggregate.RenderRate);
+        output.Append(",\"frameTimeMin\":");
+        AppendJsonNumber(output, aggregate.MinimumRenderMilliseconds);
+        output.Append(",\"frameTimeMax\":");
+        AppendJsonNumber(output, aggregate.MaximumRenderMilliseconds);
+        output.Append(",\"frameTimeAvg\":");
+        AppendJsonNumber(output, aggregate.AverageRenderMilliseconds);
+        output.Append(",\"parserBytesPerSec\":0,\"parserSeqPerSec\":0")
+            .Append(",\"totalBytes\":0,\"totalSequences\":0")
+            .Append(",\"heapSize\":").Append(heapSize)
+            .Append(",\"allocatedBytes\":").Append(aggregate.TotalRenderAllocatedBytes)
+            .Append(",\"workingSet\":").Append(Environment.WorkingSet)
+            .Append(",\"gen0\":").Append(GC.CollectionCount(0))
+            .Append(",\"gen1\":").Append(GC.CollectionCount(1))
+            .Append(",\"gen2\":").Append(GC.CollectionCount(2))
+            .Append(",\"inputLatencyMin\":0,\"inputLatencyMax\":0,\"inputLatencyAvg\":0")
+            .Append(",\"scrollLinesPerSec\":0,\"scrollTimeAvg\":0")
+            .Append(",\"cellUpdatesPerSec\":0,\"totalCellsUpdated\":0")
+            .Append(",\"rawCounters\":{")
+            .Append("\"renderNotifications\":").Append(aggregate.RenderNotifications)
+            .Append(",\"coalescedRenderNotifications\":").Append(aggregate.CoalescedRenderNotifications)
+            .Append(",\"uiRenderUpdates\":").Append(aggregate.UiRenderUpdates)
+            .Append(",\"frameRequests\":").Append(aggregate.FrameRequests)
+            .Append(",\"renderCalls\":").Append(aggregate.RenderCalls)
+            .Append(",\"contentRenderAttempts\":").Append(aggregate.ContentRenderAttempts)
+            .Append(",\"contentFrames\":").Append(aggregate.ContentFrames)
+            .Append(",\"bufferLockMisses\":").Append(aggregate.BufferLockMisses)
+            .Append(",\"bitmapRecreations\":").Append(aggregate.BitmapRecreations)
+            .Append(",\"renderP95UpperBoundMs\":");
+        AppendJsonNumber(output, aggregate.P95RenderMilliseconds);
+        output.Append(",\"averageRenderAllocatedBytes\":");
+        AppendJsonNumber(output, aggregate.AverageRenderAllocatedBytes);
+        output.Append(",\"maximumRenderAllocatedBytes\":").Append(aggregate.MaximumRenderAllocatedBytes)
+            .Append("},\"active\":");
+        AppendRenderTelemetrySnapshotJson(output, active);
+        output.Append(",\"aggregate\":");
+        AppendRenderTelemetrySnapshotJson(output, aggregate);
+        output.Append('}');
+        return output.ToString();
+    }
+
+    private static void AppendRenderTelemetrySnapshotJson(
+        StringBuilder output,
+        TerminalRenderTelemetrySnapshot snapshot)
+    {
+        output.Append('{')
+            .Append("\"enabled\":").Append(snapshot.Enabled ? "true" : "false")
+            .Append(",\"elapsedSeconds\":");
+        AppendJsonNumber(output, snapshot.ElapsedSeconds);
+        output.Append(",\"renderNotifications\":").Append(snapshot.RenderNotifications)
+            .Append(",\"coalescedRenderNotifications\":").Append(snapshot.CoalescedRenderNotifications)
+            .Append(",\"uiRenderUpdates\":").Append(snapshot.UiRenderUpdates)
+            .Append(",\"frameRequests\":").Append(snapshot.FrameRequests)
+            .Append(",\"renderCalls\":").Append(snapshot.RenderCalls)
+            .Append(",\"contentRenderAttempts\":").Append(snapshot.ContentRenderAttempts)
+            .Append(",\"contentFrames\":").Append(snapshot.ContentFrames)
+            .Append(",\"bufferLockMisses\":").Append(snapshot.BufferLockMisses)
+            .Append(",\"bitmapRecreations\":").Append(snapshot.BitmapRecreations)
+            .Append(",\"renderRate\":");
+        AppendJsonNumber(output, snapshot.RenderRate);
+        output.Append(",\"renderMinMs\":");
+        AppendJsonNumber(output, snapshot.MinimumRenderMilliseconds);
+        output.Append(",\"renderMaxMs\":");
+        AppendJsonNumber(output, snapshot.MaximumRenderMilliseconds);
+        output.Append(",\"renderAvgMs\":");
+        AppendJsonNumber(output, snapshot.AverageRenderMilliseconds);
+        output.Append(",\"renderP95UpperBoundMs\":");
+        AppendJsonNumber(output, snapshot.P95RenderMilliseconds);
+        output.Append(",\"contentMaxMs\":");
+        AppendJsonNumber(output, snapshot.MaximumContentMilliseconds);
+        output.Append(",\"contentAvgMs\":");
+        AppendJsonNumber(output, snapshot.AverageContentMilliseconds);
+        output.Append(",\"renderAllocatedBytes\":").Append(snapshot.TotalRenderAllocatedBytes)
+            .Append(",\"renderAllocatedBytesMax\":").Append(snapshot.MaximumRenderAllocatedBytes)
+            .Append(",\"renderAllocatedBytesAvg\":");
+        AppendJsonNumber(output, snapshot.AverageRenderAllocatedBytes);
+        output.Append(",\"lastBufferGeneration\":").Append(snapshot.LastBufferGeneration)
+            .Append(",\"lastRenderScale\":");
+        AppendJsonNumber(output, snapshot.LastRenderScale);
+        output.Append(",\"lastPixelWidth\":").Append(snapshot.LastPixelWidth)
+            .Append(",\"lastPixelHeight\":").Append(snapshot.LastPixelHeight)
+            .Append(",\"presentFrames\":").Append(snapshot.PresentFrames)
+            .Append(",\"presentMinMs\":");
+        AppendJsonNumber(output, snapshot.MinimumPresentMilliseconds);
+        output.Append(",\"presentMaxMs\":");
+        AppendJsonNumber(output, snapshot.MaximumPresentMilliseconds);
+        output.Append(",\"presentAvgMs\":");
+        AppendJsonNumber(output, snapshot.AveragePresentMilliseconds);
+        output.Append(",\"renderDurationHistogram\":[");
+        for (int i = 0; i < snapshot.RenderDurationHistogram.Length; i++)
+        {
+            if (i > 0)
+            {
+                output.Append(',');
+            }
+            output.Append(snapshot.RenderDurationHistogram[i]);
+        }
+        output.Append("]}");
+    }
+
+    private static void AppendJsonNumber(StringBuilder output, double value)
+    {
+        output.Append(value.ToString("0.###", CultureInfo.InvariantCulture));
     }
     
     private string GetTerminalStateJson()
@@ -995,6 +1170,97 @@ namespace Dotty.App.Views;
         return sb.ToString();
     }
     
+    private async Task WaitForHarnessIdleAsync()
+    {
+        var completion = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            var topLevel = TopLevel.GetTopLevel(this);
+            if (topLevel == null)
+            {
+                completion.TrySetResult(true);
+                return;
+            }
+
+            topLevel.RequestAnimationFrame(_ =>
+            {
+                topLevel.RequestAnimationFrame(__ => completion.TrySetResult(true));
+            });
+        });
+
+        await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    private bool CaptureHarnessVisual(bool canvasOnly)
+    {
+        try
+        {
+            Visual target = this;
+            if (canvasOnly &&
+                _viewModel.ActiveTab != null &&
+                _terminalViews.TryGetValue(_viewModel.ActiveTab, out var activeView))
+            {
+                target = activeView.RenderCaptureTarget;
+            }
+
+            var topLevel = TopLevel.GetTopLevel(target);
+            double scale = topLevel?.RenderScaling ?? 1.0;
+            int width = Math.Max(1, (int)Math.Ceiling(target.Bounds.Width * scale));
+            int height = Math.Max(1, (int)Math.Ceiling(target.Bounds.Height * scale));
+            var pixelSize = new PixelSize(width, height);
+            var dpi = new Vector(96.0 * scale, 96.0 * scale);
+            using var bitmap = new RenderTargetBitmap(pixelSize, dpi);
+            bitmap.Render(target);
+
+            string prefix = canvasOnly ? "dotty_canvas" : "dotty_avalonia";
+            string path = Path.Combine(
+                Path.GetTempPath(),
+                $"{prefix}_{Environment.ProcessId}_{DateTime.UtcNow.Ticks}.png");
+            bitmap.Save(path, PngBitmapEncoderOptions.Default);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Harness capture failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    private bool LoadHarnessRenderScenario()
+    {
+        var tab = _viewModel.ActiveTab;
+        if (tab?.Session?.Adapter is not Terminal.Adapter.TerminalAdapter adapter)
+        {
+            return false;
+        }
+
+        const string scenario =
+            "\u001b[2J\u001b[H" +
+            "\u001b[1;38;2;123;211;255mDotty Avalonia render baseline\u001b[0m\r\n" +
+            "\u001b[30;47m black \u001b[31m red \u001b[32m green \u001b[33m yellow " +
+            "\u001b[34m blue \u001b[35m magenta \u001b[36m cyan \u001b[37m white \u001b[0m\r\n" +
+            "\u001b[1mBold\u001b[0m  \u001b[3mItalic\u001b[0m  \u001b[4mUnderline\u001b[0m  " +
+            "\u001b[9mStrike\u001b[0m  \u001b[53mOverline\u001b[0m\r\n" +
+            "Ligatures: != == === => -> >= <=  |  combining: e\u0301 a\u0308\r\n" +
+            "Wide: \u65e5\u672c\u8a9e \u4e2d\u6587 \ud55c\uad6d\uc5b4  Emoji: \ud83d\ude80 \ud83e\uddea \ud83d\udcbb \u2764\ufe0f\r\n" +
+            "\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2510  \u2588\u2588\u2588 \u2593\u2592\u2591  \u2502 box and block geometry \u2502\r\n" +
+            "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2518  \u001b[38;2;255;170;80mTrueColor foreground\u001b[0m\r\n" +
+            "\u001b]8;;https://example.com\u001b\\Hyperlink sample\u001b]8;;\u001b\\  " +
+            "\u001b[48;2;45;55;72m rounded/background span \u001b[0m\r\n" +
+            "Cursor baseline below; selection and search are separate scenarios.\r\n" +
+            "\u001b[11;5H\u001b[6 q";
+
+        byte[] bytes = Encoding.UTF8.GetBytes(scenario);
+        lock (adapter.Buffer.SyncRoot)
+        {
+            tab.Session.Parser.Feed(bytes);
+        }
+        adapter.FlushRender();
+        return true;
+    }
+
     private void StartTestCommandListener()
     {
         var portStr = Environment.GetEnvironmentVariable("DOTTY_TEST_PORT");
@@ -1128,6 +1394,19 @@ namespace Dotty.App.Views;
                 return $"{{\"error\":\"{ex.Message}\"}}";
             }
         }
+
+        if (string.Equals(command.Trim(), "WAIT_FOR_IDLE", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                await WaitForHarnessIdleAsync();
+                return "OK";
+            }
+            catch (Exception ex)
+            {
+                return $"ERROR:{ex.Message}";
+            }
+        }
         
         // Handle other commands on UI thread
         var commandResult = await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1153,9 +1432,19 @@ namespace Dotty.App.Views;
                     case "PREV_TAB":
                         SwitchTab(-1);
                         return (success: true, response: (string?)null, error: (string?)null);
-                    case "WAIT_FOR_IDLE":
-                        // Just return OK - the UI thread being available means we're idle
-                        return (success: true, response: (string?)null, error: (string?)null);
+                    case "CAPTURE":
+                        return CaptureHarnessVisual(canvasOnly: false)
+                            ? (success: true, response: (string?)null, error: (string?)null)
+                            : (success: false, response: (string?)null, error: "Window capture failed");
+                    case "CAPTURE_CANVAS":
+                        return CaptureHarnessVisual(canvasOnly: true)
+                            ? (success: true, response: (string?)null, error: (string?)null)
+                            : (success: false, response: (string?)null, error: "Canvas capture failed");
+                    case "RENDER_SCENARIO":
+                    case "RENDER_SCENARIO:CORE":
+                        return LoadHarnessRenderScenario()
+                            ? (success: true, response: (string?)null, error: (string?)null)
+                            : (success: false, response: (string?)null, error: "No active terminal session");
                     case "SHUTDOWN":
                         // Close the application
                         Close();
@@ -1183,15 +1472,20 @@ namespace Dotty.App.Views;
                         // Clipboard operations not fully implemented in headless mode
                         return (success: true, response: (string?)null, error: (string?)null);
                     case "SCREENSHOT":
-                        // Screenshot not implemented - return empty response
+                        // Legacy no-op kept for older harness clients; use CAPTURE/CAPTURE_CANVAS.
                         return (success: true, response: "0", error: (string?)null);
                     case "PERF:START":
+                        StartRenderTelemetry();
+                        return (success: true, response: (string?)null, error: (string?)null);
                     case "PERF:STOP":
+                        StopRenderTelemetry();
+                        return (success: true, response: GetRenderTelemetryJson(), error: (string?)null);
                     case "PERF:GET":
-                    case "PERF:RESET":
                     case "PERF:SNAPSHOT":
-                        // Performance commands - return empty metrics
-                        return (success: true, response: "{}", error: (string?)null);
+                        return (success: true, response: GetRenderTelemetryJson(), error: (string?)null);
+                    case "PERF:RESET":
+                        ResetRenderTelemetry();
+                        return (success: true, response: (string?)null, error: (string?)null);
                     default:
                         // Handle TYPE:text - send text to active terminal
                         if (command.Trim().ToUpper().StartsWith("TYPE:"))

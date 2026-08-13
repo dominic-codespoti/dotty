@@ -14,6 +14,8 @@ For detailed architectural information, we use progressive disclosure. Please re
   ➡️ See [Architecture Docs](./docs/Architecture.md) for details on project layering and responsibilities.
 - **Rendering:** `src/Dotty.App/Controls/Canvas/`
   ➡️ See [Rendering Docs](./docs/Rendering.md) for details on GlyphAtlas, BackgroundSynth, etc.
+- **Avalonia optimization roadmap:** `src/Dotty.App/` rendering, scheduling, DPI, and native UI integration
+  ➡️ See [Avalonia Optimization Plan](./docs/architecture/AvaloniaOptimizationPlan.md) before changing the production render path.
 - **Terminal Parsing:** `src/Dotty.Abstractions/` and `src/Dotty.Terminal/`
   ➡️ See [Parsing Docs](./docs/Parsing.md) for control code handling and escaping sequences.
 - **Native PTY Integration:** `src/Dotty.NativePty/`

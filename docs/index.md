@@ -6,6 +6,7 @@
 |----------|-------------|
 | [Architecture Overview](Architecture.md) | Layered architecture, component diagram, data flow, platform abstraction |
 | [Rendering Pipeline](Rendering.md) | GPU rendering via SkiaSharp, frame lifecycle, glyph atlas, performance optimizations |
+| [Avalonia Optimization Plan](architecture/AvaloniaOptimizationPlan.md) | Active long-term roadmap for DPI correctness, demand-driven scheduling, bounded memory, renderer measurement, and native Avalonia UX |
 | [Incremental Scroll Rendering](architecture/IncrementalScrollRendering.md) | Scroll-aware dirty tracking + region-memmove rendering: reverted from the live path, primitives tested for a future re-attempt |
 | [State Coordination Hardening](architecture/StateCoordinationPlan.md) | Executed: library-owned buffer invariants, single-owner scroll state, dormant incremental machinery removed, alt-screen invalidation locked in |
 | [Parsing Engine](Parsing.md) | ANSI/VT parser state machine, escape sequences, handler dispatch |
@@ -45,4 +46,4 @@
 
 ---
 
-*Last updated: 2026-06-17*
+*Last updated: 2026-08-13*

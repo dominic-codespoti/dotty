@@ -37,6 +37,11 @@ public class TerminalBuffer
 
     private ulong[] _rowGenerations = Array.Empty<ulong>();
     private ulong _globalGeneration;
+    /// <summary>
+    /// Monotonic identity generation for diagnostic correlation.
+    /// Read it while holding <see cref="SyncRoot"/> when a consistent frame value is required.
+    /// </summary>
+    public ulong Generation => _globalGeneration;
 
     // Motion epochs: travel with content across scrolls (rotated like the
     // Screen ring) and are bumped only for rows whose content actually changed

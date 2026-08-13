@@ -60,43 +60,48 @@ The rendering architecture follows a **composition-based, deferred rendering mod
 
 ### Frame Lifecycle
 
+The shipped scheduling path (demand-driven; no poll timers):
+
 ```
 ┌────────────────────────────────────────────────────────────┐
 │                    Frame Lifecycle                           │
 ├────────────────────────────────────────────────────────────┤
 │                                                              │
-│  1. MUTATION          TerminalAdapter writes to buffer       │
-│     │                  BufferTextWriter optimizes bulk writes │
+│  1. MUTATION          PTY consumer parses a chunk under      │
+│     │                  TerminalBuffer.SyncRoot, then          │
+│     │                  Adapter.FlushRender() (dirty-gated)    │
 │     ↓                                                        │
-│  2. INVALIDATION      Buffer signals change, enqueues frame  │
+│  2. GATE              TerminalView.OnRenderScheduled: one     │
+│     │                  coalesced UI post; one TopLevel        │
+│     │                  animation frame in flight (dedup)      │
 │     ↓                                                        │
-│  3. TEXT SHAPING      TextShaper processes glyph runs        │
-│     │                  (HarfBuzz ligature detection/shaping)  │
-│     │                  ShapedRunCache caches results          │
+│  3. PRESENT GATE      Frame callback renders the latest       │
+│     │                  buffer (SetBuffer -> RequestFrame).    │
+│     │                  A 4ms buffer-lock miss reschedules.    │
 │     ↓                                                        │
-│  4. DISCOVERY         GlyphDiscovery.ProcessSlice(5)         │
-│     │                  (runs a slice of pending rows)         │
+│  4. RASTER            TerminalCanvas.Render: content bitmap   │
+│     │                  re-rasterized only when dirty;         │
+│     │                  TerminalFrameComposer draws into a     │
+│     │                  WriteableBitmap (Skia CPU)             │
 │     ↓                                                        │
-│  5. DEBOUNCE          1ms timer coalesces rapid changes      │
+│  5. OVERLAYS          Cached bitmap drawn via DrawImage;      │
+│     │                  cursor (and IME preedit) drawn as      │
+│     │                  Avalonia primitives — blink never      │
+│     │                  re-rasterizes terminal content         │
 │     ↓                                                        │
-│  6. COMPOSITION       TerminalFrameComposer builds regions    │
-│     │                  - CollectBackgroundRegions()           │
-│     │                  - ClassifyRowCells()                   │
-│     │                  - MergeRowSpans()                      │
-│     │                  - ClipRoundedRect()                    │
-│     ↓                                                        │
-│  7. RENDER            TerminalVisualHandler draws to GPU      │
-│     │                  - Clear canvas                        │
-│     │                  - DrawBackgroundRegions()              │
-│     │                  - DrawGlyphs() / DrawLigatures()       │
-│     │                  - DrawUnderlineStyles() (undercurl,    │
-│     │                    dotted, dashed)                     │
-│     │                  - DrawSelection/Search overlays       │
-│     ↓                                                        │
-│  8. PRESENT           Avalonia composition presents frame    │
+│  6. PRESENT           Avalonia composition presents frame     │
 │                                                              │
 └────────────────────────────────────────────────────────────┘
 ```
+
+Notes on the shipped path:
+
+- There is no 1 ms debounce timer and no per-frame resource lookup; brushes are cached and
+  refreshed on attach/settings/theme change. Glyph atlases are shared, reference-counted, and
+  LRU-evicted under a byte budget.
+- Frame cadence depends on Avalonia animation-clock delivery, which is composition-batch-bound.
+  Measured healthy on bare X11; on composited Wayland/XWayland stacks the cadence can throttle
+  under sustained output (see the roadmap's presentation-cadence finding).
 
 ---
 

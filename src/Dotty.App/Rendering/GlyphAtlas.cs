@@ -37,6 +37,24 @@ public class GlyphAtlas : IDisposable
 
     public SKBitmap AtlasBitmap => _bitmap;
 
+    /// <summary>
+    /// Approximate retained memory of the atlas texture in bytes
+    /// (RGBA8 = 4 bytes per pixel).
+    /// </summary>
+    public long SizeBytes => _bitmap == null ? 0 : (long)_bitmap.Width * _bitmap.Height * 4;
+
+    /// <summary>
+    /// Monotonic recency stamp maintained by <see cref="GlyphAtlasService"/>
+    /// for LRU eviction. Read/written under the service lock only.
+    /// </summary>
+    internal long LastUsedStamp { get; set; }
+
+    /// <summary>
+    /// Number of mounted views referencing this atlas. Read/written under the
+    /// service lock only.
+    /// </summary>
+    internal int ReferenceCount { get; set; }
+
     public GlyphAtlas(SKTypeface typeface, float textSize, GlyphRasterizationOptions? rasterizationOptions = null, int initialSize = 1024)
     {
         _typeface = typeface ?? SKTypeface.Default;

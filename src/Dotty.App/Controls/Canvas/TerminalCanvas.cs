@@ -81,6 +81,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			if (_selectionRange == value) return;
 			_selectionRange = value;
+			_contentDirty = true; // selection is rasterized into the bitmap
 			InvalidateVisual();
 		}
 	}
@@ -158,6 +159,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private ulong[]? _lastRowGenerations;
 
 	private double _renderScaling = 1.0;
+	private TopLevel? _attachedTopLevel;
 	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
 	private static readonly string[] MonospaceFallbackFamilies =
 	{
@@ -183,6 +185,15 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	};
 	
 	private WriteableBitmap? _bitmap;
+	internal TerminalRenderTelemetry RenderTelemetry { get; set; } = new();
+
+	/// <summary>
+	/// Invoked when a render is skipped because the buffer lock could not be
+	/// acquired within the bounded wait. The owner (TerminalView) schedules
+	/// one more presentation frame so the skipped content is retried instead
+	/// of being lost until the next mutation.
+	/// </summary>
+	internal Action? FrameRetryRequested;
 	private SKPaint? _debugTextPaint;
 	private SKFont? _debugFont;
 	private SKPaint? _debugBgPaint;
@@ -224,6 +235,58 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		} 
 	}
 
+	/// <summary>
+	/// True when the cached content bitmap no longer matches the buffer and
+	/// must be re-rasterized. Overlay-only changes (cursor blink, cursor shape)
+	/// leave it false so the cached bitmap is reused across frames.
+	/// </summary>
+	private bool _contentDirty = true;
+
+	// Theme brushes resolved on attach, settings, or theme change so Render
+	// never touches the resource dictionary or converts colors per frame.
+	private IBrush? _cachedBackgroundBrush;
+	private SKColor _cachedBackgroundArgb = SKColors.Black;
+	private IBrush? _cachedCursorBrush;
+
+	// IME preedit state (active composition), rendered as an overlay at the
+	// cursor cell.
+	private string? _preeditText;
+	private int _preeditCursor;
+	private int _lastRenderedCursorCell = -1;
+
+	/// <summary>
+	/// Invoked when the rendered cursor cell changes so the IME candidate
+	/// window can follow it. Set by the owning view.
+	/// </summary>
+	internal Action? CursorMovedCallback;
+
+	/// <summary>
+	/// Bounded visible viewport text for assistive technology. Computed lazily
+	/// on query (AT-driven, never per frame); caps the returned length.
+	/// </summary>
+	internal string GetVisibleTextForAccessibility()
+	{
+		var buffer = Buffer;
+		if (buffer == null)
+		{
+			return string.Empty;
+		}
+
+		var sb = new System.Text.StringBuilder(4096);
+		int startRow = Math.Max(0, (int)Math.Floor(_offset.Y / _cellHeight) - buffer.ScrollbackCount);
+		int endRow = Math.Min(buffer.Rows - 1, (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - buffer.ScrollbackCount);
+		for (int r = startRow; r <= endRow && sb.Length < 16_384; r++)
+		{
+			sb.Append(buffer.GetRowText(r));
+			sb.Append('\n');
+		}
+
+		return sb.ToString();
+	}
+
+	protected override Avalonia.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
+		new Canvas.Rendering.TerminalCanvasAutomationPeer(this);
+
     // --- ILogicalScrollable implementation ---
     public bool CanHorizontallyScroll { get; set; } = false;
     public bool CanVerticallyScroll { get; set; } = true;
@@ -241,6 +304,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
             if (_offset != value)
             {
                 _offset = value;
+                _contentDirty = true; // scroll translate is baked into the bitmap
                 ScrollInvalidated?.Invoke(this, EventArgs.Empty);
                 InvalidateVisual();
             }
@@ -400,6 +464,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		base.OnSizeChanged(e);
         _viewport = e.NewSize;
+        _contentDirty = true;
         UpdateScrollState();
 	}
 
@@ -421,31 +486,152 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 	public override void Render(DrawingContext context)
 	{
-		base.Render(context);
-
-		var bg = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
-		context.FillRectangle(bg, new Rect(Bounds.Size));
-
-		if (!IsVisible) return;
-
-		var buffer = Buffer;
-		if (buffer == null) return;
-
-		// Always render fresh from buffer — no bitmap caching.
-		// This eliminates stale-frame artifacts from inter-chunk render timing.
-		EnsureMetrics();
-		RenderToBitmap(buffer);
-
-		// Draw cached bitmap to screen
-		if (_bitmap != null)
+		var measurement = RenderTelemetry.BeginRender();
+		try
 		{
-			context.DrawImage(_bitmap,
-				new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height),
-				new Rect(Bounds.Size));
+			base.Render(context);
+
+			context.FillRectangle(ResolveCachedBackgroundBrush(), new Rect(Bounds.Size));
+
+			if (!IsVisible) return;
+
+			var buffer = Buffer;
+			if (buffer == null) return;
+
+			EnsureMetrics();
+
+			// Content is rasterized only when the buffer/geometry/colors changed.
+			// Cursor blink and shape changes reuse the cached bitmap, so blink
+			// never re-rasterizes terminal content.
+			if (_contentDirty || _bitmap == null)
+			{
+				long contentStarted = RenderTelemetry.BeginContentRender();
+				bool contentRendered = false;
+				try
+				{
+					contentRendered = RenderToBitmap(buffer);
+				}
+				finally
+				{
+					RenderTelemetry.CompleteContentRender(contentStarted, contentRendered);
+				}
+
+				// A lock miss keeps the flag set so the retry frame re-rasterizes.
+				if (contentRendered)
+				{
+					_contentDirty = false;
+				}
+			}
+
+			// Draw cached bitmap to screen. A lock miss deliberately keeps the
+			// previous complete frame visible.
+			if (_bitmap != null)
+			{
+				context.DrawImage(_bitmap,
+					new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height),
+					new Rect(Bounds.Size));
+			}
+
+			DrawCursorOverlay(context, buffer);
+
+			// Keep the IME candidate window anchored to the cursor cell.
+			int cell = buffer.CursorRow * buffer.Columns + buffer.CursorCol;
+			if (cell != _lastRenderedCursorCell)
+			{
+				_lastRenderedCursorCell = cell;
+				CursorMovedCallback?.Invoke();
+			}
+		}
+		finally
+		{
+			RenderTelemetry.CompleteRender(measurement);
 		}
 	}
 
-	private void RenderToBitmap(TerminalBuffer buffer)
+	/// <summary>
+	/// Updates the IME preedit overlay state. A non-empty preedit re-rasterizes
+	/// the content (the preedit replaces the cell text at the cursor); changes
+	/// are composition-paced, not per-frame.
+	/// </summary>
+	internal void SetPreedit(string? text, int? cursor)
+	{
+		_preeditText = string.IsNullOrEmpty(text) ? null : text;
+		_preeditCursor = cursor ?? -1;
+		_contentDirty = true;
+		InvalidateVisual();
+	}
+
+	/// <summary>
+	/// The terminal cursor cell rectangle in canvas-local DIPs (padding +
+	/// scroll translate), used by the IME client for the candidate window.
+	/// </summary>
+	internal Rect GetCursorScreenRect()
+	{
+		var buffer = Buffer;
+		if (buffer == null)
+		{
+			return new Rect(0, 0, _cellWidth, _cellHeight);
+		}
+
+		double x = ContentPadding.Left + buffer.CursorCol * _cellWidth;
+		double y = ContentPadding.Top + (buffer.CursorRow + buffer.ScrollbackCount) * _cellHeight - _offset.Y;
+		return new Rect(x, y, _cellWidth, _cellHeight);
+	}
+
+	/// <summary>
+	/// 0-based cursor cell offset; with surrounding text disabled this is only
+	/// a stable anchor for the platform's selection bookkeeping.
+	/// </summary>
+	internal int GetCursorCellOffset()
+	{
+		var buffer = Buffer;
+		return buffer == null ? 0 : buffer.CursorRow * buffer.Columns + buffer.CursorCol;
+	}
+
+	/// <summary>
+	/// Draws the terminal cursor as a lightweight Avalonia primitive on top of the
+	/// cached content bitmap. Same logical geometry as the raster path
+	/// (padding + scroll translate), snapped to device pixels.
+	/// </summary>
+	private void DrawCursorOverlay(DrawingContext context, TerminalBuffer buffer)
+	{
+		if (!_showCursor) return;
+
+		int curRow = buffer.CursorRow;
+		int curCol = buffer.CursorCol;
+		if (curRow < 0 || curRow >= buffer.Rows || curCol < 0 || curCol >= buffer.Columns) return;
+
+		double scale = Math.Max(0.1, _renderScaling);
+		double leftDip = ContentPadding.Left + curCol * _cellWidth;
+		double topDip = ContentPadding.Top + (curRow + buffer.ScrollbackCount) * _cellHeight - _offset.Y;
+		double cellWDip = _cellWidth;
+		double cellHDip = _cellHeight;
+
+		double left = Math.Round(leftDip * scale) / scale;
+		double top = Math.Round(topDip * scale) / scale;
+		double right = Math.Round((leftDip + cellWDip) * scale) / scale;
+		double bottom = Math.Round((topDip + cellHDip) * scale) / scale;
+		double width = Math.Max(0, right - left);
+		double height = Math.Max(0, bottom - top);
+
+		var brush = ResolveCachedCursorBrush();
+		switch (CursorShape)
+		{
+			case TerminalCursorShape.Block:
+				context.FillRectangle(brush, new Rect(left, top, width, height));
+				break;
+			case TerminalCursorShape.Beam:
+				double beamW = Math.Max(1.0 / scale, Math.Round(cellWDip * 0.08 * scale) / scale);
+				context.FillRectangle(brush, new Rect(left, top, beamW, height));
+				break;
+			case TerminalCursorShape.Underline:
+				double ulH = Math.Max(1.0 / scale, Math.Round(cellHDip * 0.08 * scale) / scale);
+				context.FillRectangle(brush, new Rect(left, bottom - ulH, width, ulH));
+				break;
+		}
+	}
+
+	private bool RenderToBitmap(TerminalBuffer buffer)
 	{
 		bool lockTaken = false;
 		try
@@ -457,39 +643,74 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// the writer can starve this thread for as long as the burst lasts,
 			// freezing the entire UI (input, resize, everything runs on this
 			// thread). Bound the wait and skip this frame (the caller redraws
-			// the last cached bitmap) if the buffer is busy; the dedicated
-			// render timer retries on the next tick.
+			// the last cached bitmap) if the buffer is busy; the presentation
+			// gate retries on the next tick.
 			System.Threading.Monitor.TryEnter(buffer.SyncRoot, 4, ref lockTaken);
 			if (!lockTaken)
-				return;
-
-			if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
 			{
-				_frameComposer.ResetCaches();
-				_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
+				RenderTelemetry.RecordBufferLockMiss();
+				// Explicit reschedule: the owner requests one more animation
+				// frame so this skipped content is presented on the next tick.
+				FrameRetryRequested?.Invoke();
+				return false;
 			}
 
-			var bgBrush = ResolveResourceBrush(Application.Current?.Resources, "TerminalBackground", Brushes.Black);
-			var bgColor = SKColors.Black;
-			if (bgBrush is ISolidColorBrush solid)
-				bgColor = new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A);
-
-			int w = Math.Max(1, (int)Bounds.Width);
-			int h = Math.Max(1, (int)Bounds.Height);
+			// Backing surface is physical pixels: round(Bounds * RenderScaling).
+			// Bounds stay DIPs for all layout/scroll/hit-test math; the single
+			// canvas.Scale below maps logical geometry onto this surface.
+			double scale = Math.Max(0.1, _renderScaling);
+			int w = Math.Max(1, (int)Math.Round(Bounds.Width * scale));
+			int h = Math.Max(1, (int)Math.Round(Bounds.Height * scale));
 
 			if (_bitmap == null || _bitmap.PixelSize.Width != w || _bitmap.PixelSize.Height != h)
 			{
-			_bitmap?.Dispose();
-			_bitmap = new WriteableBitmap(new PixelSize(w, h), new Vector(96, 96), PixelFormat.Bgra8888);
+				_bitmap?.Dispose();
+				_bitmap = new WriteableBitmap(
+					new PixelSize(w, h),
+					new Vector(96.0 * scale, 96.0 * scale),
+					PixelFormat.Bgra8888);
+				RenderTelemetry.RecordBitmapRecreation();
 			}
+			RenderTelemetry.RecordBufferState(
+				buffer.Generation,
+				_renderScaling,
+				w,
+				h);
 
-			try
-			{
-				buffer.MarkRender();
-			}
-			catch { }
+			using var locked = _bitmap.Lock();
+			var info = new SKImageInfo(locked.Size.Width, locked.Size.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+			using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
+			DrawContentToSkiaCanvas(surface.Canvas, buffer, scale);
+			return true;
+		}
+		finally
+		{
+			if (lockTaken)
+				System.Threading.Monitor.Exit(buffer.SyncRoot);
+		}
+	}
 
-			int sbCount = buffer.ScrollbackCount;
+	/// <summary>
+	/// Rasterizes the terminal content into an arbitrary Skia canvas — either
+	/// the backing bitmap surface or, for the Experiment A prototype, the
+	/// compositor's lease canvas. The caller holds buffer.SyncRoot and supplies
+	/// the logical-to-physical scale; all geometry stays in DIPs.
+	/// </summary>
+	private void DrawContentToSkiaCanvas(SKCanvas canvas, TerminalBuffer buffer, double scale)
+	{
+		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
+		{
+			_frameComposer.ResetCaches();
+			_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
+		}
+
+		try
+		{
+			buffer.MarkRender();
+		}
+		catch { }
+
+		int sbCount = buffer.ScrollbackCount;
 		// Posted, not synchronous: ApplyExtent can invalidate a visual
 		// (via ScrollInvalidated -> ScrollContentPresenter -> InvalidateMeasure),
 		// and Avalonia throws if a visual is invalidated while a render pass is
@@ -514,13 +735,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}, DispatcherPriority.Render);
 		}
 
-		using var locked = _bitmap.Lock();
-		var info = new SKImageInfo(locked.Size.Width, locked.Size.Height);
-		using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
-		var canvas = surface.Canvas;
-
-		float newScrollTranslate = (float)(sbCount * _cellHeight - _offset.Y);
-
 		// Always full render: clear the bitmap and re-render everything. An
 		// earlier incremental path here (viewport-shift memmove, buffer-scroll
 		// replay, dirty-row culling) traded this full redraw for partial
@@ -531,15 +745,20 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		// primitives were removed (see StateCoordinationPlan R3); the design
 		// doc IncrementalScrollRendering.md records how to rebuild them with
 		// the pixel-diff harness if a future attempt is made.
-		canvas.Clear(bgColor);
+		canvas.Clear(_cachedBackgroundArgb);
 
-		var mFull = SKMatrix.Identity;
-		canvas.SetMatrix(mFull);
+		// One logical-to-physical transform: everything below (padding,
+		// scroll translate, cell geometry, selection) stays in DIPs.
+		if (_frameComposer != null)
+		{
+			_frameComposer.DeviceScale = (float)scale;
+		}
+		canvas.SetMatrix(SKMatrix.CreateScale((float)scale, (float)scale));
 
 		if (ContentPadding.Left != 0 || ContentPadding.Top != 0)
 			canvas.Translate((float)ContentPadding.Left, (float)ContentPadding.Top);
 
-		canvas.Translate(0, newScrollTranslate);
+		canvas.Translate(0, (float)(sbCount * _cellHeight - _offset.Y));
 
 		if (_frameComposer != null)
 		{
@@ -577,7 +796,48 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}
 		}
 
-		// Draw selection overlay
+		// IME preedit overlay: draws the active composition at the cursor cell,
+		// replacing the underlying cell text, with an underline marking the
+		// composed region.
+		if (!string.IsNullOrEmpty(_preeditText) && SkPaint != null && SkFont != null && buffer != null)
+		{
+			int curRow = buffer.CursorRow;
+			int curCol = buffer.CursorCol;
+			if (curRow >= 0 && curRow < buffer.Rows && curCol >= 0 && curCol < buffer.Columns)
+			{
+				float cellW = (float)_cellWidth;
+				float cellH = (float)_cellHeight;
+				float x = curCol * cellW;
+				float y = curRow * cellH;
+
+				canvas.Save();
+				canvas.ClipRect(SKRect.Create(0, y, buffer.Columns * cellW, cellH));
+
+				var font = SkFont;
+				var fm = font.Metrics;
+				float baseline = y + Math.Abs(fm.Ascent);
+
+				var prevColor = SkPaint.Color;
+				SkPaint.Color = SKColors.White.WithAlpha(230);
+				canvas.DrawText(SKTextBlob.Create(_preeditText, font), x, baseline, SkPaint);
+				SkPaint.Color = prevColor;
+
+				// Composition underline.
+				using var underline = new SKPaint
+				{
+					IsAntialias = false,
+					Style = SKPaintStyle.Fill,
+					Color = SKColors.White.WithAlpha(200),
+				};
+				float ulY = y + cellH - Math.Max(1f, cellH * 0.08f);
+				float textW = Math.Max(cellW, font.MeasureText(_preeditText));
+				canvas.DrawRect(new SKRect(x, ulY, Math.Min(x + textW, (curCol + 1) * cellW), ulY + Math.Max(1f, cellH * 0.06f)), underline);
+				canvas.Restore();
+			}
+		}
+
+		// Draw selection overlay (drawn into the content; split from content
+		// is deferred until the cursor overlay passes pixel tests)
 		if (!_selectionRange.IsEmpty)
 		{
 			int visStart = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
@@ -614,46 +874,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					float x = sCol * cellW;
 					float y = r * cellH;
 					float rectW = (eCol - sCol + 1) * cellW;
-					canvas.DrawRect(new SKRect(x, y, x + rectW, y + cellH), _selectionPaint);
+					canvas.DrawRect(SnapRectToDevice(new SKRect(x, y, x + rectW, y + cellH), scale), _selectionPaint);
 				}
 			}
 		}
 
-		// Draw cursor
-		if (_showCursor && buffer != null)
-		{
-			int curRow = buffer.CursorRow;
-			int curCol = buffer.CursorCol;
-			if (curRow >= 0 && curRow < buffer.Rows && curCol >= 0 && curCol < buffer.Columns)
-			{
-				float cx = curCol * (float)_cellWidth;
-				float cy = curRow * (float)_cellHeight;
-				float cw = (float)_cellWidth;
-				float ch = (float)_cellHeight;
-
-				using var cursorPaint = new SKPaint
-				{
-					Color = new SKColor(0xFF, 0xFF, 0xFF, 180),
-					Style = SKPaintStyle.Fill,
-					IsAntialias = false
-				};
-
-				switch (CursorShape)
-				{
-					case TerminalCursorShape.Block:
-						canvas.DrawRect(new SKRect(cx, cy, cx + cw, cy + ch), cursorPaint);
-						break;
-					case TerminalCursorShape.Beam:
-						float beamW = Math.Max(1f, cw * 0.08f);
-						canvas.DrawRect(new SKRect(cx, cy, cx + beamW, cy + ch), cursorPaint);
-						break;
-					case TerminalCursorShape.Underline:
-						float ulH = Math.Max(1f, ch * 0.08f);
-						canvas.DrawRect(new SKRect(cx, cy + ch - ulH, cx + cw, cy + ch), cursorPaint);
-						break;
-				}
-			}
-		}
+		// Cursor is drawn as an Avalonia overlay after the content (see
+		// DrawCursorOverlay) so blink never re-rasterizes content.
 
 		// Debug overlay
 		if (ShowDebugOverlay && SkPaint != null)
@@ -679,23 +906,18 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			var debugBgPaint = _debugBgPaint!;
 			var debugInfo = buffer.GetDebugInfo();
 			float y = 4f;
-			canvas.DrawRect(0, 0, canvas.DeviceClipBounds.Width, 20, debugBgPaint);
+			canvas.DrawRect(0, 0, canvas.DeviceClipBounds.Width / (float)scale, 20, debugBgPaint);
 			canvas.DrawText(SKTextBlob.Create(debugInfo, debugFont), 4, y + 14, debugTextPaint);
 			canvas.Restore();
 		}
 
 		canvas.Flush();
-		}
-		finally
-		{
-			if (lockTaken)
-				System.Threading.Monitor.Exit(buffer.SyncRoot);
-		}
 	}
 
 	public void OnBufferUpdated(TerminalBuffer buffer)
 	{
 		if (buffer == null) return;
+		_contentDirty = true;
 		HandleBufferGeometryChange(buffer);
 		if (_glyphDiscovery == null) return;
 		_glyphDiscovery.EnsureSize(buffer.Rows);
@@ -754,6 +976,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	public void RequestFrame()
 	{
 		if (!IsVisible) return;
+		RenderTelemetry.RecordFrameRequest();
 		ProcessGlyphDiscoverySlice();
 		InvalidateVisual();
 	}
@@ -761,9 +984,32 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnAttachedToVisualTree(e);
+		_attachedTopLevel = TopLevel.GetTopLevel(this);
+		if (_attachedTopLevel != null)
+		{
+			_attachedTopLevel.ScalingChanged += OnTopLevelScalingChanged;
+		}
 		RuntimeSettings.Changed += OnRuntimeSettingsChanged;
+		App.ThemeUpdated += OnAppThemeChanged;
+		RefreshCachedBrushes();
 		OnRuntimeSettingsChanged(null, EventArgs.Empty); // apply current runtime settings
 		InvalidateVisual();
+	}
+
+	/// <summary>
+	/// A display-scale transition changes the physical backing dimensions even
+	/// when the DIP bounds stay the same, so the bitmap and metrics must be
+	/// rebuilt. The invalidation happens once; the render pass recreates the
+	/// backing surface on demand when its physical size no longer matches.
+	/// </summary>
+	private void OnTopLevelScalingChanged(object? sender, EventArgs e)
+	{
+		if (!IsVisible) return;
+		_metricsDirty = true;
+		_contentDirty = true;
+		InvalidateMeasure();
+		InvalidateVisual();
+		RequestFrame();
 	}
 
 	private void OnRuntimeSettingsChanged(object? sender, EventArgs e)
@@ -812,6 +1058,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 
 		_metricsDirty = true;
+		RefreshCachedBrushes();
+		_contentDirty = true;
 		InvalidateMeasure();
 		InvalidateVisual();
 	}
@@ -893,8 +1141,15 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		// Only update our reference if it's a different atlas
 		if (_glyphAtlas != newAtlas)
 		{
+			if (_glyphAtlas != null)
+			{
+				GlyphAtlasService.ReleaseAtlas(_glyphAtlas);
+			}
 			_glyphAtlas = newAtlas;
+			GlyphAtlasService.AcquireAtlas(newAtlas);
 		}
+		
+		_contentDirty = true;
 		
 		if (Buffer != null)
 		{
@@ -952,7 +1207,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				if (_glyphAtlas == null)
 				{
 					_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
-					_glyphAtlas = GlyphAtlasService.GetOrCreateAtlas(SkFont?.Typeface ?? SKTypeface.Default, SkFont?.Size ?? 12f, _glyphRasterizationOptions);
+					var newAtlas = GlyphAtlasService.GetOrCreateAtlas(SkFont?.Typeface ?? SKTypeface.Default, SkFont?.Size ?? 12f, _glyphRasterizationOptions);
+					_glyphAtlas = newAtlas;
+					GlyphAtlasService.AcquireAtlas(newAtlas);
 				}
 				// Ensure discovery and composer are created only once so we preserve
 				// front-buffer and row caches across buffer swaps. If sizes differ,
@@ -983,6 +1240,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				_lastBufferWasAlternate = buf.IsAlternateScreenActive;
 				
 				// Force re-render with new buffer
+				_contentDirty = true;
 				InvalidateVisual();
 				RequestFrame();
 			}
@@ -1002,7 +1260,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnDetachedFromVisualTree(e);
+		if (_attachedTopLevel != null)
+		{
+			_attachedTopLevel.ScalingChanged -= OnTopLevelScalingChanged;
+			_attachedTopLevel = null;
+		}
 		RuntimeSettings.Changed -= OnRuntimeSettingsChanged;
+		App.ThemeUpdated -= OnAppThemeChanged;
 		
 		_glyphDiscovery = null;
 		
@@ -1012,8 +1276,12 @@ public class TerminalCanvas : Control, ILogicalScrollable
         _textShaper?.Dispose();
         _textShaper = null;
 		
-		// Clear glyph atlas reference (atlas itself is shared via service)
-		_glyphAtlas = null;
+		// Release the shared atlas reference (the service owns eviction)
+		if (_glyphAtlas != null)
+		{
+			GlyphAtlasService.ReleaseAtlas(_glyphAtlas);
+			_glyphAtlas = null;
+		}
 		
 		// Release Skia paint resources
 		if (SkPaint != null)
@@ -1043,16 +1311,72 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		_metricsDirty = true;
 		_cellWidth = 8;
 		_cellHeight = 16;
+		_contentDirty = true;
+		_cachedBackgroundBrush = null;
+		_cachedCursorBrush = null;
 	}
 
 	private IBrush ResolveResourceBrush(IResourceDictionary? resources, string key, IBrush fallback)
 	{
-		if (resources != null && resources.TryGetResource(key, ThemeVariant.Default, out var value) && value is IBrush brush)
+		if (resources != null && resources.TryGetResource(key, ActualThemeVariant, out var value) && value is IBrush brush)
 		{
 			return brush;
 		}
 
 		return fallback;
+	}
+
+	private IBrush ResolveCachedBackgroundBrush()
+	{
+		if (_cachedBackgroundBrush == null)
+		{
+			RefreshCachedBrushes();
+		}
+		return _cachedBackgroundBrush!;
+	}
+
+	private IBrush ResolveCachedCursorBrush()
+	{
+		if (_cachedCursorBrush == null)
+		{
+			RefreshCachedBrushes();
+		}
+		return _cachedCursorBrush!;
+	}
+
+	/// <summary>
+	/// Re-resolves theme brushes. Called on attach, runtime-settings changes,
+	/// and theme changes — never during Render.
+	/// </summary>
+	private void RefreshCachedBrushes()
+	{
+		var resources = Application.Current?.Resources;
+		var bg = ResolveResourceBrush(resources, "TerminalBackground", Brushes.Black);
+		_cachedBackgroundBrush = bg;
+		_cachedBackgroundArgb = bg is ISolidColorBrush solid
+			? new SKColor(solid.Color.R, solid.Color.G, solid.Color.B, solid.Color.A)
+			: SKColors.Black;
+
+		// Theme-aware cursor: the theme foreground at the same translucency as
+		// the previous hard-coded white, so contrast follows the palette.
+		var fg = ResolveResourceBrush(resources, "TerminalForeground", Brushes.White);
+		if (fg is ISolidColorBrush fgSolid)
+		{
+			var c = fgSolid.Color;
+			_cachedCursorBrush = new SolidColorBrush(new Avalonia.Media.Color(180, c.R, c.G, c.B));
+		}
+		else
+		{
+			_cachedCursorBrush = Brushes.White;
+		}
+	}
+
+	private void OnAppThemeChanged()
+	{
+		if (!IsVisible) return;
+		RefreshCachedBrushes();
+		_contentDirty = true;
+		InvalidateVisual();
 	}
 
 	private static string BuildFontCacheKey()
@@ -1179,6 +1503,25 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private double GetRenderScaling()
 	{
 		return TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+	}
+
+	/// <summary>
+	/// Snaps a DIP coordinate to the nearest device pixel and returns it in
+	/// DIPs, so geometry drawn under the canvas scale transform lands on
+	/// whole device pixels at fractional display scales (1.25x, 1.5x).
+	/// </summary>
+	private static float SnapDipToDevice(float dip, double scale)
+	{
+		return (float)(Math.Round(dip * scale) / Math.Max(0.1, scale));
+	}
+
+	private static SKRect SnapRectToDevice(SKRect rect, double scale)
+	{
+		float left = SnapDipToDevice(rect.Left, scale);
+		float top = SnapDipToDevice(rect.Top, scale);
+		float right = SnapDipToDevice(rect.Right, scale);
+		float bottom = SnapDipToDevice(rect.Bottom, scale);
+		return SKRect.Create(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
 	}
 
 	private static bool ParseHexColor(string hex, out SKColor color)

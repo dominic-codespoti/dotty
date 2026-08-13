@@ -34,6 +34,28 @@ public sealed class TerminalFrameComposer : IDisposable
         StrokeCap = SKStrokeCap.Round
     };
 
+    /// <summary>
+    /// Current display scale factor (device pixels per DIP). Set by the host
+    /// canvas before each render. Used to snap geometry and stroke widths to
+    /// whole device pixels so fractional display scales stay crisp.
+    /// </summary>
+    public float DeviceScale { get; set; } = 1f;
+
+    private float SnapDip(float dip)
+    {
+        float ds = Math.Max(0.1f, DeviceScale);
+        return (float)(Math.Round(dip * ds) / ds);
+    }
+
+    private SKRect SnapRect(SKRect rect)
+    {
+        float left = SnapDip(rect.Left);
+        float top = SnapDip(rect.Top);
+        float right = SnapDip(rect.Right);
+        float bottom = SnapDip(rect.Bottom);
+        return SKRect.Create(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
+    }
+
     // --- background synthesis state ---
     private readonly List<Span> _rowSpans = new();
     private readonly Dictionary<RegionKey, ActiveRegion> _activeRegions = new();
@@ -283,7 +305,7 @@ public sealed class TerminalFrameComposer : IDisposable
 
             if (right <= left || bottom <= top) continue;
 
-            var rect = SKRect.Create(left, top, right - left, bottom - top);
+            var rect = SnapRect(SKRect.Create(left, top, right - left, bottom - top));
             if (exactCellBackgrounds)
             {
                 _backgroundFill.Style = SKPaintStyle.Fill;
@@ -292,7 +314,7 @@ public sealed class TerminalFrameComposer : IDisposable
                 continue;
             }
 
-            var rectRadius = Math.Min(radius, Math.Min(rect.Width, rect.Height) * 0.5f);
+            var rectRadius = SnapDip(Math.Min(radius, Math.Min(rect.Width, rect.Height) * 0.5f));
             bool canInset = rect.Width >= rect.Height + 2f;
             DrawPill(canvas, rect, r.Color, canInset, rectRadius);
         }
@@ -311,7 +333,7 @@ public sealed class TerminalFrameComposer : IDisposable
         _backgroundStroke.Style = SKPaintStyle.Stroke;
         _backgroundStroke.StrokeJoin = SKStrokeJoin.Round;
         _backgroundStroke.StrokeCap = SKStrokeCap.Round;
-        _backgroundStroke.StrokeWidth = 2f;
+        _backgroundStroke.StrokeWidth = Math.Max(1f / Math.Max(0.1f, DeviceScale), SnapDip(2f));
         _backgroundStroke.Color = DarkenColor(color);
 
         var rr = new SKRoundRect(rect, rad, rad);
@@ -449,7 +471,7 @@ public sealed class TerminalFrameComposer : IDisposable
         using var shaderPaint = new SKPaint { Shader = shader };
         float totalW = cols * cellW;
         float totalH = rows * cellH;
-        canvas.DrawRect(0, startRow * cellH, totalW, totalH, shaderPaint);
+        canvas.DrawRect(SnapRect(SKRect.Create(0, startRow * cellH, totalW, totalH)), shaderPaint);
     }
 
     // Default hyperlink color (blue) - can be made configurable
@@ -479,7 +501,7 @@ public sealed class TerminalFrameComposer : IDisposable
         bool baseSubpixel = _glyphFont.Subpixel;
         var baseEdging = _glyphFont.Edging;
 
-        _linePaint.StrokeWidth = Math.Max(1f, cellH * 0.05f);
+        _linePaint.StrokeWidth = Math.Max(1f / Math.Max(0.1f, DeviceScale), SnapDip(cellH * 0.05f));
         Span<SKRect> geometryRects = stackalloc SKRect[8];
         var sb = new StringBuilder(64);
 
@@ -532,7 +554,7 @@ public sealed class TerminalFrameComposer : IDisposable
                         _glyphPaint.StrokeWidth = 0f;
                         for (int i = 0; i < rectCount; i++)
                         {
-                            var rect = geometryRects[i];
+                            var rect = SnapRect(geometryRects[i]);
                             if (rect.Width <= 0f || rect.Height <= 0f) continue;
                             canvas.DrawRect(rect, _glyphPaint);
                         }
@@ -680,8 +702,8 @@ public sealed class TerminalFrameComposer : IDisposable
         // Underline variants.
         if (style != UnderlineStyle.None || hasHyperlink)
         {
-            float y = baseline + fm.Descent * 0.5f;
-            float w = Math.Max(1f, _linePaint.StrokeWidth);
+            float y = SnapDip(baseline + fm.Descent * 0.5f);
+            float w = Math.Max(1f / Math.Max(0.1f, DeviceScale), _linePaint.StrokeWidth);
 
             switch (style)
             {
@@ -696,7 +718,7 @@ public sealed class TerminalFrameComposer : IDisposable
                     {
                         float t = i / (float)steps;
                         float px = x + lineW * t;
-                        float py = y + amp * (float)Math.Sin(t * Math.PI * 2 * (lineW / period));
+                        float py = SnapDip(y + amp * (float)Math.Sin(t * Math.PI * 2 * (lineW / period)));
                         path.LineTo(px, py);
                     }
                     canvas.DrawPath(path, _linePaint);
@@ -705,7 +727,7 @@ public sealed class TerminalFrameComposer : IDisposable
                 case UnderlineStyle.Dotted:
                 {
                     float dotSpacing = Math.Max(3f, w * 4f);
-                    float dotR = w * 0.6f;
+                    float dotR = Math.Max(1f / Math.Max(0.1f, DeviceScale), SnapDip(w * 0.6f));
                     for (float px = x; px < x + lineW; px += dotSpacing)
                     {
                         canvas.DrawCircle(px, y, dotR, _linePaint);
@@ -729,7 +751,7 @@ public sealed class TerminalFrameComposer : IDisposable
                     canvas.DrawLine(x, y, x + lineW, y, _linePaint);
                     if (style == UnderlineStyle.Double)
                     {
-                        float y2 = baseline + fm.Descent * 0.8f;
+                        float y2 = SnapDip(baseline + fm.Descent * 0.8f);
                         canvas.DrawLine(x, y2, x + lineW, y2, _linePaint);
                     }
                     break;
@@ -739,12 +761,12 @@ public sealed class TerminalFrameComposer : IDisposable
 
         if (cc.Strikethrough)
         {
-            float y = baseline - (fm.Ascent * -0.3f);
+            float y = SnapDip(baseline - (fm.Ascent * -0.3f));
             canvas.DrawLine(x, y, x + lineW, y, _linePaint);
         }
         if (cc.Overline)
         {
-            float y = baseline + fm.Ascent * 1.05f;
+            float y = SnapDip(baseline + fm.Ascent * 1.05f);
             canvas.DrawLine(x, y, x + lineW, y, _linePaint);
         }
     }

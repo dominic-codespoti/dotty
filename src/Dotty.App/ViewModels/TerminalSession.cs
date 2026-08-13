@@ -37,6 +37,12 @@ public class TerminalSession : IDisposable
 
     private TimeSpan _refreshInterval = TimeSpan.FromMilliseconds(16);
 
+    /// <summary>
+    /// Measured display frame cadence (4-33 ms clamp). The historical render
+    /// poll timer that consumed this was removed in the demand-driven
+    /// scheduling cutover; the value now serves as a diagnostic display-cadence
+    /// signal updated by the presentation gate.
+    /// </summary>
     public TimeSpan RefreshInterval
     {
         get => _refreshInterval;
@@ -220,8 +226,8 @@ public class TerminalSession : IDisposable
 
         // Consumer: reads from channel, processes sequentially.
         // SyncRoot is acquired so the renderer never reads a partially-updated buffer state.
-        // FlushRender is called immediately after each chunk so the render timer
-        // never catches an intermediate state between related operations (e.g. scroll+write).
+        // FlushRender is called after each chunk so the view's presentation gate
+        // never presents an intermediate state between related operations (e.g. scroll+write).
         _ = Task.Run(async () =>
         {
             int chunkCount = 0;
@@ -248,23 +254,6 @@ public class TerminalSession : IDisposable
                 }
             }
             catch { }
-        }, cancellationToken);
-
-        // Dedicated render timer: polls at the measured display refresh interval,
-        // decoupled from data processing. Flushes pending renders at a fixed
-        // cadence regardless of chunk arrival rate.
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    await Task.Delay(_refreshInterval, cancellationToken);
-                    Adapter.FlushRender();
-                }
-            }
-            catch { }
-            try { Adapter.FlushRender(); } catch { }
         }, cancellationToken);
     }
 

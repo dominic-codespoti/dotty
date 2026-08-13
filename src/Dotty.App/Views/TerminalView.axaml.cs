@@ -7,11 +7,14 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Input.Platform;
+using Avalonia.Input.TextInput;
+using Avalonia.Platform.Storage;
 using Dotty.App.Controls;
 using Dotty.Terminal.Adapter;
 using Dotty.App.Input;
 using Dotty.App.Services;
 using Avalonia.Threading;
+using Dotty.App.Controls.Canvas.Rendering;
 
 namespace Dotty.App.Views
 {
@@ -34,12 +37,20 @@ namespace Dotty.App.Views
         public bool KeypadApplicationMode { get; set; }
 
         private Dotty.App.ViewModels.TerminalSession? _session;
-        private Action<TimeSpan>? _fpsMeasurementCallback;
+        private TerminalTextInputMethodClient? _imeClient;
         private TimeSpan _lastFrameTime;
         private bool _renderUpdatePending;
+
+        /// <summary>
+        /// True while the view is attached and visible. Maintained on the UI
+        /// thread only; the mutation signal can arrive from the PTY consumer
+        /// thread, where reading Avalonia visual state is unsafe.
+        /// </summary>
+        private bool _presentationEnabled;
         private int _lastCols = -1;
         private int _lastRows = -1;
         private bool _layoutSizeSyncPending;
+        internal TerminalRenderTelemetry RenderTelemetry { get; } = new();
         private const int DefaultStartupCols = 80;
         private const int DefaultStartupRows = 24;
 
@@ -47,6 +58,12 @@ namespace Dotty.App.Views
         protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
         {
             base.OnDetachedFromVisualTree(e);
+            _presentationEnabled = false;
+            _renderUpdatePending = false;
+            if (_imeClient != null)
+            {
+                _imeClient.ResetComposition();
+            }
             DetachSessionHandlers();
             DetachRawInput();
             
@@ -57,6 +74,32 @@ namespace Dotty.App.Views
             RemoveHandler(PointerMovedEvent, TerminalView_PointerMoved);
             RemoveHandler(PointerReleasedEvent, TerminalView_PointerReleased);
             RemoveHandler(PointerWheelChangedEvent, TerminalView_PointerWheelChanged);
+            RemoveHandler(DragDrop.DragOverEvent, TerminalView_DragOver);
+            RemoveHandler(DragDrop.DropEvent, TerminalView_Drop);
+            RemoveHandler(InputMethod.TextInputMethodClientRequeryRequestedEvent, OnTextInputMethodClientRequeryRequested);
+        }
+
+        private void EnsureImeClient()
+        {
+            if (_canvas == null) return;
+            if (_imeClient == null)
+            {
+                _imeClient = new TerminalTextInputMethodClient(_canvas);
+                _canvas.CursorMovedCallback = () => _imeClient.NotifyCursorMoved();
+            }
+            else
+            {
+                _canvas.CursorMovedCallback = () => _imeClient.NotifyCursorMoved();
+            }
+        }
+
+        private void OnTextInputMethodClientRequeryRequested(object? sender, TextInputMethodClientRequestedEventArgs e)
+        {
+            // Provide the terminal's IME client whenever the platform asks;
+            // the platform drives preedit via SetPreeditText and commits via
+            // the normal TextInput event (sent exactly once by the view).
+            EnsureImeClient();
+            e.Client = _imeClient;
         }
         
         public Dotty.App.ViewModels.TerminalSession? Session
@@ -169,8 +212,66 @@ namespace Dotty.App.Views
             }
         }
         
-        private void OnMeasureRefreshRate(TimeSpan currentTime)
+        private void OnRenderScheduled()
         {
+            // Hidden or detached views do no presentation work. The buffer is
+            // the source of truth; showing the view renders the latest state.
+            // This flag is UI-thread maintained because the mutation signal
+            // arrives from the PTY consumer thread.
+            if (!_presentationEnabled) return;
+
+            bool coalesced = _renderUpdatePending;
+            RenderTelemetry.RecordRenderNotification(coalesced);
+            if (coalesced) return;
+            _renderUpdatePending = true;
+
+            // One coalesced UI post per mutation burst. Render priority runs
+            // just before the compositor pass, so the animation-frame request
+            // below is scheduled for the next display tick.
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                // Authoritative check on the UI thread: the view may have been
+                // hidden or detached while this post was queued.
+                if (VisualRoot == null || !IsVisible)
+                {
+                    _renderUpdatePending = false;
+                    return;
+                }
+                _renderUpdatePending = false;
+                RenderTelemetry.RecordUiRenderUpdate();
+                RequestPresentationFrame();
+            }, Avalonia.Threading.DispatcherPriority.Render);
+        }
+
+        /// <summary>
+        /// The single presentation gate: at most one TopLevel animation frame
+        /// in flight. The frame callback renders the latest buffer state, so
+        /// mutations that arrive while a frame is pending are included in it.
+        /// Without this dedup, a burst would register one callback per post
+        /// and every display tick would fire all of them, re-requesting and
+        /// churning the UI thread.
+        /// </summary>
+        private bool _frameScheduled;
+
+        private void RequestPresentationFrame()
+        {
+            if (VisualRoot == null || !IsVisible) return;
+            if (_frameScheduled) return;
+            _frameScheduled = true;
+            TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_ =>
+            {
+                _frameScheduled = false;
+                OnPresentationFrame(_);
+            });
+        }
+
+        private void OnPresentationFrame(TimeSpan currentTime)
+        {
+            if (VisualRoot == null || !IsVisible) return;
+
+            // Frame-duration measurement for diagnostics; the session render
+            // timer that consumed this is gone, but the interval remains a
+            // useful display-cadence signal for future scheduling work.
             if (_session != null)
             {
                 if (_lastFrameTime != TimeSpan.Zero && currentTime > _lastFrameTime)
@@ -179,35 +280,24 @@ namespace Dotty.App.Views
                     if (frameDuration > TimeSpan.Zero && frameDuration < TimeSpan.FromSeconds(0.25))
                     {
                         _session.RefreshInterval = frameDuration;
+                        RenderTelemetry.RecordPresentInterval(frameDuration.Ticks);
                     }
                 }
 
                 _lastFrameTime = currentTime;
-                
-                // Keep polling to dynamically adapt to monitor moves
-                TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback!); 
             }
+
+            ApplyLatestRender();
         }
 
-        private void OnRenderScheduled()
+        private void ApplyLatestRender()
         {
-            if (_renderUpdatePending) return;
-            _renderUpdatePending = true;
-            // Render priority: Default (this post's implicit priority) is
-            // lower than Render (the compositor's own pass, scheduled every
-            // frame) - under continuous rendering a Default-priority post is
-            // starved indefinitely, so new PTY output never reached the
-            // canvas (no InvalidateVisual -> no repaint -> no autoscroll).
-            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            if (_session?.Adapter != null)
             {
-                _renderUpdatePending = false;
-                if (_session?.Adapter != null)
-                {
-                    KeypadApplicationMode = _session.Adapter.KeypadApplicationMode;
-                    CursorShape = _session.Adapter.CursorShape;
-                    SetBuffer(_session.Adapter.Buffer);
-                }
-            }, Avalonia.Threading.DispatcherPriority.Render);
+                KeypadApplicationMode = _session.Adapter.KeypadApplicationMode;
+                CursorShape = _session.Adapter.CursorShape;
+                SetBuffer(_session.Adapter.Buffer);
+            }
         }
         
         private void UpdateSize()
@@ -399,12 +489,31 @@ namespace Dotty.App.Views
                     Session = session;
                 }
             }
+            else if (change.Property == IsVisibleProperty)
+            {
+                _presentationEnabled = IsVisible && VisualRoot != null;
+                if (_presentationEnabled)
+                {
+                    RequestPresentationFrame();
+                }
+            }
         }
 
         public TerminalView()
         {
             _contextMenuBuilder = new SelectionContextMenuBuilder(_selectionController);
             InitializeComponent();
+            _grid = this.FindControl<TerminalGrid>("PART_Grid");
+            _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
+            _searchOverlay = this.FindControl<SearchOverlay>("PART_SearchOverlay");
+            if (_canvas != null)
+            {
+                _canvas.RenderTelemetry = RenderTelemetry;
+            }
+            if (TerminalRenderTelemetry.DefaultEnabled)
+            {
+                RenderTelemetry.Start();
+            }
             AttachedToVisualTree += OnAttached;
         }
 
@@ -413,6 +522,13 @@ namespace Dotty.App.Views
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
             _searchOverlay = this.FindControl<SearchOverlay>("PART_SearchOverlay");
+            if (_canvas != null)
+            {
+                _canvas.RenderTelemetry = RenderTelemetry;
+                _canvas.FrameRetryRequested = RequestPresentationFrame;
+                EnsureImeClient();
+            }
+            _presentationEnabled = IsVisible && VisualRoot != null;
 
             if (_session != null)
             {
@@ -423,13 +539,6 @@ namespace Dotty.App.Views
                 
                 AttachSessionHandlers();
                 AttachRawInput();
-                
-                if (_fpsMeasurementCallback == null)
-                {
-                    _fpsMeasurementCallback = OnMeasureRefreshRate;
-                    _lastFrameTime = TimeSpan.Zero;
-                    TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback);
-                }
             }
             
             // Always add input handlers
@@ -439,6 +548,9 @@ namespace Dotty.App.Views
             AddHandler(PointerMovedEvent, TerminalView_PointerMoved, RoutingStrategies.Tunnel);
             AddHandler(PointerReleasedEvent, TerminalView_PointerReleased, RoutingStrategies.Tunnel);
             AddHandler(PointerWheelChangedEvent, TerminalView_PointerWheelChanged, RoutingStrategies.Tunnel);
+            AddHandler(DragDrop.DragOverEvent, TerminalView_DragOver);
+            AddHandler(DragDrop.DropEvent, TerminalView_Drop);
+            AddHandler(InputMethod.TextInputMethodClientRequeryRequestedEvent, OnTextInputMethodClientRequeryRequested);
 
             TryStartSessionWithCurrentSize();
             ScheduleLayoutSizeSync();
@@ -447,9 +559,55 @@ namespace Dotty.App.Views
             this.Focus();
         }
 
-        private void TerminalView_PointerPressed(object? sender, PointerPressedEventArgs e)
+        private void TerminalView_DragOver(object? sender, DragEventArgs e)
         {
-            EnsureCanvas();
+            // Accept drops that carry files or plain text; terminal paste semantics.
+            if (e.DataTransfer.Contains(DataFormat.Text) || e.DataTransfer.Contains(DataFormat.File))
+            {
+                e.DragEffects = DragDropEffects.Copy;
+                e.Handled = true;
+            }
+            else
+            {
+                e.DragEffects = DragDropEffects.None;
+            }
+        }
+
+        private void TerminalView_Drop(object? sender, DragEventArgs e)
+        {
+            // Runs on the UI thread from the drop event; no platform operation
+            // is performed inside a frame callback.
+            var files = e.DataTransfer.TryGetFiles();
+            if (files != null && files.Length > 0)
+            {
+                var paths = new System.Collections.Generic.List<string>();
+                foreach (var item in files)
+                {
+                    var local = item?.TryGetLocalPath();
+                    if (!string.IsNullOrEmpty(local))
+                    {
+                        paths.Add(local);
+                    }
+                }
+
+                if (paths.Count > 0)
+                {
+                    SendPasteInput(string.Join(" ", paths));
+                    e.Handled = true;
+                    return;
+                }
+            }
+
+            var text = e.DataTransfer.TryGetText();
+            if (!string.IsNullOrEmpty(text))
+            {
+                SendPasteInput(text);
+                e.Handled = true;
+            }
+        }
+
+        private void TerminalView_PointerPressed(object? sender, PointerPressedEventArgs e)
+        {            EnsureCanvas();
             if (_canvas == null) return;
             var current = e.GetCurrentPoint(_canvas);
 
@@ -556,6 +714,12 @@ namespace Dotty.App.Views
             if (_canvas != null) return;
             _grid ??= this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");
+            if (_canvas != null)
+            {
+                _canvas.RenderTelemetry = RenderTelemetry;
+                _canvas.FrameRetryRequested = RequestPresentationFrame;
+                EnsureImeClient();
+            }
         }
 
         private void TerminalView_KeyDown(object? sender, KeyEventArgs e)
@@ -684,6 +848,14 @@ namespace Dotty.App.Views
             
             // Force the grid to re-render
             _grid?.SetBuffer(_lastBuffer);
+        }
+        internal Visual RenderCaptureTarget
+        {
+            get
+            {
+                EnsureCanvas();
+                return (Visual?)_canvas ?? this;
+            }
         }
 
         public void SetPlainText(string text)
@@ -1091,11 +1263,13 @@ namespace Dotty.App.Views
         protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
         {
             base.OnAttachedToVisualTree(e);
-            
-            if (_session != null && _fpsMeasurementCallback != null)
+
+            if (_session != null && _canvas != null)
             {
+                // Present the latest buffer state on re-attach; the scheduling
+                // gate re-establishes from the next mutation onward.
                 _lastFrameTime = TimeSpan.Zero;
-                TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_fpsMeasurementCallback);
+                RequestPresentationFrame();
             }
         }
     }

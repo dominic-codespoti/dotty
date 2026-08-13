@@ -162,6 +162,18 @@ public record ApplicationStats
 }
 
 /// <summary>
+/// Shared JSON options: the app emits camelCase JSON, so property matching
+/// must be case-insensitive.
+/// </summary>
+internal static class CaseInsensitiveJson
+{
+    internal static JsonSerializerOptions Options { get; } = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+}
+
+/// <summary>
 /// Scrollback buffer statistics.
 /// </summary>
 public record ScrollbackStats
@@ -398,10 +410,14 @@ public sealed class TestCommandInterface : ITestCommandInterface, IAsyncDisposab
     public async Task<ApplicationStats> GetStatsAsync(CancellationToken cancellationToken = default)
     {
         var response = await SendCommandInternalAsync("STATS", cancellationToken);
-        
+
         try
         {
-            return JsonSerializer.Deserialize<ApplicationStats>(response) ?? new ApplicationStats();
+            // The app emits camelCase JSON; match it case-insensitively.
+            return JsonSerializer.Deserialize<ApplicationStats>(
+                       response,
+                       CaseInsensitiveJson.Options)
+                   ?? new ApplicationStats();
         }
         catch
         {

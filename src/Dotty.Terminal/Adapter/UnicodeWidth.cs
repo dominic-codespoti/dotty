@@ -81,19 +81,20 @@ internal static class UnicodeWidth
 
     private static bool IsWide(int codepoint)
     {
-        foreach (var (start, end) in WideIntervals)
+        // WideIntervals is sorted by Start; binary search for the interval
+        // that could contain the codepoint (~11 probes vs up to 56 linear).
+        int lo = 0, hi = WideIntervals.Length - 1;
+        while (lo <= hi)
         {
+            int mid = (lo + hi) >> 1;
+            var (start, end) = WideIntervals[mid];
             if (codepoint < start)
-            {
-                return false;
-            }
-
-            if (codepoint <= end)
-            {
+                hi = mid - 1;
+            else if (codepoint > end)
+                lo = mid + 1;
+            else
                 return true;
-            }
         }
-
         return false;
     }
 }

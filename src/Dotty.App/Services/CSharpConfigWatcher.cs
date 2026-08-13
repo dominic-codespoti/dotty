@@ -4,6 +4,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Threading;
 using Dotty.Abstractions.Config;
@@ -44,6 +45,15 @@ public sealed class CSharpConfigWatcher : IDisposable
     [UnconditionalSuppressMessage("SingleFile", "IL3000", Justification = "Assembly locations are needed only for Roslyn metadata references in non-single-file runtime config loading.")]
     public RuntimeSettingsData? CompileAndLoad()
     {
+        // NativeAOT cannot load dynamically-compiled assemblies (LoadFromStream
+        // requires a JIT). Guard so the published binary logs once instead of
+        // throwing on the first config edit; config hot-reload is JIT-only.
+        if (!RuntimeFeature.IsDynamicCodeSupported)
+        {
+            Console.WriteLine("[CSharpConfig] Runtime config compilation is unavailable in NativeAOT; config edits are ignored.");
+            return null;
+        }
+
         if (!File.Exists(_configPath))
         {
             Console.WriteLine($"[CSharpConfig] Config file not found: {_configPath}");

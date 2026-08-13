@@ -59,7 +59,12 @@ public class TerminalSession : IDisposable
     public TerminalSession(int rows = 24, int columns = 80)
     {
         Parser = new BasicAnsiParser();
-        Adapter = new TerminalAdapter(rows: rows, columns: columns);
+        // The arena is allocated at construction; honor the configured scrollback
+        // depth here so the default (5k) actually applies instead of the
+        // TerminalBuffer fallback (10k). A config change at runtime is applied
+        // via Adapter.ResizeBuffer, not by reallocating this arena.
+        var scrollbackLines = RuntimeSettings.GetScrollbackLines();
+        Adapter = new TerminalAdapter(rows: rows, columns: columns, scrollbackCapacity: scrollbackLines);
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;
@@ -231,6 +236,13 @@ public class TerminalSession : IDisposable
         _ = Task.Run(async () =>
         {
             int chunkCount = 0;
+            // Writer lock-hold bound: feed the chunk in sub-chunks, releasing
+            // SyncRoot between them so the renderer's bounded TryEnter can win
+            // the lock during a sustained burst. The parser tolerates partial
+            // sequences (it accumulates leftovers), so splits are safe. When
+            // the renderer has signaled ReaderWaiting, yield between sub-chunks
+            // to hand it a scheduling window instead of re-acquiring instantly.
+            const int SubChunkSize = 8192;
             try
             {
                 await foreach (var entry in channel.Reader.ReadAllAsync(cancellationToken))
@@ -241,9 +253,24 @@ public class TerminalSession : IDisposable
                         rawInputReceived(chunk.AsSpan(0, length).ToArray());
                     try
                     {
-                        lock (Adapter.Buffer.SyncRoot)
+                        var buffer = Adapter.Buffer;
+                        int offset = 0;
+                        while (offset < length)
                         {
-                            Parser.Feed(chunk.AsSpan(0, length));
+                            int subLen = Math.Min(SubChunkSize, length - offset);
+                            bool taken = false;
+                            try
+                            {
+                                Monitor.Enter(buffer.SyncRoot, ref taken);
+                                Parser.Feed(chunk.AsSpan(offset, subLen));
+                            }
+                            finally
+                            {
+                                if (taken) Monitor.Exit(buffer.SyncRoot);
+                            }
+                            offset += subLen;
+                            if (offset < length && buffer.ReaderWaiting)
+                                Thread.Yield();
                         }
                     }
                     catch { }

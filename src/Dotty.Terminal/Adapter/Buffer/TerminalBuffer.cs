@@ -3,6 +3,7 @@ using System.Text;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Dotty.Terminal.Adapter.Buffer;
 
 namespace Dotty.Terminal.Adapter;
@@ -11,9 +12,51 @@ namespace Dotty.Terminal.Adapter;
 /// Very small screen model for now: stores visible lines and a simple scrollback.
 /// Designed to be called from parser callbacks; it is not thread-safe by itself.
 /// </summary>
-public class TerminalBuffer
+public class TerminalBuffer : IRenderSource
 {
     public object SyncRoot { get; } = new object();
+
+    /// <summary>
+    /// Set by the renderer around its bounded <c>TryEnter</c> so the PTY
+    /// writer can yield between sub-chunks, giving the UI thread a window to
+    /// acquire the lock under sustained output. Volatile hint only; the writer
+    /// checks it at sub-chunk boundaries and merely yields — correctness does
+    /// not depend on it.
+    /// </summary>
+    public volatile bool ReaderWaiting;
+
+    /// <summary>
+    /// Executes <paramref name="action"/> under <see cref="SyncRoot"/> with a
+    /// bounded retry window sized for user-initiated operations (copy, search,
+    /// accessibility). Unlike the renderer's single 4 ms <c>TryEnter</c>, this
+    /// retries until the PTY consumer releases between chunks, so it always
+    /// completes unless the wait budget is exhausted.
+    /// </summary>
+    public void WithSyncRoot(Action action, int timeoutMs = 500)
+    {
+        long deadline = Environment.TickCount64 + timeoutMs;
+        while (true)
+        {
+            bool taken = false;
+            try
+            {
+                Monitor.TryEnter(SyncRoot, 32, ref taken);
+                if (taken)
+                {
+                    action();
+                    return;
+                }
+            }
+            finally
+            {
+                if (taken) Monitor.Exit(SyncRoot);
+            }
+
+            if (Environment.TickCount64 >= deadline)
+                throw new TimeoutException("Timed out waiting for the terminal buffer lock.");
+            Thread.Sleep(1);
+        }
+    }
 
     public Screen ActiveBuffer => _screens.Active;
 
@@ -497,6 +540,99 @@ public class TerminalBuffer
             return c;
         }
         return ActiveBuffer.GetCell(row, col);
+    }
+
+    /// <summary>
+    /// Zero-copy read-only view of one visible row's hot cells (see
+    /// <see cref="Screen.GetRowCells"/>). Used by the renderer's row-based
+    /// classification to avoid per-cell bounds checks and repair writes.
+    /// </summary>
+    public ReadOnlySpan<CellHot> GetRowCells(int row)
+        => ActiveBuffer.GetRowCells(row);
+
+    /// <summary>
+    /// Zero-copy read-only view of one visible row's cold cells.
+    /// </summary>
+    public ReadOnlySpan<ColdCell> GetRowColdCells(int row)
+        => ActiveBuffer.GetRowColdCells(row);
+
+    public ref readonly CellAttributes GetStyle(ushort styleId)
+        => ref StyleSet.GetStyle(styleId);
+
+    public string GetScrollbackLineText(int index)
+        => GetScrollbackLine(index).Text ?? string.Empty;
+
+    /// <summary>
+    /// Captures the render state under the caller's SyncRoot hold: one bounded
+    /// memcpy of the cell arenas plus style/generation/scrollback metadata.
+    /// The returned snapshot is immutable and can be rasterized without the
+    /// lock (see B-lite; docs/architecture/AvaloniaOptimizationPlan.md §10.7).
+    /// The visible scrollback range [<paramref name="sbStart"/>, <paramref name="sbEnd"/>]
+    /// (negative row indices, -1 = newest) is materialized as text.
+    /// </summary>
+    public RenderSnapshot CaptureRenderSnapshot(int sbStart, int sbEnd)
+    {
+        var styles = StyleSet.CaptureStyles();
+        var snapshot = RenderSnapshot.Capture(
+            ActiveBuffer,
+            _rowGenerations,
+            styles,
+            ScrollbackCount,
+            IsAlternateScreenActive,
+            CursorRow,
+            CursorCol);
+        snapshot.GlobalGeneration = Generation;
+
+        int count = sbEnd - sbStart + 1;
+        if (count > 0)
+        {
+            snapshot.CapturedSbStart = sbStart;
+            var text = new string[count];
+            for (int r = sbStart; r <= sbEnd; r++)
+            {
+                int idx = r + ScrollbackCount;
+                idx = Math.Max(0, Math.Min(ScrollbackCount - 1, idx));
+                text[r - sbStart] = GetScrollbackLine(idx).Text ?? string.Empty;
+            }
+            snapshot.ScrollbackText = text;
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Per-frame render capture (B-lite): copies only the visible rows' cell
+    /// slices instead of the whole arena. The raster reads ~viewport-rows x
+    /// columns; a full-arena memcpy per content frame is pure overhead.
+    /// </summary>
+    public RenderSnapshot CaptureRenderSnapshotVisible(int sbStart, int sbEnd)
+    {
+        var styles = StyleSet.CaptureStyles();
+        var snapshot = RenderSnapshot.CaptureVisible(
+            ActiveBuffer,
+            _rowGenerations,
+            styles,
+            ScrollbackCount,
+            IsAlternateScreenActive,
+            CursorRow,
+            CursorCol);
+        snapshot.GlobalGeneration = Generation;
+
+        int count = sbEnd - sbStart + 1;
+        if (count > 0)
+        {
+            snapshot.CapturedSbStart = sbStart;
+            var text = new string[count];
+            for (int r = sbStart; r <= sbEnd; r++)
+            {
+                int idx = r + ScrollbackCount;
+                idx = Math.Max(0, Math.Min(ScrollbackCount - 1, idx));
+                text[r - sbStart] = GetScrollbackLine(idx).Text ?? string.Empty;
+            }
+            snapshot.ScrollbackText = text;
+        }
+
+        return snapshot;
     }
 
     public ColdCell GetColdCell(int row, int col)

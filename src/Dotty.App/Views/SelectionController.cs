@@ -1,3 +1,4 @@
+using System;
 using Dotty.App.Controls.Canvas;
 using Dotty.Terminal.Adapter;
 
@@ -57,29 +58,65 @@ internal sealed class SelectionController
             return string.Empty;
         }
 
+        // User-initiated read of shared buffer state: run under SyncRoot so the
+        // extraction never observes a partially-parsed chunk (the consumer
+        // mutates under the same lock).
+        string result = string.Empty;
+        try
+        {
+            buffer.WithSyncRoot(() => result = ExtractTextCore(buffer));
+        }
+        catch (TimeoutException)
+        {
+            return string.Empty;
+        }
+        return result;
+    }
+
+    private string ExtractTextCore(TerminalBuffer buffer)
+    {
         using var sb = ZStr.CreateStringBuilder(buffer.Columns * (Range.EndRow - Range.StartRow + 1));
         for (int row = Range.StartRow; row <= Range.EndRow; row++)
         {
             int startCol = row == Range.StartRow ? Range.StartColumn : 0;
             int endCol = row == Range.EndRow ? Range.EndColumn : buffer.Columns - 1;
 
-            for (int col = startCol; col <= endCol; col++)
+            if (row < 0)
             {
-                var cell = buffer.GetCell(row, col);
-                if (cell.IsContinuation)
+                // Scrollback rows are not addressable through GetCell (its bounds
+                // check returns blank cells for negative rows); read the scrollback
+                // line API instead. Row -1 is the newest scrollback line.
+                int sbIdx = -row - 1;
+                if (sbIdx >= buffer.ScrollbackCount)
                 {
+                    if (row < Range.EndRow) sb.AppendLine();
                     continue;
                 }
+                var line = buffer.GetScrollbackLine(sbIdx).Text ?? string.Empty;
+                int s = Math.Clamp(startCol, 0, line.Length);
+                int e = Math.Clamp(endCol + 1, s, line.Length);
+                sb.Append(line.AsSpan(s, e - s));
+            }
+            else
+            {
+                for (int col = startCol; col <= endCol; col++)
+                {
+                    var cell = buffer.GetCell(row, col);
+                    if (cell.IsContinuation)
+                    {
+                        continue;
+                    }
 
-                var cold = buffer.GetColdCell(row, col);
-                var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
-                if (string.IsNullOrEmpty(grapheme))
-                {
-                    sb.Append(' ');
-                }
-                else
-                {
-                    sb.Append(grapheme);
+                    var cold = buffer.GetColdCell(row, col);
+                    var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
+                    if (string.IsNullOrEmpty(grapheme))
+                    {
+                        sb.Append(' ');
+                    }
+                    else
+                    {
+                        sb.Append(grapheme);
+                    }
                 }
             }
 

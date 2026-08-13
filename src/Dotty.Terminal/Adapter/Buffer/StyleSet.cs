@@ -40,6 +40,21 @@ public class StyleSet
         return ref Unsafe.Add(ref arr, (nint)id);
     }
 
+    /// <summary>
+    /// Copies the style table under its lock. The renderer's snapshot path
+    /// reads from the copy so rasterization never observes entries being
+    /// remapped in place by <see cref="RemapAnsiPalette"/>.
+    /// </summary>
+    public CellAttributes[] CaptureStyles()
+    {
+        lock (_idToStyle)
+        {
+            var copy = new CellAttributes[_idToStyle.Length];
+            Array.Copy(_idToStyle, copy, _idToStyle.Length);
+            return copy;
+        }
+    }
+
     public bool RemapAnsiPalette(uint[] previousPalette, uint[] currentPalette)
     {
         if (previousPalette == null || currentPalette == null || previousPalette.Length != 16 || currentPalette.Length != 16)

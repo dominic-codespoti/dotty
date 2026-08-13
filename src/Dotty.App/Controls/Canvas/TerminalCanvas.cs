@@ -14,7 +14,6 @@ using Avalonia.Threading;
 using Dotty.App.Controls.Canvas;
 using Dotty.App.Controls.Canvas.Rendering;
 using Dotty.App.Rendering;
-using Dotty.App.Discovery;
 using Dotty.App.Services;
 using Dotty.App.Configuration;
 using Dotty.Terminal.Adapter;
@@ -141,8 +140,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private float _cellWidth = 8;
 	private float _cellHeight = 16;
 	private bool _metricsDirty = true;
-	private GlyphAtlas? _glyphAtlas;
-	private GlyphDiscovery? _glyphDiscovery;
 	private TerminalFrameComposer? _frameComposer;
 	private TextShaper? _textShaper;
 	private static readonly ShapedRunCache SharedShapedRunCache = new();
@@ -156,11 +153,22 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private bool _lastBufferWasAlternate = false;
 	private int _lastKnownBufferRows = -1;
 	private int _lastKnownBufferColumns = -1;
+
+	// Step C per-row dirty redraw state (IncrementalScrollRendering.md §4.5).
+	// The dirty path patches the retained bitmap only when the scroll offset,
+	// scrollback count, selection, preedit, and alt-screen state are all
+	// unchanged, so every pixel outside the dirty rows is provably identical
+	// to the last full render.
 	private ulong[]? _lastRowGenerations;
+	private double _lastRenderedOffsetY = double.NaN;
+	private int _lastRenderedSbCount = -1;
+	private TerminalSelectionRange _lastRenderedSelection = TerminalSelectionRange.Empty;
+	private bool _lastRenderedPreeditActive;
+	private bool _forceFullRender = true; // first render / bitmap recreation
+	private readonly List<int> _dirtyRowScratch = new();
 
 	private double _renderScaling = 1.0;
 	private TopLevel? _attachedTopLevel;
-	private GlyphRasterizationOptions _glyphRasterizationOptions = new();
 	private static readonly string[] MonospaceFallbackFamilies =
 	{
 		"JetBrains Mono",
@@ -272,12 +280,38 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			return string.Empty;
 		}
 
+		// AT-driven, never per frame; read under SyncRoot so the extraction
+		// observes a consistent buffer state.
+		string result = string.Empty;
+		try
+		{
+			buffer.WithSyncRoot(() => result = BuildVisibleTextForAccessibility(buffer));
+		}
+		catch (TimeoutException)
+		{
+			return string.Empty;
+		}
+		return result;
+	}
+
+	private string BuildVisibleTextForAccessibility(TerminalBuffer buffer)
+	{
 		var sb = new System.Text.StringBuilder(4096);
 		int startRow = Math.Max(0, (int)Math.Floor(_offset.Y / _cellHeight) - buffer.ScrollbackCount);
 		int endRow = Math.Min(buffer.Rows - 1, (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - buffer.ScrollbackCount);
 		for (int r = startRow; r <= endRow && sb.Length < 16_384; r++)
 		{
-			sb.Append(buffer.GetRowText(r));
+			if (r < 0)
+			{
+				// Scrollback: row -1 is the newest scrollback line.
+				int sbIdx = -r - 1;
+				if (sbIdx < buffer.ScrollbackCount)
+					sb.Append(buffer.GetScrollbackLine(sbIdx).Text ?? string.Empty);
+			}
+			else
+			{
+				sb.Append(buffer.GetRowText(r));
+			}
 			sb.Append('\n');
 		}
 
@@ -633,7 +667,55 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 	private bool RenderToBitmap(TerminalBuffer buffer)
 	{
+		// B-lite (docs/architecture/AvaloniaOptimizationPlan.md §10.7): hold
+		// SyncRoot only for a bounded memcpy snapshot of the render state, then
+		// rasterize from the immutable snapshot without the lock. The UI thread
+		// never blocks the PTY writer for the whole raster (~2.8 ms), only for
+		// the copy (~1 ms), and the raster can never race a partial parse.
 		bool lockTaken = false;
+		using var snapshot = CaptureRenderSnapshotBounded(buffer, ref lockTaken);
+		if (snapshot == null)
+		{
+			return false;
+		}
+
+		// Backing surface is physical pixels: round(Bounds * RenderScaling).
+		// Bounds stay DIPs for all layout/scroll/hit-test math; the single
+		// canvas.Scale below maps logical geometry onto this surface.
+		double scale = Math.Max(0.1, _renderScaling);
+		int w = Math.Max(1, (int)Math.Round(Bounds.Width * scale));
+		int h = Math.Max(1, (int)Math.Round(Bounds.Height * scale));
+
+		if (_bitmap == null || _bitmap.PixelSize.Width != w || _bitmap.PixelSize.Height != h)
+		{
+			_bitmap?.Dispose();
+			_bitmap = new WriteableBitmap(
+				new PixelSize(w, h),
+				new Vector(96.0 * scale, 96.0 * scale),
+				PixelFormat.Bgra8888);
+			RenderTelemetry.RecordBitmapRecreation();
+			_forceFullRender = true;
+		}
+		RenderTelemetry.RecordBufferState(
+			buffer.Generation,
+			_renderScaling,
+			w,
+			h);
+
+		using var locked = _bitmap.Lock();
+		var info = new SKImageInfo(locked.Size.Width, locked.Size.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+		using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
+		DrawContentToSkiaCanvas(surface.Canvas, snapshot, scale);
+		return true;
+	}
+
+	/// <summary>
+	/// Acquires the bounded SyncRoot wait, runs MarkRender, and captures the
+	/// render snapshot (cell arenas + styles + generations + visible scrollback
+	/// text). On a lock miss returns null (the presentation gate retries).
+	/// </summary>
+	private RenderSnapshot? CaptureRenderSnapshotBounded(TerminalBuffer buffer, ref bool lockTaken)
+	{
 		try
 		{
 			// Never block the UI thread indefinitely on this lock: under a
@@ -645,6 +727,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// thread). Bound the wait and skip this frame (the caller redraws
 			// the last cached bitmap) if the buffer is busy; the presentation
 			// gate retries on the next tick.
+			//
+			// The handshake flag lets the writer yield between sub-chunks so
+			// this bounded wait actually wins the lock during a burst instead
+			// of timing out on every attempt.
+			buffer.ReaderWaiting = true;
 			System.Threading.Monitor.TryEnter(buffer.SyncRoot, 4, ref lockTaken);
 			if (!lockTaken)
 			{
@@ -652,63 +739,41 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				// Explicit reschedule: the owner requests one more animation
 				// frame so this skipped content is presented on the next tick.
 				FrameRetryRequested?.Invoke();
-				return false;
+				return null;
 			}
 
-			// Backing surface is physical pixels: round(Bounds * RenderScaling).
-			// Bounds stay DIPs for all layout/scroll/hit-test math; the single
-			// canvas.Scale below maps logical geometry onto this surface.
-			double scale = Math.Max(0.1, _renderScaling);
-			int w = Math.Max(1, (int)Math.Round(Bounds.Width * scale));
-			int h = Math.Max(1, (int)Math.Round(Bounds.Height * scale));
+			try { buffer.MarkRender(); } catch { }
 
-			if (_bitmap == null || _bitmap.PixelSize.Width != w || _bitmap.PixelSize.Height != h)
-			{
-				_bitmap?.Dispose();
-				_bitmap = new WriteableBitmap(
-					new PixelSize(w, h),
-					new Vector(96.0 * scale, 96.0 * scale),
-					PixelFormat.Bgra8888);
-				RenderTelemetry.RecordBitmapRecreation();
-			}
-			RenderTelemetry.RecordBufferState(
-				buffer.Generation,
-				_renderScaling,
-				w,
-				h);
-
-			using var locked = _bitmap.Lock();
-			var info = new SKImageInfo(locked.Size.Width, locked.Size.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-			using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
-			DrawContentToSkiaCanvas(surface.Canvas, buffer, scale);
-			return true;
+			int sbCount = buffer.ScrollbackCount;
+			int startVisibleRow = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
+			int endVisibleRow = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
+			int sbStart = Math.Max(-sbCount, startVisibleRow);
+			int sbEnd = Math.Min(-1, endVisibleRow);
+			return buffer.CaptureRenderSnapshotVisible(sbStart, sbEnd);
 		}
 		finally
 		{
 			if (lockTaken)
 				System.Threading.Monitor.Exit(buffer.SyncRoot);
+			buffer.ReaderWaiting = false;
 		}
 	}
 
 	/// <summary>
-	/// Rasterizes the terminal content into an arbitrary Skia canvas — either
-	/// the backing bitmap surface or, for the Experiment A prototype, the
-	/// compositor's lease canvas. The caller holds buffer.SyncRoot and supplies
-	/// the logical-to-physical scale; all geometry stays in DIPs.
+	/// Rasterizes the terminal content into an arbitrary Skia canvas from an
+	/// <see cref="IRenderSource"/> — the live <see cref="TerminalBuffer"/>
+	/// (renderer holds SyncRoot) or, on the shipped B-lite path, a
+	/// <see cref="RenderSnapshot"/> captured under a short lock. The caller
+	/// supplies the logical-to-physical scale; all geometry stays in DIPs.
 	/// </summary>
-	private void DrawContentToSkiaCanvas(SKCanvas canvas, TerminalBuffer buffer, double scale)
+	private void DrawContentToSkiaCanvas(SKCanvas canvas, IRenderSource buffer, double scale)
 	{
-		if (_frameComposer != null && buffer.IsAlternateScreenActive != _lastBufferWasAlternate)
+		bool altChanged = buffer.IsAlternateScreenActive != _lastBufferWasAlternate;
+		if (_frameComposer != null && altChanged)
 		{
 			_frameComposer.ResetCaches();
 			_lastBufferWasAlternate = buffer.IsAlternateScreenActive;
 		}
-
-		try
-		{
-			buffer.MarkRender();
-		}
-		catch { }
 
 		int sbCount = buffer.ScrollbackCount;
 		// Posted, not synchronous: ApplyExtent can invalidate a visual
@@ -735,18 +800,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			}, DispatcherPriority.Render);
 		}
 
-		// Always full render: clear the bitmap and re-render everything. An
-		// earlier incremental path here (viewport-shift memmove, buffer-scroll
-		// replay, dirty-row culling) traded this full redraw for partial
-		// updates, but proved unsafe in practice - it corrupted glyphs on
-		// manual scroll and, separately, its offset-tracking starved the
-		// "follow new output to bottom" update. Full render is ~11.7ms at
-		// 73x136 (bench-verified), well within a frame budget. The incremental
-		// primitives were removed (see StateCoordinationPlan R3); the design
-		// doc IncrementalScrollRendering.md records how to rebuild them with
-		// the pixel-diff harness if a future attempt is made.
-		canvas.Clear(_cachedBackgroundArgb);
-
 		// One logical-to-physical transform: everything below (padding,
 		// scroll translate, cell geometry, selection) stays in DIPs.
 		if (_frameComposer != null)
@@ -760,6 +813,14 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 		canvas.Translate(0, (float)(sbCount * _cellHeight - _offset.Y));
 
+		// Step C (IncrementalScrollRendering.md §4.5): when nothing about the
+		// viewport moved, patch only the rows whose identity generation
+		// changed instead of clearing and re-rendering the whole surface. The
+		// gate is strict: offset, scrollback count, selection, preedit, and
+		// alt-screen state must all match the last full render, so the pixels
+		// outside the dirty rows are provably identical. Anything else falls
+		// back to the full path (the pre-incremental behavior).
+		bool dirtyPath = false;
 		if (_frameComposer != null)
 		{
 			int startVisibleRow = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
@@ -771,35 +832,59 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			int composerEnd = Math.Max(0, Math.Min(buffer.Rows - 1, endVisibleRow));
 
 			if (composerStart <= composerEnd && SkPaint != null && SkFont != null)
-				_frameComposer.RenderTo(canvas, buffer, SkPaint, SkFont, (float)_cellWidth, (float)_cellHeight, composerStart, composerEnd);
+				dirtyPath = TryRenderDirtyPath(canvas, buffer, sbCount, altChanged, composerStart, composerEnd);
 
-			int sbStart = Math.Max(-sbCount, startVisibleRow);
-			int sbEnd = Math.Min(-1, endVisibleRow);
-
-			if (sbStart <= sbEnd && SkPaint != null && SkFont != null)
+			if (!dirtyPath)
 			{
-				var font = SkFont;
-				var fm = font.Metrics;
-				float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
-				float baselineOffset = (float)(_cellHeight * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
+				// Full render: clear the bitmap and re-render everything. An
+				// earlier incremental path here (viewport-shift memmove,
+				// buffer-scroll replay, dirty-row culling) traded this full
+				// redraw for partial updates, but proved unsafe in practice -
+				// it corrupted glyphs on manual scroll and, separately, its
+				// offset-tracking starved the "follow new output to bottom"
+				// update. Full render is ~11.7ms at 73x136 (bench-verified),
+				// well within a frame budget. The incremental primitives were
+				// removed (see StateCoordinationPlan R3); Step C above rebuilds
+				// the safe subset: per-row culling with a strict no-motion gate.
+				canvas.Clear(_cachedBackgroundArgb);
 
-				for (int r = sbStart; r <= sbEnd; r++)
+				if (composerStart <= composerEnd && SkPaint != null && SkFont != null)
+					_frameComposer.RenderTo(canvas, buffer, SkPaint, SkFont, (float)_cellWidth, (float)_cellHeight, composerStart, composerEnd);
+
+				int sbStart = Math.Max(-sbCount, startVisibleRow);
+				int sbEnd = Math.Min(-1, endVisibleRow);
+
+				if (sbStart <= sbEnd && SkPaint != null && SkFont != null)
 				{
-					int idx = r + sbCount;
-					idx = Math.Max(0, Math.Min(sbCount - 1, idx));
-					var line = buffer.GetScrollbackLine(idx);
-					if (line.Length <= 0) continue;
-					float y = (float)(r * _cellHeight + baselineOffset);
-					var text = line.Text ?? string.Empty;
-					canvas.DrawText(SKTextBlob.Create(text, font), 0, y, SkPaint);
+					var font = SkFont;
+					var fm = font.Metrics;
+					float glyphHeight = Math.Abs(fm.Ascent) + Math.Abs(fm.Descent);
+					float baselineOffset = (float)(_cellHeight * 0.5f) + (glyphHeight * 0.5f) - Math.Abs(fm.Descent);
+
+					for (int r = sbStart; r <= sbEnd; r++)
+					{
+						int idx = r + sbCount;
+						idx = Math.Max(0, Math.Min(sbCount - 1, idx));
+						var text = buffer.GetScrollbackLineText(idx);
+						if (string.IsNullOrEmpty(text)) continue;
+						float y = (float)(r * _cellHeight + baselineOffset);
+						canvas.DrawText(SKTextBlob.Create(text, font), 0, y, SkPaint);
+					}
 				}
 			}
+
+			_forceFullRender = false;
+			RecordLastRenderedState(buffer, sbCount);
+		}
+		else
+		{
+			canvas.Clear(_cachedBackgroundArgb);
 		}
 
 		// IME preedit overlay: draws the active composition at the cursor cell,
 		// replacing the underlying cell text, with an underline marking the
-		// composed region.
-		if (!string.IsNullOrEmpty(_preeditText) && SkPaint != null && SkFont != null && buffer != null)
+		// composed region. Skipped on the dirty path (the gate rejects preedit).
+		if (!dirtyPath && !string.IsNullOrEmpty(_preeditText) && SkPaint != null && SkFont != null && buffer != null)
 		{
 			int curRow = buffer.CursorRow;
 			int curCol = buffer.CursorCol;
@@ -837,8 +922,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 
 		// Draw selection overlay (drawn into the content; split from content
-		// is deferred until the cursor overlay passes pixel tests)
-		if (!_selectionRange.IsEmpty)
+		// is deferred until the cursor overlay passes pixel tests). Skipped on
+		// the dirty path (the gate rejects selection changes).
+		if (!dirtyPath && !_selectionRange.IsEmpty)
 		{
 			int visStart = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
 			int visEnd = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
@@ -882,8 +968,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		// Cursor is drawn as an Avalonia overlay after the content (see
 		// DrawCursorOverlay) so blink never re-rasterizes content.
 
-		// Debug overlay
-		if (ShowDebugOverlay && SkPaint != null)
+		// Debug overlay (full path only; diagnostic, not content)
+		if (!dirtyPath && ShowDebugOverlay && SkPaint != null)
 		{
 			canvas.Save();
 			if (_debugTextPaint == null || _debugBgPaint == null || _debugFont == null)
@@ -914,42 +1000,79 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		canvas.Flush();
 	}
 
+	/// <summary>
+	/// Attempts the Step C per-row dirty redraw. Returns true when the dirty
+	/// path was taken (or nothing changed and the retained bitmap is already
+	/// current); false falls back to the full render. Strict gate:
+	/// offset, scrollback count, selection, preedit, alt-screen state, and a
+	/// matching generation array must all be unchanged since the last raster.
+	/// </summary>
+	private bool TryRenderDirtyPath(SKCanvas canvas, IRenderSource buffer, int sbCount, bool altChanged, int composerStart, int composerEnd)
+	{
+		if (_forceFullRender) return false;
+		if (altChanged) return false;
+		if (_selectionRange != _lastRenderedSelection) return false;
+		if (_preeditText != null || _lastRenderedPreeditActive) return false;
+		if (Math.Abs(_offset.Y - _lastRenderedOffsetY) > 0.001) return false;
+		if (sbCount != _lastRenderedSbCount) return false;
+
+		var gens = buffer.RowGenerations;
+		if (gens.IsEmpty) return false;
+		if (_lastRowGenerations == null || _lastRowGenerations.Length != gens.Length) return false;
+
+		_dirtyRowScratch.Clear();
+		for (int r = composerStart; r <= composerEnd; r++)
+		{
+			if (gens[r] != _lastRowGenerations[r])
+				_dirtyRowScratch.Add(r);
+		}
+
+		int visibleRowCount = composerEnd - composerStart + 1;
+		if (_dirtyRowScratch.Count == 0) return true; // bitmap already current
+		if (_dirtyRowScratch.Count >= visibleRowCount) return false; // whole screen -> full render
+
+		_dirtyRowScratch.Sort();
+		_frameComposer!.RenderDirty(
+			canvas,
+			buffer,
+			SkPaint!,
+			SkFont!,
+			(float)_cellWidth,
+			(float)_cellHeight,
+			_cachedBackgroundArgb,
+			composerStart,
+			composerEnd,
+			System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_dirtyRowScratch));
+		return true;
+	}
+
+	/// <summary>
+	/// Captures the raster-time viewport state the dirty path gates on.
+	/// Called after every successful content raster (full or dirty).
+	/// </summary>
+	private void RecordLastRenderedState(IRenderSource buffer, int sbCount)
+	{
+		_lastRenderedOffsetY = _offset.Y;
+		_lastRenderedSbCount = sbCount;
+		_lastRenderedSelection = _selectionRange;
+		_lastRenderedPreeditActive = _preeditText != null;
+
+		var gens = buffer.RowGenerations;
+		if (_lastRowGenerations == null || _lastRowGenerations.Length != gens.Length)
+		{
+			_lastRowGenerations = gens.ToArray();
+		}
+		else
+		{
+			gens.CopyTo(_lastRowGenerations);
+		}
+	}
+
 	public void OnBufferUpdated(TerminalBuffer buffer)
 	{
 		if (buffer == null) return;
 		_contentDirty = true;
 		HandleBufferGeometryChange(buffer);
-		if (_glyphDiscovery == null) return;
-		_glyphDiscovery.EnsureSize(buffer.Rows);
-
-		var gens = buffer.RowGenerations;
-		if (!gens.IsEmpty)
-		{
-			if (_lastRowGenerations == null || _lastRowGenerations.Length != gens.Length)
-			{
-				_lastRowGenerations = gens.ToArray();
-				for (int r = 0; r < gens.Length; r++)
-					_glyphDiscovery.EnqueueRow(r);
-			}
-			else
-			{
-				for (int r = 0; r < gens.Length; r++)
-				{
-					if (gens[r] != _lastRowGenerations[r])
-					{
-						_lastRowGenerations[r] = gens[r];
-						_glyphDiscovery.EnqueueRow(r);
-					}
-				}
-			}
-		}
-		else
-		{
-			_lastRowGenerations = null;
-			for (int r = 0; r < buffer.Rows; r++)
-				_glyphDiscovery.EnqueueRow(r);
-		}
-
 		InvalidateVisual();
 	}
 
@@ -977,7 +1100,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	{
 		if (!IsVisible) return;
 		RenderTelemetry.RecordFrameRequest();
-		ProcessGlyphDiscoverySlice();
 		InvalidateVisual();
 	}
 
@@ -1064,22 +1186,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		InvalidateVisual();
 	}
 
-	private void ProcessGlyphDiscoverySlice()
-	{
-		if (_glyphDiscovery == null) return;
-		try
-		{
-			var disable = !string.IsNullOrEmpty(Dotty.Env.GetEnvironmentVariable("DOTTY_DISABLE_GLYPH_DISCOVERY"));
-			if (disable) return;
-			var buf = Buffer;
-			if (buf != null)
-			{
-				try { _glyphDiscovery.Process(buf, 5); } catch { }
-			}
-		}
-		catch { }
-	}
-
 	private void EnsureMetrics()
 	{
 		var scaling = GetRenderScaling();
@@ -1130,50 +1236,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		if (_frameComposer != null)
 			_frameComposer.FallbackTypefaces = fallbackTypefaces;
 
-		// Recreate glyph atlas when metrics change (font family/size)
-		// Use shared atlas service to reduce memory across tabs
-		_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
-		
-		// Get or create a shared atlas for this font configuration
-		// Multiple tabs with same font will share the same atlas
-		var newAtlas = GlyphAtlasService.GetOrCreateAtlas(SkFont!.Typeface, SkFont.Size, _glyphRasterizationOptions);
-		
-		// Only update our reference if it's a different atlas
-		if (_glyphAtlas != newAtlas)
-		{
-			if (_glyphAtlas != null)
-			{
-				GlyphAtlasService.ReleaseAtlas(_glyphAtlas);
-			}
-			_glyphAtlas = newAtlas;
-			GlyphAtlasService.AcquireAtlas(newAtlas);
-		}
-		
 		_contentDirty = true;
-		
-		if (Buffer != null)
-		{
-			_glyphDiscovery = new GlyphDiscovery(Buffer.Rows, _glyphAtlas);
-		}
 
 		_metricsDirty = false;
 
 		// Font/typeface changes invalidate the composer's per-row classification
 		// cache (TypefaceIndex resolution depends on the current font list).
 		try { _frameComposer?.ResetCaches(); } catch { }
-
-		// Optionally disable glyph discovery (atlas population) to avoid heavy
-		// UI-thread work on resource-constrained systems. Set env var
-		// DOTTY_DISABLE_GLYPH_DISCOVERY=1 to disable.
-		var disableDiscovery = !string.IsNullOrEmpty(Dotty.Env.GetEnvironmentVariable("DOTTY_DISABLE_GLYPH_DISCOVERY"));
-		if (disableDiscovery)
-		{
-			_glyphDiscovery = null;
-		}
-		else
-		{
-			_glyphDiscovery = new GlyphDiscovery(Buffer?.Rows ?? 24, _glyphAtlas);
-		}
 	}
 
 	protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -1203,25 +1272,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			{
 				EnsureMetrics();
 				HandleBufferGeometryChange(buf);
-				// Ensure glyph atlas exists for current metrics using shared service
-				if (_glyphAtlas == null)
-				{
-					_glyphRasterizationOptions = CreateRasterizationOptions(SkPaint);
-					var newAtlas = GlyphAtlasService.GetOrCreateAtlas(SkFont?.Typeface ?? SKTypeface.Default, SkFont?.Size ?? 12f, _glyphRasterizationOptions);
-					_glyphAtlas = newAtlas;
-					GlyphAtlasService.AcquireAtlas(newAtlas);
-				}
-				// Ensure discovery and composer are created only once so we preserve
-				// front-buffer and row caches across buffer swaps. If sizes differ,
-				// ensure the discovery knows about the row count.
-				if (_glyphDiscovery == null)
-				{
-					_glyphDiscovery = new GlyphDiscovery(buf.Rows, _glyphAtlas);
-				}
-				else
-				{
-					_glyphDiscovery.EnsureSize(buf.Rows);
-				}
 				// Ensure we have a composer. If one already exists, reset its caches
 				// for the new buffer (cheaper than recreating the object). Track
 				// alternate-screen state for later detection in Render.
@@ -1236,7 +1286,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				{
 					_frameComposer.ResetCaches();
 				}
-				_frameComposer.GlyphAtlas = _glyphAtlas;
 				_lastBufferWasAlternate = buf.IsAlternateScreenActive;
 				
 				// Force re-render with new buffer
@@ -1248,9 +1297,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			{
 				_lastKnownBufferRows = -1;
 				_lastKnownBufferColumns = -1;
-				_glyphDiscovery = null;
-				// _glyphAtlas?.Dispose(); removed for safety
-				_glyphAtlas = null;
 				// _frameComposer?.Dispose(); removed for safety
 				_frameComposer = null;
 			}
@@ -1268,20 +1314,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		RuntimeSettings.Changed -= OnRuntimeSettingsChanged;
 		App.ThemeUpdated -= OnAppThemeChanged;
 		
-		_glyphDiscovery = null;
-		
         // Release per-view render state now that this canvas is leaving the tree.
         try { _frameComposer?.Dispose(); } catch { }
         _frameComposer = null;
         _textShaper?.Dispose();
         _textShaper = null;
-		
-		// Release the shared atlas reference (the service owns eviction)
-		if (_glyphAtlas != null)
-		{
-			GlyphAtlasService.ReleaseAtlas(_glyphAtlas);
-			_glyphAtlas = null;
-		}
 		
 		// Release Skia paint resources
 		if (SkPaint != null)
@@ -1543,17 +1580,5 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		}
 		catch { }
 		return false;
-	}
-
-	private static GlyphRasterizationOptions CreateRasterizationOptions(SKPaint? paint)
-	{
-		return new GlyphRasterizationOptions
-		{
-			IsAntialias = false,
-			IsLinearText = false,
-			SubpixelText = false,
-			IsAutohinted = false,
-			LcdRenderText = false,
-		};
 	}
 }

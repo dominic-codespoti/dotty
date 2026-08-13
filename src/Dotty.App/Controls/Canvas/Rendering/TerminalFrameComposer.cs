@@ -57,7 +57,7 @@ public sealed class TerminalFrameComposer : IDisposable
     }
 
     // --- background synthesis state ---
-    private readonly List<Span> _rowSpans = new();
+    private readonly List<RowSpan> _rowSpans = new();
     private readonly Dictionary<RegionKey, ActiveRegion> _activeRegions = new();
     private readonly List<Region> _regions = new();
     private readonly List<RegionKey> _toRemove = new();
@@ -134,7 +134,7 @@ public sealed class TerminalFrameComposer : IDisposable
 
     public void RenderTo(
         SKCanvas target,
-        TerminalBuffer buffer,
+        IRenderSource buffer,
         SKPaint paint,
         SKFont font,
         float cellW,
@@ -183,11 +183,113 @@ public sealed class TerminalFrameComposer : IDisposable
             Array.Clear(_rowClassGen, 0, _rowClassGen.Length);
     }
 
+    /// <summary>
+    /// Per-row dirty redraw for the non-scroll case (scroll offset and
+    /// scrollback count unchanged, no alt-screen transition). The retained
+    /// surface still holds the previous full render; only <paramref name="dirtyRows"/>
+    /// (sorted ascending) are re-rasterized:
+    /// 1. classify every visible row through the generation-keyed cache
+    ///    (unchanged rows cost one Array.Copy);
+    /// 2. synthesize background regions over the full visible range from the
+    ///    cached classes so pills are never split and viewport-edge behavior
+    ///    matches the full render;
+    /// 3. re-apply the base color under dirty rows (non-AA hard rects) so
+    ///    cells that lost their background do not keep stale pixels;
+    /// 4. draw background regions intersecting dirty rows (opaque -> identity
+    ///    elsewhere);
+    /// 5. draw glyphs for dirty rows only.
+    /// Cost model (73x136): a 1-row statusline update ~0.16 ms vs ~7 ms full.
+    /// See docs/architecture/IncrementalScrollRendering.md §4.5.
+    /// </summary>
+    public void RenderDirty(
+        SKCanvas target,
+        IRenderSource buffer,
+        SKPaint paint,
+        SKFont font,
+        float cellW,
+        float cellH,
+        SKColor bgColor,
+        int startRow,
+        int endRow,
+        ReadOnlySpan<int> dirtyRows)
+    {
+        if (target == null || buffer == null || paint == null || font == null) return;
+        if (cellW <= 0 || cellH <= 0 || dirtyRows.IsEmpty) return;
+        int visibleRowCount = endRow - startRow + 1;
+        if (dirtyRows.Length >= Math.Max(1, visibleRowCount))
+        {
+            // Degenerate: the dirty set covers the range; a full render is cheaper.
+            RenderTo(target, buffer, paint, font, cellW, cellH, startRow, endRow);
+            return;
+        }
+
+        EnsureCellClasses(buffer.Columns);
+
+        // 1. Classify every visible row and synthesize background regions over
+        //    the full range (CollectBackgroundRegions classifies each row via
+        //    the generation-keyed cache; unchanged rows cost a reference swap).
+        CollectBackgroundRegions(buffer, startRow, endRow);
+
+        // 3. Base-color refill under dirty rows.
+        bool prevAA = _backgroundFill.IsAntialias;
+        _backgroundFill.IsAntialias = false;
+        _backgroundFill.Style = SKPaintStyle.Fill;
+        _backgroundFill.Color = bgColor;
+        foreach (var r in dirtyRows)
+        {
+            if (r < startRow || r > endRow) continue;
+            target.DrawRect(SKRect.Create(0, r * cellH, buffer.Columns * cellW, cellH), _backgroundFill);
+        }
+        _backgroundFill.IsAntialias = prevAA;
+
+        // 4. Background regions intersecting dirty rows.
+        DrawBackgroundRegions(target, cellW, cellH, buffer.IsAlternateScreenActive, dirtyRows);
+
+        // 5. Glyphs for dirty rows only.
+        SyncGlyphPaint(paint, font);
+        DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, endRow, dirtyRows);
+    }
+
+    /// <summary>
+    /// True when <paramref name="dirtyRows"/> (sorted ascending) contains any
+    /// row in the half-open range [<paramref name="top"/>, <paramref name="bottom"/>).
+    /// </summary>
+    private static bool SpanOverlapsDirtyRows(int top, int bottom, ReadOnlySpan<int> dirtyRows)
+    {
+        int lo = 0, hi = dirtyRows.Length - 1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) >> 1;
+            int row = dirtyRows[mid];
+            if (row < top) lo = mid + 1;
+            else if (row >= bottom) hi = mid - 1;
+            else return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// True when <paramref name="rows"/> (sorted ascending) contains <paramref name="row"/>.
+    /// </summary>
+    private static bool ContainsDirtyRow(ReadOnlySpan<int> rows, int row)
+    {
+        int lo = 0, hi = rows.Length - 1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) >> 1;
+            int v = rows[mid];
+            if (v == row) return true;
+            if (v < row) lo = mid + 1;
+            else hi = mid - 1;
+        }
+        return false;
+    }
+
     // ============================================================
     // BACKGROUND REGION PIPELINE
     // ============================================================
 
-    private void CollectBackgroundRegions(TerminalBuffer buffer, int startRow, int endRow)
+    private void CollectBackgroundRegions(IRenderSource buffer, int startRow, int endRow)
     {
         _regions.Clear();
         _activeRegions.Clear();
@@ -196,7 +298,7 @@ public sealed class TerminalFrameComposer : IDisposable
         {
             // Classify the row once and let the span builder and glyph
             // renderer consume that single source of truth.
-            ClassifyRowCellsCached(buffer, row);
+            EnsureRowClassified(buffer, row);
             BuildRowSpans(_cellClasses, row);
             MergeRowSpans(row);
         }
@@ -208,9 +310,8 @@ public sealed class TerminalFrameComposer : IDisposable
 
     private void BuildRowSpans(CellClass[] rowCells, int row)
     {
-        _rowSpans.Clear();
-
-        // Convert classification into synth cells and call the pure builder.
+        // Convert classification into synth cells; the pure builder appends
+        // directly into the composer's persistent span list (no per-row List).
         if (_reusableSynthSpan.Length < rowCells.Length) { _reusableSynthSpan = new SynthCell[rowCells.Length]; }
         var synth = _reusableSynthSpan;
         for (int i = 0; i < rowCells.Length; i++)
@@ -226,9 +327,7 @@ public sealed class TerminalFrameComposer : IDisposable
             };
         }
 
-        var spans = BackgroundSynth.BuildRowSpans(synth.AsSpan(0, rowCells.Length));
-        foreach (var s in spans)
-            _rowSpans.Add(new Span(s.X0, s.X1, s.Color));
+        BackgroundSynth.BuildRowSpans(synth.AsSpan(0, rowCells.Length), _rowSpans);
     }
 
     private void MergeRowSpans(int row)
@@ -290,7 +389,8 @@ public sealed class TerminalFrameComposer : IDisposable
         SKCanvas canvas,
         float cellW,
         float cellH,
-        bool exactCellBackgrounds)
+        bool exactCellBackgrounds,
+        ReadOnlySpan<int> onlyRows = default)
     {
         float horizontalPadding = exactCellBackgrounds ? 0f : _appearance.HorizontalPadding;
         float verticalPadding = exactCellBackgrounds ? 0f : _appearance.GetVerticalPadding(cellH);
@@ -298,6 +398,9 @@ public sealed class TerminalFrameComposer : IDisposable
 
         foreach (var r in _regions)
         {
+            if (!onlyRows.IsEmpty && !SpanOverlapsDirtyRows(r.TopRow, r.BottomRow, onlyRows))
+                continue;
+
             float left = r.X0 * cellW - horizontalPadding;
             float right = r.X1 * cellW + horizontalPadding;
             float top = r.TopRow * cellH + verticalPadding;
@@ -347,149 +450,19 @@ public sealed class TerminalFrameComposer : IDisposable
     // GLYPH RENDERING
     // ============================================================
 
-    private static readonly string s_glyphSkSL = @"
-        uniform shader atlas;
-        uniform shader cellData;
-        uniform float2 u_cellSize;
-        uniform float2 u_gridSize;
-        uniform float2 u_atlasSize;
-
-        half4 main(float2 coord) {
-            float2 cellCoord = floor(coord / u_cellSize);
-            if (cellCoord.x >= u_gridSize.x || cellCoord.y >= u_gridSize.y)
-                return half4(0);
-
-            float2 cellUV = (cellCoord + 0.5) / u_gridSize;
-            half4 cell = cellData.eval(cellUV);
-
-            float2 inCell = coord - cellCoord * u_cellSize;
-            float2 glyphPos = cell.xy * 255.0;
-            float2 glyphSize = half2(cell.z * 4.0, cell.w * 4.0);
-
-            half4 fgColor = half4(0.88, 0.88, 0.88, 1.0);
-            float flags = 0;
-            half4 bgColor = half4(0, 0, 0, 1);
-
-            if (glyphSize.x > 0 && glyphSize.y > 0) {
-                float2 offset = (u_cellSize - glyphSize) * 0.5;
-                float2 samplePos = inCell - offset;
-                if (samplePos.x >= 0 && samplePos.x < glyphSize.x &&
-                    samplePos.y >= 0 && samplePos.y < glyphSize.y) {
-                    float2 atlasUV = (glyphPos + samplePos) / u_atlasSize;
-                    half4 texColor = atlas.eval(atlasUV);
-                    half4 blended = half4(mix(bgColor.rgb, fgColor.rgb, texColor.a), 1.0);
-                    return blended;
-                }
-            }
-            return bgColor;
-        }";
-
-    private void DrawGlyphsWithShader(
-        SKCanvas canvas,
-        TerminalBuffer buffer,
-        SKPaint paint,
-        float cellW,
-        float cellH,
-        int startRow,
-        int endRow)
-    {
-        if (GlyphAtlas == null) { DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow); return; }
-
-        int cols = buffer.Columns;
-        int rows = endRow - startRow + 1;
-
-        // Get atlas snapshot
-        using var atlasImage = GlyphAtlas.CreateSnapshot();
-        if (atlasImage == null) { DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow); return; }
-
-        // Build cell data texture (RGBA8888, rows×cols pixels)
-        // R: atlas U / 255, G: atlas V / 255, B: glyph width / 4, A: glyph height / 4
-        byte[] pixels = new byte[cols * rows * 4];
-
-        for (int r = startRow; r <= endRow; r++)
-        {
-            ClassifyRowCells(buffer, r);
-            for (int c = 0; c < cols; c++)
-            {
-                int pi = (r - startRow) * cols + c;
-                var cc = _cellClasses[c];
-                if (!cc.ShouldDrawGlyph)
-                {
-                    pixels[pi * 4 + 2] = 0;
-                    pixels[pi * 4 + 3] = 0;
-                    continue;
-                }
-
-                var key = new GlyphKey(cc.Grapheme, null, cc.Bold);
-                if (GlyphAtlas.TryGetGlyph(key, out var info))
-                {
-                    float uNorm = (float)info.X / atlasImage.Width;
-                    float vNorm = (float)info.Y / atlasImage.Height;
-                    pixels[pi * 4 + 0] = (byte)Math.Clamp(uNorm * 255, 0, 255);
-                    pixels[pi * 4 + 1] = (byte)Math.Clamp(vNorm * 255, 0, 255);
-                    pixels[pi * 4 + 2] = (byte)Math.Clamp(info.Width / 4f, 0, 255);
-                    pixels[pi * 4 + 3] = (byte)Math.Clamp(info.Height / 4f, 0, 255);
-                }
-                else
-                {
-                    pixels[pi * 4 + 2] = 0;
-                    pixels[pi * 4 + 3] = 0;
-                }
-            }
-        }
-
-        using var cellBitmap = new SKBitmap(cols, rows, SKColorType.Rgba8888, SKAlphaType.Premul);
-        System.Runtime.InteropServices.Marshal.Copy(pixels, 0, cellBitmap.GetPixels(), pixels.Length);
-        cellBitmap.NotifyPixelsChanged();
-        using var cellImage = SKImage.FromBitmap(cellBitmap);
-
-        // Create or reuse the runtime effect
-        if (_glyphShaderEffect == null)
-        {
-            _glyphShaderEffect = SKRuntimeEffect.CreateShader(s_glyphSkSL, out _);
-            if (_glyphShaderEffect == null)
-            {
-                DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow);
-                return;
-            }
-        }
-
-        // Create uniforms
-        var uniforms = new SKRuntimeEffectUniforms(_glyphShaderEffect);
-        uniforms["u_cellSize"] = new float[] { cellW, cellH };
-        uniforms["u_gridSize"] = new float[] { cols, rows };
-        uniforms["u_atlasSize"] = new float[] { atlasImage.Width, atlasImage.Height };
-
-        // Create child shaders: atlas texture + cell data
-        var children = new SKRuntimeEffectChildren(_glyphShaderEffect);
-        children["atlas"] = atlasImage.ToShader();
-        children["cellData"] = cellImage.ToShader();
-
-        using var shader = _glyphShaderEffect.ToShader(uniforms, children);
-        if (shader == null) { DrawGlyphs(canvas, buffer, paint, cellW, cellH, startRow, endRow); return; }
-
-        using var shaderPaint = new SKPaint { Shader = shader };
-        float totalW = cols * cellW;
-        float totalH = rows * cellH;
-        canvas.DrawRect(SnapRect(SKRect.Create(0, startRow * cellH, totalW, totalH)), shaderPaint);
-    }
-
     // Default hyperlink color (blue) - can be made configurable
     private static readonly SKColor HyperlinkColor = new SKColor(0xFF, 0x64, 0xB0); // Accent blue
     private static readonly SKColor HyperlinkUnderlineColor = new SKColor(0xFF, 0x64, 0xB0);
 
-    public GlyphAtlas? GlyphAtlas { get; set; }
-    private SKRuntimeEffect? _glyphShaderEffect;
-    private static readonly SKColor s_shaderBgDefault = new SKColor(0x00, 0x00, 0x00);
-
     private void DrawGlyphs(
         SKCanvas canvas,
-        TerminalBuffer buffer,
+        IRenderSource buffer,
         SKPaint paint,
         float cellW,
         float cellH,
         int startRow,
-        int endRow)
+        int endRow,
+        ReadOnlySpan<int> onlyRows = default)
     {
         var fm = _glyphFont.Metrics;
         float baselineOffset = -fm.Ascent;
@@ -507,7 +480,9 @@ public sealed class TerminalFrameComposer : IDisposable
 
         for (int row = startRow; row <= endRow; row++)
         {
-            ClassifyRowCellsCached(buffer, row);
+            if (!onlyRows.IsEmpty && !ContainsDirtyRow(onlyRows, row)) continue;
+
+            EnsureRowClassified(buffer, row);
 
             float rowTop = row * cellH;
             float baseline = MathF.Round(rowTop + baselineOffset);
@@ -609,7 +584,8 @@ public sealed class TerminalFrameComposer : IDisposable
                             float textSize = _glyphFont.Size;
 
                             ShapedRun shaped;
-                            if (_shapedRunCache == null || !_shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped))
+                            SKTextBlob? cachedBlob = null;
+                            if (_shapedRunCache == null || !_shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped, out cachedBlob))
                             {
                                 shaped = _textShaper.Shape(combined, runTypeface, textSize);
                                 _shapedRunCache?.Add(combined, runTypeface, textSize, runBold, shaped);
@@ -619,14 +595,28 @@ public sealed class TerminalFrameComposer : IDisposable
                             _glyphPaint.StrokeWidth = runBold ? 0.8f : 0f;
                             _glyphPaint.Style = SKPaintStyle.Fill;
 
-                            // Use HarfBuzz-shaped positions: build an SKTextBlob
-                            var blobBuilder = new SKTextBlobBuilder();
-                            using var runFont = new SKFont(runTypeface, textSize);
-                            var runHandle = blobBuilder.AllocatePositionedRun(runFont, shaped.GlyphIndices.Length);
-                            runHandle.SetGlyphs(shaped.GlyphIndices.AsSpan());
-                            runHandle.SetPositions(shaped.Positions.AsSpan());
-                            using var blob = blobBuilder.Build();
-                            canvas.DrawText(blob, x, baseline, _glyphPaint);
+                            // Use HarfBuzz-shaped positions. The built SKTextBlob is
+                            // cached alongside the run so the per-frame combined-string
+                            // + SKTextBlobBuilder + SKFont churn happens once per
+                            // unique (text, typeface, size, bold) key.
+                            if (cachedBlob != null)
+                            {
+                                canvas.DrawText(cachedBlob, x, baseline, _glyphPaint);
+                            }
+                            else
+                            {
+                                var blobBuilder = new SKTextBlobBuilder();
+                                using var runFont = new SKFont(runTypeface, textSize);
+                                var runHandle = blobBuilder.AllocatePositionedRun(runFont, shaped.GlyphIndices.Length);
+                                runHandle.SetGlyphs(shaped.GlyphIndices.AsSpan());
+                                runHandle.SetPositions(shaped.Positions.AsSpan());
+                                var blob = blobBuilder.Build();
+                                canvas.DrawText(blob, x, baseline, _glyphPaint);
+                                if (_shapedRunCache != null)
+                                    _shapedRunCache.AddBlob(combined, runTypeface, textSize, runBold, blob);
+                                else
+                                    blob.Dispose();
+                            }
 
                             // Draw per-cell decorations for the shaped run
                             for (int c = col; c < runEnd; )
@@ -796,12 +786,12 @@ public sealed class TerminalFrameComposer : IDisposable
     }
 
     /// <summary>
-    /// Classifies one row into <see cref="_cellClasses"/>, reusing the cached
-    /// per-row classification when the buffer's identity generation is
-    /// unchanged. The cache is keyed on generations that are bumped on every
-    /// content change but never rotated by scrolls, so a hit is always sound.
+    /// Points <see cref="_cellClasses"/> at the row's classification,
+    /// classifying directly into the per-row cache array when the identity
+    /// generation changed. Zero-copy on cache hits: no per-cell bounds checks
+    /// and no Array.Copy — just a reference swap.
     /// </summary>
-    private void ClassifyRowCellsCached(TerminalBuffer buffer, int row)
+    private void EnsureRowClassified(IRenderSource buffer, int row)
     {
         EnsureCellClasses(buffer.Columns);
         EnsureRowClassCache(buffer);
@@ -810,18 +800,18 @@ public sealed class TerminalFrameComposer : IDisposable
         var cached = _rowClassCache![row];
         if (cached != null && cached.Length >= buffer.Columns && _rowClassGen![row] == gen)
         {
-            Array.Copy(cached, _cellClasses, buffer.Columns);
+            _cellClasses = cached;
             return;
         }
 
-        ClassifyRowCells(buffer, row);
         if (cached == null || cached.Length < buffer.Columns)
             cached = _rowClassCache[row] = new CellClass[buffer.Columns];
-        Array.Copy(_cellClasses, cached, buffer.Columns);
+        _cellClasses = cached;
+        ClassifyRowCells(buffer, row);
         _rowClassGen![row] = gen;
     }
 
-    private void EnsureRowClassCache(TerminalBuffer buffer)
+    private void EnsureRowClassCache(IRenderSource buffer)
     {
         if (_rowClassCache != null && _rowClassCache.Length >= buffer.Rows) return;
         int rows = Math.Max(buffer.Rows, 1);
@@ -886,14 +876,20 @@ public sealed class TerminalFrameComposer : IDisposable
         public int TypefaceIndex;
     }
 
-    private void ClassifyRowCells(TerminalBuffer buffer, int row)
+    private void ClassifyRowCells(IRenderSource buffer, int row)
     {
         EnsureCellClasses(buffer.Columns);
 
-        for (int col = 0; col < buffer.Columns; col++)
+        // Row-span reads: one bounds check per row, no per-cell GetCell
+        // (which re-checks bounds and runs the mutating continuation-repair).
+        var cells = buffer.GetRowCells(row);
+        var colds = buffer.GetRowColdCells(row);
+        int cols = Math.Min(buffer.Columns, cells.Length);
+
+        for (int col = 0; col < cols; col++)
         {
-            var cell = buffer.GetCell(row, col);
-            var cold = buffer.GetColdCell(row, col);
+            var cell = cells[col];
+            var cold = colds[col];
 
             var cc = new CellClass();
             cc.RawCell = cell;
@@ -901,7 +897,7 @@ public sealed class TerminalFrameComposer : IDisposable
             cc.Width = Math.Max(1, (int)cell.Width);
 
             
-            var style = buffer.StyleSet.GetStyle(cell.StyleId);
+            var style = buffer.GetStyle(cell.StyleId);
             cc.HasBg = style.Background.Argb != 0;
             cc.Bg = style.Background.Argb != 0 ? ToSkColor(style.Background.Argb) : default;
             if (cc.HasBg && cc.Bg.Alpha == 0) cc.Bg = cc.Bg.WithAlpha(255);
@@ -1390,7 +1386,6 @@ public sealed class TerminalFrameComposer : IDisposable
     // DATA TYPES
     // ============================================================
 
-    private readonly record struct Span(int X0, int X1, SKColor Color);
     private readonly record struct Region(int X0, int X1, int TopRow, int BottomRow, SKColor Color);
     private readonly record struct RegionKey(int X0, int X1, SKColor Color);
 

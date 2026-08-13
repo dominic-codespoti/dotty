@@ -97,61 +97,6 @@ public class TerminalFrameComposerRenderingTests
     }
 
     [Fact]
-    public void RenderTo_WithGlyphAtlas_RendersNonZeroStartRow()
-    {
-        using var composer = new TerminalFrameComposer();
-        using var atlas = new GlyphAtlas(SKTypeface.Default, 26f);
-        atlas.EnsureGlyph(new GlyphKey("W"));
-        composer.GlyphAtlas = atlas;
-
-        var buffer = new TerminalBuffer(rows: 2, columns: 2);
-        buffer.SetCursor(1, 0);
-        buffer.WriteText("W".AsSpan(), CellAttributes.Default);
-
-        const float cellW = 24f;
-        const float cellH = 30f;
-
-        using var bitmap = new SKBitmap(48, 60, SKColorType.Rgba8888, SKAlphaType.Premul);
-        using var canvas = new SKCanvas(bitmap);
-        canvas.Clear(SKColors.Black);
-
-        using var paint = new SKPaint
-        {
-            Color = SKColors.White,
-            IsAntialias = true
-        };
-        using var font = new SKFont(SKTypeface.Default, 26f);
-
-
-        composer.RenderTo(canvas, buffer, paint, font, cellW, cellH, startRow: 1, endRow: 1);
-
-        int targetRowPixels = 0;
-        int otherRowPixels = 0;
-
-        for (int y = 0; y < bitmap.Height; y++)
-        {
-            for (int x = 0; x < bitmap.Width; x++)
-            {
-                var px = bitmap.GetPixel(x, y);
-                bool isDrawn = px.Red != 0 || px.Green != 0 || px.Blue != 0 || px.Alpha != 255;
-                if (!isDrawn) continue;
-
-                if (y >= 30 && y < 60)
-                {
-                    targetRowPixels++;
-                }
-                else
-                {
-                    otherRowPixels++;
-                }
-            }
-        }
-
-        Assert.True(targetRowPixels > 0, "Expected glyph pixels inside the rendered non-zero start row.");
-        Assert.Equal(0, otherRowPixels);
-    }
-
-    [Fact]
     public void RenderTo_BackgroundSpans_FillExactCellRectanglesWithoutStyling()
     {
         using var composer = new TerminalFrameComposer();

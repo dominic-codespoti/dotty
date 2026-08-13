@@ -28,11 +28,12 @@ namespace Dotty.App.Rendering
 
     public static class BackgroundSynth
     {
-        // Build row spans from a sequence of SynthCell. This mirrors the
-        // behaviour used by the compositor but is pure and testable.
-        public static List<RowSpan> BuildRowSpans(ReadOnlySpan<SynthCell> cells)
+        // Build row spans into a caller-provided list (the composer pools its
+        // span list across rows/frames; no per-row List allocation). This
+        // mirrors the behaviour used by the compositor but is pure and testable.
+        public static void BuildRowSpans(ReadOnlySpan<SynthCell> cells, List<RowSpan> spans)
         {
-            var spans = new List<RowSpan>();
+            spans.Clear();
 
             bool inSpan = false;
             int spanStart = 0;
@@ -127,6 +128,13 @@ namespace Dotty.App.Rendering
             }
 
             Flush();
+        }
+
+        // Build row spans from a sequence of SynthCell, returning a fresh list.
+        public static List<RowSpan> BuildRowSpans(ReadOnlySpan<SynthCell> cells)
+        {
+            var spans = new List<RowSpan>();
+            BuildRowSpans(cells, spans);
             return spans;
         }
 

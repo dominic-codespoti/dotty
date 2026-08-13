@@ -100,6 +100,29 @@ public unsafe class Screen : IDisposable
         return ref UnsafeAsRef<CellHot>(_cellsPtr, GetPhysicalRow(logicalRow) * Columns + col);
     }
 
+    /// <summary>
+    /// Zero-copy read-only view of one logical row's hot cells. Bounds-checked
+    /// once per row; the renderer's classification uses this instead of
+    /// per-cell <see cref="GetCell(int,int)"/> (which re-checks bounds and runs
+    /// the mutating continuation-repair on every call).
+    /// </summary>
+    public ReadOnlySpan<CellHot> GetRowCells(int logicalRow)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return default;
+        int pRow = GetPhysicalRow(logicalRow);
+        return new ReadOnlySpan<CellHot>((void*)(_cellsPtr + (nint)pRow * Columns * Unsafe.SizeOf<CellHot>()), Columns);
+    }
+
+    /// <summary>
+    /// Zero-copy read-only view of one logical row's cold cells.
+    /// </summary>
+    public ReadOnlySpan<ColdCell> GetRowColdCells(int logicalRow)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return default;
+        int pRow = GetPhysicalRow(logicalRow);
+        return new ReadOnlySpan<ColdCell>((void*)(_coldCellsPtr + (nint)pRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
+    }
+
     public CellHot GetCell(int logicalRow, int col)
     {
         if (logicalRow < 0 || logicalRow >= Rows || col < 0 || col >= Columns)
@@ -205,18 +228,26 @@ public unsafe class Screen : IDisposable
         if (maxCol < 0) return string.Empty;
 
         int offset = pRow * Columns;
-        var chars = new char[maxCol + 1];
+        using var sb = ZStr.CreateStringBuilder(maxCol + 1);
         for (int i = 0; i <= maxCol; i++)
         {
             ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + i);
             if (cell.IsContinuation || cell.Rune == 0)
-                chars[i] = ' ';
-            else if (cell.Rune <= 0xFFFF)
-                chars[i] = (char)cell.Rune;
+            {
+                sb.Append(' ');
+                continue;
+            }
+
+            // Resolve through the cold cell so multi-char graphemes are not
+            // reduced to their first rune (or U+FFFD for supplementary planes).
+            ref var cold = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + i);
+            var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
+            if (string.IsNullOrEmpty(grapheme))
+                sb.Append(' ');
             else
-                chars[i] = '\uFFFD';
+                sb.Append(grapheme);
         }
-        return new string(chars);
+        return sb.ToString();
     }
 
     public int GetScrollbackRowLength(int scrollbackIndex)

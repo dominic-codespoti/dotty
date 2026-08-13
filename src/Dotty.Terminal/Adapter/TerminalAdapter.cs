@@ -45,9 +45,9 @@ public class TerminalAdapter : ITerminalHandler
     public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
     public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
 
-    public TerminalAdapter(int rows = 24, int columns = 80)
+    public TerminalAdapter(int rows = 24, int columns = 80, int scrollbackCapacity = 10000)
     {
-        _buffer = new TerminalBuffer(rows, columns);
+        _buffer = new TerminalBuffer(rows, columns, scrollbackCapacity);
     }
 
     public event Action<string>? RenderRequested;

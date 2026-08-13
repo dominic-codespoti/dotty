@@ -9,6 +9,5 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
-    <PackageReference Include="K4os.Compression.LZ4" />
   </ItemGroup>
 </Project>

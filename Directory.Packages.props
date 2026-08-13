@@ -77,7 +77,6 @@
 
   <!-- Other -->
   <ItemGroup>
-    <PackageVersion Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageVersion Include="IsExternalInit" Version="1.0.3" />
     <PackageVersion Include="Microsoft.Windows.CsWin32" Version="0.3.298" />
   </ItemGroup>

@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -21,6 +22,60 @@ public sealed class TerminalSearch
     public TerminalSearch(TerminalBuffer buffer)
     {
         _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
+    }
+
+    /// <summary>The buffer this search operates on.</summary>
+    public TerminalBuffer? Buffer => _buffer;
+
+    /// <summary>
+    /// Searches an immutable <see cref="RenderSnapshot"/> (captured by the
+    /// caller under a short lock). Safe to run on any thread; throws
+    /// <see cref="OperationCanceledException"/> when cancelled. Row convention
+    /// matches the live search: negative = scrollback (most negative =
+    /// oldest), non-negative = visible row.
+    /// </summary>
+    public int Search(RenderSnapshot snapshot, string query, bool caseSensitive, bool useRegex, CancellationToken cancellationToken)
+    {
+        _matches.Clear();
+        _currentMatchIndex = -1;
+
+        if (string.IsNullOrEmpty(query))
+        {
+            _lastQuery = string.Empty;
+            return 0;
+        }
+
+        _lastQuery = query;
+        _lastCaseSensitive = caseSensitive;
+        _lastUseRegex = useRegex;
+
+        // Search scrollback lines first (oldest to newest)
+        int scrollbackCount = snapshot.ScrollbackCount;
+        for (int i = 0; i < scrollbackCount; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = snapshot.GetScrollbackRowText(i);
+            if (line.Length == 0) continue;
+
+            SearchInLine(line, i - scrollbackCount, caseSensitive, useRegex);
+        }
+
+        // Search visible buffer rows
+        for (int row = 0; row < snapshot.Rows; row++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = snapshot.GetVisibleRowText(row);
+            if (string.IsNullOrEmpty(line)) continue;
+
+            SearchInLine(line, row, caseSensitive, useRegex);
+        }
+
+        if (_matches.Count > 0)
+        {
+            _currentMatchIndex = 0;
+        }
+
+        return _matches.Count;
     }
 
     /// <summary>
@@ -215,7 +270,9 @@ public sealed class TerminalSearch
             try
             {
                 var options = caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase;
-                var matches = Regex.Matches(line, _lastQuery, options);
+                // Bounded evaluation: a pathological pattern must not hang the UI
+                // thread (search runs synchronously from the search box).
+                var matches = Regex.Matches(line, _lastQuery, options, TimeSpan.FromMilliseconds(250));
                 foreach (Match match in matches)
                 {
                     if (match.Success && match.Length > 0)

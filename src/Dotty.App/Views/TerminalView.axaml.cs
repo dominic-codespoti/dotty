@@ -253,14 +253,27 @@ namespace Dotty.App.Views
         /// </summary>
         private bool _frameScheduled;
 
+        /// <summary>
+        /// Safety net for the presentation gate. On some compositor stacks
+        /// (XWayland on Hyprland, measured 2026-08-13: ~1.75/s gate callbacks
+        /// during sustained output because composition batches were only being
+        /// driven by blink invalidations) the animation clock stalls. When it
+        /// does, this timer drives the render directly so output keeps
+        /// presenting. Interval is longer than a healthy display tick, so it
+        /// never fires while the animation clock works.
+        /// </summary>
+        private readonly DispatcherTimer _cadenceFallbackTimer;
+
         private void RequestPresentationFrame()
         {
             if (VisualRoot == null || !IsVisible) return;
             if (_frameScheduled) return;
             _frameScheduled = true;
+            _cadenceFallbackTimer.Start();
             TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_ =>
             {
                 _frameScheduled = false;
+                _cadenceFallbackTimer.Stop();
                 OnPresentationFrame(_);
             });
         }
@@ -502,6 +515,17 @@ namespace Dotty.App.Views
         public TerminalView()
         {
             _contextMenuBuilder = new SelectionContextMenuBuilder(_selectionController);
+            _cadenceFallbackTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {
+                Interval = TimeSpan.FromMilliseconds(50)
+            };
+            _cadenceFallbackTimer.Tick += (_, _) =>
+            {
+                _cadenceFallbackTimer.Stop();
+                if (VisualRoot == null || !IsVisible) return;
+                _frameScheduled = false;
+                OnPresentationFrame(TimeSpan.Zero);
+            };
             InitializeComponent();
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");

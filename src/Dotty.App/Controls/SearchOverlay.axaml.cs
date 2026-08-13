@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -16,6 +18,7 @@ public partial class SearchOverlay : UserControl
 {
     private TerminalSearch? _search;
     private bool _isUpdating;
+    private CancellationTokenSource? _searchCts;
 
     // Events
     public event EventHandler? SearchRequested;
@@ -159,15 +162,18 @@ public partial class SearchOverlay : UserControl
     /// </summary>
     public void ClearSearch()
     {
+        _searchCts?.Cancel();
         _search?.Clear();
         UpdateMatchCounter();
     }
 
     /// <summary>
-    /// Navigates to the next match.
+    /// Navigates to the next match. Cancels any in-flight search first so the
+    /// match list is never read mid-write by the background task.
     /// </summary>
     public bool NextMatch()
     {
+        _searchCts?.Cancel();
         if (_search?.NextMatch() != true) return false;
 
         CurrentMatchIndex = _search.CurrentMatchIndex;
@@ -181,6 +187,7 @@ public partial class SearchOverlay : UserControl
     /// </summary>
     public bool PreviousMatch()
     {
+        _searchCts?.Cancel();
         if (_search?.PreviousMatch() != true) return false;
 
         CurrentMatchIndex = _search.CurrentMatchIndex;
@@ -196,32 +203,87 @@ public partial class SearchOverlay : UserControl
     {
         if (!string.IsNullOrEmpty(SearchText))
         {
-            int count = _search?.RefreshSearch() ?? 0;
-            MatchCount = count;
-            CurrentMatchIndex = _search?.CurrentMatchIndex ?? -1;
-            UpdateMatchCounter();
+            PerformSearch();
         }
     }
 
+    /// <summary>
+    /// Runs the search off the UI thread against an immutable snapshot.
+    /// Capture happens under a short SyncRoot hold; the scan itself is
+    /// cancellable per keystroke, so typing in the box never blocks on the
+    /// buffer lock or the full-scrollback scan.
+    /// </summary>
     private void PerformSearch()
     {
-        if (_search == null) 
+        if (_search == null)
         {
             return;
         }
 
-        int count = _search.Search(SearchText, CaseSensitive, UseRegex);
-        MatchCount = count;
-        CurrentMatchIndex = count > 0 ? 0 : -1;
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        var cts = _searchCts = new CancellationTokenSource();
+        var token = cts.Token;
 
-        UpdateMatchCounter();
-
-        if (count > 0)
+        var buffer = _search.Buffer;
+        if (buffer == null)
         {
-            MatchNavigated?.Invoke(this, _search.CurrentMatch);
+            return;
         }
 
-        SearchRequested?.Invoke(this, EventArgs.Empty);
+        RenderSnapshot? snapshot = null;
+        try
+        {
+            buffer.WithSyncRoot(() => snapshot = buffer.CaptureRenderSnapshot(-1, -2));
+        }
+        catch (TimeoutException)
+        {
+            return;
+        }
+        if (snapshot == null)
+        {
+            return;
+        }
+
+        var search = _search;
+        string query = SearchText;
+        bool caseSensitive = CaseSensitive;
+        bool useRegex = UseRegex;
+
+        Task.Run(() =>
+        {
+            try
+            {
+                int count = search.Search(snapshot, query, caseSensitive, useRegex, token);
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (token.IsCancellationRequested)
+                    {
+                        snapshot.Dispose();
+                        return;
+                    }
+                    MatchCount = count;
+                    CurrentMatchIndex = count > 0 ? 0 : -1;
+                    UpdateMatchCounter();
+
+                    if (count > 0)
+                    {
+                        MatchNavigated?.Invoke(this, search.CurrentMatch);
+                    }
+
+                    SearchRequested?.Invoke(this, EventArgs.Empty);
+                    snapshot.Dispose();
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                snapshot.Dispose();
+            }
+            catch (Exception)
+            {
+                snapshot.Dispose();
+            }
+        }, token);
     }
 
     private void UpdateMatchCounter()

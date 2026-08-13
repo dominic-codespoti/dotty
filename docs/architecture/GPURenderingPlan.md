@@ -1,6 +1,6 @@
 # GPU Rendering Migration Plan
 
-Branch: `feat/gpu-rendering` · Status: **PLANNING** · Last updated: 2026-08-13
+Branch: `feat/gpu-rendering` · Status: **PHASE 0 COMPLETE — Phase 1 (A8 atlas) ready** · Last updated: 2026-08-13
 
 ## 1. Goal
 
@@ -118,6 +118,51 @@ The GPU only pays when frames present. Recorded finding (`AvaloniaOptimizationPl
 to ~1.75/s because composition batches were driven only by blink; bare X11 delivers
 ~108 renders/s on the same build. A GPU raster does not fix that.
 
+### 6.1 Implementation record — 2026-08-13 (spikes)
+
+Environment: Hyprland session, `XDG_SESSION_TYPE=wayland`, `DISPLAY=:0` (XWayland),
+`WAYLAND_DISPLAY=wayland-1`. Release build `3af71cb` + cadence-fallback timer (shipped
+in the tier sweep).
+
+**Spike 1a — XWayland flood cadence with the fallback timer (live desktop):**
+
+| Metric | Pre-fix (docs §10.8) | With fallback timer |
+|---|---|---|
+| Gate callbacks under sustained flood | ~1.75/s (blink-only) | **40.2 fps** (470 content frames / 12 s) |
+| Lock misses | — | 2.7% |
+| Content raster avg / p95 / max | — | 7.1 / 33 / 74 ms |
+| Alloc per render | — | 13.0 KB |
+
+The shipped 50 ms fallback timer delivers a **real ~40 fps floor** on the desktop that
+previously collapsed to 1.75/s. It does not reach 60 fps, but the presentation path
+is now usable for sustained output — the Phase 0 gate's "fallback floor accepted as
+v1 target" option is exercised and measured.
+
+**Spike 1b — native Wayland backend: REFUTED at the API level.**
+
+With `DISPLAY` unset and `WAYLAND_DISPLAY=wayland-1`, `UsePlatformDetect()` still
+selected X11 (`XOpenDisplay failed` crash). No `WAYLAND_DISPLAY` string exists in any
+shipped Avalonia 12.1 assembly (`Avalonia.Desktop.dll`, `Avalonia.FreeDesktop.dll`,
+`Avalonia.X11.dll`). **Avalonia 12.1's public API cannot reach the Wayland backend;
+`UsePlatformDetect` on Linux is X11-only.** Native Wayland requires upstream Avalonia
+(open question #1 resolved). The plan proceeds on the XWayland + fallback-timer path.
+
+**Spike 2 — GL/EGL availability:**
+
+- Live desktop: Mesa 26.1.6 with `radeonsi_dri.so` + `swrast`, libEGL/libGLX present,
+  `/dev/dri/renderD128` + `card1` (AMD 680M) → **hardware GL** available to the X11
+  backend; an `ISkiaSharpApiLeaseFeature` surface there is hardware-accelerated.
+- Xvfb: llvmpipe (`swrast`) software GL — the lease surface is GL-API-backed but
+  software-rasterized; quad-path correctness is identical, GPU speed is not.
+- Implication: Phase 3's GPU detection should probe GLX/EGL surface creation success,
+  not driver presence; the bitmap path remains the unconditional software fallback.
+
+**Phase 0 gate decision (2026-08-13):** the fallback-floor option is accepted. GPU
+rendering work proceeds on the XWayland path with a measured **~40 fps presentation
+ceiling on Hyprland** (hardware GL raster, composition-bound presentation). The 60 Hz
+desktop target stays blocked on upstream Avalonia Wayland support; re-evaluate when
+Avalonia exposes a Wayland opt-in or when `UsePlatformDetect` learns Wayland.
+
 Spikes, in order:
 1. **Native Wayland:** Avalonia 12.1 exposes no `UseWayland` API (verified against
    assemblies). Test whether unsetting `DISPLAY` (Wayland-only session) changes
@@ -180,11 +225,20 @@ rejected alternatives (repo convention).
 | 2026-08-13 | A8 coverage atlas + quad batching; no cell-texture shader; no per-cell DrawText on the GPU path | Old shader failure modes; kitty/Ghostty/Wezterm architecture |
 | 2026-08-13 | Phase 0 (presentation) precedes rendering work | §10.8 cadence finding: GPU raster does not fix a stalled present path |
 | 2026-08-13 | v1 emoji = tofu/fallback | Color-font path is a separate subsystem; scope cut |
+| 2026-08-13 | Phase 0 gate: accept the ~40 fps XWayland fallback floor as the v1 presentation target | Spike 1a measured 40.2 fps vs 1.75/s pre-fix; spike 1b refuted Wayland at the API level |
 
 ## 11. Open questions
 
-- Does a Wayland-only session (no `DISPLAY`) route around the XWayland cadence
-  collapse with the current backend?
-- What does the leased surface actually report on each backend (GPU vs CPU)?
+- ~~Does a Wayland-only session (no `DISPLAY`) route around the XWayland cadence
+  collapse with the current backend?~~ **Resolved 2026-08-13: no Wayland backend is
+  reachable in Avalonia 12.1** — `UsePlatformDetect` on Linux is X11-only (no
+  `WAYLAND_DISPLAY` handling in shipped assemblies; X11 selected with DISPLAY unset).
+  Upstream dependency; re-check on Avalonia updates.
+- ~~What does the leased surface actually report on each backend (GPU vs CPU)?~~
+  **Resolved 2026-08-13:** hardware GL (radeonsi, `/dev/dri/renderD128`) on the live
+  desktop; llvmpipe software GL under Xvfb. Phase 3 detects GLX/EGL surface creation
+  success, not driver presence.
 - Should the atlas live per-font-config (service) or per-view? (Old service shared
   across tabs — keep, with the byte budget fixed.)
+- Can the 60 Hz desktop ceiling be reached without upstream Wayland (e.g. frame
+  pacing independent of the animation clock at full rate instead of the 50 ms floor)?

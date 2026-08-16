@@ -1,6 +1,6 @@
 # GPU Rendering Migration Plan
 
-Branch: `feat/gpu-rendering` · Status: **PHASE 1 COMPLETE — Phase 2 (quad renderer) ready** · Last updated: 2026-08-13
+Branch: `feat/gpu-rendering` · Status: **PHASE 2 COMPLETE — Phase 3 (lease integration) ready** · Last updated: 2026-08-16
 
 ## 1. Goal
 
@@ -108,6 +108,47 @@ Delivered: `src/Dotty.App/Rendering/GlyphAtlas.cs` (atlas + `GlyphKey` struct +
 Phase 2 consumes: `EnsureGlyph(key, out GlyphInfo)` for placement +
 `AtlasBitmap` (A8) for texture upload, both under the atlas lock / service
 Acquire discipline.
+
+### 4.2 Implementation record — 2026-08-16
+
+Delivered: `QuadGlyphBatch.cs` (CPU-built quad buffer, two passes: textured
+glyph quads + solid decoration/geometry quads; exact-size arrays cached per
+vertex count so steady frames allocate once), `QuadGlyphRenderer.cs`
+(atlas SKImage + coverage SKSL shader + paints, generation-tracked against
+atlas growth), composer `DrawGlyphsQuad` (per-row ensure-then-quad with
+whole-row direct fallback for complex decorations and atlas-full), shared
+`TryGetRunBlob` (direct + quad paths), env gate `DOTTY_QUAD_RENDER=1`.
+
+- **Shader coordinate space (empirically pinned):** `SKImage.ToShader()`
+  samples in the image's PIXEL coordinates — vertex UVs are glyph rects in
+  atlas pixels; the SKSL returns `half4(t.a)` (A8 coverage replicated) and
+  `DrawVertices(..., Modulate, paint)` multiplies in the per-vertex fg color.
+  A normalized-[0,1] attempt rendered nothing; the probe test proved pixels.
+- **Solid pass paint must be white** (`DrawVertices` without a shader
+  modulates vertex colors by the paint color — the default black made all
+  solid quads invisible).
+- **Native lifetimes:** `SKRuntimeEffectChildren` must outlive the paint that
+  owns the effect shader (premature finalizer dispose aborts); the raster
+  `SKImage` from `surface.Snapshot()` must be disposed after the atlas blit
+  (a leak accumulated and aborted long test runs).
+- **Known rendering divergences (documented, pixel-diff gate tolerance):**
+  grayscale AA vs the direct path's subpixel (edge pixels only); synthetic
+  bold via `StrokeAndFill` is now visible where the direct path's bold was
+  inert; ligatures preserved via shaped-blob atlas rasterization.
+- **Verification:** live app under Xvfb with `DOTTY_QUAD_RENDER=1` + flood:
+  no crash, 61.7 fps, content raster ~2.7 ms avg (parity with the CPU path on
+  the CPU raster surface — the quad win lands on a GPU surface in Phase 3),
+  7.4 KB/render. Canvas capture pixel-compared vs the CPU path: **99.86% of
+  pixels identical** (the 0.14% are AA-edge + bold divergence).
+- **Test infrastructure note:** the atlas + quad test classes abort the whole
+  test process (SIGABRT, intermittent, serial or parallel, root cause
+  unidentified in SkiaSharp native state) when they coexist in one process.
+  Resolved structurally by process isolation: atlas tests live in
+  `Dotty.App.Tests` (proven clean since Phase 1), quad tests in the new
+  `Dotty.App.SkiaTests` project. Additionally the xunit v3.3.2 vstest adapter
+  flakily drops individual methods from the small native-heavy assembly during
+  run discovery — quad scenarios are consolidated into three methods and each
+  has been verified passing; re-check on adapter updates.
 
 ## 4. Phase 2 — Quad renderer (5–8 days, the real work)
 

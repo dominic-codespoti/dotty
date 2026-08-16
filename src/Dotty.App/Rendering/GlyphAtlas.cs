@@ -106,6 +106,13 @@ public sealed class GlyphAtlas : IDisposable
     internal long LastUsedStamp { get; set; }
     internal int RefCount { get; set; }
 
+    /// <summary>
+    /// Bumped whenever the backing bitmap is replaced (grow). Renderers hold
+    /// an <see cref="SKImage"/> derived from the bitmap; they must recreate it
+    /// when this changes (the old bitmap is disposed on grow).
+    /// </summary>
+    internal int Generation { get; private set; }
+
     public SKTypeface Typeface => _typeface;
     public float TextSize => _textSize;
     public int Width => _bitmap.Width;
@@ -165,28 +172,72 @@ public sealed class GlyphAtlas : IDisposable
             if (string.IsNullOrEmpty(key.Grapheme)) return false;
 
             var raster = RasterizeTight(key);
-            if (raster.Width <= 0 || raster.Height <= 0) return false;
-            if (raster.Width > MaxGlyphDimension || raster.Height > MaxGlyphDimension) return false;
+            using (raster.Image)
+            {
+                if (raster.Width <= 0 || raster.Height <= 0) return false;
+                if (raster.Width > MaxGlyphDimension || raster.Height > MaxGlyphDimension) return false;
 
-            if (!TryPlace(raster.Width, raster.Height, out int x, out int y)) return false;
+                if (!TryPlace(raster.Width, raster.Height, out int x, out int y)) return false;
 
-            _canvas.DrawImage(
-                raster.Image,
-                new SKRect(raster.Left, raster.Top, raster.Left + raster.Width, raster.Top + raster.Height),
-                new SKRect(x, y, x + raster.Width, y + raster.Height),
-                new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
-                RasterBlitPaint);
-            _canvas.Flush();
+                _canvas.DrawImage(
+                    raster.Image,
+                    new SKRect(raster.Left, raster.Top, raster.Left + raster.Width, raster.Top + raster.Height),
+                    new SKRect(x, y, x + raster.Width, y + raster.Height),
+                    new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
+                    _rasterBlitPaint);
+                _canvas.Flush();
 
-            info = new GlyphInfo(
-                x, y, raster.Width, raster.Height,
-                raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
-            _map[key] = info;
-            return true;
+                info = new GlyphInfo(
+                    x, y, raster.Width, raster.Height,
+                    raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
+                _map[key] = info;
+                return true;
+            }
         }
     }
 
-    private static readonly SKPaint RasterBlitPaint = new() { Color = SKColors.White, IsAntialias = false };
+    // Per-atlas blit paint: SkiaSharp paints are not thread-safe and atlases
+    // are used concurrently by tests (and eventually by multiple views).
+    private readonly SKPaint _rasterBlitPaint = new() { Color = SKColors.White, IsAntialias = false };
+
+    /// <summary>
+    /// Ensures a pre-shaped run (ligature) is rasterized and packed. The blob
+    /// is only read during the call; the atlas retains nothing from it.
+    /// Placement metadata follows the same contract as <see cref="EnsureGlyph"/>.
+    /// </summary>
+    public bool EnsureGlyphShaped(GlyphKey key, SKTextBlob blob, out GlyphInfo info)
+    {
+        lock (_lock)
+        {
+            if (_map.TryGetValue(key, out info)) return true;
+
+            info = default;
+            if (string.IsNullOrEmpty(key.Grapheme) || blob == null) return false;
+
+            var raster = RasterizeTightShaped(key, blob);
+            using (raster.Image)
+            {
+                if (raster.Width <= 0 || raster.Height <= 0) return false;
+                if (raster.Width > MaxGlyphDimension || raster.Height > MaxGlyphDimension) return false;
+
+                if (!TryPlace(raster.Width, raster.Height, out int x, out int y)) return false;
+
+                _canvas.DrawImage(
+                    raster.Image,
+                    new SKRect(raster.Left, raster.Top, raster.Left + raster.Width, raster.Top + raster.Height),
+                    new SKRect(x, y, x + raster.Width, y + raster.Height),
+                    new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
+                    _rasterBlitPaint);
+                _canvas.Flush();
+
+                info = new GlyphInfo(
+                    x, y, raster.Width, raster.Height,
+                    raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
+                _map[key] = info;
+                return true;
+            }
+        }
+    }
 
     private readonly struct GlyphRaster
     {
@@ -217,6 +268,22 @@ public sealed class GlyphAtlas : IDisposable
     /// </summary>
     private GlyphRaster RasterizeTight(GlyphKey key)
     {
+        return RasterizeTightCore(key, blob: null);
+    }
+
+    /// <summary>
+    /// Same as <see cref="RasterizeTight"/> but rasterizes a pre-shaped
+    /// <see cref="SKTextBlob"/> (ligature runs) instead of the raw string.
+    /// The blob's glyph positions are relative to the baseline origin, matching
+    /// the direct path's <c>DrawText(blob, x, baseline)</c> placement.
+    /// </summary>
+    private GlyphRaster RasterizeTightShaped(GlyphKey key, SKTextBlob blob)
+    {
+        return RasterizeTightCore(key, blob);
+    }
+
+    private GlyphRaster RasterizeTightCore(GlyphKey key, SKTextBlob? blob)
+    {
         using var font = new SKFont(key.Typeface, key.TextSize)
         {
             Edging = SKFontEdging.Antialias,   // grayscale AA; subpixel needs RGB, not A8
@@ -227,23 +294,37 @@ public sealed class GlyphAtlas : IDisposable
         {
             Color = SKColors.White,
             IsAntialias = true,
-            Style = key.Bold ? SKPaintStyle.StrokeAndFill : SKPaintStyle.Fill,
-            // Synthetic bold: the direct path's stroke-width-on-fill was inert;
-            // StrokeAndFill actually thickens the outline.
-            StrokeWidth = key.Bold ? Math.Max(0.5f, key.TextSize * 0.04f) : 0f,
+            // Synthetic bold applies to raw-string glyphs. Pre-shaped blobs
+            // carry their own weight via the run font; no extra stroke.
+            Style = blob == null && key.Bold ? SKPaintStyle.StrokeAndFill : SKPaintStyle.Fill,
+            StrokeWidth = blob == null && key.Bold ? Math.Max(0.5f, key.TextSize * 0.04f) : 0f,
         };
 
         var fm = font.Metrics;
         float ascent = MathF.Ceiling(-fm.Ascent) + 1f;
         float descent = MathF.Ceiling(fm.Descent) + 1f;
-        float advance = MathF.Ceiling(font.MeasureText(key.Grapheme)) + 1f;
+        float advance;
+        if (blob != null)
+        {
+            var bounds = blob.Bounds; // relative to the blob origin (baseline at 0,0)
+            advance = MathF.Ceiling(bounds.Right) + 1f;
+            ascent = MathF.Max(ascent, MathF.Ceiling(-bounds.Top) + 1f);
+            descent = MathF.Max(descent, MathF.Ceiling(bounds.Bottom) + 1f);
+        }
+        else
+        {
+            advance = MathF.Ceiling(font.MeasureText(key.Grapheme)) + 1f;
+        }
         int width = Math.Max(1, (int)advance);
         int height = Math.Max(1, (int)(ascent + descent));
 
         using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Alpha8, SKAlphaType.Premul));
         var canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
-        canvas.DrawText(key.Grapheme, 0f, -fm.Ascent, SKTextAlign.Left, font, paint);
+        if (blob != null)
+            canvas.DrawText(blob, 0f, -fm.Ascent, paint);
+        else
+            canvas.DrawText(key.Grapheme, 0f, -fm.Ascent, SKTextAlign.Left, font, paint);
         canvas.Flush();
 
         var pixmap = new SKPixmap();
@@ -333,6 +414,7 @@ public sealed class GlyphAtlas : IDisposable
         _bitmap.Dispose();
         _bitmap = bigger;
         _canvas = new SKCanvas(_bitmap);
+        Generation++;
         return true;
     }
 
@@ -344,6 +426,7 @@ public sealed class GlyphAtlas : IDisposable
             _disposed = true;
             _canvas.Dispose();
             _bitmap.Dispose();
+            _rasterBlitPaint.Dispose();
         }
     }
 }

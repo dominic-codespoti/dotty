@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <!--
+    GPU-plan renderer tests (A8 glyph atlas + quad path). Kept in a separate
+    project/process from Dotty.App.Tests: the two native-heavy test classes
+    (atlas + quad) abort the process (SIGABRT) when they coexist with the main
+    suite's SkiaSharp load — the crash survives serial execution and defied
+    isolation, so process isolation is the structural fix.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Dotty.Terminal\Dotty.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.App\Dotty.App.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="Avalonia.Desktop" />
+  </ItemGroup>
+</Project>

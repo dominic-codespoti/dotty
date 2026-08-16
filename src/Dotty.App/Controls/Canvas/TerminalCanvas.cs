@@ -144,6 +144,15 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private TextShaper? _textShaper;
 	private static readonly ShapedRunCache SharedShapedRunCache = new();
 
+	// GPU-plan Phase 2: env-gated quad glyph renderer. When enabled, the
+	// composer draws glyphs through the A8 atlas + quad batch instead of
+	// per-cell DrawText (on the CPU raster surface this is a correctness
+	// vehicle; the GPU lease integration is Phase 3).
+	private static readonly bool s_useQuadRender =
+		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_QUAD_RENDER"));
+	private GlyphAtlas? _quadAtlas;
+	private QuadGlyphRenderer? _quadRenderer;
+
 	// Global font resolution cache shared across all TerminalCanvas instances.
 	// Key is "{FontFamily}|{TextSize:F1}".  Invalidated when font settings change.
 	private static readonly ConcurrentDictionary<string, SKTypeface> CachedPrimaryTypeface = new();
@@ -1236,6 +1245,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		if (_frameComposer != null)
 			_frameComposer.FallbackTypefaces = fallbackTypefaces;
 
+		if (s_useQuadRender)
+		{
+			EnsureQuadRenderer(typeface, scaledFontSize);
+		}
+
 		_contentDirty = true;
 
 		_metricsDirty = false;
@@ -1319,6 +1333,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
         _frameComposer = null;
         _textShaper?.Dispose();
         _textShaper = null;
+		ReleaseQuadRenderer();
 		
 		// Release Skia paint resources
 		if (SkPaint != null)
@@ -1351,6 +1366,45 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		_contentDirty = true;
 		_cachedBackgroundBrush = null;
 		_cachedCursorBrush = null;
+	}
+
+	/// <summary>
+	/// (Re)acquires the A8 atlas + quad renderer for the current font metrics
+	/// and switches the composer to the quad glyph path.
+	/// </summary>
+	private void EnsureQuadRenderer(SKTypeface typeface, float scaledFontSize)
+	{
+		if (_quadAtlas != null && ReferenceEquals(_quadAtlas.Typeface, typeface) && Math.Abs(_quadAtlas.TextSize - scaledFontSize) < 0.01f)
+			return;
+
+		ReleaseQuadRenderer();
+		var atlas = GlyphAtlasService.GetOrCreateAtlas(typeface, scaledFontSize);
+		GlyphAtlasService.AcquireAtlas(atlas);
+		_quadAtlas = atlas;
+		_quadRenderer = new QuadGlyphRenderer(atlas);
+		if (_frameComposer != null)
+		{
+			_frameComposer.GlyphAtlas = atlas;
+			_frameComposer.QuadRenderer = _quadRenderer;
+			_frameComposer.UseQuadGlyphs = true;
+		}
+	}
+
+	private void ReleaseQuadRenderer()
+	{
+		if (_frameComposer != null)
+		{
+			_frameComposer.GlyphAtlas = null;
+			_frameComposer.QuadRenderer = null;
+			_frameComposer.UseQuadGlyphs = false;
+		}
+		_quadRenderer?.Dispose();
+		_quadRenderer = null;
+		if (_quadAtlas != null)
+		{
+			GlyphAtlasService.ReleaseAtlas(_quadAtlas);
+			_quadAtlas = null;
+		}
 	}
 
 	private IBrush ResolveResourceBrush(IResourceDictionary? resources, string key, IBrush fallback)

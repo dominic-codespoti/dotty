@@ -9,12 +9,6 @@ namespace Dotty.App.Tests;
 
 // GlyphAtlasService is process-wide shared state. Run these tests alone so
 // reference counts and eviction are deterministic.
-[CollectionDefinition("GlyphAtlas", DisableParallelization = true)]
-public class GlyphAtlasCollectionDefinition
-{
-}
-
-[Collection("GlyphAtlas")]
 public sealed class GlyphAtlasTests
 {
     public GlyphAtlasTests()
@@ -130,25 +124,24 @@ public sealed class GlyphAtlasTests
     public void WideGlyph_AdvanceIsWiderThanNarrow()
     {
         // The default typeface usually lacks CJK; resolve one that contains 世.
+        // Not disposed: fonts from SKFontManager may alias shared native font
+        // state, and disposing under concurrent SkiaSharp tests aborts (SIGABRT).
         var cjkFont = SKFontManager.Default.MatchCharacter(0x4E16);
         if (cjkFont == null)
         {
             Assert.Skip("No CJK-capable font installed");
         }
-        using (cjkFont)
-        {
-            using var atlas = new GlyphAtlas(Font, 16f);
-            Assert.True(atlas.EnsureGlyph(new GlyphKey("i", Font, 16f, false), out var narrow));
-            Assert.True(atlas.EnsureGlyph(new GlyphKey("世", cjkFont, 16f, false), out var wide));
+        using var wideAtlas = new GlyphAtlas(Font, 16f);
+        Assert.True(wideAtlas.EnsureGlyph(new GlyphKey("i", Font, 16f, false), out var narrow));
+        Assert.True(wideAtlas.EnsureGlyph(new GlyphKey("世", cjkFont, 16f, false), out var wide));
 
-            // A CJK glyph occupies the full em box (~1 x textSize); a narrow
-            // Latin glyph is well under it.
-            Assert.True(wide.Advance >= 16f * 0.9f,
-                $"wide advance ({wide.Advance}) should be ~1 em at 16px");
-            Assert.True(wide.Advance > narrow.Advance * 1.4f,
-                $"wide advance ({wide.Advance}) should exceed narrow ({narrow.Advance})");
-            Assert.True(wide.Width > narrow.Width, "wide glyph bounds should be wider");
-        }
+        // A CJK glyph occupies the full em box (~1 x textSize); a narrow
+        // Latin glyph is well under it.
+        Assert.True(wide.Advance >= 16f * 0.9f,
+            $"wide advance ({wide.Advance}) should be ~1 em at 16px");
+        Assert.True(wide.Advance > narrow.Advance * 1.4f,
+            $"wide advance ({wide.Advance}) should exceed narrow ({narrow.Advance})");
+        Assert.True(wide.Width > narrow.Width, "wide glyph bounds should be wider");
     }
 
     [Fact]

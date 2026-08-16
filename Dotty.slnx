@@ -17,6 +17,7 @@
     <Project Path="src/Dotty.Terminal/Dotty.Terminal.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj" />
     <Project Path="tests/Dotty.App.Tests/Dotty.App.Tests.csproj" />
     <Project Path="tests/Dotty.Config.SourceGenerator.Tests/Dotty.Config.SourceGenerator.Tests.csproj" />
     <Project Path="tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj" />

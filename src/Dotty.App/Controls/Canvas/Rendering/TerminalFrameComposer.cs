@@ -81,6 +81,16 @@ public sealed class TerminalFrameComposer : IDisposable
         set => _shapedRunCache = value;
     }
 
+    /// <summary>
+    /// A8 coverage atlas + quad renderer (GPU plan Phase 2). When set along
+    /// with <see cref="UseQuadGlyphs"/>, the glyph phase draws through
+    /// <see cref="QuadGlyphRenderer"/> instead of per-cell DrawText. Owned and
+    /// disposed by the canvas, not by the composer.
+    /// </summary>
+    public GlyphAtlas? GlyphAtlas { get; set; }
+    public QuadGlyphRenderer? QuadRenderer { get; set; }
+    public bool UseQuadGlyphs { get; set; }
+
     // --- Font fallback ---
     private List<SKTypeface>? _fallbackTypefaces;
     private SKTypeface? _primaryTypeface;
@@ -464,6 +474,12 @@ public sealed class TerminalFrameComposer : IDisposable
         int endRow,
         ReadOnlySpan<int> onlyRows = default)
     {
+        if (UseQuadGlyphs && GlyphAtlas != null && QuadRenderer != null)
+        {
+            DrawGlyphsQuad(canvas, buffer, paint, cellW, cellH, startRow, endRow, onlyRows);
+            return;
+        }
+
         var fm = _glyphFont.Metrics;
         float baselineOffset = -fm.Ascent;
 
@@ -583,14 +599,6 @@ public sealed class TerminalFrameComposer : IDisposable
                             var runTypeface = GetTypefaceForIndex(runTypefaceIdx);
                             float textSize = _glyphFont.Size;
 
-                            ShapedRun shaped;
-                            SKTextBlob? cachedBlob = null;
-                            if (_shapedRunCache == null || !_shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped, out cachedBlob))
-                            {
-                                shaped = _textShaper.Shape(combined, runTypeface, textSize);
-                                _shapedRunCache?.Add(combined, runTypeface, textSize, runBold, shaped);
-                            }
-
                             _glyphPaint.Color = fgColor;
                             _glyphPaint.StrokeWidth = runBold ? 0.8f : 0f;
                             _glyphPaint.Style = SKPaintStyle.Fill;
@@ -599,23 +607,10 @@ public sealed class TerminalFrameComposer : IDisposable
                             // cached alongside the run so the per-frame combined-string
                             // + SKTextBlobBuilder + SKFont churn happens once per
                             // unique (text, typeface, size, bold) key.
-                            if (cachedBlob != null)
+                            if (TryGetRunBlob(combined, runTypeface, textSize, runBold, out var blob, out bool disposeBlob))
                             {
-                                canvas.DrawText(cachedBlob, x, baseline, _glyphPaint);
-                            }
-                            else
-                            {
-                                var blobBuilder = new SKTextBlobBuilder();
-                                using var runFont = new SKFont(runTypeface, textSize);
-                                var runHandle = blobBuilder.AllocatePositionedRun(runFont, shaped.GlyphIndices.Length);
-                                runHandle.SetGlyphs(shaped.GlyphIndices.AsSpan());
-                                runHandle.SetPositions(shaped.Positions.AsSpan());
-                                var blob = blobBuilder.Build();
                                 canvas.DrawText(blob, x, baseline, _glyphPaint);
-                                if (_shapedRunCache != null)
-                                    _shapedRunCache.AddBlob(combined, runTypeface, textSize, runBold, blob);
-                                else
-                                    blob.Dispose();
+                                if (disposeBlob) blob.Dispose();
                             }
 
                             // Draw per-cell decorations for the shaped run
@@ -668,6 +663,329 @@ public sealed class TerminalFrameComposer : IDisposable
             }
 
             canvas.Restore();
+        }
+    }
+
+    /// <summary>
+    /// Returns the shaped SKTextBlob for a run, shaping and building/caching it
+    /// when missing. <paramref name="disposeBlob"/> is true only when there is no
+    /// shared cache and the caller owns the blob.
+    /// </summary>
+    private bool TryGetRunBlob(string combined, SKTypeface runTypeface, float textSize, bool runBold, out SKTextBlob blob, out bool disposeBlob)
+    {
+        blob = null!;
+        disposeBlob = false;
+        ShapedRun shaped;
+        if (_shapedRunCache == null || !_shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped, out blob))
+        {
+            if (_textShaper == null) return false;
+            shaped = _textShaper.Shape(combined, runTypeface, textSize);
+            _shapedRunCache?.Add(combined, runTypeface, textSize, runBold, shaped);
+        }
+        if (blob != null) return true;
+
+        var blobBuilder = new SKTextBlobBuilder();
+        using var runFont = new SKFont(runTypeface, textSize);
+        var runHandle = blobBuilder.AllocatePositionedRun(runFont, shaped.GlyphIndices.Length);
+        runHandle.SetGlyphs(shaped.GlyphIndices.AsSpan());
+        runHandle.SetPositions(shaped.Positions.AsSpan());
+        blob = blobBuilder.Build();
+        if (_shapedRunCache != null)
+            _shapedRunCache.AddBlob(combined, runTypeface, textSize, runBold, blob);
+        else
+            disposeBlob = true;
+        return true;
+    }
+
+    private readonly struct CellQuadPlan
+    {
+        public readonly GlyphInfo Info;
+        public readonly float X;
+        public readonly float Baseline;
+        public readonly SKColor Color;
+
+        public CellQuadPlan(GlyphInfo info, float x, float baseline, SKColor color)
+        {
+            Info = info;
+            X = x;
+            Baseline = baseline;
+            Color = color;
+        }
+    }
+
+    private CellQuadPlan[] _quadPlanScratch = Array.Empty<CellQuadPlan>();
+
+    /// <summary>
+    /// GPU-plan Phase 2 glyph path: per-frame CPU-built quad buffer consumed by
+    /// one DrawVertices call per pass (textured glyphs + solid decorations/box
+    /// geometry). Per row: ensure every glyph in the A8 atlas first — a miss
+    /// falls the whole row back to the direct path so nothing double-draws.
+    /// Rows with curl/dotted/dashed underline also fall back wholesale.
+    /// Rasterization is grayscale AA (the atlas is A8); the direct path's
+    /// subpixel AA is a documented v1 divergence (pixel-diff gate tolerance).
+    /// </summary>
+    private void DrawGlyphsQuad(
+        SKCanvas canvas,
+        IRenderSource buffer,
+        SKPaint paint,
+        float cellW,
+        float cellH,
+        int startRow,
+        int endRow,
+        ReadOnlySpan<int> onlyRows)
+    {
+        var atlas = GlyphAtlas!;
+        var quad = QuadRenderer!;
+        var batch = quad.Batch;
+        var fm = _glyphFont.Metrics;
+        float baselineOffset = -fm.Ascent;
+        var defaultColor = paint.Color;
+        long ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        bool isBlinkVisible = (ms % 1000) < 500;
+
+        _linePaint.StrokeWidth = Math.Max(1f / Math.Max(0.1f, DeviceScale), SnapDip(cellH * 0.05f));
+        Span<SKRect> geometryRects = stackalloc SKRect[8];
+        var sb = new StringBuilder(64);
+
+        for (int row = startRow; row <= endRow; row++)
+        {
+            if (!onlyRows.IsEmpty && !ContainsDirtyRow(onlyRows, row)) continue;
+            EnsureRowClassified(buffer, row);
+
+            if (RowHasComplexDecorations())
+            {
+                DrawGlyphs(canvas, buffer, paint, cellW, cellH, row, row);
+                continue;
+            }
+
+            float rowTop = row * cellH;
+            float baseline = MathF.Round(rowTop + baselineOffset);
+            int cols = buffer.Columns;
+
+            if (_quadPlanScratch.Length < cols)
+                _quadPlanScratch = new CellQuadPlan[cols];
+
+            // Phase 1: ensure every glyph in the atlas; collect placement plans.
+            int planCount = 0;
+            bool fallback = false;
+            int col = 0;
+            while (col < cols)
+            {
+                var cc = _cellClasses[col];
+                if (!cc.ShouldDrawGlyph || cc.Invisible || (cc.SlowBlink && !isBlinkVisible) || cc.IsContinuation)
+                {
+                    col += cc.Width;
+                    continue;
+                }
+                if (IsGeometryRenderedRune(cc.FirstRune))
+                {
+                    col += cc.Width; // solids in phase 2; nothing to ensure
+                    continue;
+                }
+
+                bool hasHyperlink = cc.HyperlinkId != 0;
+                var fgColor = cc.HasFg ? cc.Fg : defaultColor;
+                if (hasHyperlink) fgColor = HyperlinkColor;
+                if (cc.Faint) fgColor = fgColor.WithAlpha((byte)(fgColor.Alpha / 2));
+
+                bool disableSmoothing = IsPixelGridRune(cc.FirstRune);
+                float x = MathF.Round(col * cellW);
+
+                // Run detection (same rules as the direct path).
+                int runEnd = col + cc.Width;
+                if (!disableSmoothing && _textShaper != null)
+                {
+                    var runFg = fgColor;
+                    bool runBold = cc.Bold;
+                    int runTypefaceIdx = cc.TypefaceIndex;
+
+                    while (runEnd < cols)
+                    {
+                        var next = _cellClasses[runEnd];
+                        if (!next.ShouldDrawGlyph || next.Invisible) break;
+                        if (IsPixelGridRune(next.FirstRune)) break;
+                        if (next.HasFg ? next.Fg != runFg : runFg != defaultColor) break;
+                        if (next.Bold != runBold) break;
+                        if (next.TypefaceIndex != runTypefaceIdx) break;
+                        if (next.IsContinuation) { runEnd++; continue; }
+                        runEnd += next.Width;
+                    }
+
+                    int glyphCount = 0;
+                    for (int c = col; c < runEnd;)
+                    {
+                        if (!_cellClasses[c].IsContinuation) glyphCount++;
+                        c += _cellClasses[c].Width;
+                    }
+
+                    if (glyphCount >= 2)
+                    {
+                        sb.Clear();
+                        for (int c = col; c < runEnd;)
+                        {
+                            var cell = _cellClasses[c];
+                            if (cell.ShouldDrawGlyph && !cell.IsContinuation)
+                                sb.Append(cell.Grapheme);
+                            c += cell.Width;
+                        }
+                        string combined = sb.ToString();
+                        var runTypeface = GetTypefaceForIndex(runTypefaceIdx);
+                        float textSize = _glyphFont.Size;
+
+                        var key = new GlyphKey(combined, runTypeface, textSize, runBold);
+                        if (atlas.TryGetGlyph(key, out var info))
+                        {
+                            _quadPlanScratch[planCount++] = new CellQuadPlan(info, x, baseline, fgColor);
+                            col = runEnd;
+                            continue;
+                        }
+                        if (TryGetRunBlob(combined, runTypeface, textSize, runBold, out var blob, out bool disposeBlob))
+                        {
+                            bool ok = atlas.EnsureGlyphShaped(key, blob, out info);
+                            if (disposeBlob) blob.Dispose();
+                            if (ok)
+                            {
+                                _quadPlanScratch[planCount++] = new CellQuadPlan(info, x, baseline, fgColor);
+                                col = runEnd;
+                                continue;
+                            }
+                        }
+                        fallback = true;
+                        break;
+                    }
+                }
+
+                // Single cell.
+                var cellKey = new GlyphKey(cc.Grapheme, GetTypefaceForIndex(cc.TypefaceIndex), _glyphFont.Size, cc.Bold);
+                if (atlas.EnsureGlyph(cellKey, out var cellInfo))
+                {
+                    _quadPlanScratch[planCount++] = new CellQuadPlan(cellInfo, x, baseline, fgColor);
+                }
+                else
+                {
+                    fallback = true;
+                    break;
+                }
+                col += cc.Width;
+            }
+
+            if (fallback)
+            {
+                DrawGlyphs(canvas, buffer, paint, cellW, cellH, row, row);
+                continue;
+            }
+
+            // Phase 2: emit glyph quads + solid quads from the plans.
+            col = 0;
+            int planIdx = 0;
+            while (col < cols)
+            {
+                var cc = _cellClasses[col];
+                bool hasHyperlink = cc.HyperlinkId != 0;
+                var fgColor = cc.HasFg ? cc.Fg : defaultColor;
+                if (hasHyperlink) fgColor = HyperlinkColor;
+                if (cc.Faint) fgColor = fgColor.WithAlpha((byte)(fgColor.Alpha / 2));
+                float x = MathF.Round(col * cellW);
+
+                if (cc.ShouldDrawGlyph && !cc.Invisible && !(cc.SlowBlink && !isBlinkVisible) && !cc.IsContinuation)
+                {
+                    if (IsGeometryRenderedRune(cc.FirstRune))
+                    {
+                        float left = x;
+                        float top = MathF.Round(row * cellH);
+                        float right = MathF.Round((col + cc.Width) * cellW);
+                        float bottom = MathF.Round((row + 1) * cellH);
+                        int rectCount = BuildGeometryRects(cc.FirstRune, geometryRects, left, top, right, bottom);
+                        for (int i = 0; i < rectCount; i++)
+                        {
+                            var rect = SnapRect(geometryRects[i]);
+                            if (rect.Width <= 0f || rect.Height <= 0f) continue;
+                            batch.AddSolidQuad(rect.Left, rect.Top, rect.Width, rect.Height, fgColor);
+                        }
+                    }
+                    else if (planIdx < planCount)
+                    {
+                        var plan = _quadPlanScratch[planIdx++];
+                        float destX = plan.X + plan.Info.LeftBearing;
+                        float destY = plan.Baseline + plan.Info.TopBearing;
+                        // Image shaders sample in the image's pixel coordinates.
+                        batch.AddGlyphQuad(
+                            destX, destY, plan.Info.Width, plan.Info.Height,
+                            new SKRect(plan.Info.X, plan.Info.Y, plan.Info.X + plan.Info.Width, plan.Info.Y + plan.Info.Height),
+                            plan.Color);
+                    }
+                }
+
+                if (cc.ShouldDrawGlyph && !cc.Invisible)
+                    AddDecorationQuads(batch, fm, fgColor, hasHyperlink, x, baseline, cellW * cc.Width, cc);
+
+                col += cc.Width;
+            }
+        }
+
+        quad.Flush(canvas);
+    }
+
+    /// <summary>
+    /// True when the current row's classification contains any cell whose
+    /// underline style needs the direct path (curl/dotted/dashed geometry is
+    /// not expressible as quads in v1). The whole row falls back to keep
+    /// per-cell alignment trivial.
+    /// </summary>
+    private bool RowHasComplexDecorations()
+    {
+        for (int i = 0; i < _cellClasses.Length; i++)
+        {
+            var style = _cellClasses[i].CellUnderlineStyle;
+            if (style == UnderlineStyle.Curl || style == UnderlineStyle.Dotted || style == UnderlineStyle.Dashed)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Solid-quad equivalent of <see cref="DrawCellDecorations"/> for the
+    /// quad path. Single/double underline, strikethrough, overline, and
+    /// hyperlink underline; complex styles never reach here (row fallback).
+    /// </summary>
+    private void AddDecorationQuads(QuadGlyphBatch batch, SKFontMetrics fm, SKColor fgColor, bool hasHyperlink, float x, float baseline, float lineW, in CellClass cc)
+    {
+        var style = cc.CellUnderlineStyle;
+        if (style == UnderlineStyle.None && !cc.Strikethrough && !cc.Overline && !hasHyperlink)
+            return;
+
+        SKColor lineColor = hasHyperlink ? HyperlinkUnderlineColor
+            : (cc.UnderlineColorArgb != 0) ? new SKColor(cc.UnderlineColorArgb) : fgColor;
+        float w = Math.Max(1f / Math.Max(0.1f, DeviceScale), _linePaint.StrokeWidth);
+
+        if (style != UnderlineStyle.None || hasHyperlink)
+        {
+            float y = SnapDip(baseline + fm.Descent * 0.5f);
+            switch (style)
+            {
+                case UnderlineStyle.Double:
+                    batch.AddSolidQuad(x, y, lineW, w, lineColor);
+                    batch.AddSolidQuad(x, SnapDip(baseline + fm.Descent * 0.8f), lineW, w, lineColor);
+                    break;
+                case UnderlineStyle.Single:
+                case UnderlineStyle.None: // hyperlink fallback
+                    batch.AddSolidQuad(x, y, lineW, w, lineColor);
+                    break;
+                default: // Curl/Dotted/Dashed never reach here (row fallback); draw single as a best effort
+                    batch.AddSolidQuad(x, y, lineW, w, lineColor);
+                    break;
+            }
+        }
+
+        if (cc.Strikethrough)
+        {
+            float y = SnapDip(baseline - (fm.Ascent * -0.3f));
+            batch.AddSolidQuad(x, y, lineW, w, lineColor);
+        }
+        if (cc.Overline)
+        {
+            float y = SnapDip(baseline + fm.Ascent * 1.05f);
+            batch.AddSolidQuad(x, y, lineW, w, lineColor);
         }
     }
 

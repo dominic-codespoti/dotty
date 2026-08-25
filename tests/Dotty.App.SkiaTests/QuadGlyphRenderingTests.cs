@@ -171,7 +171,6 @@ public sealed class QuadGlyphRenderingTests
     [Fact]
     public void QuadPath_ComplexDecorationFallback()
     {
-
         {
             var (composer, atlas, renderer) = CreateQuadComposer();
             using (composer) using (atlas) using (renderer)

@@ -156,7 +156,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	// ISkiaSharpApiLeaseFeature (GPU-composited sessions); on software backends
 	// the probe falls back to the bitmap pipeline automatically.
 	private static readonly bool s_useLeaseRender =
-		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_LEASE_RENDER"));
+		true; // probe every frame: the lease feature is backend-dependent (Xvfb = software, live GPU sessions expose it)
 	private GlyphAtlas? _quadAtlas;
 	private QuadGlyphRenderer? _quadRenderer;
 
@@ -760,13 +760,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var info = new SKImageInfo(locked.Size.Width, locked.Size.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
 		using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
 		DrawContentToSkiaCanvas(surface.Canvas, snapshot, scale);
-		if (++s_diagFrames % 50 == 0)
-		if (++s_diagFrames % 50 == 0)
-			Console.WriteLine("[quad-diag] frames=" + s_diagFrames + " rows=" + snapshot.Rows + " cols=" + snapshot.Columns + " sb=" + snapshot.ScrollbackCount + " useQuad=" + _frameComposer.UseQuadGlyphs);
 		return true;
 	}
 
-	private static int s_diagFrames;
 
 	/// <summary>
 	/// Acquires the bounded SyncRoot wait, runs MarkRender, and captures the

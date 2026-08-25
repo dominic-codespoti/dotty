@@ -1,6 +1,6 @@
 # GPU Rendering Migration Plan
 
-Branch: `feat/gpu-rendering` · Status: **PHASE 2 COMPLETE — Phase 3 (lease integration) ready** · Last updated: 2026-08-16
+Branch: `feat/gpu-rendering` · Status: **PHASE 3 IMPLEMENTED — lease path live-verified on GPU-composited sessions; software backends auto-fall back to the bitmap pipeline. Phase 4 (pixel-diff gate) next** · Last updated: 2026-08-16
 
 ## 1. Goal
 

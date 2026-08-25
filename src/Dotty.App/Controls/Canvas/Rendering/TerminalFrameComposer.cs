@@ -482,10 +482,13 @@ public sealed class TerminalFrameComposer : IDisposable
         float cellH,
         int startRow,
         int endRow,
-        ReadOnlySpan<int> onlyRows = default)
+        ReadOnlySpan<int> onlyRows = default,
+        bool allowQuadPath = true)
     {
-        if (UseQuadGlyphs && GlyphAtlas != null && QuadRenderer != null)
+        if (allowQuadPath && UseQuadGlyphs && GlyphAtlas != null && QuadRenderer != null)
         {
+            // The quad path handles its own fallback rows by re-entering here
+            // with allowQuadPath: false - never recurse.
             DrawGlyphsQuad(canvas, buffer, paint, cellW, cellH, startRow, endRow, onlyRows);
             return;
         }
@@ -764,7 +767,7 @@ public sealed class TerminalFrameComposer : IDisposable
 
             if (RowHasComplexDecorations())
             {
-                DrawGlyphs(canvas, buffer, paint, cellW, cellH, row, row);
+                DrawGlyphs(canvas, buffer, paint, cellW, cellH, row, row, default, allowQuadPath: false);
                 continue;
             }
 
@@ -881,7 +884,7 @@ public sealed class TerminalFrameComposer : IDisposable
 
             if (fallback)
             {
-                DrawGlyphs(canvas, buffer, paint, cellW, cellH, row, row);
+                DrawGlyphs(canvas, buffer, paint, cellW, cellH, row, row, default, allowQuadPath: false);
                 continue;
             }
 

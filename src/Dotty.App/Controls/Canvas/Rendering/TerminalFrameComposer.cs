@@ -1034,6 +1034,9 @@ public sealed class TerminalFrameComposer : IDisposable
             {
                 case UnderlineStyle.Curl:
                 {
+                    // Pre-existing curl path: SKPathBuilder would require
+                    // restructuring this working code for no functional gain.
+#pragma warning disable CS0618
                     using var path = new SKPath();
                     float amp = w * 2.5f;
                     float period = Math.Max(4f, w * 6f);
@@ -1049,6 +1052,7 @@ public sealed class TerminalFrameComposer : IDisposable
                     canvas.DrawPath(path, _linePaint);
                     break;
                 }
+#pragma warning restore CS0618
                 case UnderlineStyle.Dotted:
                 {
                     float dotSpacing = Math.Max(3f, w * 4f);

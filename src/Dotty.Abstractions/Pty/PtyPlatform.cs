@@ -57,7 +57,7 @@ public static class PtyPlatform
             // Its default path avoids spaces and is broadly available.
             var psPath = GetWindowsPowerShellPath();
             if (!string.IsNullOrEmpty(psPath))
-                return psPath;
+                return psPath!;
 
             // Fall back to PowerShell Core when available.
             var pwshPath = GetPowerShellCorePath();

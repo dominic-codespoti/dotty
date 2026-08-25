@@ -984,8 +984,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		{
 			int visStart = (int)Math.Floor(_offset.Y / _cellHeight) - sbCount;
 			int visEnd = (int)Math.Ceiling((_offset.Y + _viewport.Height) / _cellHeight) - sbCount;
-			visStart = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, visStart));
-			visEnd = Math.Max(-sbCount, Math.Min(buffer.Rows - 1, visEnd));
+			visStart = Math.Max(-sbCount, Math.Min(buffer!.Rows - 1, visStart));
+			visEnd = Math.Max(-sbCount, Math.Min(buffer!.Rows - 1, visEnd));
 
 			int drawStart = Math.Max(_selectionRange.StartRow, visStart);
 			int drawEnd = Math.Min(_selectionRange.EndRow, visEnd);
@@ -1046,7 +1046,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			var debugFont = _debugFont!;
 			var debugTextPaint = _debugTextPaint!;
 			var debugBgPaint = _debugBgPaint!;
-			var debugInfo = buffer.GetDebugInfo();
+			var debugInfo = buffer!.GetDebugInfo();
 			float y = 4f;
 			canvas.DrawRect(0, 0, canvas.DeviceClipBounds.Width / (float)scale, 20, debugBgPaint);
 			canvas.DrawText(SKTextBlob.Create(debugInfo, debugFont), 4, y + 14, debugTextPaint);

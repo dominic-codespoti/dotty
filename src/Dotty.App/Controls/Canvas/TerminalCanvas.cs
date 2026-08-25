@@ -181,6 +181,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private TerminalSelectionRange _lastRenderedSelection = TerminalSelectionRange.Empty;
 	private bool _lastRenderedPreeditActive;
 	private bool _forceFullRender = true; // first render / bitmap recreation
+	private int _renderDiag;
 	private readonly List<int> _dirtyRowScratch = new();
 
 	private double _renderScaling = 1.0;
@@ -534,6 +535,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
         );
 	}
 
+
 	public override void Render(DrawingContext context)
 	{
 		var measurement = RenderTelemetry.BeginRender();
@@ -886,6 +888,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			int composerStart = Math.Max(0, startVisibleRow);
 			int composerEnd = Math.Max(0, Math.Min(buffer.Rows - 1, endVisibleRow));
 
+			if (++_renderDiag % 25 == 1)
+				Console.WriteLine("[quad-diag] n=" + _renderDiag + " rows=" + buffer.Rows + " cols=" + buffer.Columns + " useQuad=" + _frameComposer.UseQuadGlyphs);
 			if (composerStart <= composerEnd && SkPaint != null && SkFont != null)
 				dirtyPath = TryRenderDirtyPath(canvas, buffer, sbCount, altChanged, composerStart, composerEnd);
 
@@ -1346,6 +1350,16 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				{
 					_frameComposer.ResetCaches();
 				}
+
+				// Re-apply the quad renderer to the new composer instance: the
+				// BufferProperty handler can run after EnsureMetrics created it.
+				if (_quadAtlas != null && _quadRenderer != null)
+				{
+					_frameComposer.GlyphAtlas = _quadAtlas;
+					_frameComposer.QuadRenderer = _quadRenderer;
+					_frameComposer.UseQuadGlyphs = true;
+				}
+
 				_lastBufferWasAlternate = buf.IsAlternateScreenActive;
 				
 				// Force re-render with new buffer

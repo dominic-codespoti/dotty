@@ -81,17 +81,25 @@ static class Program
         var builder = AppBuilder.Configure<App>()
             .WithInterFont()
             .LogToTrace()
-            .UsePlatformDetect()
             .UseSkia();
 
-        // GPU rendering is handled automatically by the platform backend:
-        // - Wayland: compositor uses GPU composition by default
-        // - X11: falls back to software if GLX/EGL unavailable
-        // - macOS: uses Metal via Skia
-        // The terminal content itself is rasterized by Skia (CPU, AVX2-accelerated)
-        // and composited as a texture by Avalonia.  This path is already fast
-        // enough (>50 MiB/s throughput) that a dedicated GPU renderer would not
-        // move the needle for typical terminal workloads.
+        // Prefer native Wayland when available (avoids XWayland cadence
+        // collapse under sustained output — see GPURenderingPlan Phase 0).
+        // Fall back to X11 for SSH/X forwarding or when Wayland is absent.
+        var waylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
+        var xDisplay = Environment.GetEnvironmentVariable("DISPLAY");
+        var isWindows = OperatingSystem.IsWindows();
+        var isMacOS = OperatingSystem.IsMacOS();
+
+        if (!isWindows && !isMacOS && !string.IsNullOrEmpty(waylandDisplay))
+        {
+            builder.UseWayland().UseHarfBuzz();
+        }
+        else
+        {
+            builder.UsePlatformDetect();
+        }
+
         return builder;
     }
 }

@@ -313,3 +313,18 @@ rejected alternatives (repo convention).
   across tabs — keep, with the byte budget fixed.)
 - Can the 60 Hz desktop ceiling be reached without upstream Wayland (e.g. frame
   pacing independent of the animation clock at full rate instead of the 50 ms floor)?
+
+## 17. Phase 4 — Pixel-diff gate (implementation record)
+
+`PixelDiffGateTests.StyledScenario_QuadMatchesDirect_Coverage` (in
+`Dotty.App.SkiaTests`) renders a styled scenario (plain, bold, red fg, blue
+bg, underline, strike, box drawing incl. wide CJK cells, inverse) through both
+paths and asserts per-row coverage agreement within a 0.5×–2× band. Passes.
+The per-row coverage comparison is the v1 gate; exact pixel identity is not
+achievable across AA modes and is explicitly out of scope per the divergence
+table in §4.2.
+
+Remaining Phase-4 items (hardware-GL session required):
+- Full-frame pixel capture comparison on a GPU-composited session.
+- The 15% complexity-gate re-measurement per §10.4 on that session.
+- Atlas eviction stress + RSS accounting (§14 controls).

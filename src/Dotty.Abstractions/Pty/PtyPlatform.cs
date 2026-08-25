@@ -62,7 +62,7 @@ public static class PtyPlatform
             // Fall back to PowerShell Core when available.
             var pwshPath = GetPowerShellCorePath();
             if (!string.IsNullOrEmpty(pwshPath))
-                return pwshPath;
+                return pwshPath!;
             
             // Last-resort fallback for unusual locked-down environments.
             return Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";

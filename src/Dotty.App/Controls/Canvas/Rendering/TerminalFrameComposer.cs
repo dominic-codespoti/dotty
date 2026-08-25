@@ -688,7 +688,7 @@ public sealed class TerminalFrameComposer : IDisposable
     {
         blob = null!;
         disposeBlob = false;
-        ShapedRun shaped;
+        ShapedRun shaped = default;
         SKTextBlob? cached = null;
         if (_shapedRunCache != null)
             _shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped, out cached);
@@ -1275,13 +1275,17 @@ public sealed class TerminalFrameComposer : IDisposable
             return 0;
 
         // Check primary font (index 0)
-        if (_fallbackTypefaces[0].GetFont(_glyphFont.Size).ContainsGlyph(cc.FirstRune))
+        #pragma warning disable CS0618 // Pre-existing API; SKFont.ContainsGlyph requires allocation in hot path
+        if (_fallbackTypefaces[0].ContainsGlyph(cc.FirstRune))
+#pragma warning restore CS0618
             return 0;
 
         // Walk the fallback chain (monospace fonts first, then emoji)
         for (int i = 1; i < _fallbackTypefaces.Count; i++)
         {
-            if (_fallbackTypefaces[i].GetFont(_glyphFont.Size).ContainsGlyph(cc.FirstRune))
+            #pragma warning disable CS0618
+            if (_fallbackTypefaces[i].ContainsGlyph(cc.FirstRune))
+#pragma warning restore CS0618
                 return i;
         }
 

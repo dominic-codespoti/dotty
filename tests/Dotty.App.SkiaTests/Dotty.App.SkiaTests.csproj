@@ -25,5 +25,8 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Skia" />
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.HarfBuzz" />
   </ItemGroup>
 </Project>

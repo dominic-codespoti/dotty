@@ -142,6 +142,21 @@ public sealed class TerminalFrameComposer : IDisposable
     // PUBLIC API (unchanged)
     // ============================================================
 
+    /// <summary>
+    /// Serializes composer cache access across threads. The GPU-plan lease
+    /// path executes <see cref="RenderTo"/> on the compositor's render thread
+    /// while the UI thread may concurrently build the next frame's caches
+    /// (classification rows, shaped-run blobs); this lock keeps those
+    /// mutations exclusive. Hold times are bounded by one frame's raster.
+    /// </summary>
+    public object RenderLock { get; } = new object();
+
+    /// <summary>Typeface of the composer's glyph font (for draw-op font setup).</summary>
+    public SKTypeface PrimaryTypeface => _glyphFont.Typeface;
+
+    /// <summary>Size of the composer's glyph font (for draw-op font setup).</summary>
+    public float GlyphSize => _glyphFont.Size;
+
     public void RenderTo(
         SKCanvas target,
         IRenderSource buffer,
@@ -158,23 +173,18 @@ public sealed class TerminalFrameComposer : IDisposable
         if (font == null) throw new ArgumentNullException(nameof(font));
         if (cellW <= 0 || cellH <= 0) return;
 
-        int safeEndRow = endRow ?? (buffer.Rows - 1);
+        lock (RenderLock)
+        {
+            int safeEndRow = endRow ?? (buffer.Rows - 1);
 
-        // Cell classification will handle per-row sizing/flags.
-        EnsureCellClasses(buffer.Columns);
+            EnsureCellClasses(buffer.Columns);
 
-        // ---- background regions ----
-        CollectBackgroundRegions(buffer, startRow, safeEndRow);
-        DrawBackgroundRegions(target, cellW, cellH, exactCellBackgrounds: buffer.IsAlternateScreenActive);
+            CollectBackgroundRegions(buffer, startRow, safeEndRow);
+            DrawBackgroundRegions(target, cellW, cellH, exactCellBackgrounds: buffer.IsAlternateScreenActive);
 
-        // ---- glyphs ----
-        SyncGlyphPaint(paint, font);
-
-        // The shader glyph path rebuilds a lossy per-frame cell texture and has
-        // been observed to misrender clipped row ranges during scrolling.
-        // Keep the direct glyph renderer as the correctness path until the
-        // shader path is rebuilt with exact cell/color semantics.
-        DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+            SyncGlyphPaint(paint, font);
+            DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+        }
     }
 
     public void ResetCaches()

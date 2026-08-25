@@ -148,7 +148,7 @@ public sealed class QuadGlyphRenderingTests
     }
 
     [Fact]
-    public void QuadPath_UnderlinesAndFallbacks()
+    public void QuadPath_Underline()
     {
         // 5. Underline renders as a solid quad in the lower cell band.
         {
@@ -166,7 +166,12 @@ public sealed class QuadGlyphRenderingTests
             }
         }
 
-        // 6. Complex decorations fall back to the direct path without throwing.
+    }
+
+    [Fact]
+    public void QuadPath_ComplexDecorationFallback()
+    {
+
         {
             var (composer, atlas, renderer) = CreateQuadComposer();
             using (composer) using (atlas) using (renderer)
@@ -187,7 +192,12 @@ public sealed class QuadGlyphRenderingTests
     [Fact]
     public void QuadPath_MatchesDirectPathCoverage()
     {
-        // 7. Quad and direct paths cover the same cell (AA mode differs).
+    }
+
+    [Fact]
+    public void QuadPath_DirectParity()
+    {
+
         var quadComposer = CreateQuadComposer();
         var directComposer = new TerminalFrameComposer();
         using (quadComposer.composer)

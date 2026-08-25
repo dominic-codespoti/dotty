@@ -145,11 +145,18 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private static readonly ShapedRunCache SharedShapedRunCache = new();
 
 	// GPU-plan Phase 2: env-gated quad glyph renderer. When enabled, the
-	// composer draws glyphs through the A8 atlas + quad batch instead of
-	// per-cell DrawText (on the CPU raster surface this is a correctness
-	// vehicle; the GPU lease integration is Phase 3).
+	// composer draws glyphs through the A8 atlas + quad batch inside the
+	// proven bitmap pipeline.
 	private static readonly bool s_useQuadRender =
 		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_QUAD_RENDER"));
+
+	// GPU-plan Phase 3: render the frame through a custom draw operation that
+	// leases the compositor's Skia canvas — no WriteableBitmap, no full-surface
+	// upload. Requires a backend whose compositor surface exposes
+	// ISkiaSharpApiLeaseFeature (GPU-composited sessions); on software backends
+	// the probe falls back to the bitmap pipeline automatically.
+	private static readonly bool s_useLeaseRender =
+		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_LEASE_RENDER"));
 	private GlyphAtlas? _quadAtlas;
 	private QuadGlyphRenderer? _quadRenderer;
 
@@ -543,6 +550,44 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 			EnsureMetrics();
 
+			// GPU-plan Phase 3: when the quad path is enabled, skip the
+			// WriteableBitmap entirely — capture the frame snapshot under a
+			// short SyncRoot hold and hand a custom draw operation the
+			// compositor's Skia canvas (leased during the render pass). The
+			// cursor overlay below still draws as an Avalonia primitive.
+			if (s_useLeaseRender && s_useQuadRender && _quadRenderer != null && _quadAtlas != null)
+			{
+				bool leaseLockTaken = false;
+				var snapshot = CaptureRenderSnapshotBounded(buffer, ref leaseLockTaken);
+				if (snapshot != null)
+				{
+					float scale = (float)Math.Max(0.1, _renderScaling);
+					float translateX = (float)ContentPadding.Left;
+					float translateY = (float)((double)ContentPadding.Top + (double)buffer.ScrollbackCount * _cellHeight - _offset.Y);
+					var op = new QuadGlyphDrawOperation(
+						_frameComposer!,
+						snapshot,
+						_quadRenderer,
+						new Rect(Bounds.Size),
+						scale,
+						(float)_cellWidth,
+						(float)_cellHeight,
+						translateX,
+						translateY,
+						_cachedBackgroundArgb);
+					context.Custom(op);
+					DrawCursorOverlay(context, buffer);
+
+					int cursorCell = buffer.CursorRow * buffer.Columns + buffer.CursorCol;
+					if (cursorCell != _lastRenderedCursorCell)
+					{
+						_lastRenderedCursorCell = cursorCell;
+						CursorMovedCallback?.Invoke();
+					}
+					return;
+				}
+			}
+
 			// Content is rasterized only when the buffer/geometry/colors changed.
 			// Cursor blink and shape changes reuse the cached bitmap, so blink
 			// never re-rasterizes terminal content.
@@ -715,8 +760,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		var info = new SKImageInfo(locked.Size.Width, locked.Size.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
 		using var surface = SKSurface.Create(info, locked.Address, locked.RowBytes);
 		DrawContentToSkiaCanvas(surface.Canvas, snapshot, scale);
+		if (++s_diagFrames % 50 == 0)
+		if (++s_diagFrames % 50 == 0)
+			Console.WriteLine("[quad-diag] frames=" + s_diagFrames + " rows=" + snapshot.Rows + " cols=" + snapshot.Columns + " sb=" + snapshot.ScrollbackCount + " useQuad=" + _frameComposer.UseQuadGlyphs);
 		return true;
 	}
+
+	private static int s_diagFrames;
 
 	/// <summary>
 	/// Acquires the bounded SyncRoot wait, runs MarkRender, and captures the

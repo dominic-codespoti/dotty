@@ -662,7 +662,7 @@ public sealed class TerminalFrameComposer : IDisposable
                             _glyphFont.Typeface = cellTf;
                     }
 
-                    canvas.DrawText(cc.Grapheme, x, baseline, _glyphFont, _glyphPaint);
+                    canvas.DrawText(cc.Grapheme, x, baseline, SKTextAlign.Left, _glyphFont, _glyphPaint);
 
                     // Restore primary typeface
                     if (cc.TypefaceIndex != 0)
@@ -689,24 +689,28 @@ public sealed class TerminalFrameComposer : IDisposable
         blob = null!;
         disposeBlob = false;
         ShapedRun shaped;
-        if (_shapedRunCache == null || !_shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped, out blob))
+        SKTextBlob? cached = null;
+        if (_shapedRunCache != null)
+            _shapedRunCache.TryGet(combined, runTypeface, textSize, runBold, out shaped, out cached);
+        if (cached == null)
         {
             if (_textShaper == null) return false;
             shaped = _textShaper.Shape(combined, runTypeface, textSize);
             _shapedRunCache?.Add(combined, runTypeface, textSize, runBold, shaped);
         }
-        if (blob != null) return true;
+        if (cached != null) { blob = cached; return true; }
 
         var blobBuilder = new SKTextBlobBuilder();
         using var runFont = new SKFont(runTypeface, textSize);
         var runHandle = blobBuilder.AllocatePositionedRun(runFont, shaped.GlyphIndices.Length);
         runHandle.SetGlyphs(shaped.GlyphIndices.AsSpan());
         runHandle.SetPositions(shaped.Positions.AsSpan());
-        blob = blobBuilder.Build();
+        var built = blobBuilder.Build() ?? throw new InvalidOperationException("SKTextBlobBuilder.Build() returned null");
         if (_shapedRunCache != null)
-            _shapedRunCache.AddBlob(combined, runTypeface, textSize, runBold, blob);
+            _shapedRunCache.AddBlob(combined, runTypeface, textSize, runBold, built);
         else
             disposeBlob = true;
+        blob = built;
         return true;
     }
 
@@ -1271,13 +1275,13 @@ public sealed class TerminalFrameComposer : IDisposable
             return 0;
 
         // Check primary font (index 0)
-        if (_fallbackTypefaces[0].ContainsGlyph(cc.FirstRune))
+        if (_fallbackTypefaces[0].GetFont(_glyphFont.Size).ContainsGlyph(cc.FirstRune))
             return 0;
 
         // Walk the fallback chain (monospace fonts first, then emoji)
         for (int i = 1; i < _fallbackTypefaces.Count; i++)
         {
-            if (_fallbackTypefaces[i].ContainsGlyph(cc.FirstRune))
+            if (_fallbackTypefaces[i].GetFont(_glyphFont.Size).ContainsGlyph(cc.FirstRune))
                 return i;
         }
 

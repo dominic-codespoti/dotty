@@ -407,7 +407,7 @@ public sealed class GlyphAtlas : IDisposable
         var bigger = CreateAtlasBitmap(newSize);
         using (var canvas = new SKCanvas(bigger))
         {
-            canvas.DrawBitmap(_bitmap, 0, 0);
+            canvas.DrawBitmap(_bitmap, 0, 0, new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None));
             canvas.Flush();
         }
         _canvas.Dispose();

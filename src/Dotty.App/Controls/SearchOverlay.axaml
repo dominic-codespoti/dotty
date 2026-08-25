@@ -20,7 +20,7 @@
       <TextBox x:Name="SearchTextBox"
                Grid.Column="0"
                TabIndex="0"
-               Watermark="Search..."
+               PlaceholderText="Search..."
                FontSize="13"
                Padding="8,4"
                Margin="0,0,12,0"

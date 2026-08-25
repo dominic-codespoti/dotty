@@ -514,7 +514,7 @@ namespace Dotty.App.Views;
             
             // Convert to WriteableBitmap for display
             using var stream = new System.IO.MemoryStream();
-            renderBitmap.Save(stream);
+            renderBitmap.Save(stream, (int?)null);
             stream.Position = 0;
             
             var snapshot = WriteableBitmap.Decode(stream);

@@ -33,8 +33,6 @@ public sealed class QuadGlyphDrawOperation : ICustomDrawOperation, IDisposable
     private readonly float _cellH;
     private readonly float _translateX;
     private readonly float _translateY;
-    private readonly int _startRow;
-    private readonly int _endRow;
     private readonly SKColor _background;
     private readonly SKPaint _framePaint = new() { Color = SKColors.White, IsAntialias = true };
     private readonly SKFont _frameFont;

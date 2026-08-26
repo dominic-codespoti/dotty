@@ -1,6 +1,6 @@
 # Path B — Embedded OpenGL Rendering Design
 
-Branch: `feat/gpu-rendering` · Status: **IMPLEMENTED — lease-path variant live** (`DOTTY_QUAD_RENDER=1`) · Validated against Alacritty/kitty/Ghostty source · Last updated: 2026-08-26
+Branch: `feat/gpu-rendering` · Status: **SHIPPED — OpenGlControlBase (TerminalGLSurface) is the default renderer** (`DOTTY_QUAD_RENDER=1`) · Validated against Alacritty/kitty/Ghostty source · Last updated: 2026-08-26
 
 > **Implementation note (2026-08-26):** A first-frame GPU probe (`GpuProbeDrawOperation`)
 > classifies the compositor surface: software / software-GL (llvmpipe et al. via
@@ -342,3 +342,34 @@ Fallback triggers for switching to bitmap mid-session:
 | Atlas eviction mid-frame | Generation counter; skip frame if changed |
 | Fractional-DPI positioning drift | Snap quad positions to device pixels |
 | Double-buffered snapshots memory pressure | Pool snapshots; cap at 2 concurrent |
+
+
+---
+
+## 2026-08-26: Shipped as TerminalGLSurface (OpenGlControlBase)
+
+The lease/custom-draw-op variant was superseded: its render thread stopped
+invoking custom ops after ~8 frames under sparse updates on X11+hardware GL
+(freeze/ghosting; llvmpipe unaffected), and the native Wayland backend
+stalled its animation clock outright. OpenGlControlBase is driven by
+Avalonia's render loop directly — no compositor custom-op indirection.
+
+Shipped architecture:
+- TerminalGLSurface (OpenGlControlBase): two instanced passes (cell
+  backgrounds, glyphs) with premultiplied-over blending; atlas as GL_R8
+  keyed on GlyphAtlas.ContentVersion; instances from QuadFrameBuilder over
+  the bounded snapshot capture; decoration bars via decor-only instances at
+  metric-derived cell fractions; background-only instances for empty cells
+  with custom backgrounds.
+- Default on; DOTTY_GL=0 opts out. Fallbacks: GL init failure, 2 s
+  first-frame watchdog, capture lock-miss → bitmap path (which remains
+  fully functional and content-hash-validated in both caches).
+
+Verified on X11+radeonsi: flood, colored ls, CJK wide chars, decorations,
+backspace liveness — pixel-parity with the bitmap path in the output
+region; no render-thread stall.
+
+Known v1 gaps: no overline in the decor shader (underline/strike only)…
+actually overline included via FLAG_OVERLINE; remaining gap is cursor
+rendering (still an Avalonia overlay primitive) and per-line decoration
+color (decor bars use the cell fg, not UnderlineColor).

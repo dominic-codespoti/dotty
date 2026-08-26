@@ -177,9 +177,12 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	// render loop directly instead of fighting the compositor.
 	// OpenGlControlBase path: the GL surface is Avalonia's own render-loop
 	// citizen (OnOpenGlRender), avoiding the lease/compositor custom-op
-	// indirection whose render thread stalls under sparse updates.
+	// indirection whose render thread stalls under sparse updates. Default
+	// on; DOTTY_GL=0 opts out (bitmap path). Safety nets: OpenGlControlBase
+	// init failure, first-frame watchdog (2 s), and per-frame capture
+	// lock-miss all fall back to the bitmap path automatically.
 	private static readonly bool s_useGlSurface =
-		Environment.GetEnvironmentVariable("DOTTY_GL") == "1";
+		Environment.GetEnvironmentVariable("DOTTY_GL") != "0";
 	private TerminalGLSurface? _glSurface;
 	private bool _glSurfaceFailed;
 
@@ -605,6 +608,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// it (OnOpenGlRender). No compositor custom op, no lease.
 			if (s_useGlSurface && !_glSurfaceFailed)
 			{
+				CheckGlFirstFrame();
 				EnsureGlSurface();
 				if (_glSurface != null && !_glSurface.Failed && SkPaint != null)
 				{
@@ -612,6 +616,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					var glSnapshot = CaptureRenderSnapshotBounded(buffer, ref glLockTaken);
 					if (glSnapshot != null)
 					{
+						if (_glFirstPresentMs < 0) _glFirstPresentMs = Environment.TickCount64;
 						var fg = SkPaint.Color;
 						var bg = _cachedBackgroundArgb;
 						_glSurface.Present(
@@ -1243,6 +1248,8 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		InvalidateVisual();
 	}
 
+	private long _glFirstPresentMs = -1;
+
 	private void EnsureGlSurface()
 	{
 		if (_glSurface != null || _quadAtlas == null) return;
@@ -1252,6 +1259,28 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		VisualChildren.Add(_glSurface);
 		_glSurface.InvalidateMeasure();
 		InvalidateVisual();
+	}
+
+	/// <summary>
+	/// First-frame watchdog: environments without a working GL context never
+	/// call OnOpenGlRender, so the surface would silently show nothing while
+	/// the canvas keeps skipping the bitmap path. Two seconds without a
+	/// rendered frame after the first Present → permanent fallback.
+	/// </summary>
+	private void CheckGlFirstFrame()
+	{
+		if (_glSurface == null || _glSurfaceFailed) return;
+		long now = Environment.TickCount64;
+		if (_glFirstPresentMs < 0)
+		{
+			_glFirstPresentMs = now;
+			return;
+		}
+		if (_glSurface.FramesRendered == 0 && now - _glFirstPresentMs > 2000)
+		{
+			Console.Error.WriteLine("[GL] no frame rendered within 2s of first present — falling back to bitmap path");
+			_glSurfaceFailed = true;
+		}
 	}
 
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)

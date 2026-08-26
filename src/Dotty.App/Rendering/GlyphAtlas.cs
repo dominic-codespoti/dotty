@@ -191,10 +191,20 @@ public sealed class GlyphAtlas : IDisposable
                     x, y, raster.Width, raster.Height,
                     raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
                 _map[key] = info;
+                // Content changed (not just capacity): consumers holding a
+                // derived GPU image of the atlas (QuadGlyphRenderer's RGBA
+                // twin) must rebuild or the new glyph is invisible.
+                ContentVersion++;
                 return true;
             }
         }
     }
+
+    /// <summary>
+    /// Bumped on every successful glyph placement (not only growth). Derived
+    /// copies of the atlas pixels key their freshness on this.
+    /// </summary>
+    public int ContentVersion { get; private set; }
 
     // Per-atlas blit paint: SkiaSharp paints are not thread-safe and atlases
     // are used concurrently by tests (and eventually by multiple views).
@@ -234,6 +244,7 @@ public sealed class GlyphAtlas : IDisposable
                     x, y, raster.Width, raster.Height,
                     raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
                 _map[key] = info;
+                ContentVersion++;
                 return true;
             }
         }

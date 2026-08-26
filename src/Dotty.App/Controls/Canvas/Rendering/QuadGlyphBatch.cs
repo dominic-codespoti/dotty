@@ -102,6 +102,44 @@ public sealed class QuadGlyphBatch
     /// vertex colors directly. The atlas image is supplied by the renderer and
     /// must match the current atlas generation.
     /// </summary>
+
+    /// <summary>
+    /// Appends one cached row's vertices (QuadRowCache entry) with the row's
+    /// absolute Y offset applied. Bulk copy — no per-quad branching.
+    /// </summary>
+    public void AppendGlyphRow(ReadOnlySpan<SKPoint> pos, ReadOnlySpan<SKPoint> uv, ReadOnlySpan<SKColor> col, float yOffset)
+    {
+        int count = pos.Length;
+        if (count == 0) return;
+        Ensure(ref _glyphPos, _glyphCount + count);
+        Ensure(ref _glyphUv, _glyphCount + count);
+        Ensure(ref _glyphCol, _glyphCount + count);
+
+        int baseIdx = _glyphCount;
+        for (int i = 0; i < count; i++)
+        {
+            _glyphPos[baseIdx + i] = new SKPoint(pos[i].X, pos[i].Y + yOffset);
+            _glyphUv[baseIdx + i] = uv[i];
+            _glyphCol[baseIdx + i] = col[i];
+        }
+        _glyphCount += count;
+    }
+
+    public void AppendSolidRow(ReadOnlySpan<SKPoint> pos, ReadOnlySpan<SKColor> col, float yOffset)
+    {
+        int count = pos.Length;
+        if (count == 0) return;
+        Ensure(ref _solidPos, _solidCount + count);
+        Ensure(ref _solidCol, _solidCount + count);
+
+        int baseIdx = _solidCount;
+        for (int i = 0; i < count; i++)
+        {
+            _solidPos[baseIdx + i] = new SKPoint(pos[i].X, pos[i].Y + yOffset);
+            _solidCol[baseIdx + i] = col[i];
+        }
+        _solidCount += count;
+    }
     public void Flush(SKCanvas canvas, SKPaint? glyphPaint, SKPaint solidPaint)
     {
         if (_solidCount > 0)

@@ -92,6 +92,14 @@ public sealed class TerminalFrameComposer : IDisposable
     public QuadGlyphRenderer? QuadRenderer { get; set; }
     public bool UseQuadGlyphs { get; set; }
 
+    /// <summary>
+    /// Per-row quad cache for the GPU path (WezTerm line_quad_cache pattern).
+    /// Render-thread confined; scroll-shifted by <see cref="TryShiftCachesOnScroll"/>.
+    /// </summary>
+    private readonly QuadRowCache _quadRowCache = new();
+    private int _lastShiftSbCount = -1;
+    private int _diagQuadPrints;
+
     // --- Font fallback ---
     private List<SKTypeface>? _fallbackTypefaces;
     private SKTypeface? _primaryTypeface;
@@ -181,6 +189,12 @@ public sealed class TerminalFrameComposer : IDisposable
 
             EnsureCellClasses(buffer.Columns);
 
+            // Must run before any classification of this frame: background
+            // collection classifies every row, which would stamp the new
+            // generations and defeat scroll detection.
+            TryShiftCachesOnScroll(buffer);
+            _quadRowCache.EnsureGeometry(buffer.Rows, buffer.Columns, cellW, cellH);
+
             CollectBackgroundRegions(buffer, startRow, safeEndRow);
             DrawBackgroundRegions(target, cellW, cellH, exactCellBackgrounds: buffer.IsAlternateScreenActive);
 
@@ -216,6 +230,8 @@ public sealed class TerminalFrameComposer : IDisposable
         // force a re-classify on the next pass.
         if (_rowClassGen != null)
             Array.Clear(_rowClassGen, 0, _rowClassGen.Length);
+        _quadRowCache.Reset();
+        _lastShiftSbCount = -1;
     }
 
     /// <summary>
@@ -259,6 +275,11 @@ public sealed class TerminalFrameComposer : IDisposable
         }
 
         EnsureCellClasses(buffer.Columns);
+
+        // Scroll shift must precede classification (see RenderTo). The
+        // degenerate path above delegates to RenderTo, which shifts itself.
+        TryShiftCachesOnScroll(buffer);
+        _quadRowCache.EnsureGeometry(buffer.Rows, buffer.Columns, cellW, cellH);
 
         // 1. Classify every visible row and synthesize background regions over
         //    the full range (CollectBackgroundRegions classifies each row via
@@ -779,6 +800,8 @@ public sealed class TerminalFrameComposer : IDisposable
         Span<SKRect> geometryRects = stackalloc SKRect[8];
         var sb = new StringBuilder(64);
 
+        _quadRowCache.EnsureGeometry(buffer.Rows, buffer.Columns, cellW, cellH);
+
         for (int row = startRow; row <= endRow; row++)
         {
             if (!onlyRows.IsEmpty && !ContainsDirtyRow(onlyRows, row)) continue;
@@ -786,6 +809,7 @@ public sealed class TerminalFrameComposer : IDisposable
 
             if (RowHasComplexDecorations())
             {
+                _quadRowCache.InvalidateRow(row);
                 DrawGlyphs(canvas, buffer, paint, cellW, cellH, row, row, default, allowQuadPath: false);
                 continue;
             }
@@ -796,6 +820,42 @@ public sealed class TerminalFrameComposer : IDisposable
 
             if (_quadPlanScratch.Length < cols)
                 _quadPlanScratch = new CellQuadPlan[cols];
+
+            // Row-local quad cache: reuse emitted vertices when the row's
+            // identity generation is unchanged (WezTerm line_quad_cache).
+            // Slow-blink rows depend on wall-clock visibility — never cached.
+            ulong rowGen = buffer.GetRowGeneration(row);
+            ref var entry = ref _quadRowCache.GetEntryRef(row);
+            bool hasSlowBlink = false;
+            for (int c = 0; c < cols; c++)
+            {
+                if (_cellClasses[c].SlowBlink) { hasSlowBlink = true; break; }
+            }
+
+            bool cacheEnabled = Environment.GetEnvironmentVariable("DOTTY_NO_QUADCACHE") == null;
+            bool useEntry = cacheEnabled; // false → emit directly to batch (legacy path)
+            if (cacheEnabled && !hasSlowBlink && entry.Valid && entry.Generation == rowGen)
+            {
+                // Slice to GlyphCount: entry arrays are pooled and keep stale
+                // vertices beyond the current count after a rebuild with fewer
+                // quads — copying Length would resurrect deleted geometry.
+                batch.AppendGlyphRow(
+                    entry.GlyphPos.AsSpan(0, entry.GlyphCount),
+                    entry.GlyphUv.AsSpan(0, entry.GlyphCount),
+                    entry.GlyphCol.AsSpan(0, entry.GlyphCount),
+                    rowTop);
+                batch.AppendSolidRow(
+                    entry.SolidPos.AsSpan(0, entry.SolidCount),
+                    entry.SolidCol.AsSpan(0, entry.SolidCount),
+                    rowTop);
+                _quadRowCache.Hits++;
+                continue;
+            }
+            _quadRowCache.Misses++;
+            entry.Valid = false;
+            entry.GlyphCount = 0;
+            entry.SolidCount = 0;
+            if (!useEntry) entry.Valid = true; // legacy: skip entry bookkeeping
 
             // Phase 1: ensure every glyph in the atlas; collect placement plans.
             int planCount = 0;
@@ -932,7 +992,8 @@ public sealed class TerminalFrameComposer : IDisposable
                         {
                             var rect = SnapRect(geometryRects[i]);
                             if (rect.Width <= 0f || rect.Height <= 0f) continue;
-                            batch.AddSolidQuad(rect.Left, rect.Top, rect.Width, rect.Height, fgColor);
+                            if (useEntry) _quadRowCache.AddSolidQuad(ref entry, rect.Left, rect.Top - rowTop, rect.Width, rect.Height, fgColor);
+                            else batch.AddSolidQuad(rect.Left, rect.Top, rect.Width, rect.Height, fgColor);
                         }
                     }
                     else if (planIdx < planCount)
@@ -941,7 +1002,12 @@ public sealed class TerminalFrameComposer : IDisposable
                         float destX = plan.X + plan.Info.LeftBearing;
                         float destY = plan.Baseline + plan.Info.TopBearing;
                         // Image shaders sample in the image's pixel coordinates.
-                        batch.AddGlyphQuad(
+                        if (useEntry) _quadRowCache.AddGlyphQuad(
+                            ref entry,
+                            destX, destY - rowTop, plan.Info.Width, plan.Info.Height,
+                            new SKRect(plan.Info.X, plan.Info.Y, plan.Info.X + plan.Info.Width, plan.Info.Y + plan.Info.Height),
+                            plan.Color);
+                        else batch.AddGlyphQuad(
                             destX, destY, plan.Info.Width, plan.Info.Height,
                             new SKRect(plan.Info.X, plan.Info.Y, plan.Info.X + plan.Info.Width, plan.Info.Y + plan.Info.Height),
                             plan.Color);
@@ -949,13 +1015,128 @@ public sealed class TerminalFrameComposer : IDisposable
                 }
 
                 if (cc.ShouldDrawGlyph && !cc.Invisible)
-                    AddDecorationQuads(batch, fm, fgColor, hasHyperlink, x, baseline, cellW * cc.Width, cc);
+                {
+                    if (useEntry) AddDecorationQuadsToEntry(ref entry, fm, fgColor, hasHyperlink, x, baseline - rowTop, cellW * cc.Width, cc);
+                    else AddDecorationQuads(batch, fm, fgColor, hasHyperlink, x, baseline, cellW * cc.Width, cc);
+                }
 
                 col += cc.Width;
+            }
+
+            entry.Generation = rowGen;
+            entry.Valid = true;
+            if (useEntry)
+            {
+                batch.AppendGlyphRow(
+                    entry.GlyphPos.AsSpan(0, entry.GlyphCount),
+                    entry.GlyphUv.AsSpan(0, entry.GlyphCount),
+                    entry.GlyphCol.AsSpan(0, entry.GlyphCount),
+                    rowTop);
+                batch.AppendSolidRow(
+                    entry.SolidPos.AsSpan(0, entry.SolidCount),
+                    entry.SolidCol.AsSpan(0, entry.SolidCount),
+                    rowTop);
             }
         }
 
         quad.Flush(canvas);
+
+        if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null)
+        {
+            _diagQuadPrints++;
+            if (_diagQuadPrints <= 8 || _diagQuadPrints % 500 == 0)
+                Console.Error.WriteLine($"[DIAG] quad #{_diagQuadPrints}: hits={_quadRowCache.Hits} misses={_quadRowCache.Misses} sb={buffer.ScrollbackCount} rows={buffer.Rows} cols={buffer.Columns}");
+        }
+    }
+
+    /// <summary>
+    /// Row-cache variant of <see cref="AddDecorationQuads"/>: identical
+    /// geometry, Y relative to the row top, vertices into the cache entry.
+    /// </summary>
+    private void AddDecorationQuadsToEntry(ref QuadRowCache.Entry e, SKFontMetrics fm, SKColor fgColor, bool hasHyperlink, float x, float baselineRel, float lineW, in CellClass cc)
+    {
+        var style = cc.CellUnderlineStyle;
+        if (style == UnderlineStyle.None && !cc.Strikethrough && !cc.Overline && !hasHyperlink)
+            return;
+
+        SKColor lineColor = hasHyperlink ? HyperlinkUnderlineColor
+            : (cc.UnderlineColorArgb != 0) ? new SKColor(cc.UnderlineColorArgb) : fgColor;
+        float w = Math.Max(1f / Math.Max(0.1f, DeviceScale), _linePaint.StrokeWidth);
+
+        if (style != UnderlineStyle.None || hasHyperlink)
+        {
+            float y = SnapDip(baselineRel + fm.Descent * 0.5f);
+            switch (style)
+            {
+                case UnderlineStyle.Double:
+                    _quadRowCache.AddSolidQuad(ref e, x, y, lineW, w, lineColor);
+                    _quadRowCache.AddSolidQuad(ref e, x, SnapDip(baselineRel + fm.Descent * 0.8f), lineW, w, lineColor);
+                    break;
+                case UnderlineStyle.Single:
+                case UnderlineStyle.None: // hyperlink fallback
+                    _quadRowCache.AddSolidQuad(ref e, x, y, lineW, w, lineColor);
+                    break;
+                default:
+                    _quadRowCache.AddSolidQuad(ref e, x, y, lineW, w, lineColor);
+                    break;
+            }
+        }
+
+        if (cc.Strikethrough)
+        {
+            float y = SnapDip(baselineRel - (fm.Ascent * -0.3f));
+            _quadRowCache.AddSolidQuad(ref e, x, y, lineW, w, lineColor);
+        }
+        if (cc.Overline)
+        {
+            float y = SnapDip(baselineRel + fm.Ascent * 1.05f);
+            _quadRowCache.AddSolidQuad(ref e, x, y, lineW, w, lineColor);
+        }
+    }
+
+    /// <summary>
+    /// Detects a pure scroll since the previous frame and shifts the
+    /// per-row classification and quad caches down by the scroll delta, so
+    /// only the exposed bottom band re-classifies/re-emits. Validation is
+    /// generation-based and self-correcting: any mismatch falls through to
+    /// normal per-row validation (today's behavior).
+    ///
+    /// A pure scroll moves logical row r's content from row r+delta; each
+    /// intermediate scroll bumps every region generation once
+    /// (<see cref="TerminalBuffer"/> BumpIdentity), so delta scrolls bump the
+    /// moved content delta times and the check is
+    /// gen_now(r) == gen_cached(r+delta) + delta for all surviving rows.
+    /// </summary>
+    private void TryShiftCachesOnScroll(IRenderSource buffer)
+    {
+        int sb = buffer.ScrollbackCount;
+        int prev = _lastShiftSbCount;
+        _lastShiftSbCount = sb;
+        if (prev < 0 || sb <= prev) return;
+        int delta = sb - prev;
+        int rows = buffer.Rows;
+        if (delta > rows) return;
+
+        var gens = buffer.RowGenerations;
+        if (gens.IsEmpty || _rowClassCache == null || _rowClassCache.Length < rows || _rowClassGen == null) return;
+
+        ulong bump = (ulong)delta;
+        for (int r = 0; r < rows - delta; r++)
+        {
+            int src = r + delta;
+            if (_rowClassCache[src] == null) return;
+            if (gens[r] != _rowClassGen[src] + bump) return;
+        }
+
+        for (int r = 0; r < rows - delta; r++)
+        {
+            _rowClassCache[r] = _rowClassCache[r + delta];
+            _rowClassGen[r] = gens[r];
+        }
+        for (int r = Math.Max(0, rows - delta); r < rows; r++)
+            _rowClassCache[r] = null;
+
+        _quadRowCache.ShiftUp(delta, gens);
     }
 
     /// <summary>

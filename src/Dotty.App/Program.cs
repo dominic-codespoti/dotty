@@ -83,15 +83,23 @@ static class Program
             .LogToTrace()
             .UseSkia();
 
-        // Prefer native Wayland when available (avoids XWayland cadence
-        // collapse under sustained output — see GPURenderingPlan Phase 0).
-        // Fall back to X11 for SSH/X forwarding or when Wayland is absent.
-        var waylandDisplay = Environment.GetEnvironmentVariable("WAYLAND_DISPLAY");
-        var xDisplay = Environment.GetEnvironmentVariable("DISPLAY");
+        // X11/XWayland by default. The native Wayland backend
+        // (Avalonia.Wayland 12.1, experimental) has two verified blockers for
+        // a terminal workload (2026-08-26, Hyprland/radeonsi):
+        //   1. Animation-frame callbacks stall for seconds under paced
+        //      output (bursts of ~10 callbacks, then multi-second gaps);
+        //   2. DispatcherTimers starve in the same conditions (a 50 ms
+        //      Background-priority timer fired once in ~10 s), so watchdogs
+        //      built on timers fail with it.
+        // A dedicated watchdog thread (TerminalView) mitigates (1) partially,
+        // but smooth output requires upstream fixes. Opt in via
+        // DOTTY_WAYLAND=1.
         var isWindows = OperatingSystem.IsWindows();
         var isMacOS = OperatingSystem.IsMacOS();
 
-        if (!isWindows && !isMacOS && !string.IsNullOrEmpty(waylandDisplay))
+        if (!isWindows && !isMacOS
+            && Environment.GetEnvironmentVariable("DOTTY_WAYLAND") == "1"
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("WAYLAND_DISPLAY")))
         {
             builder.UseWayland().UseHarfBuzz();
         }

@@ -156,8 +156,12 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	private static int s_gpuProbeState;
 
 	/// <summary>Called by <see cref="GpuProbeDrawOperation"/> with the surface classification.</summary>
-	internal static void CompleteGpuProbe(GpuClass classification) =>
+	internal static void CompleteGpuProbe(GpuClass classification)
+	{
 		Interlocked.Exchange(ref s_gpuProbeState, (int)classification);
+		if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null)
+			Console.Error.WriteLine($"[DIAG] GpuProbe complete: {classification}");
+	}
 
 	/// <summary>True only on a hardware GPU — the only surface where the quad path wins.</summary>
 	private static bool GpuBacked => Volatile.Read(ref s_gpuProbeState) == (int)GpuClass.Hardware;
@@ -166,6 +170,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_QUAD_RENDER"));
 
 	private GlyphAtlas? _quadAtlas;
+	private static bool _diagGatePrinted;
 	private QuadGlyphRenderer? _quadRenderer;
 
 	// Global font resolution cache shared across all TerminalCanvas instances.
@@ -571,6 +576,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// short SyncRoot hold and hand a custom draw operation the
 			// compositor's Skia canvas (leased during the render pass). The
 			// cursor overlay below still draws as an Avalonia primitive.
+			if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && Volatile.Read(ref s_gpuProbeState) != 0 && !_diagGatePrinted)
+			{
+				_diagGatePrinted = true;
+				Console.Error.WriteLine($"[DIAG] lease gate: gpuBacked={GpuBacked} quadRenderer={_quadRenderer != null} atlas={_quadAtlas != null}");
+			}
 			if (s_useQuadRender && GpuBacked && _quadRenderer != null && _quadAtlas != null)
 			{
 				bool leaseLockTaken = false;
@@ -1463,10 +1473,16 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		GlyphAtlasService.AcquireAtlas(atlas);
 		_quadAtlas = atlas;
 		_quadRenderer = new QuadGlyphRenderer(atlas);
-		// The composer's glyph path stays DrawText: the bitmap surface is a
-		// CPU raster canvas where DrawVertices regresses ~20x vs the glyph
-		// cache. Quads are forced per-call via RenderTo(quadGlyphs: true)
-		// from the lease path only.
+		if (_frameComposer != null)
+		{
+			// Atlas + renderer feed the quad path's gate (DrawGlyphs). The
+			// composer's default glyph path stays DrawText — the bitmap
+			// surface is a CPU raster canvas where DrawVertices regresses
+			// ~20x vs the glyph cache. The lease path forces quads per-call
+			// via RenderTo(quadGlyphs: true).
+			_frameComposer.GlyphAtlas = atlas;
+			_frameComposer.QuadRenderer = _quadRenderer;
+		}
 	}
 
 	private void ReleaseQuadRenderer()

@@ -274,7 +274,22 @@ public class TerminalSession : IDisposable
                             }
                             offset += subLen;
                             if (offset < length && buffer.ReaderWaiting)
-                                Thread.Yield();
+                            {
+                                // Reader-priority handoff. A single Yield lets
+                                // this thread barge straight back into the
+                                // Monitor (pthread mutexes are not FIFO and the
+                                // renderer is parked in a bounded TryEnter) —
+                                // with the deep channel keeping a chunk always
+                                // queued, that barging starved the renderer's
+                                // capture entirely under flood (measured
+                                // 2026-08-26: lease path fell back to the
+                                // bitmap path on every frame). Hold off until
+                                // the renderer clears the flag or the bounded
+                                // spin elapses.
+                                int handoffSpins = 0;
+                                while (buffer.ReaderWaiting && handoffSpins++ < 64)
+                                    Thread.Yield();
+                            }
                         }
                     }
                     catch { }

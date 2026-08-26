@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
@@ -212,16 +213,89 @@ namespace Dotty.App.Views
             }
         }
         
+        private int _diagNotifications;
+        private long _lastPresentationMs = Environment.TickCount64;
+
+        /// <summary>
+        /// Parser-side cadence watchdog. The compositor's animation clock can
+        /// stall for seconds under sustained output (native Wayland backend,
+        /// measured 2026-08-26: callbacks arrive in ~10-frame bursts with
+        /// multi-second gaps; DispatcherTimer is equally unreliable on this
+        /// backend). The parser thread provably runs during those stalls —
+        /// notifications keep flowing — so it drives the fallback: if a
+        /// presentation frame hasn't run for 50 ms while output is pending,
+        /// post one directly, resetting a stuck frame gate.
+        /// </summary>
+        /// <summary>
+        /// Dedicated watchdog thread. Avalonia timers (Render and Background
+        /// priority) starve on the native Wayland backend when the animation
+        /// clock stalls — precisely the condition this exists to cover. A
+        /// thread with Thread.Sleep always runs. When a frame is pending but
+        /// nothing has presented for 50 ms, post a direct render at Send
+        /// priority (the only dispatcher priority guaranteed to process on
+        /// this backend).
+        /// </summary>
+        /// <summary>True while buffer content has arrived that was never presented.</summary>
+        private volatile bool _contentPending;
+
+        private void RunCadenceWatchdog(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                Thread.Sleep(25);
+                if (!_frameScheduled && !_contentPending) continue;
+                if (Environment.TickCount64 - _lastPresentationMs <= 50) continue;
+                _contentPending = false;
+                _lastPresentationMs = Environment.TickCount64;
+                _frameScheduled = false;
+                if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null)
+                    Console.Error.WriteLine("[DIAG] watchdog: forcing stalled frame");
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (VisualRoot == null || !IsVisible) return;
+                    OnPresentationFrame(TimeSpan.Zero);
+                }, Avalonia.Threading.DispatcherPriority.Send);
+            }
+        }
+
+        private void MaybeForceStalledFrame()
+        {
+            long now = Environment.TickCount64;
+            if (now - _lastPresentationMs <= 50) return;
+            _lastPresentationMs = now;
+            if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null)
+                Console.Error.WriteLine("[DIAG] watchdog: forcing stalled frame");
+            // Render directly — re-registering an animation frame callback
+            // would wait on the same stalled clock that caused the stall.
+            _frameScheduled = false;
+            _cadenceWatchdogCts?.Cancel();
+            // Send priority: Background-priority posts starve on the native
+            // Wayland loop exactly like the Render-priority timer did
+            // (measured 2026-08-26); Send is processed unconditionally.
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (VisualRoot == null || !IsVisible) return;
+                OnPresentationFrame(TimeSpan.Zero);
+            }, Avalonia.Threading.DispatcherPriority.Send);
+        }
+
         private void OnRenderScheduled()
         {
+            if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && ++_diagNotifications % 500 == 1)
+                Console.Error.WriteLine($"[DIAG] notify#{_diagNotifications} pending={_renderUpdatePending} frameScheduled={_frameScheduled}");
             // Hidden or detached views do no presentation work. The buffer is
             // the source of truth; showing the view renders the latest state.
             // This flag is UI-thread maintained because the mutation signal
             // arrives from the PTY consumer thread.
             if (!_presentationEnabled) return;
 
+            _contentPending = true;
             bool coalesced = _renderUpdatePending;
             RenderTelemetry.RecordRenderNotification(coalesced);
+            // Staleness check on EVERY notification: the UI thread usually
+            // consumes the coalescing post within microseconds, so waiting
+            // for a coalesced notification would almost never check.
+            MaybeForceStalledFrame();
             if (coalesced) return;
             _renderUpdatePending = true;
 
@@ -262,18 +336,36 @@ namespace Dotty.App.Views
         /// presenting. Interval is longer than a healthy display tick, so it
         /// never fires while the animation clock works.
         /// </summary>
-        private readonly DispatcherTimer _cadenceFallbackTimer;
+        private Thread? _cadenceWatchdogThread;
+        private CancellationTokenSource? _cadenceWatchdogCts;
+
+        private int _diagGateOpens;
+        private int _diagGateSkips;
 
         private void RequestPresentationFrame()
         {
             if (VisualRoot == null || !IsVisible) return;
-            if (_frameScheduled) return;
+            if (_frameScheduled)
+            {
+                if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && ++_diagGateSkips % 2000 == 1)
+                    Console.Error.WriteLine($"[DIAG] gate skip #{_diagGateSkips}");
+                // Watchdog keep-alive: the animation callback may never fire
+                // (compositor cadence collapse — measured on native Wayland
+                // 2026-08-26: callbacks stall after ~13 frames under sustained
+                // output, leaving _frameScheduled stuck true and this gate
+                // closed). Keep the 50 ms fallback armed while a frame is
+                // pending; IsEnabled check because Start() would reset the
+                // interval every notification (400/s) and it would never fire.
+                return;
+            }
             _frameScheduled = true;
-            _cadenceFallbackTimer.Start();
+            if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && ++_diagGateOpens % 5000 == 1)
+                Console.Error.WriteLine($"[DIAG] gate open #{_diagGateOpens}");
             TopLevel.GetTopLevel(this)?.RequestAnimationFrame(_ =>
             {
                 _frameScheduled = false;
-                _cadenceFallbackTimer.Stop();
+                _contentPending = false;
+                _lastPresentationMs = Environment.TickCount64;
                 OnPresentationFrame(_);
             });
         }
@@ -515,17 +607,18 @@ namespace Dotty.App.Views
         public TerminalView()
         {
             _contextMenuBuilder = new SelectionContextMenuBuilder(_selectionController);
-            _cadenceFallbackTimer = new DispatcherTimer(DispatcherPriority.Render)
+            // The watchdog is a dedicated thread, not a DispatcherTimer:
+            // both Render- and Background-priority timers starve on the
+            // native Wayland backend when the animation clock stalls
+            // (measured 2026-08-26 — a 50 ms timer fired once in ~10 s), and
+            // that is exactly the condition the watchdog exists for.
+            _cadenceWatchdogCts = new CancellationTokenSource();
+            _cadenceWatchdogThread = new Thread(() => RunCadenceWatchdog(_cadenceWatchdogCts.Token))
             {
-                Interval = TimeSpan.FromMilliseconds(50)
+                IsBackground = true,
+                Name = "Dotty.CadenceWatchdog",
             };
-            _cadenceFallbackTimer.Tick += (_, _) =>
-            {
-                _cadenceFallbackTimer.Stop();
-                if (VisualRoot == null || !IsVisible) return;
-                _frameScheduled = false;
-                OnPresentationFrame(TimeSpan.Zero);
-            };
+            _cadenceWatchdogThread.Start();
             InitializeComponent();
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");

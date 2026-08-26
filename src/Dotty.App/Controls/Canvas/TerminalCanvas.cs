@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Threading;
+using Avalonia.Skia;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Avalonia;
@@ -147,16 +149,22 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	// GPU-plan Phase 2: env-gated quad glyph renderer. When enabled, the
 	// composer draws glyphs through the A8 atlas + quad batch inside the
 	// proven bitmap pipeline.
+	// GPU probe: 0 = unknown, 1 = software (no GrContext), 2 = GPU-backed.
+	// The quad path only wins on GPU — DrawVertices through Skia's software
+	// rasterizer is ~20x slower than the DrawText glyph cache (measured
+	// 2026-08-26: 77ms vs 3.4ms per content frame at 73x136 under Xvfb).
+	private static int s_gpuProbeState;
+
+	/// <summary>Called by <see cref="GpuProbeDrawOperation"/> with the surface classification.</summary>
+	internal static void CompleteGpuProbe(GpuClass classification) =>
+		Interlocked.Exchange(ref s_gpuProbeState, (int)classification);
+
+	/// <summary>True only on a hardware GPU — the only surface where the quad path wins.</summary>
+	private static bool GpuBacked => Volatile.Read(ref s_gpuProbeState) == (int)GpuClass.Hardware;
+
 	private static readonly bool s_useQuadRender =
 		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_QUAD_RENDER"));
 
-	// GPU-plan Phase 3: render the frame through a custom draw operation that
-	// leases the compositor's Skia canvas — no WriteableBitmap, no full-surface
-	// upload. Requires a backend whose compositor surface exposes
-	// ISkiaSharpApiLeaseFeature (GPU-composited sessions); on software backends
-	// the probe falls back to the bitmap pipeline automatically.
-	private static readonly bool s_useLeaseRender =
-		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_LEASE_RENDER"));
 	private GlyphAtlas? _quadAtlas;
 	private QuadGlyphRenderer? _quadRenderer;
 
@@ -544,6 +552,13 @@ public class TerminalCanvas : Control, ILogicalScrollable
 
 			context.FillRectangle(ResolveCachedBackgroundBrush(), new Rect(Bounds.Size));
 
+			// One-time GPU probe: the quad path only pays off on a hardware
+			// GPU canvas (see s_gpuProbeState note). The probe op resolves
+			// the lease feature + GL renderer string on the render thread;
+			// the next frame acts on the result.
+			if (s_useQuadRender && Volatile.Read(ref s_gpuProbeState) == 0)
+				context.Custom(new GpuProbeDrawOperation());
+
 			if (!IsVisible) return;
 
 			var buffer = Buffer;
@@ -556,7 +571,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// short SyncRoot hold and hand a custom draw operation the
 			// compositor's Skia canvas (leased during the render pass). The
 			// cursor overlay below still draws as an Avalonia primitive.
-			if (s_useLeaseRender && s_useQuadRender && _quadRenderer != null && _quadAtlas != null)
+			if (s_useQuadRender && GpuBacked && _quadRenderer != null && _quadAtlas != null)
 			{
 				bool leaseLockTaken = false;
 				var snapshot = CaptureRenderSnapshotBounded(buffer, ref leaseLockTaken);
@@ -1251,7 +1266,16 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			_metricsDirty = true;
 		}
 
-		if (!_metricsDirty && SkPaint != null) return;
+		if (!_metricsDirty && SkPaint != null)
+		{
+			// The GPU probe completes asynchronously (render-thread op on the
+			// first frame). Once it reports hardware, lazily build the atlas
+			// + quad renderer here — the _metricsDirty block above ran before
+			// the probe result existed.
+			if (s_useQuadRender && GpuBacked && (_quadRenderer == null || _quadAtlas == null))
+				EnsureQuadRenderer(ResolveTerminalTypeface(), Math.Max(1f, (float)((double.IsNaN(FontSize) || FontSize <= 0 ? 13.0 : FontSize) * Math.Max(0.1, _renderScaling))));
+			return;
+		}
 
 		// Let the GC clean up the old SKPaint, because the render thread might still be drawing with it.
 		// Disposing it here can cause a segfault (access violation) if the render thread is mid-draw.
@@ -1292,7 +1316,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		if (_frameComposer != null)
 			_frameComposer.FallbackTypefaces = fallbackTypefaces;
 
-		if (s_useQuadRender)
+		if (s_useQuadRender && GpuBacked)
 		{
 			EnsureQuadRenderer(typeface, scaledFontSize);
 		}
@@ -1439,12 +1463,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		GlyphAtlasService.AcquireAtlas(atlas);
 		_quadAtlas = atlas;
 		_quadRenderer = new QuadGlyphRenderer(atlas);
-		if (_frameComposer != null)
-		{
-			_frameComposer.GlyphAtlas = atlas;
-			_frameComposer.QuadRenderer = _quadRenderer;
-			_frameComposer.UseQuadGlyphs = true;
-		}
+		// The composer's glyph path stays DrawText: the bitmap surface is a
+		// CPU raster canvas where DrawVertices regresses ~20x vs the glyph
+		// cache. Quads are forced per-call via RenderTo(quadGlyphs: true)
+		// from the lease path only.
 	}
 
 	private void ReleaseQuadRenderer()

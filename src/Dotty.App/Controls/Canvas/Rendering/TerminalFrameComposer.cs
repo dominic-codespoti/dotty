@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Text;
 using System.Collections.Generic;
 using Dotty.Terminal.Adapter;
@@ -165,7 +166,8 @@ public sealed class TerminalFrameComposer : IDisposable
         float cellW,
         float cellH,
         int startRow = 0,
-        int? endRow = null)
+        int? endRow = null,
+        bool? quadGlyphs = null)
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
         if (buffer == null) throw new ArgumentNullException(nameof(buffer));
@@ -183,7 +185,20 @@ public sealed class TerminalFrameComposer : IDisposable
             DrawBackgroundRegions(target, cellW, cellH, exactCellBackgrounds: buffer.IsAlternateScreenActive);
 
             SyncGlyphPaint(paint, font);
-            DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+            // Per-call quad-mode override: the lease path forces quads on the
+            // GPU canvas while the bitmap path keeps DrawText, sharing one
+            // composer instance. The flip happens under RenderLock, so a
+            // pending op from a previous frame can never observe a torn mode.
+            bool prev = UseQuadGlyphs;
+            if (quadGlyphs.HasValue) UseQuadGlyphs = quadGlyphs.Value;
+            try
+            {
+                DrawGlyphs(target, buffer, paint, cellW, cellH, startRow, safeEndRow);
+            }
+            finally
+            {
+                UseQuadGlyphs = prev;
+            }
         }
     }
 

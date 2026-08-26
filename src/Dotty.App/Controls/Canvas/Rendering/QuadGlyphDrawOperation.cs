@@ -86,18 +86,16 @@ public sealed class QuadGlyphDrawOperation : ICustomDrawOperation, IDisposable
 
         canvas.Translate(_translateX, _translateY);
 
-        lock (_composer.RenderLock)
-        {
-            _composer.RenderTo(
-                canvas,
-                _snapshot,
-                _framePaint,
-                _frameFont,
-                _cellW,
-                _cellH,
-                startRow: 0,
-                endRow: _snapshot.Rows - 1);
-        }
+        _composer.RenderTo(
+            canvas,
+            _snapshot,
+            _framePaint,
+            _frameFont,
+            _cellW,
+            _cellH,
+            startRow: 0,
+            endRow: _snapshot.Rows - 1,
+            quadGlyphs: true); // GPU canvas: quads are the fast path here
 
         canvas.Flush();
     }

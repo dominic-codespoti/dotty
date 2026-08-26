@@ -1,6 +1,18 @@
 # Path B — Embedded OpenGL Rendering Design
 
-Branch: `feat/gpu-rendering` · Status: **DESIGN COMPLETE — ready to implement** · Validated against Alacritty/kitty/Ghostty source · Last updated: 2026-08-16
+Branch: `feat/gpu-rendering` · Status: **IMPLEMENTED — lease-path variant live** (`DOTTY_QUAD_RENDER=1`) · Validated against Alacritty/kitty/Ghostty source · Last updated: 2026-08-26
+
+> **Implementation note (2026-08-26):** A first-frame GPU probe (`GpuProbeDrawOperation`)
+> classifies the compositor surface: software / software-GL (llvmpipe et al. via
+> `glGetString(GL_RENDERER)`) / hardware GPU. Only hardware activates the quad path;
+> everything else falls back to the proven bitmap+DrawText pipeline. Key finding: the
+> WriteableBitmap surface is a CPU raster canvas where `DrawVertices` regresses ~20x vs
+> the glyph cache — quads run only on the leased compositor canvas, forced per-call via
+> `RenderTo(quadGlyphs:)` under `RenderLock`. Measured live on Hyprland (Radeon 680M):
+> sustained flood 81.5 fps (lease+quads) vs 40.3 fps (bitmap), 4188 B/render vs 8796 B.
+> Native Wayland renders correctly via the lease path (53.3 fps) — the WriteableBitmap
+> incompatibility is bypassed entirely. The OpenGlControlBase shell below is superseded
+> by the lease path and remains a fallback design.
 
 ## 1. Goal
 

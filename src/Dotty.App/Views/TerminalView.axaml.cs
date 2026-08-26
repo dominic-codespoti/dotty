@@ -16,6 +16,7 @@ using Dotty.Terminal.Adapter;
 using Dotty.App.Input;
 using Dotty.App.Services;
 using Avalonia.Threading;
+using System.Runtime.InteropServices;
 using Dotty.App.Controls.Canvas.Rendering;
 
 namespace Dotty.App.Views
@@ -214,6 +215,13 @@ namespace Dotty.App.Views
             }
         }
         
+        [DllImport("libX11.so.6")]
+        private static extern int XFlush(IntPtr display);
+        [DllImport("libX11.so.6")]
+        private static extern int XClearArea(IntPtr display, IntPtr window, int x, int y, int width, int height, int exposures);
+        [DllImport("libX11.so.6")]
+        private static extern int XClearWindow(IntPtr display, IntPtr window);
+
         private int _diagNotifications;
         private long _lastPresentationMs = Environment.TickCount64;
 
@@ -257,6 +265,70 @@ namespace Dotty.App.Views
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
                     if (VisualRoot == null || !IsVisible) return;
+                    // Aggressive invalidation: the X11 compositor present is stalled
+                    // (buffer correct, UI thread renders, screen frozen). Visual-only
+                    // invalidations are coalesced away — force a full layout pass
+                    // which the render thread cannot skip.
+                    _canvas?.InvalidateMeasure();
+                    _canvas?.InvalidateArrange();
+                    _canvas?.InvalidateVisual();
+                    (VisualRoot as TopLevel)?.InvalidateMeasure();
+                    (VisualRoot as TopLevel)?.InvalidateArrange();
+                    (VisualRoot as TopLevel)?.InvalidateVisual();
+                    // X11 present stall: force XFlush on the display fd to wake the render thread's poll
+                    try
+                    {
+                        var t = Type.GetType("Avalonia.X11.X11Platform, Avalonia.X11");
+                        var prop = t?.GetProperty("Display", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                        var disp = prop != null ? (IntPtr)prop.GetValue(null)! : IntPtr.Zero;
+                        if (disp != IntPtr.Zero) XFlush(disp);
+                    }
+                    catch { }
+                    try
+                    {
+                        var tl2 = TopLevel.GetTopLevel(this);
+                        var handle = tl2?.TryGetPlatformHandle();
+                        var win = handle?.Handle ?? IntPtr.Zero;
+                        if (win != IntPtr.Zero)
+                        {
+                            var t2 = Type.GetType("Avalonia.X11.X11Platform, Avalonia.X11");
+                            var prop2 = t2?.GetProperty("Display", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                            var disp2 = prop2 != null ? (IntPtr)prop2.GetValue(null)! : IntPtr.Zero;
+                            if (disp2 != IntPtr.Zero) XClearArea(disp2, win, 0, 0, 1, 1, 1);
+                        }
+                    }
+                    catch { }
+                    try
+                    {
+                        var tl2 = TopLevel.GetTopLevel(this);
+                        var handle2 = tl2?.TryGetPlatformHandle();
+                        var win2 = handle2?.Handle ?? IntPtr.Zero;
+                        if (win2 != IntPtr.Zero)
+                        {
+                            var t2 = Type.GetType("Avalonia.X11.X11Platform, Avalonia.X11");
+                            var prop2 = t2?.GetProperty("Display", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                            var disp2 = prop2 != null ? (IntPtr)prop2.GetValue(null)! : IntPtr.Zero;
+                            if (disp2 != IntPtr.Zero) XClearWindow(disp2, win2);
+                        }
+                    }
+                    catch { }
+                    try
+                    {
+                        var tl = TopLevel.GetTopLevel(this);
+                        var plat = tl?.PlatformImpl;
+                        if (plat != null)
+                        {
+                            var mi = plat.GetType().GetMethod("Invalidate", new[] { typeof(Rect) });
+                            mi?.Invoke(plat, new object[] { new Rect(0, 0, Bounds.Width, Bounds.Height) });
+                        }
+                    }
+                    catch { }
+                    try
+                    {
+                        var visual = Avalonia.Rendering.Composition.ElementComposition.GetElementVisual(this);
+                        visual?.Compositor?.RequestCompositionUpdate(() => {});
+                    }
+                    catch { }
                     OnPresentationFrame(TimeSpan.Zero);
                 }, Avalonia.Threading.DispatcherPriority.Send);
             }

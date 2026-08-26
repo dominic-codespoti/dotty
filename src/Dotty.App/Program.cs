@@ -113,6 +113,34 @@ static class Program
             builder.UsePlatformDetect();
         }
 
+        // X11 present stall workaround: the Glx present path stalls under sparse
+        // updates (buffer/UI thread correct, screen frozen — reproduced on main
+        // with ED(2) clears). Software rendering (XShmPutImage) does not stall
+        // in the same conditions. Force it for the bitmap default; the GL path
+        // (DOTTY_GL=1) keeps Glx for hardware acceleration. Use reflection to
+        // avoid a direct Avalonia.X11 package reference (transitive only).
+        if (!isWindows && !isMacOS && Environment.GetEnvironmentVariable("DOTTY_GL") != "1")
+        {
+            try
+            {
+                var optsType = Type.GetType("Avalonia.X11.X11PlatformOptions, Avalonia.X11");
+                var modeType = Type.GetType("Avalonia.X11.X11RenderingMode, Avalonia.X11");
+                if (optsType != null && modeType != null)
+                {
+                    var opts = Activator.CreateInstance(optsType)!;
+                    var software = Enum.Parse(modeType, "Software");
+                    var arr = Array.CreateInstance(modeType, 1);
+                    arr.SetValue(software, 0);
+                    optsType.GetProperty("RenderingMode")!.SetValue(opts, arr);
+                    var withMethod = typeof(Avalonia.AppBuilder).GetMethods()
+                        .First(m => m.Name == "With" && m.IsGenericMethodDefinition)
+                        .MakeGenericMethod(optsType);
+                    withMethod.Invoke(builder, new[] { opts });
+                }
+            }
+            catch { }
+        }
+
         return builder;
     }
 }

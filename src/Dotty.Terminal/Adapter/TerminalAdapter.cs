@@ -356,6 +356,8 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnEraseDisplay(int mode)
     {
+        if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null)
+            Console.Error.WriteLine($"[DIAG] ED({mode}) cursor=({_buffer.CursorRow},{_buffer.CursorCol})");
         _buffer.EraseDisplay(mode);
         Trace?.Invoke($"ED({mode})", _buffer);
         RequestRender();

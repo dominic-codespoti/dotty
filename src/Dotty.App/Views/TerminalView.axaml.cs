@@ -249,7 +249,10 @@ namespace Dotty.App.Views
                 _lastPresentationMs = Environment.TickCount64;
                 _frameScheduled = false;
                 if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null)
-                    Console.Error.WriteLine("[DIAG] watchdog: forcing stalled frame");
+                {
+                    var gl = _canvas?._glSurface;
+                    Console.Error.WriteLine($"[DIAG] watchdog: forcing stalled frame, glFrames={gl?.FramesRendered ?? -1} glFailed={gl?.Failed ?? false}");
+                }
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>
                 {
                     if (VisualRoot == null || !IsVisible) return;

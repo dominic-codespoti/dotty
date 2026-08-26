@@ -109,6 +109,14 @@ public sealed class UnixPty : IPty
                 }
             }
 
+            // Terminal identity: child programs (clear, vim, htop, ls --color,
+            // everything terminfo-based) query TERM. Launchers and non-
+            // interactive parents often lack TERM or set dumb — a terminal
+            // emulator must declare its own capabilities. Dotty parses
+            // xterm-256color + truecolor SGR sequences.
+            psi.EnvironmentVariables["TERM"] = "xterm-256color";
+            psi.EnvironmentVariables["COLORTERM"] = "truecolor";
+
             // Create a unique control socket path for resize messages
             var controlPath = Path.Combine(Path.GetTempPath(), $"dotty-control-{Guid.NewGuid():N}.sock");
             psi.EnvironmentVariables["DOTTY_CONTROL_SOCKET"] = controlPath;

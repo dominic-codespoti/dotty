@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Animation;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Media.Imaging;
@@ -175,15 +176,17 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	// continued debugging; the long-term path is OpenGlControlBase (see
 	// docs/architecture/PathBEmbeddedGLDesign.md), which uses Avalonia's
 	// render loop directly instead of fighting the compositor.
-	// OpenGlControlBase path: the GL surface is Avalonia's own render-loop
-	// citizen (OnOpenGlRender), avoiding the lease/compositor custom-op
-	// indirection whose render thread stalls under sparse updates. Default
-	// on; DOTTY_GL=0 opts out (bitmap path). Safety nets: OpenGlControlBase
-	// init failure, first-frame watchdog (2 s), and per-frame capture
-	// lock-miss all fall back to the bitmap path automatically.
+	// OpenGlControlBase path. Renders correctly WHEN its render callback
+	// fires, but Avalonia X11's render thread stops processing composition
+	// updates under sparse invalidations (RequestCompositionUpdate queued,
+	// never drained — _updateQueued latches true and every subsequent
+	// RequestNextFrameRendering no-ops; measured 2026-08-26, radeonsi:
+	// OnOpenGlRender fires ~once then never again). The bitmap path renders
+	// on the UI thread and is immune. Opt in via DOTTY_GL=1 to test as
+	// Avalonia improves; the bitmap path is the verified default.
 	private static readonly bool s_useGlSurface =
-		Environment.GetEnvironmentVariable("DOTTY_GL") != "0";
-	private TerminalGLSurface? _glSurface;
+		Environment.GetEnvironmentVariable("DOTTY_GL") == "1";
+	internal TerminalGLSurface? _glSurface;
 	private bool _glSurfaceFailed;
 
 	private static readonly bool s_useQuadRender =
@@ -609,7 +612,6 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			if (s_useGlSurface && !_glSurfaceFailed)
 			{
 				CheckGlFirstFrame();
-				EnsureGlSurface();
 				if (_glSurface != null && !_glSurface.Failed && SkPaint != null)
 				{
 					bool glLockTaken = false;
@@ -617,6 +619,9 @@ public class TerminalCanvas : Control, ILogicalScrollable
 					if (glSnapshot != null)
 					{
 						if (_glFirstPresentMs < 0) _glFirstPresentMs = Environment.TickCount64;
+						_glPresentCount++;
+						if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _glPresentCount % 25 == 1)
+							Console.Error.WriteLine($"[DIAG] present #{_glPresentCount}: glFrames={_glSurface.FramesRendered} failed={_glSurface.Failed}");
 						var fg = SkPaint.Color;
 						var bg = _cachedBackgroundArgb;
 						_glSurface.Present(
@@ -1216,6 +1221,10 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	public void OnBufferUpdated(TerminalBuffer buffer)
 	{
 		if (buffer == null) return;
+		// GL surface attachment happens here — NOT in Render: adding a child
+		// visual during the render pass throws
+		// ("Visual was invalidated during the render pass", crash 2026-08-26).
+		if (s_useGlSurface && !_glSurfaceFailed) EnsureGlSurface();
 		_contentDirty = true;
 		HandleBufferGeometryChange(buffer);
 		InvalidateVisual();
@@ -1249,10 +1258,21 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	}
 
 	private long _glFirstPresentMs = -1;
+	private static int _glPresentCount;
+
 
 	private void EnsureGlSurface()
 	{
-		if (_glSurface != null || _quadAtlas == null) return;
+		if (_glSurface != null) return;
+		if (_quadAtlas == null)
+		{
+			// GL path runs without the lease probe: acquire the atlas directly.
+			var typeface = ResolveTerminalTypeface();
+			var size = Math.Max(1f, (float)((double.IsNaN(FontSize) || FontSize <= 0 ? 13.0 : FontSize) * Math.Max(0.1, _renderScaling)));
+			var atlas = GlyphAtlasService.GetOrCreateAtlas(typeface, size);
+			GlyphAtlasService.AcquireAtlas(atlas);
+			_quadAtlas = atlas;
+		}
 		_glSurface = new TerminalGLSurface();
 		_glSurface.SetAtlas(_quadAtlas);
 		((ISetLogicalParent)_glSurface).SetParent(this);

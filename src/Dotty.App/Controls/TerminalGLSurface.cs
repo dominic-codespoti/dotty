@@ -106,6 +106,7 @@ public class TerminalGLSurface : OpenGlControlBase
 
     protected override void OnOpenGlInit(GlInterface gl)
     {
+        Console.Error.WriteLine($"[GL] OnOpenGlInit: version={gl.Version}");
         try
         {
             _gl = gl;

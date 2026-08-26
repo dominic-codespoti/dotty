@@ -373,3 +373,27 @@ Known v1 gaps: no overline in the decor shader (underline/strike only)…
 actually overline included via FLAG_OVERLINE; remaining gap is cursor
 rendering (still an Avalonia overlay primitive) and per-line decoration
 color (decor bars use the cell fg, not UnderlineColor).
+
+
+---
+
+## 2026-08-26 (evening): Upstream X11 compositor present stall — affects ALL render paths
+
+Bisection on Hyprland + XWayland + radeonsi (Avalonia 12.1): after an
+output burst drains, the compositor stops presenting frames. The UI thread
+and terminal buffer remain correct (DUMP shows the right state); the
+screen freezes at an older frame, sometimes with render artifacts
+(garbage-filled regions after ED/erase).
+
+- Confirmed on `main` (pre-branch) with the bitmap path: identical stall.
+- Confirmed on the lease path and the OpenGlControlBase path.
+- Continuous output keeps presents flowing; sparse updates stall them.
+- Render-priority dispatcher starvation (fixed for our posts via Send
+  priority) is part of the same family; the remaining stall is inside
+  Avalonia's X11 render loop / compositor present path.
+
+Also fixed this session (real bugs, independent of the stall):
+- PTY children now get TERM=xterm-256color + COLORTERM=truecolor. The app
+  inherited TERM=dumb from desktop/agent launchers — `clear`, vim, htop
+  and everything terminfo-based emitted nothing. This was the root cause
+  of "clear leaves ghosting" at the protocol level.

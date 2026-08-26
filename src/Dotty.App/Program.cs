@@ -78,6 +78,11 @@ static class Program
 
     public static AppBuilder BuildAvaloniaApp()
     {
+        // Surface Avalonia's internal error logs (compositor/GL init failures
+        // log via Trace at Error level; the default listener drops them).
+        System.Diagnostics.Trace.AutoFlush = true;
+        System.Diagnostics.Trace.Listeners.Add(new System.Diagnostics.TextWriterTraceListener(Console.Error));
+
         var builder = AppBuilder.Configure<App>()
             .WithInterFont()
             .LogToTrace()

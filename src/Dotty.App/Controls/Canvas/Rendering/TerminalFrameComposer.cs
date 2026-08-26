@@ -129,6 +129,7 @@ public sealed class TerminalFrameComposer : IDisposable
     // Lets full-range background synthesis skip unchanged rows.
     private CellClass[][]? _rowClassCache;
     private ulong[]? _rowClassGen;
+    private ulong[]? _rowClassHash; // content-hash twin: validation by actual row bytes
 
     private readonly TerminalAppearanceSettings _appearance;
 
@@ -230,6 +231,8 @@ public sealed class TerminalFrameComposer : IDisposable
         // force a re-classify on the next pass.
         if (_rowClassGen != null)
             Array.Clear(_rowClassGen, 0, _rowClassGen.Length);
+        if (_rowClassHash != null)
+            Array.Clear(_rowClassHash, 0, _rowClassHash.Length);
         _quadRowCache.Reset();
         _lastShiftSbCount = -1;
     }
@@ -825,7 +828,10 @@ public sealed class TerminalFrameComposer : IDisposable
             // identity generation is unchanged (WezTerm line_quad_cache).
             // Slow-blink rows depend on wall-clock visibility — never cached.
             ulong rowGen = buffer.GetRowGeneration(row);
-            ulong contentHash = HashRowCells(buffer, row);
+            // EnsureRowClassified validated + stamped the current content
+            // hash this frame (CollectBackgroundRegions classifies every
+            // visible row before glyphs) — reuse it, no re-hash.
+            ulong contentHash = _rowClassHash![row];
             ref var entry = ref _quadRowCache.GetEntryRef(row);
             bool hasSlowBlink = false;
             for (int c = 0; c < cols; c++)
@@ -1372,9 +1378,14 @@ public sealed class TerminalFrameComposer : IDisposable
         EnsureCellClasses(buffer.Columns);
         EnsureRowClassCache(buffer);
 
-        ulong gen = buffer.GetRowGeneration(row);
+        // Content-hash validation (same rationale as the quad cache):
+        // generation-based validation has a vintage hole — bitmap-fallback
+        // frames stamp this cache from different snapshot vintages, and a
+        // stale hit feeds stale background regions AND stale glyph plans
+        // (user-visible prompt ghosting after clear, 2026-08-26).
+        ulong hash = HashRowCells(buffer, row);
         var cached = _rowClassCache![row];
-        if (cached != null && cached.Length >= buffer.Columns && _rowClassGen![row] == gen)
+        if (cached != null && cached.Length >= buffer.Columns && _rowClassHash![row] == hash)
         {
             _cellClasses = cached;
             return;
@@ -1384,7 +1395,8 @@ public sealed class TerminalFrameComposer : IDisposable
             cached = _rowClassCache[row] = new CellClass[buffer.Columns];
         _cellClasses = cached;
         ClassifyRowCells(buffer, row);
-        _rowClassGen![row] = gen;
+        _rowClassGen![row] = buffer.GetRowGeneration(row);
+        _rowClassHash![row] = hash;
     }
 
     private void EnsureRowClassCache(IRenderSource buffer)
@@ -1393,13 +1405,17 @@ public sealed class TerminalFrameComposer : IDisposable
         int rows = Math.Max(buffer.Rows, 1);
         var cache = new CellClass[rows][];
         var gens = new ulong[rows];
+        var hashes = new ulong[rows];
         if (_rowClassCache != null)
             Array.Copy(_rowClassCache, cache, Math.Min(_rowClassCache.Length, rows));
         if (_rowClassGen != null)
             Array.Copy(_rowClassGen, gens, Math.Min(_rowClassGen.Length, rows));
+        if (_rowClassHash != null)
+            Array.Copy(_rowClassHash, hashes, Math.Min(_rowClassHash.Length, rows));
         // Fresh slots keep null row arrays so they always miss (re-classify).
         _rowClassCache = cache;
         _rowClassGen = gens;
+        _rowClassHash = hashes;
     }
 
     private static unsafe int GetFirstRune(string? s)

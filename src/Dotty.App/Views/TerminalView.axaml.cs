@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Animation;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -642,6 +643,48 @@ namespace Dotty.App.Views
                 RenderTelemetry.Start();
             }
             AttachedToVisualTree += OnAttached;
+            AttachedToVisualTree += (_, _) => StartCompositorKeepAlive();
+        }
+
+        /// <summary>
+        /// Compositor keep-alive: an infinite render-thread-evaluated opacity
+        /// animation forces the compositor to commit and present every frame.
+        /// Without it, the X11 compositor stalls its present path under sparse
+        /// updates (buffer/UI thread correct, screen frozen at an older frame
+        /// — upstream Avalonia issue, reproduced on main). GPU terminals
+        /// present at vsync continuously anyway; the cost is one opacity
+        /// interpolation per frame on a 1px element.
+        /// </summary>
+        private void StartCompositorKeepAlive()
+        {
+            var rect = new Avalonia.Controls.Shapes.Rectangle
+            {
+                Width = 1,
+                Height = 1,
+                Fill = Avalonia.Media.Brushes.Transparent,
+                Opacity = 0.999,
+            };
+            ((ISetLogicalParent)rect).SetParent(this);
+            VisualChildren.Add(rect);
+            rect.Arrange(new Rect(0, 0, 1, 1));
+
+            var anim = new Avalonia.Animation.Animation
+            {
+                Duration = TimeSpan.FromMilliseconds(16),
+                IterationCount = new IterationCount(ulong.MaxValue),
+                PlaybackDirection = PlaybackDirection.Alternate,
+            };
+            anim.Children.Add(new KeyFrame
+            {
+                Cue = new Cue(0.0),
+                Setters = { new Avalonia.Styling.Setter(Visual.OpacityProperty, 0.999d) },
+            });
+            anim.Children.Add(new KeyFrame
+            {
+                Cue = new Cue(1.0),
+                Setters = { new Avalonia.Styling.Setter(Visual.OpacityProperty, 1.0d) },
+            });
+            _ = anim.RunAsync(rect);
         }
 
         private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)

@@ -52,7 +52,7 @@ public sealed class QuadGlyphDrawOperation : ICustomDrawOperation, IDisposable
     {
         _composer = composer ?? throw new ArgumentNullException(nameof(composer));
         _snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
-        Bounds = bounds;
+        _ = bounds; // DIAG: Bounds forced to full-damage rect
         _scale = scale <= 0 ? 1f : scale;
         _cellW = cellW;
         _cellH = cellH;
@@ -63,13 +63,28 @@ public sealed class QuadGlyphDrawOperation : ICustomDrawOperation, IDisposable
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
     }
 
-    public Rect Bounds { get; }
+    public Rect Bounds => new Rect(0, 0, 100000, 100000); // DIAG: force full damage — tests compositor dirty-tracking culling
 
     public bool HitTest(Point p) => true;
 
-    public bool Equals(ICustomDrawOperation? other) => ReferenceEquals(this, other);
+    public bool Equals(ICustomDrawOperation? other) => false;
 
     public void Render(ImmediateDrawingContext context)
+    {
+        try
+        {
+            RenderCore(context);
+        }
+        catch (Exception ex)
+        {
+            // Render-thread exceptions are swallowed by the compositor —
+            // surface them or the screen silently freezes (2026-08-26 stall).
+            Console.Error.WriteLine($"[DIAG] lease op render THREW: {ex.Message}");
+            throw;
+        }
+    }
+
+    private void RenderCore(ImmediateDrawingContext context)
     {
         var feature = context.TryGetFeature<ISkiaSharpApiLeaseFeature>();
         if (feature == null) return; // software backend: caller keeps the bitmap fallback

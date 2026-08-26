@@ -166,6 +166,15 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	/// <summary>True only on a hardware GPU — the only surface where the quad path wins.</summary>
 	private static bool GpuBacked => Volatile.Read(ref s_gpuProbeState) == (int)GpuClass.Hardware;
 
+	// The lease path (custom draw op on the compositor's GPU canvas) renders
+	// correctly under sustained output but its render-thread execution stalls
+	// after ~8 frames when updates are sparse (typing, backspaces): ops are
+	// queued but never invoked, freezing the screen at the last drawn frame
+	// (2026-08-26, X11+radeonsi; llvmpipe unaffected). Bitmap path verified
+	// through every interaction scenario. Opt in via DOTTY_QUAD_RENDER=1 for
+	// continued debugging; the long-term path is OpenGlControlBase (see
+	// docs/architecture/PathBEmbeddedGLDesign.md), which uses Avalonia's
+	// render loop directly instead of fighting the compositor.
 	private static readonly bool s_useQuadRender =
 		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_QUAD_RENDER"));
 

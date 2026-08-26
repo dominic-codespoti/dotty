@@ -299,9 +299,13 @@ namespace Dotty.App.Views
             if (coalesced) return;
             _renderUpdatePending = true;
 
-            // One coalesced UI post per mutation burst. Render priority runs
-            // just before the compositor pass, so the animation-frame request
-            // below is scheduled for the next display tick.
+            // One coalesced UI post per mutation burst. Send priority, NOT
+            // Render: Render-priority dispatcher items drain as part of a
+            // compositor pass, and when the pass is not itself scheduled the
+            // post starves — backspace/edit bursts then never request a frame
+            // and the screen updates only at the blink rate (measured
+            // 2026-08-26: prompt edits stalled at ~2.8 fps, buffer correct).
+            // Send is processed by the dispatcher loop unconditionally.
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 // Authoritative check on the UI thread: the view may have been
@@ -314,7 +318,7 @@ namespace Dotty.App.Views
                 _renderUpdatePending = false;
                 RenderTelemetry.RecordUiRenderUpdate();
                 RequestPresentationFrame();
-            }, Avalonia.Threading.DispatcherPriority.Render);
+            }, Avalonia.Threading.DispatcherPriority.Send);
         }
 
         /// <summary>
@@ -613,12 +617,15 @@ namespace Dotty.App.Views
             // (measured 2026-08-26 — a 50 ms timer fired once in ~10 s), and
             // that is exactly the condition the watchdog exists for.
             _cadenceWatchdogCts = new CancellationTokenSource();
-            _cadenceWatchdogThread = new Thread(() => RunCadenceWatchdog(_cadenceWatchdogCts.Token))
+            if (Environment.GetEnvironmentVariable("DOTTY_NO_WATCHDOG") == null)
             {
-                IsBackground = true,
-                Name = "Dotty.CadenceWatchdog",
-            };
-            _cadenceWatchdogThread.Start();
+                _cadenceWatchdogThread = new Thread(() => RunCadenceWatchdog(_cadenceWatchdogCts.Token))
+                {
+                    IsBackground = true,
+                    Name = "Dotty.CadenceWatchdog",
+                };
+                _cadenceWatchdogThread.Start();
+            }
             InitializeComponent();
             _grid = this.FindControl<TerminalGrid>("PART_Grid");
             _canvas = _grid?.FindControl<TerminalCanvas>("PART_Canvas");

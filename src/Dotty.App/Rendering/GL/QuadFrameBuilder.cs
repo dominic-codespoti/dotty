@@ -190,6 +190,8 @@ public static class QuadFrameBuilder
                     {
                         Col = (ushort)c,
                         Row = (ushort)r,
+                        OffX = (short)glyphInfo.LeftBearing,
+                        OffY = (short)(glyphInfo.BaselineOffset - glyphInfo.TopBearing),
                         GlyphX = (short)glyphInfo.X,
                         GlyphY = (short)glyphInfo.Y,
                         GlyphW = (short)glyphInfo.Width,

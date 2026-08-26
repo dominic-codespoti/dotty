@@ -175,6 +175,14 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	// continued debugging; the long-term path is OpenGlControlBase (see
 	// docs/architecture/PathBEmbeddedGLDesign.md), which uses Avalonia's
 	// render loop directly instead of fighting the compositor.
+	// OpenGlControlBase path: the GL surface is Avalonia's own render-loop
+	// citizen (OnOpenGlRender), avoiding the lease/compositor custom-op
+	// indirection whose render thread stalls under sparse updates.
+	private static readonly bool s_useGlSurface =
+		Environment.GetEnvironmentVariable("DOTTY_GL") == "1";
+	private TerminalGLSurface? _glSurface;
+	private bool _glSurfaceFailed;
+
 	private static readonly bool s_useQuadRender =
 		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_QUAD_RENDER"));
 
@@ -540,8 +548,15 @@ public class TerminalCanvas : Control, ILogicalScrollable
         UpdateScrollState();
 	}
 
+	protected override Size ArrangeOverride(Size finalSize)
+	{
+		_glSurface?.Arrange(new Rect(finalSize));
+		return finalSize;
+	}
+
 	protected override Size MeasureOverride(Size availableSize)
 	{
+		_glSurface?.Measure(availableSize);
 		EnsureMetrics();
         // Since we are ILogicalScrollable, we don't need to report the full combined extent as our desired size.
         // We report 0,0 or just the minimum we need so that ScrollViewer handles us correctly as a viewport.
@@ -585,6 +600,41 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// short SyncRoot hold and hand a custom draw operation the
 			// compositor's Skia canvas (leased during the render pass). The
 			// cursor overlay below still draws as an Avalonia primitive.
+			// OpenGlControlBase path: capture under the bounded hold, hand the
+			// snapshot to the GL surface, and let Avalonia's render loop draw
+			// it (OnOpenGlRender). No compositor custom op, no lease.
+			if (s_useGlSurface && !_glSurfaceFailed)
+			{
+				EnsureGlSurface();
+				if (_glSurface != null && !_glSurface.Failed && SkPaint != null)
+				{
+					bool glLockTaken = false;
+					var glSnapshot = CaptureRenderSnapshotBounded(buffer, ref glLockTaken);
+					if (glSnapshot != null)
+					{
+						var fg = SkPaint.Color;
+						var bg = _cachedBackgroundArgb;
+						_glSurface.Present(
+							glSnapshot,
+							ResolveTerminalTypeface(),
+							SkFont!.Size,
+							(float)_cellWidth,
+							(float)_cellHeight,
+							(float)ContentPadding.Left,
+							(float)((double)ContentPadding.Top + (double)buffer.ScrollbackCount * _cellHeight - _offset.Y),
+							SgrColorArgb.FromRgb(fg.Red, fg.Green, fg.Blue),
+							SgrColorArgb.FromRgb(bg.Red, bg.Green, bg.Blue));
+						DrawCursorOverlay(context, buffer);
+						return;
+					}
+					// capture failed (lock miss): fall through, keep last frame
+				}
+				else
+				{
+					_glSurfaceFailed = true;
+				}
+			}
+
 			if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && Volatile.Read(ref s_gpuProbeState) != 0 && !_diagGatePrinted)
 			{
 				_diagGatePrinted = true;
@@ -1193,6 +1243,17 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		InvalidateVisual();
 	}
 
+	private void EnsureGlSurface()
+	{
+		if (_glSurface != null || _quadAtlas == null) return;
+		_glSurface = new TerminalGLSurface();
+		_glSurface.SetAtlas(_quadAtlas);
+		((ISetLogicalParent)_glSurface).SetParent(this);
+		VisualChildren.Add(_glSurface);
+		_glSurface.InvalidateMeasure();
+		InvalidateVisual();
+	}
+
 	protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
 	{
 		base.OnAttachedToVisualTree(e);
@@ -1291,7 +1352,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// first frame). Once it reports hardware, lazily build the atlas
 			// + quad renderer here — the _metricsDirty block above ran before
 			// the probe result existed.
-			if (s_useQuadRender && GpuBacked && (_quadRenderer == null || _quadAtlas == null))
+			if ((s_useQuadRender || s_useGlSurface) && GpuBacked && (_quadRenderer == null || _quadAtlas == null))
 				EnsureQuadRenderer(ResolveTerminalTypeface(), Math.Max(1f, (float)((double.IsNaN(FontSize) || FontSize <= 0 ? 13.0 : FontSize) * Math.Max(0.1, _renderScaling))));
 			return;
 		}

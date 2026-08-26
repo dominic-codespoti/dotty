@@ -86,7 +86,9 @@ public sealed class GLTextureManager : IDisposable
     {
         EnsureNotDisposed();
 
-        int currentGeneration = _atlas.Generation;
+        // ContentVersion (bumped per placed glyph), not the growth generation:
+        // glyphs placed without growth must reach the GPU texture.
+        int currentGeneration = _atlas.ContentVersion;
         if (_textureId != 0 && currentGeneration == _lastUploadedGeneration)
         {
             return _textureId;

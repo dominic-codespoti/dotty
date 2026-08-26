@@ -28,6 +28,12 @@ public struct CellInstance
     /// <summary>Glyph height in atlas pixels.</summary>
     public short GlyphH;
 
+    /// <summary>Glyph horizontal placement offset (left bearing, px).</summary>
+    public short OffX;
+
+    /// <summary>Glyph vertical placement offset (baseline − top bearing, px).</summary>
+    public short OffY;
+
     /// <summary>Foreground red channel (0–255).</summary>
     public byte FgR;
 

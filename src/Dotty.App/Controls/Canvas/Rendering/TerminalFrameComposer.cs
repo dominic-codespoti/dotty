@@ -825,6 +825,7 @@ public sealed class TerminalFrameComposer : IDisposable
             // identity generation is unchanged (WezTerm line_quad_cache).
             // Slow-blink rows depend on wall-clock visibility — never cached.
             ulong rowGen = buffer.GetRowGeneration(row);
+            ulong contentHash = HashRowCells(buffer, row);
             ref var entry = ref _quadRowCache.GetEntryRef(row);
             bool hasSlowBlink = false;
             for (int c = 0; c < cols; c++)
@@ -834,7 +835,12 @@ public sealed class TerminalFrameComposer : IDisposable
 
             bool cacheEnabled = Environment.GetEnvironmentVariable("DOTTY_NO_QUADCACHE") == null;
             bool useEntry = cacheEnabled; // false → emit directly to batch (legacy path)
-            if (cacheEnabled && !hasSlowBlink && entry.Valid && entry.Generation == rowGen)
+            // Content-hash validation: a hit requires the row's actual cell
+            // bytes to match what the quads were built from. Generation-based
+            // trust had a vintage hole (bitmap-fallback frames stamp the
+            // shared caches from different snapshot vintages, letting a wrong
+            // scroll shift validate stale quads — user-visible corruption).
+            if (cacheEnabled && !hasSlowBlink && entry.Valid && entry.ContentHash == contentHash)
             {
                 // Slice to GlyphCount: entry arrays are pooled and keep stale
                 // vertices beyond the current count after a rebuild with fewer
@@ -1024,6 +1030,7 @@ public sealed class TerminalFrameComposer : IDisposable
             }
 
             entry.Generation = rowGen;
+            entry.ContentHash = contentHash;
             entry.Valid = true;
             if (useEntry)
             {
@@ -1109,6 +1116,13 @@ public sealed class TerminalFrameComposer : IDisposable
     /// </summary>
     private void TryShiftCachesOnScroll(IRenderSource buffer)
     {
+        // Opt-in: the shift compares generations across cache vintages, and
+        // bitmap-fallback frames stamp the shared caches from different
+        // snapshot vintages — a wrong pass validates stale quads (visual
+        // corruption, user-reported 2026-08-26). Content-hash validation in
+        // DrawGlyphsQuad makes the shift unnecessary for correctness; without
+        // it scroll frames just rebuild (pre-cache behavior).
+        if (Environment.GetEnvironmentVariable("DOTTY_SHIFT") == null) return;
         int sb = buffer.ScrollbackCount;
         int prev = _lastShiftSbCount;
         _lastShiftSbCount = sb;
@@ -1145,6 +1159,33 @@ public sealed class TerminalFrameComposer : IDisposable
     /// not expressible as quads in v1). The whole row falls back to keep
     /// per-cell alignment trivial.
     /// </summary>
+    /// <summary>
+    /// FNV-1a over the row's hot cells (rune/style/flags) + cold cells
+    /// (hyperlink/grapheme) — everything classification and quad emission
+    /// read. Validates cached quads against actual content with no trust in
+    /// generation bookkeeping.
+    /// </summary>
+    private static unsafe ulong HashRowCells(IRenderSource buffer, int row)
+    {
+        var cells = buffer.GetRowCells(row);
+        var cold = buffer.GetRowColdCells(row);
+        ulong hash = 14695981039346656037UL;
+        ref var r = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(cells);
+        ref var cr = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(cold);
+        int n = cells.Length;
+        for (int i = 0; i < n; i++)
+        {
+            var c = System.Runtime.CompilerServices.Unsafe.Add(ref r, i);
+            hash = (hash ^ c.Rune) * 1099511628211UL;
+            hash = (hash ^ c.StyleId) * 1099511628211UL;
+            hash = (hash ^ c.PackedFlags) * 1099511628211UL;
+            var cc = System.Runtime.CompilerServices.Unsafe.Add(ref cr, i);
+            hash = (hash ^ (ulong)(uint)cc.GraphemeIndex) * 1099511628211UL;
+            hash = (hash ^ cc.HyperlinkId) * 1099511628211UL;
+        }
+        return hash;
+    }
+
     private bool RowHasComplexDecorations()
     {
         for (int i = 0; i < _cellClasses.Length; i++)

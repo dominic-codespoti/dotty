@@ -26,6 +26,7 @@ public sealed class QuadRowCache
     {
         public bool Valid;
         public ulong Generation;
+        public ulong ContentHash;
         public SKPoint[] GlyphPos = Array.Empty<SKPoint>();
         public SKPoint[] GlyphUv = Array.Empty<SKPoint>();
         public SKColor[] GlyphCol = Array.Empty<SKColor>();

@@ -39,6 +39,9 @@ public class TerminalGLSurface : OpenGlControlBase
     private int _uAtlasSize = -1;
     private int _uPass = -1;
     private int _uAtlas = -1;
+    private int _uUnderlineY = -1;
+    private int _uStrikeY = -1;
+    private int _uLineHalf = -1;
 
     private float[] _staging = Array.Empty<float>();
 
@@ -57,6 +60,18 @@ public class TerminalGLSurface : OpenGlControlBase
 
     private float _cellW = 10f;
     private float _cellH = 20f;
+    private double _underlineY = 0.8;
+    private double _strikeY = 0.55;
+    private double _lineHalf = 0.04;
+
+    /// <summary>Sets decoration bar positions as fractions of cell height
+    /// (computed from font metrics by the host).</summary>
+    public void SetLineMetrics(double underlineY, double strikeY, double lineHalf)
+    {
+        _underlineY = underlineY;
+        _strikeY = strikeY;
+        _lineHalf = lineHalf;
+    }
     private float _offsetX;
     private float _offsetY;
     private SgrColorArgb _defaultFg = SgrColorArgb.FromRgb(255, 255, 255);
@@ -102,6 +117,9 @@ public class TerminalGLSurface : OpenGlControlBase
             _uAtlasSize = _program.GetUniformLocation("uAtlasSize");
             _uPass = _program.GetUniformLocation("uPass");
             _uAtlas = _program.GetUniformLocation("uAtlas");
+            _uUnderlineY = _program.GetUniformLocation("uUnderlineY");
+            _uStrikeY = _program.GetUniformLocation("uStrikeY");
+            _uLineHalf = _program.GetUniformLocation("uLineHalf");
 
             gl.Enable(GL_BLEND);
             var blendFuncPtr = gl.GetProcAddress("glBlendFunc");
@@ -201,6 +219,9 @@ public class TerminalGLSurface : OpenGlControlBase
         _program.SetUniform2f(_uFramebufferPx, fbW, fbH);
         _program.SetUniform2f(_uCellPx, _cellW, _cellH);
         _program.SetUniform2f(_uAtlasSize, atlasW, atlasH);
+        _gl.Uniform1f(_uUnderlineY, (float)_underlineY);
+        _gl.Uniform1f(_uStrikeY, (float)_strikeY);
+        _gl.Uniform1f(_uLineHalf, (float)_lineHalf);
         _gl.Uniform1i(_uAtlas, 0);
         _gl.ActiveTexture(GLConsts.GL_TEXTURE0);
         _gl.BindTexture(GLTextureManager.GL_TEXTURE_2D, texId);
@@ -247,7 +268,33 @@ public class TerminalGLSurface : OpenGlControlBase
                 stagingArr[o + 13] = c.BgR / 255f;
                 stagingArr[o + 14] = c.BgG / 255f;
                 stagingArr[o + 15] = c.BgB / 255f;
-                stagingArr[o + 16] = (c.Flags & CellFlags.WideCell) != 0 ? 2f : 0f;
+                stagingArr[o + 16] = c.Flags;
+
+                // Decorated cell: extra decor-only instance (bar quad over
+                // the full cell; the glyph instance above draws the glyph).
+                if ((c.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0
+                    && _staging.Length >= needed + floatsPerInstance)
+                {
+                    int d = needed;
+                    stagingArr[d] = x;
+                    stagingArr[d + 1] = y;
+                    stagingArr[d + 2] = 0f;
+                    stagingArr[d + 3] = 0f;
+                    stagingArr[d + 4] = _cellW;
+                    stagingArr[d + 5] = _cellH;
+                    stagingArr[d + 6] = 0f;
+                    stagingArr[d + 7] = 0f;
+                    stagingArr[d + 8] = 0f;
+                    stagingArr[d + 9] = 0f;
+                    stagingArr[d + 10] = c.FgR / 255f;
+                    stagingArr[d + 11] = c.FgG / 255f;
+                    stagingArr[d + 12] = c.FgB / 255f;
+                    stagingArr[d + 13] = c.BgR / 255f;
+                    stagingArr[d + 14] = c.BgG / 255f;
+                    stagingArr[d + 15] = c.BgB / 255f;
+                    stagingArr[d + 16] = c.Flags | CellFlags.DecorOnly;
+                    needed += floatsPerInstance;
+                }
             }
 
             gl.BindBuffer(GLConsts.GL_ARRAY_BUFFER, _instanceVbo);

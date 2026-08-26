@@ -30,12 +30,15 @@ public sealed class GLShaderProgram : IDisposable
         flat out vec3 vFg;
         flat out vec3 vBg;
         out vec2 vUv;
+        out float vCornerY;
         flat out uint vFlags;
-        const uint FLAG_WIDE = 1u;
+        const uint FLAG_WIDE = 2u;      // CellFlags.WideCell
+        const uint FLAG_DECOR = 128u;   // CellFlags.DecorOnly
 
         void main()
         {
             bool wide = (aFlags & FLAG_WIDE) != 0u;
+            vCornerY = aCorner.y;
             vec2 cell = vec2(uCellPx.x * (wide ? 2.0 : 1.0), uCellPx.y);
             vec2 origin = aGridPx;
             vec2 size = cell;
@@ -60,17 +63,35 @@ public sealed class GLShaderProgram : IDisposable
         #version 330 core
         uniform sampler2D uAtlas;
         uniform int uPass;
+        uniform float uUnderlineY;   // fraction of cell height
+        uniform float uStrikeY;
+        uniform float uLineHalf;     // half thickness, fraction
         flat in vec3 vFg;
         flat in vec3 vBg;
         in vec2 vUv;
+        in float vCornerY;
         flat in uint vFlags;
         out vec4 fragColor;
-        const uint FLAG_WIDE_CONT = 2u;
+        const uint FLAG_DECOR = 128u;   // CellFlags.DecorOnly
+        const uint FLAG_UNDERLINE = 8u;
+        const uint FLAG_STRIKE = 16u;
+        const uint FLAG_OVERLINE = 32u;
 
         void main()
         {
             if (uPass == 0) { fragColor = vec4(vBg, 1.0); return; }
-            if ((vFlags & FLAG_WIDE_CONT) != 0u) discard;
+            if ((vFlags & FLAG_DECOR) != 0u)
+            {
+                // Decoration-only instance: the quad covers the cell; draw
+                // the bars at their metric fractions, discard elsewhere.
+                if ((vFlags & FLAG_UNDERLINE) != 0u &&
+                    abs(vCornerY - uUnderlineY) <= uLineHalf)
+                { fragColor = vec4(vFg.rgb, 1.0); return; }
+                if ((vFlags & FLAG_STRIKE) != 0u &&
+                    abs(vCornerY - uStrikeY) <= uLineHalf)
+                { fragColor = vec4(vFg.rgb, 1.0); return; }
+                discard;
+            }
             float coverage = texture(uAtlas, vUv).r;
             if (coverage <= 0.001) discard;
             fragColor = vec4(vFg.rgb * coverage, coverage);

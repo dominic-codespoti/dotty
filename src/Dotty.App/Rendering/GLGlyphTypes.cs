@@ -65,6 +65,11 @@ public static class CellFlags
     public const byte Bold = 0x01;
     public const byte WideCell = 0x02;
     public const byte InverseVideo = 0x04;
+    public const byte Underline = 0x08;
+    public const byte Strikethrough = 0x10;
+    public const byte Overline = 0x20;
+    /// <summary>Instance draws only the decoration bars (no glyph).</summary>
+    public const byte DecorOnly = 0x80;
 }
 
 /// <summary>

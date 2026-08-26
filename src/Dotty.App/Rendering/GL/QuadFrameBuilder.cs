@@ -126,9 +126,32 @@ public static class QuadFrameBuilder
             {
                 ref readonly var hot = ref cellHotSpan[c];
 
-                // Skip continuation cells and empty cells (Rune == 0)
-                if (hot.IsContinuation || hot.Rune == 0)
+                // Skip continuation cells. Empty cells emit only when they
+                // carry a custom background (pill/segment padding) — a
+                // zero-size glyph instance draws just the background quad.
+                if (hot.IsContinuation)
                 {
+                    c++;
+                    continue;
+                }
+                if (hot.Rune == 0)
+                {
+                    ref readonly var emptyStyle = ref source.GetStyle(hot.StyleId);
+                    bool emptyHasBg = !emptyStyle.Background.IsEmpty || emptyStyle.Inverse;
+                    if (emptyHasBg && written < destination.Length)
+                    {
+                        var bg2 = emptyStyle.Inverse ? (emptyStyle.Background.IsEmpty ? defFg : emptyStyle.Background) : emptyStyle.Background;
+                        destination[written] = new CellInstance
+                        {
+                            Col = (ushort)c,
+                            Row = (ushort)r,
+                            BgR = bg2.R,
+                            BgG = bg2.G,
+                            BgB = bg2.B,
+                            BgA = 255,
+                        };
+                        written++;
+                    }
                     c++;
                     continue;
                 }
@@ -183,6 +206,9 @@ public static class QuadFrameBuilder
                 if (style.Bold) flags |= CellFlags.Bold;
                 if (hot.Width == 2) flags |= CellFlags.WideCell;
                 if (style.Inverse) flags |= CellFlags.InverseVideo;
+                if (style.Underline) flags |= CellFlags.Underline;
+                if (style.Strikethrough) flags |= CellFlags.Strikethrough;
+                if (style.Overline) flags |= CellFlags.Overline;
 
                 if (written < destination.Length)
                 {

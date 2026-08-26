@@ -25,6 +25,7 @@ public sealed class QuadGlyphBatch
 
     private readonly Dictionary<int, GlyphArrays> _glyphCache = new();
     private readonly Dictionary<int, SolidArrays> _solidCache = new();
+    private readonly Dictionary<int, ushort[]> _indexCache = new();
 
     private struct GlyphArrays
     {
@@ -145,7 +146,7 @@ public sealed class QuadGlyphBatch
         if (_solidCount > 0)
         {
             var arrays = GetSolidArrays();
-            canvas.DrawVertices(SKVertexMode.Triangles, arrays.Pos, arrays.Col, solidPaint);
+            canvas.DrawVertices(SKVertexMode.Triangles, arrays.Pos, null, arrays.Col, SKBlendMode.Modulate, GetQuadIndices(_solidCount), solidPaint);
         }
 
         if (_glyphCount > 0 && glyphPaint != null)
@@ -153,8 +154,38 @@ public sealed class QuadGlyphBatch
             var arrays = GetGlyphArrays();
             canvas.DrawVertices(
                 SKVertexMode.Triangles, arrays.Pos, arrays.Uv, arrays.Col,
-                SKBlendMode.Modulate, indices: null, glyphPaint);
+                SKBlendMode.Modulate, indices: GetQuadIndices(_glyphCount), glyphPaint);
         }
+    }
+
+    /// <summary>
+    /// Quad index buffer: (0,1,2)(0,2,3) per 4-vertex quad. REQUIRED — with
+    /// indices: null, Triangles mode treats the vertex array as consecutive
+    /// triples, so each quad's 4th vertex wraps into the next quad's first
+    /// two and draws a stray triangle spanning from one row's end to the
+    /// next row's start (diagonal streak artifacts, driver-dependent:
+    /// visible on radeonsi, harmless on llvmpipe). Cached per vertex count
+    /// like the vertex arrays.
+    /// </summary>
+    private ushort[] GetQuadIndices(int vertexCount)
+    {
+        if (_indexCache.TryGetValue(vertexCount, out var cached)) return cached;
+
+        int quadCount = vertexCount / 4;
+        var indices = new ushort[quadCount * 6];
+        for (int q = 0; q < quadCount; q++)
+        {
+            int b = q * 4;
+            int o = q * 6;
+            indices[o] = (ushort)b;
+            indices[o + 1] = (ushort)(b + 1);
+            indices[o + 2] = (ushort)(b + 2);
+            indices[o + 3] = (ushort)b;
+            indices[o + 4] = (ushort)(b + 2);
+            indices[o + 5] = (ushort)(b + 3);
+        }
+        _indexCache[vertexCount] = indices;
+        return indices;
     }
 
     private GlyphArrays GetGlyphArrays()

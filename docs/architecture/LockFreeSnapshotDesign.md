@@ -127,7 +127,36 @@ render-side work reduction (per-row quad caching keyed on the row
 generations we already copy — translate-on-scroll instead of rebuild) and/or
 thread priority hints.
 
-## 5. Recommended sequence
+## 5. Production survey (verified from source, 2026-08-26)
+
+| Terminal | State sharing | Reader | Per-line incremental |
+|---|---|---|---|
+| Alacritty | Global `FairMutex<Term>` (`alacritty_terminal/src/event_loop.rs`) | Reader thread `try_lock_unfair()`, parses ≤64 KB per hold (`MAX_LOCKED_READ`), releases; renderer locks and walks the **live grid** | GPU damage upload only |
+| Warp (embeds Alacritty core) | Same `Arc<FairMutex<TerminalModel>>` | Same | Same |
+| WezTerm | Mutex on pane terminal state | `get_changed_since(lines, seqno)` dirty check | **`line_quad_cache`: LFU cache of per-line quads keyed on (config gen, shape gen, content hash, selection, position)** — `wezterm-gui/src/termwindow/render/mod.rs` |
+| kitty | Per-screen lock | Render thread, dirty lines only | Persistent sprite/vertex buffers |
+
+**No production terminal uses seqlocks or lock-free reads.** All four use a
+plain mutex with bounded writer holds — the exact shape we already have, with
+equivalent measured lock behavior (0.6 µs waits). The production differentiator
+is per-line incremental GPU work: WezTerm's line-quad cache is the reference
+pattern.
+
+## 6. Revised recommendation
+
+1. **Tier 0** — delete ScrollbackText from capture + style capture caching (unchanged).
+2. **Drop the seqlock.** Zero production precedent; measured benefit ≈ 0
+   (contention already absent). Revisit only if a future capture redesign
+   needs wait-free UI guarantees.
+3. **WezTerm-style line-quad cache** (the production-blessed path): cache
+   per-row quads keyed on (row generation, selection range, cursor row,
+   config generation); re-render only rows whose generation changed since
+   the last frame. Under flood every row changes, but a scrolled row's
+   content is identical at the shifted position — generation-keyed reuse
+   (or quad translation) beats WezTerm's position-sensitive key. This attacks
+   the scheduling-level render cost that lock-freedom cannot.
+
+## 7. Risks
 
 1. **Tier 0 now** (~1 h): remove ScrollbackText from capture + style capture
    caching. Dead-work deletion; zero risk; measurable via capture-work diag.
@@ -138,7 +167,6 @@ thread priority hints.
    keyed on `RowGenerations` — attacks the scheduling-level cost that
    lock-freedom cannot.
 
-## 6. Risks
 
 - Seqlock retry storms under pathological writers → bounded retries +
   SyncRoot fallback (never livelocks; degrades to today's behavior).

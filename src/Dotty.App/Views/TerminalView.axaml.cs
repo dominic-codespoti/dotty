@@ -671,7 +671,7 @@ namespace Dotty.App.Views
             var anim = new Avalonia.Animation.Animation
             {
                 Duration = TimeSpan.FromMilliseconds(16),
-                IterationCount = new IterationCount(ulong.MaxValue),
+                IterationCount = new IterationCount(1_000_000),
                 PlaybackDirection = PlaybackDirection.Alternate,
             };
             anim.Children.Add(new KeyFrame

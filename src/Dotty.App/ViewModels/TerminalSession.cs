@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -201,7 +202,10 @@ public class TerminalSession : IDisposable
         if (_pty?.OutputStream == null) return;
 
         var reader = _pty.OutputStream;
-        var channel = Channel.CreateBounded<(byte[] Data, int Length)>(new BoundedChannelOptions(4)
+        // Depth 32 (4 MB): decouples kernel PTY delivery from parse. At depth 4
+        // the producer stalls whenever parse falls behind, serializing the
+        // stages — measured 118ms/500K-line flood of non-overlapped parse.
+        var channel = Channel.CreateBounded<(byte[] Data, int Length)>(new BoundedChannelOptions(32)
         {
             SingleReader = true,
             SingleWriter = true,

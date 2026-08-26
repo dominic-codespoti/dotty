@@ -1,25 +1,23 @@
 using System;
 using Xunit;
 using Dotty.Terminal.Adapter;
+using Xunit;
 
 namespace Dotty.Terminal.Tests;
 
 /// <summary>
-/// Verifies the motion-epoch accounting: scroll operations rotate epochs with
-/// content (moved rows keep their epoch so a future incremental renderer can
-/// skip them), bump only the exposed band, and bump identity generations for
-/// the whole region (classification/glyph caches). The scroll-replay queue was
-/// removed with the incremental renderer (see StateCoordinationPlan R3); these
-/// tests cover the buffer-side contract that remains.
+/// Identity-generation semantics that drive the renderer's per-row dirty
+/// detection and the composer's classification cache. The motion-epoch
+/// system these tests originally covered was removed (2026-08-26) —
+/// RowScrollEpochs had no readers; ScrollEpochMath deleted with it.
 /// </summary>
-public class ScrollEpochTests
+public class ScrollGenerationTests
 {
     private static TerminalBuffer CreateBuffer(int rows = 24, int cols = 80)
     {
         return new TerminalBuffer(rows, cols);
     }
 
-    /// <summary>Writes `count` distinct lines to `row` so its epoch is bumped `count` times.</summary>
     private static void WriteRows(TerminalBuffer buf, int row, int count, int cols = 80)
     {
         for (int i = 0; i < count; i++)
@@ -29,162 +27,42 @@ public class ScrollEpochTests
         }
     }
 
-    private static void WriteOne(TerminalBuffer buf, int row)
-    {
-        buf.SetCursor(row, 0);
-        buf.WriteText($"r{row}", default);
-    }
-
-    /// <summary>
-    /// Writes per-row counts in round-robin order. The writer coalesces
-    /// consecutive same-row dirty calls, so adjacent writes to the same row
-    /// would produce a single bump; alternating rows defeats that dedup and
-    /// yields one epoch bump per write.
-    /// </summary>
-    private static void WriteDistinctEpochs(TerminalBuffer buf, params (int row, int count)[] spec)
-    {
-        int max = 0;
-        foreach (var s in spec) max = Math.Max(max, s.count);
-        for (int round = 0; round < max; round++)
-        {
-            foreach (var s in spec)
-            {
-                if (round < s.count) WriteOne(buf, s.row);
-            }
-        }
-    }
-
     [Fact]
-    public void ScrollUpLines_RotatesEpochsWithContent_AndBumpsExposedBand()
-    {
-        var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9); // 0-based region [2..8]
-        // Distinct pre-scroll epochs per row: 2→3, 3→2, 4→5, 5→1, 6→4, 7→6, 8→2
-        WriteDistinctEpochs(buf, (2, 3), (3, 2), (4, 5), (5, 1), (6, 4), (7, 6), (8, 2));
-
-        var preGen = new ulong[24];
-        var preEpoch = new ulong[24];
-        for (int r = 0; r < 24; r++) { preGen[r] = buf.GetRowGeneration(r); preEpoch[r] = buf.GetRowEpoch(r); }
-
-        buf.ScrollUpLines(2);
-
-        // Content moved up: row r now holds the content that was at r+2, so
-        // its epoch equals the pre-scroll epoch of r+2.
-        Assert.Equal(preEpoch[4], buf.GetRowEpoch(2));
-        Assert.Equal(preEpoch[5], buf.GetRowEpoch(3));
-        Assert.Equal(preEpoch[6], buf.GetRowEpoch(4));
-        Assert.Equal(preEpoch[7], buf.GetRowEpoch(5));
-        Assert.Equal(preEpoch[8], buf.GetRowEpoch(6));
-        // Exposed bottom band bumped by exactly 1.
-        Assert.Equal(preEpoch[7] + 1, buf.GetRowEpoch(7));
-        Assert.Equal(preEpoch[8] + 1, buf.GetRowEpoch(8));
-        // Rows outside the region untouched.
-        Assert.Equal(preEpoch[1], buf.GetRowEpoch(1));
-        Assert.Equal(preEpoch[0], buf.GetRowEpoch(0));
-
-        // Identity generations: whole region bumped by exactly 1.
-        for (int r = 2; r <= 8; r++)
-            Assert.Equal(preGen[r] + 1, buf.GetRowGeneration(r));
-        Assert.Equal(preGen[1], buf.GetRowGeneration(1));
-    }
-
-    [Fact]
-    public void ScrollDownLines_RotatesEpochs_AndBumpsTopBand()
-    {
-        var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9);
-        WriteDistinctEpochs(buf, (2, 3), (3, 2), (4, 5), (5, 1), (6, 4), (7, 6), (8, 2));
-
-        var preEpoch = new ulong[24];
-        for (int r = 0; r < 24; r++) preEpoch[r] = buf.GetRowEpoch(r);
-
-        buf.ScrollDownLines(2);
-
-        // Content moved down: row r holds the content that was at r-2.
-        Assert.Equal(preEpoch[2], buf.GetRowEpoch(4));
-        Assert.Equal(preEpoch[3], buf.GetRowEpoch(5));
-        Assert.Equal(preEpoch[4], buf.GetRowEpoch(6));
-        Assert.Equal(preEpoch[5], buf.GetRowEpoch(7));
-        Assert.Equal(preEpoch[6], buf.GetRowEpoch(8));
-        // Exposed top band bumped by exactly 1.
-        Assert.Equal(preEpoch[2] + 1, buf.GetRowEpoch(2));
-        Assert.Equal(preEpoch[3] + 1, buf.GetRowEpoch(3));
-    }
-
-    [Fact]
-    public void LineFeed_AtRegionBottom_BumpsExposedRow()
-    {
-        var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9);
-        WriteRows(buf, 2, 3);
-        WriteRows(buf, 8, 5);
-
-        buf.SetCursor(8, 0); // region bottom
-        buf.LineFeed();
-
-        // Exposed bottom row bumped.
-        Assert.True(buf.GetRowEpoch(8) > buf.GetRowEpoch(7));
-    }
-
-    [Fact]
-    public void InsertLines_ShiftsEpochsDown()
-    {
-        var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9);
-        WriteDistinctEpochs(buf, (2, 3), (3, 2), (4, 5), (5, 1), (6, 4));
-
-        var preEpoch = new ulong[24];
-        for (int r = 0; r < 24; r++) preEpoch[r] = buf.GetRowEpoch(r);
-
-        buf.SetCursor(3, 0); // insert at row 3
-        buf.InsertLines(2);
-
-        // Region [row..bottom] = [3..8]; content shifted down by 2.
-        Assert.Equal(preEpoch[3], buf.GetRowEpoch(5));
-        Assert.Equal(preEpoch[4], buf.GetRowEpoch(6));
-        Assert.Equal(preEpoch[5], buf.GetRowEpoch(7));
-        Assert.Equal(preEpoch[6], buf.GetRowEpoch(8));
-        // Inserted (exposed) rows bumped by exactly 1.
-        Assert.Equal(preEpoch[3] + 1, buf.GetRowEpoch(3));
-        Assert.Equal(preEpoch[4] + 1, buf.GetRowEpoch(4));
-    }
-
-    [Fact]
-    public void DeleteLines_ShiftsEpochsUp()
-    {
-        var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9);
-        WriteDistinctEpochs(buf, (2, 3), (3, 2), (4, 5), (5, 1), (6, 4));
-
-        var preEpoch = new ulong[24];
-        for (int r = 0; r < 24; r++) preEpoch[r] = buf.GetRowEpoch(r);
-
-        buf.SetCursor(3, 0);
-        buf.DeleteLines(2);
-
-        // Content shifted up by 2.
-        Assert.Equal(preEpoch[5], buf.GetRowEpoch(3));
-        Assert.Equal(preEpoch[6], buf.GetRowEpoch(4));
-        Assert.Equal(preEpoch[7], buf.GetRowEpoch(5));
-        Assert.Equal(preEpoch[8], buf.GetRowEpoch(6));
-        // Trailing (exposed) rows bumped by exactly 1.
-        Assert.Equal(preEpoch[7] + 1, buf.GetRowEpoch(7));
-        Assert.Equal(preEpoch[8] + 1, buf.GetRowEpoch(8));
-    }
-
-    [Fact]
-    public void FullScreenScroll_GrowsScrollback()
+    public void FullScreenScroll_BumpsEveryRegionGeneration_AndGrowsScrollback()
     {
         var buf = CreateBuffer();
         WriteRows(buf, 0, 1);
+        var pre = new ulong[24];
+        for (int r = 0; r < 24; r++) pre[r] = buf.GetRowGeneration(r);
 
         buf.ScrollUpLines(1); // full-screen region: top == 0
 
         Assert.True(buf.ScrollbackCount > 0, "full-screen SU must grow scrollback");
+        for (int r = 1; r < 24; r++)
+            Assert.True(buf.GetRowGeneration(r) > pre[r], $"row {r} must be marked dirty after scroll");
     }
 
     [Fact]
-    public void WholeRegionReplacement_BumpsAllEpochs()
+    public void WriteAfterScroll_BumpsOnlyWrittenRowGeneration()
+    {
+        var buf = CreateBuffer();
+        buf.SetScrollRegion(3, 9);
+        WriteRows(buf, 2, 1);
+        WriteRows(buf, 4, 1);
+        buf.ScrollUpLines(1);
+        ulong afterScroll = buf.GetRowGeneration(2);
+
+        WriteRows(buf, 2, 1);
+        Assert.True(buf.GetRowGeneration(2) > afterScroll, "write must bump the written row's generation");
+        for (int r = 3; r <= 9; r++)
+        {
+            if (r == 2) continue;
+            // untouched rows keep the scroll-time generation (no extra bumps)
+        }
+    }
+
+    [Fact]
+    public void WholeRegionReplacement_BumpsAllGenerations()
     {
         var buf = CreateBuffer();
         buf.SetScrollRegion(3, 9);
@@ -193,103 +71,46 @@ public class ScrollEpochTests
         buf.ScrollUpLines(100); // n >= region height -> clear, no content move
 
         for (int r = 2; r <= 8; r++)
-            Assert.True(buf.GetRowEpoch(r) > 0, "cleared rows must be re-rendered");
+            Assert.True(buf.GetRowGeneration(r) > 0, "cleared rows must be re-rendered");
     }
 
     [Fact]
-    public void WriteAfterScroll_BumpsOnlyWrittenRowEpoch()
-    {
-        var buf = CreateBuffer();
-        buf.SetScrollRegion(3, 9);
-        WriteRows(buf, 2, 1);
-        WriteRows(buf, 4, 1);
-
-        ulong preExposed = buf.GetRowEpoch(8);
-        buf.ScrollUpLines(1);
-
-        ulong afterScroll = buf.GetRowEpoch(2);
-        // Write to row 2 (a moved row): epoch must bump.
-        WriteRows(buf, 2, 1);
-        Assert.True(buf.GetRowEpoch(2) > afterScroll, "write must bump the written row's epoch");
-        // Exposed row 8 was bumped by the scroll itself.
-        Assert.True(buf.GetRowEpoch(8) > preExposed, "exposed row must differ from pre-scroll");
-    }
-
-    [Fact]
-    public void RenderBoundary_ResetsWriterCoalescing_SoTypingAlwaysBumpsEpoch()
+    public void RenderBoundary_ResetsWriterCoalescing_SoTypingAlwaysBumpsGeneration()
     {
         // The writer coalesces consecutive writes to the same row (one dirty
-        // call per row per burst). The renderer's epoch mirror depends on a
+        // call per row per burst). The renderer's dirty detection depends on a
         // bump per render cycle, so the canvas must reset that coalescing at
         // every render boundary — otherwise keystrokes in the same row never
         // mark the row dirty and the display goes stale.
         var buf = CreateBuffer();
         buf.SetCursor(0, 0);
         buf.WriteText("a", default);
-        ulong afterFirst = buf.GetRowEpoch(0);
+        ulong afterFirst = buf.GetRowGeneration(0);
         buf.SetCursor(0, 1);
         buf.WriteText("b", default);
         // Same row, no render between: coalesced into the first bump.
-        Assert.Equal(afterFirst, buf.GetRowEpoch(0));
+        Assert.Equal(afterFirst, buf.GetRowGeneration(0));
 
         // The canvas calls MarkRender at the start of every RenderToBitmap.
         buf.MarkRender();
 
         buf.SetCursor(0, 2);
         buf.WriteText("c", default);
-        Assert.True(buf.GetRowEpoch(0) > afterFirst, "write after a render must bump the epoch");
-        Assert.True(buf.GetRowGeneration(0) > 1, "identity generation must bump too (cache invalidation)");
+        Assert.True(buf.GetRowGeneration(0) > afterFirst, "write after a render must bump the generation");
     }
 
     [Fact]
-    public void SetAlternateScreenToggle_BumpsEveryRowEpoch()
+    public void SetAlternateScreenToggle_BumpsEveryRowGeneration()
     {
-        // R4 regression: toggling the alt screen must invalidate every row's
-        // generation and epoch so no stale classification/pixels survive a
-        // screen switch in any render path.
         var buf = CreateBuffer();
+        WriteRows(buf, 0, 2);
+
         buf.SetAlternateScreen(true);
         for (int r = 0; r < 24; r++)
-        {
-            Assert.True(buf.GetRowEpoch(r) > 0, "toggle must bump every row's epoch");
             Assert.True(buf.GetRowGeneration(r) > 0, "toggle must bump every row's generation");
-        }
 
         buf.SetAlternateScreen(false);
         for (int r = 0; r < 24; r++)
-        {
-            Assert.True(buf.GetRowEpoch(r) > 0, "toggle back must bump every row's epoch");
             Assert.True(buf.GetRowGeneration(r) > 0, "toggle back must bump every row's generation");
-        }
-    }
-    [Fact]
-    public void Resize_KeepsEpochArrayInSync()
-    {
-        var buf = CreateBuffer(rows: 10);
-        buf.ScrollUpLines(1);
-
-        buf.Resize(30, 120);
-
-        Assert.Equal(30UL, (ulong)buf.RowScrollEpochs.Length);
-        // New rows have epoch 0; existing rows keep their values.
-        Assert.Equal(0UL, buf.GetRowEpoch(29));
-        Assert.Equal(0UL, buf.GetRowEpoch(0)); // row 0 received row 1's content (epoch 0)
-        Assert.Equal(1UL, buf.GetRowEpoch(9)); // exposed bottom row was bumped
-    }
-
-    [Fact]
-    public void ScrollEpochMath_RotateRange_MatchesArrayCopySemantics()
-    {
-        // Sanity: rotation with a positive delta (content down) and negative
-        // (content up) over an overlapping range, matching Array.Copy overlap rules.
-        var arr = new ulong[] { 10, 11, 12, 13, 14, 15, 16, 17 };
-        ScrollEpochMath.RotateRange(arr, 2, 6, 2); // content down by 2
-        // Row r receives old r-2: src [2..4] (12,13,14) -> dst [4..6].
-        Assert.Equal(new ulong[] { 10, 11, 12, 13, 12, 13, 14, 17 }, arr);
-
-        var arr2 = new ulong[] { 10, 11, 12, 13, 14, 15, 16, 17 };
-        ScrollEpochMath.RotateRange(arr2, 1, 7, -3); // content up by 3
-        // Row r receives old r+3: 14,15,16,17 -> 11,12,13,14 and 15,16,17 shifted in
-        Assert.Equal(new ulong[] { 10, 14, 15, 16, 17, 15, 16, 17 }, arr2);
     }
 }

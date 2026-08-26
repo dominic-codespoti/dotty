@@ -1,3 +1,5 @@
+using System;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -261,9 +263,10 @@ public unsafe class Screen : IDisposable
     private void ClearPhysicalRow(int physicalRow)
     {
         new Span<CellHot>((void*)(_cellsPtr + physicalRow * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-        var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + physicalRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-        for (int i = 0; i < Columns; i++)
-            coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
+        // Span.Fill vectorizes (4-byte struct, constant pattern) — the
+        // per-element loop measured 195ms per 500K-line flood, ~2x the fill.
+        new Span<ColdCell>((void*)(_coldCellsPtr + physicalRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns)
+            .Fill(new ColdCell { GraphemeIndex = -1 });
         _rowMaxCol[physicalRow] = -1;
         _rowColdFlags[physicalRow] = false;
     }

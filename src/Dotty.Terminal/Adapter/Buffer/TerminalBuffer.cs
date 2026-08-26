@@ -94,7 +94,6 @@ public class TerminalBuffer : IRenderSource
     // Distinct from _rowGenerations (identity; bumped on every content change)
     // so the composer's per-row classification cache can key on identity
     // without false hits after a scroll rotation.
-    private ulong[] _rowScrollEpochs = Array.Empty<ulong>();
 
     private List<string> _hyperlinks = new List<string> { string.Empty };
     private Dictionary<string, ushort> _hyperlinkLookup = new Dictionary<string, ushort>();
@@ -104,7 +103,6 @@ public class TerminalBuffer : IRenderSource
         Rows = rows;
         Columns = columns;
         _rowGenerations = new ulong[rows];
-        _rowScrollEpochs = new ulong[rows];
         _screens = new ScreenManager(rows, columns, scrollbackCapacity);
         _writer = CreateWriter();
         _scrollBottom = rows - 1;
@@ -131,7 +129,6 @@ public class TerminalBuffer : IRenderSource
         _scrollTop = Math.Min(_scrollTop, _scrollBottom);
 
         Array.Resize(ref _rowGenerations, rows);
-        Array.Resize(ref _rowScrollEpochs, rows);
         unchecked { _globalGeneration++; }
     }
 
@@ -423,15 +420,10 @@ public class TerminalBuffer : IRenderSource
         if (top == 0)
             unchecked { _totalScrolled += delta; }
 
-        // Motion epochs travel with content: row r now holds the content that
-        // was at row r+delta, so its epoch moves down the array. The exposed
-        // (blanked) bottom band gets fresh epochs.
-        ScrollEpochMath.RotateRange(_rowScrollEpochs, top, bottom, -delta);
-        for (int r = bottom - delta + 1; r <= bottom; r++)
-            unchecked { _rowScrollEpochs[r]++; }
-
         // Identity generations: the whole region changed; classification and
-        // glyph caches must re-examine every row.
+        // glyph caches must re-examine every row. (Motion epochs removed
+        // 2026-08-26: RowScrollEpochs had no readers — the composer keys its
+        // per-row cache on identity generations only.)
         BumpIdentity(top, height);
     }
 
@@ -462,15 +454,7 @@ public class TerminalBuffer : IRenderSource
                 ActiveBuffer.ClearRow(row);
         }
 
-        // Content moved down: row r now holds the content that was at row
-        // r-delta; epochs rotate up the array. The exposed top band gets fresh
-        // epochs (its content is restored-from-scrollback or blanked — new to
-        // the renderer either way).
         int height = bottom - top + 1;
-        ScrollEpochMath.RotateRange(_rowScrollEpochs, top, bottom, clampedLines);
-        for (int r = top; r < top + clampedLines; r++)
-            unchecked { _rowScrollEpochs[r]++; }
-
         BumpIdentity(top, height);
     }
 
@@ -857,9 +841,6 @@ public class TerminalBuffer : IRenderSource
         // clear inserted lines
         for (int r = row; r < row + count; r++)
         for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
-        ScrollEpochMath.RotateRange(_rowScrollEpochs, row, bottom, count);
-        for (int r = row; r < row + count; r++)
-            unchecked { _rowScrollEpochs[r]++; }
         BumpIdentity(row, regionHeight);
     }
 
@@ -898,9 +879,6 @@ public class TerminalBuffer : IRenderSource
         // clear trailing lines
         for (int r = bottom - count + 1; r <= bottom; r++)
         for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
-        ScrollEpochMath.RotateRange(_rowScrollEpochs, row, bottom, -count);
-        for (int r = bottom - count + 1; r <= bottom; r++)
-            unchecked { _rowScrollEpochs[r]++; }
         BumpIdentity(row, regionHeight);
     }
 
@@ -1014,7 +992,6 @@ public class TerminalBuffer : IRenderSource
     {
         if (row < 0 || row >= _rowGenerations.Length) return;
         unchecked { _rowGenerations[row]++; }
-        if (row < _rowScrollEpochs.Length) unchecked { _rowScrollEpochs[row]++; }
         unchecked { _globalGeneration++; }
     }
 
@@ -1025,7 +1002,6 @@ public class TerminalBuffer : IRenderSource
         for (int i = start; i < end; i++)
         {
             unchecked { _rowGenerations[i]++; }
-            if (i < _rowScrollEpochs.Length) unchecked { _rowScrollEpochs[i]++; }
         }
         unchecked { _globalGeneration += (ulong)(end - start); }
     }
@@ -1035,7 +1011,6 @@ public class TerminalBuffer : IRenderSource
         for (int i = 0; i < _rowGenerations.Length; i++)
         {
             unchecked { _rowGenerations[i]++; }
-            if (i < _rowScrollEpochs.Length) unchecked { _rowScrollEpochs[i]++; }
         }
         unchecked { _globalGeneration += (ulong)_rowGenerations.Length; }
     }
@@ -1062,16 +1037,6 @@ public class TerminalBuffer : IRenderSource
     }
 
     public ReadOnlySpan<ulong> RowGenerations => _rowGenerations;
-
-    /// <summary>Motion epoch of one logical row (see <c>_rowScrollEpochs</c>).</summary>
-    public ulong GetRowEpoch(int row)
-    {
-        if (row < 0 || row >= _rowScrollEpochs.Length) return 0;
-        return _rowScrollEpochs[row];
-    }
-
-    /// <summary>The full motion-epoch array; the renderer mirrors this.</summary>
-    public ReadOnlySpan<ulong> RowScrollEpochs => _rowScrollEpochs;
 
     /// <summary>
     /// Notify the active screen that a render cycle is starting so it can

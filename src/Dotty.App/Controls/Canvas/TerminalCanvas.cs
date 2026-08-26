@@ -156,7 +156,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 	// ISkiaSharpApiLeaseFeature (GPU-composited sessions); on software backends
 	// the probe falls back to the bitmap pipeline automatically.
 	private static readonly bool s_useLeaseRender =
-		true; // probe every frame: the lease feature is backend-dependent (Xvfb = software, live GPU sessions expose it)
+		!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOTTY_LEASE_RENDER"));
 	private GlyphAtlas? _quadAtlas;
 	private QuadGlyphRenderer? _quadRenderer;
 

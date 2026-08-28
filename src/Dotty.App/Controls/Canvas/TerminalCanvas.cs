@@ -48,6 +48,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
     [DllImport("libX11.so.6")] private static extern int XDefaultScreen(IntPtr display);
     [DllImport("libX11.so.6")] private static extern int XFlush(IntPtr display);
     [DllImport("libX11.so.6")] private static extern IntPtr XOpenDisplay(IntPtr display);
+    [DllImport("libX11.so.6")] private static extern int XDestroyImage(IntPtr image);
     private int _diagDirectLogged = 0;
     private int _diagDirectEntryLogged = 0;
     private static IntPtr s_x11Display = IntPtr.Zero;
@@ -698,6 +699,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 			// Content is rasterized only when the buffer/geometry/colors changed.
 			// Cursor blink and shape changes reuse the cached bitmap, so blink
 			// never re-rasterizes terminal content.
+			bool didRender = false;
 			if (_contentDirty || _bitmap == null)
 			{
 				long contentStarted = RenderTelemetry.BeginContentRender();
@@ -712,6 +714,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				}
 
 				// A lock miss keeps the flag set so the retry frame re-rasterizes.
+				didRender = contentRendered;
 				if (contentRendered)
 				{
 					_contentDirty = false;
@@ -725,7 +728,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				context.DrawImage(_bitmap,
 					new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height),
 					new Rect(Bounds.Size));
-				TryDirectX11Present();
+				if (didRender) TryDirectX11Present();
 			}
 
 			DrawCursorOverlay(context, buffer);
@@ -1883,10 +1886,11 @@ public class TerminalCanvas : Control, ILogicalScrollable
                 // ZPixmap = 2, bitmap_pad 32
                 IntPtr ximage = XCreateImage(display, visual, (uint)depth, 2, 0, locked.Address, (uint)w, (uint)h, 32, locked.RowBytes);
                 if (ximage == IntPtr.Zero) return;
-                // Do not call XDestroyImage - it would free our locked.Address. Leak the small XImage struct (~80 bytes) per frame for this spike.
                 XPutImage(display, window, gc, ximage, 0, 0, destX, destY, (uint)w, (uint)h);
                 XFlush(display);
-                // leak ximage intentionally for spike; proper fix would null data ptr before destroy
+                // Prevent XDestroyImage from freeing our bitmap memory (it would call XFree on data)
+                Marshal.WriteIntPtr(ximage + 16, IntPtr.Zero);
+                XDestroyImage(ximage);
             }
             finally
             {

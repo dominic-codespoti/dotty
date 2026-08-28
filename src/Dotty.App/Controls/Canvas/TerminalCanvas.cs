@@ -39,6 +39,18 @@ public enum TerminalCursorShape
 /// </summary>
 public class TerminalCanvas : Control, ILogicalScrollable
 {
+    [DllImport("libX11.so.6")] private static extern IntPtr XCreateGC(IntPtr display, IntPtr d, ulong valuemask, IntPtr values);
+    [DllImport("libX11.so.6")] private static extern int XFreeGC(IntPtr display, IntPtr gc);
+    [DllImport("libX11.so.6")] private static extern int XPutImage(IntPtr display, IntPtr d, IntPtr gc, IntPtr image, int src_x, int src_y, int dest_x, int dest_y, uint width, uint height);
+    [DllImport("libX11.so.6")] private static extern IntPtr XCreateImage(IntPtr display, IntPtr visual, uint depth, int format, int offset, IntPtr data, uint width, uint height, int bitmap_pad, int bytes_per_line);
+    [DllImport("libX11.so.6")] private static extern IntPtr XDefaultVisual(IntPtr display, int screen);
+    [DllImport("libX11.so.6")] private static extern int XDefaultDepth(IntPtr display, int screen);
+    [DllImport("libX11.so.6")] private static extern int XDefaultScreen(IntPtr display);
+    [DllImport("libX11.so.6")] private static extern int XFlush(IntPtr display);
+    [DllImport("libX11.so.6")] private static extern IntPtr XOpenDisplay(IntPtr display);
+    private int _diagDirectLogged = 0;
+    private int _diagDirectEntryLogged = 0;
+    private static IntPtr s_x11Display = IntPtr.Zero;
 	public static readonly StyledProperty<TerminalBuffer?> BufferProperty =
 		AvaloniaProperty.Register<TerminalCanvas, TerminalBuffer?>(nameof(Buffer));
 
@@ -713,6 +725,7 @@ public class TerminalCanvas : Control, ILogicalScrollable
 				context.DrawImage(_bitmap,
 					new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height),
 					new Rect(Bounds.Size));
+				TryDirectX11Present();
 			}
 
 			DrawCursorOverlay(context, buffer);
@@ -1829,7 +1842,61 @@ public class TerminalCanvas : Control, ILogicalScrollable
 		return SKRect.Create(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
 	}
 
-	private static bool ParseHexColor(string hex, out SKColor color)
+	private void TryDirectX11Present()
+    {
+        if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _diagDirectEntryLogged < 10) { Console.Error.WriteLine($"[DIAG] direct entry _bitmap={_bitmap != null} topLevel={TopLevel.GetTopLevel(this) != null} hasHandle={TopLevel.GetTopLevel(this)?.TryGetPlatformHandle() != null}"); _diagDirectEntryLogged++; }
+        if (!OperatingSystem.IsLinux()) return;
+        if (Environment.GetEnvironmentVariable("DOTTY_X11_DIRECT") != "1") return;
+        if (_bitmap == null) return;
+        try
+        {
+            var tl = TopLevel.GetTopLevel(this);
+            if (tl == null) return;
+            var handle = tl.TryGetPlatformHandle();
+            if (handle == null) { if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _diagDirectLogged < 10) { _diagDirectLogged++; Console.Error.WriteLine("[DIAG] direct: null handle"); } return; }
+            var window = handle.Handle;
+            if (window == IntPtr.Zero) { if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _diagDirectLogged < 10) { _diagDirectLogged++; Console.Error.WriteLine("[DIAG] direct: zero window"); } return; }
+            var t = Type.GetType("Avalonia.X11.AvaloniaX11Platform, Avalonia.X11");
+            if (t == null) t = Type.GetType("Avalonia.X11.X11Platform, Avalonia.X11");
+            var prop = t?.GetProperty("Display", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            var display = prop != null ? (IntPtr)prop.GetValue(null)! : IntPtr.Zero;
+            if (display == IntPtr.Zero) { if (s_x11Display == IntPtr.Zero) s_x11Display = XOpenDisplay(IntPtr.Zero); display = s_x11Display; }
+            if (display == IntPtr.Zero) { if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _diagDirectLogged < 10) { _diagDirectLogged++; Console.Error.WriteLine($"[DIAG] direct: zero display t={t} prop={prop}"); } return; }
+            var pos = this.TranslatePoint(new Point(0, 0), tl);
+            double scale = Math.Max(0.1, _renderScaling);
+            int destX = (int)Math.Round((pos?.X ?? 0) * scale);
+            int destY = (int)Math.Round((pos?.Y ?? 0) * scale);
+            if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _diagDirectLogged < 10) { _diagDirectLogged++; Console.Error.WriteLine($"[DIAG] direct: pos={pos} scale={scale} hasBitmap={_bitmap != null} tl={tl} handle={handle} window={window} display={display}"); }
+            using var locked = _bitmap.Lock();
+            int w = locked.Size.Width;
+            int h = locked.Size.Height;
+            if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _diagDirectLogged < 10) { _diagDirectLogged++; Console.Error.WriteLine($"[DIAG] direct present pos={pos} scale={scale} dest={destX},{destY} bitmap={w}x{h} display={display} window={window} rowBytes={locked.RowBytes} w*h*4={w*h*4}"); }
+            if (w <= 0 || h <= 0) return;
+            int screen = XDefaultScreen(display);
+            IntPtr visual = XDefaultVisual(display, screen);
+            int depth = XDefaultDepth(display, screen);
+            if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null && _diagDirectLogged < 10) { _diagDirectLogged++; Console.Error.WriteLine($"[DIAG] direct gc screen={screen} visual={visual} depth={depth}"); }
+            IntPtr gc = XCreateGC(display, window, 0, IntPtr.Zero);
+            if (gc == IntPtr.Zero) { if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null) Console.Error.WriteLine($"[DIAG] direct: gc is zero"); return; }
+            try
+            {
+                // ZPixmap = 2, bitmap_pad 32
+                IntPtr ximage = XCreateImage(display, visual, (uint)depth, 2, 0, locked.Address, (uint)w, (uint)h, 32, locked.RowBytes);
+                if (ximage == IntPtr.Zero) return;
+                // Do not call XDestroyImage - it would free our locked.Address. Leak the small XImage struct (~80 bytes) per frame for this spike.
+                XPutImage(display, window, gc, ximage, 0, 0, destX, destY, (uint)w, (uint)h);
+                XFlush(display);
+                // leak ximage intentionally for spike; proper fix would null data ptr before destroy
+            }
+            finally
+            {
+                XFreeGC(display, gc);
+            }
+        }
+        catch (Exception ex) { if (Environment.GetEnvironmentVariable("DOTTY_DIAG") != null) Console.Error.WriteLine($"[DIAG] direct ex: {ex.GetType().Name}: {ex.Message}"); }
+    }
+
+    private static bool ParseHexColor(string hex, out SKColor color)
 	{
 		color = SKColors.White;
 		try

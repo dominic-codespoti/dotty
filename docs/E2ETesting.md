@@ -1,382 +1,126 @@
-# E2E Testing Guide
+# End-to-End Testing Guide
 
-This guide covers the End-to-End (E2E) testing infrastructure for the Dotty terminal emulator.
+Dotty has two layers of compatibility tests:
 
-## Overview
+1. Headless terminal-core tests for parser, input, buffer, resize, and protocol behavior.
+2. Native host smoke tests for PTY startup, rendering, input, resize, focus, paste,
+   and shutdown.
 
-The E2E test suite provides comprehensive testing of the Dotty application by:
-- Starting the actual application in a controlled environment
-- Sending commands via a TCP-based interface
-- Capturing screenshots on failures
-- Verifying terminal state and behavior
+The executable host is `src/Dotty/Dotty.csproj`. There is no separate
+`Dotty.E2E.Tests` project.
 
-## Architecture
+## Headless contract tests
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      E2E Test Suite                            │
-├─────────────────────────────────────────────────────────────────┤
-│  Test Classes                                                   │
-│  ├── RenderingE2ETests                                          │
-│  ├── InputE2ETests                                              │
-│  ├── AnsiE2ETests                                               │
-│  ├── WindowManagementE2ETests                                   │
-│  ├── ConfigurationE2ETests                                      │
-│  ├── PerformanceE2ETests                                        │
-│  └── IntegrationE2ETests                                        │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Uses
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Test Infrastructure                        │
-├─────────────────────────────────────────────────────────────────┤
-│  ├── TestApplicationHost (lifecycle management)               │
-│  ├── TestCommandInterface (TCP commands)                        │
-│  ├── HeadlessApplicationRunner (CI mode)                      │
-│  ├── TestTimeoutManager (timeout handling)                      │
-│  └── E2ETestBase (test base class)                              │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Communicates via TCP
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Dotty Application                            │
-├─────────────────────────────────────────────────────────────────┤
-│  ├── MainWindow (handles test commands)                         │
-│  ├── TerminalView (renders terminal)                            │
-│  ├── TerminalSession (manages PTY)                              │
-│  └── Command Listener (TCP port)                                │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Test Command Interface
-
-The application exposes a TCP command interface when the `DOTTY_TEST_PORT` environment variable is set. Commands are sent as plain text and responses are returned as JSON.
-
-### Supported Commands
-
-| Command | Description | Response |
-|---------|-------------|----------|
-| `TYPE:<text>` | Send text to terminal | `OK` |
-| `KEY:<key>` | Send key press | `OK` |
-| `KEYCOMBO:<mods>+<key>` | Send key combo | `OK` |
-| `RESIZE:<cols>:<rows>` | Resize terminal | `OK` |
-| `SETCONFIG:<key>:<val>` | Set config value | `OK` |
-| `GET_STATE` | Get terminal state | JSON state |
-| `SCREENSHOT` | Capture screenshot | Binary PNG |
-| `WAIT_FOR_IDLE` | Wait for render | `OK` |
-| `INJECT_ANSI:<b64>` | Inject ANSI | `OK` |
-| `SCROLL:<lines>` | Scroll buffer | `OK` |
-| `COPY` | Copy selection | `OK` |
-| `PASTE` | Paste clipboard | `OK` |
-| `NEW_TAB` | Create tab (active) | `OK` |
-| `NEW_TAB_BG` | Create tab (background, lazy) | `OK` |
-| `CLOSE_TAB` | Close tab | `OK` |
-| `NEXT_TAB` | Next tab | `OK` |
-| `PREV_TAB` | Previous tab | `OK` |
-| `CAPTURE` | Capture window screenshot | Binary PNG |
-| `CAPTURE_CANVAS` | Capture terminal canvas | Binary PNG |
-| `STATS` | Get statistics | JSON stats |
-
-### Example Command Flow
-
-```
-Test -> App: "TYPE:hello"
-App -> Test: "OK"
-
-Test -> App: "STATS"
-App -> Test: {"totalTabs":1, "sessionsStarted":1, ...}
-```
-
-## Running Tests
-
-### Prerequisites
-
-1. Build the application:
-```bash
-dotnet build src/Dotty.App/Dotty.App.csproj
-```
-
-2. Ensure test project builds:
-```bash
-dotnet build tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj
-```
-
-### Local Development
-
-Run all E2E tests:
-```bash
-dotnet test tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj
-```
-
-Run specific test class:
-```bash
-dotnet test tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj --filter "FullyQualifiedName~RenderingE2ETests"
-```
-
-Run specific test:
-```bash
-dotnet test tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj --filter "FullyQualifiedName~Basic_Rendering_Should_Display_Text"
-```
-
-Run in headless mode (no GUI):
-```bash
-DOTTY_E2E_HEADLESS=1 dotnet test tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj
-```
-
-### CI Environment
-
-The tests automatically detect CI environments and run in headless mode. Set these environment variables as needed:
+Run the full solution tests from the repository root:
 
 ```bash
-export DOTTY_E2E_HEADLESS=1
-export DOTTY_TEST_PORT=19000  # Optional: specify port
-export DOTTY_BENCH_THROUGHPUT=1  # Optional: benchmark mode
-dotnet test tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj
+dotnet test --solution Dotty.slnx -c Release --nologo
 ```
 
-## Writing Tests
+The following tests are platform-neutral and should run on every supported OS:
 
-### Basic Test Structure
+- `Dotty.App.Tests.ParserEdgeCaseTests`
+- `Dotty.App.Tests.P0TerminalCompatibilityTests`
+- `Dotty.App.Tests.TerminalInputEncoderTests`
+- `Dotty.App.Tests.TerminalKeyboardDispatcherTests`
+- `Dotty.App.Tests.TerminalBufferCursorTests`
+- `Dotty.Terminal.Tests.ReflowResizeTests`
 
-```csharp
-public class MyE2ETests : E2ETestBase
-{
-    public MyE2ETests() : base("MyTestCategory")
-    {
-    }
-
-    [Fact]
-    public async Task My_Test_Should_Do_Something()
-    {
-        await RunTestAsync(async () =>
-        {
-            // Arrange
-            var initialState = await GetStatsAsync();
-            
-            // Act
-            await SendTextAndWaitAsync("test input");
-            
-            // Assert
-            var finalState = await GetStatsAsync();
-            Assert.True(finalState.SessionsStarted > 0);
-        });
-    }
-}
-```
-
-### Using Assertions
-
-```csharp
-// Screen assertions
-ScreenBufferAssertions.ContainsText(lines, "expected text");
-ScreenBufferAssertions.LineEquals(lines, 0, "first line");
-
-// Rendering assertions
-RenderingAssertions.DimensionsMatch(cols, rows, 80, 24);
-
-// GUI assertions
-GuiAssertions.TabCountEquals(stats.TotalTabs, 2);
-```
-
-### Adding Test Data
-
-Place test data files in `TestData/`:
-
-```
-TestData/
-├── ansi-samples/      # ANSI sequence samples
-├── shell-scripts/     # Test shell scripts
-├── configs/          # Test configuration files
-└── expected-outputs/   # Expected output files
-```
-
-Access test data in tests:
-
-```csharp
-var content = await File.ReadAllTextAsync("TestData/shell-scripts/basic-test.sh");
-```
-
-## Test Categories
-
-### RenderingE2ETests
-Tests terminal rendering functionality including:
-- Basic text rendering
-- Color rendering (basic, 256, TrueColor)
-- Font rendering and sizing
-- Window resizing and reflow
-- Scrollback buffer rendering
-- Cursor rendering (block, line, bar)
-- Selection highlighting
-
-### InputE2ETests
-Tests keyboard input handling:
-- Alphanumeric keys
-- Special characters
-- Control keys (Ctrl, Alt, Shift)
-- Function keys (F1-F12)
-- Arrow keys
-- Copy/paste operations
-
-### AnsiE2ETests
-Tests ANSI escape sequence handling:
-- SGR codes (colors, styles)
-- Cursor movement
-- Erase sequences
-- Scroll sequences
-- Title changes
-- Complex mixed sequences
-
-### WindowManagementE2ETests
-Tests window and tab management:
-- Tab creation and closing
-- Tab switching
-- Window resizing
-- Session preservation
-- Tab titles
-
-### ConfigurationE2ETests
-Tests configuration and theming:
-- Built-in themes
-- Font configuration
-- Color schemes
-- Window transparency
-- Scrollback size
-
-### PerformanceE2ETests
-Tests performance under load:
-- High throughput rendering
-- Large buffer handling
-- Rapid configuration changes
-- Multiple tab performance
-- Startup time
-
-### IntegrationE2ETests
-Tests shell and tool integration:
-- Shell startup
-- Basic commands
-- Environment variables
-- Pipes and redirections
-- Git integration
-
-## Debugging Failed Tests
-
-### Check Logs
-
-Test logs are saved to `artifacts/logs/`:
+Native PTY tests must run on the host platform:
 
 ```bash
-cat artifacts/logs/Rendering_*.log
+dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj \
+  -c Release --nologo
 ```
 
-### View Screenshots
+Windows CI must execute `WindowsPtyTests`; Unix CI must build `pty-helper`
+before executing `UnixPtyTests`.
 
-Screenshots are captured on failure and saved to `artifacts/screenshots/`:
+## Host control interface
+
+When `DOTTY_TEST_PORT` is set, the host exposes the TCP control interface used
+by the developer smoke harness. Commands are newline-delimited:
+
+| Command | Purpose |
+|---|---|
+| `TYPE:<text>` | Send text input |
+| `KEY:<name>` | Send a special key |
+| `RESIZE:<columns>:<rows>` | Resize the active terminal |
+| `DUMP` | Return visible terminal text |
+| `GET_STATE` | Return dimensions, cursor, and scrollback |
+| `WAIT_FOR_IDLE` | Wait for pending host work |
+| `STATS` | Return tab/session statistics |
+| `SHUTDOWN` | Close the host cleanly |
+
+The protocol is transport-only. Assertions about parser modes, exact PTY bytes,
+focus reports, paste wrappers, and reflow remain in deterministic tests.
+
+## Linux smoke
+
+Linux GUI smoke requires an X11 display server. Xvfb is the minimum CI setup:
 
 ```bash
-ls artifacts/screenshots/*.png
+make -C src/Dotty.NativePty
+dotnet build src/Dotty/Dotty.csproj -c Release --nologo
+mkdir -p /tmp/dotty-empty-home
+HOME=/tmp/dotty-empty-home timeout 5s \
+  xvfb-run -a dotnet run --project src/Dotty/Dotty.csproj --no-build
 ```
 
-### State Dumps
+Exit status `124` is expected because the host remains running. Any earlier
+exit, native loader error, PTY startup error, or unhandled exception fails the
+smoke test.
 
-Terminal state is dumped to `artifacts/states/`:
+Wayland smoke should use a real compositor such as Weston; Xvfb does not prove
+Wayland behavior.
+
+## macOS smoke
+
+Run on native macOS runners for both Intel and Apple Silicon:
 
 ```bash
-cat artifacts/states/Input_*_state.txt
+make -C src/Dotty.NativePty
+dotnet build Dotty.slnx -c Release --nologo
+dotnet test --solution Dotty.slnx -c Release --nologo
+DOTTY_TEST_PORT=19000 dotnet run --project src/Dotty/Dotty.csproj
 ```
 
-### Common Issues
+Exercise shell startup, UTF-8 text, resize, clipboard, focus changes, and clean
+window shutdown. Retina scale changes must be included in GUI runs.
 
-1. **Application not starting**
-   - Check build: `dotnet build`
-   - Verify executable path in logs
-   - Check port availability
+## Windows smoke
 
-2. **Timeout issues**
-   - Increase timeout in `e2e.appsettings.json`
-   - Check if app is responsive
-   - Review logs for startup errors
+Run on Windows 10 build 17763+ and Windows 11:
 
-3. **Headless mode failures**
-   - Ensure `DOTTY_E2E_HEADLESS=1` is set
-   - Check Avalonia headless dependencies
-   - Verify X11 is not required
-
-## CI Integration
-
-### GitHub Actions
-
-```yaml
-name: E2E Tests
-on: [push, pull_request]
-
-jobs:
-  e2e-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v3
-        with:
-          dotnet-version: '10.0.x'
-      
-      - name: Build
-        run: dotnet build
-      
-      - name: Run E2E Tests
-        run: dotnet test tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj --verbosity normal
-        env:
-          DOTTY_E2E_HEADLESS: 1
-        timeout-minutes: 15
-      
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
-        if: failure()
-        with:
-          name: test-artifacts
-          path: tests/Dotty.E2E.Tests/artifacts/
+```powershell
+dotnet build Dotty.slnx -c Release --nologo
+dotnet test --project tests\Dotty.NativePty.Tests\Dotty.NativePty.Tests.csproj `
+  -c Release --filter "FullyQualifiedName~WindowsPtyTests"
+$env:DOTTY_TEST_PORT = "19000"
+dotnet run --project src\Dotty\Dotty.csproj -c Release
 ```
 
-## Best Practices
+Exercise `cmd.exe`, Windows PowerShell, and `pwsh.exe`; verify ConPTY input,
+output, resize, focus, clipboard, process exit, and shutdown.
 
-1. **Use RunTestAsync**: Always wrap test logic in `RunTestAsync` for proper error handling
-2. **Add timeouts**: Use `TimeoutHelper` for operations that might hang
-3. **Clean up**: Tests automatically clean up via `IAsyncLifetime`
-4. **Screenshot on failure**: Enabled by default, review artifacts for failures
-5. **Parallel execution**: Tests support parallel execution where safe
+## Artifact smoke
 
-## Troubleshooting
+Every published artifact must be extracted into a clean directory and tested
+from there, not from the repository. Unix artifacts must contain an executable
+`pty-helper` beside the host binary. Windows artifacts must contain the host
+binary and require no Unix helper.
 
-### Port Conflicts
+Minimum artifact checks:
 
-If the default test port is in use, tests will automatically find an available port. To specify a port:
+1. Start the host.
+2. Create a session and run a shell command.
+3. Verify UTF-8 and VT output.
+4. Resize the terminal.
+5. Verify focus and paste paths.
+6. Shut down without orphan processes.
 
-```bash
-DOTTY_TEST_PORT=19123 dotnet test tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj
-```
+## Failure handling
 
-### Slow Tests
-
-If tests are running slowly:
-1. Run in headless mode: `DOTTY_E2E_HEADLESS=1`
-2. Reduce screenshot capture frequency
-3. Use parallel execution: `--parallel`
-
-### Memory Issues
-
-For memory-intensive tests:
-## Changelog
-
-| Date | Change |
-|------|--------|
-| 2026-06-17 | Added `NEW_TAB_BG` command, `CAPTURE`/`CAPTURE_CANVAS` commands for screenshot capture |
-
----
-
-1. Increase test timeout
-2. Run tests sequentially: `--parallel none`
-3. Monitor memory usage in logs
-
-*Last updated: 2026-06-17*
+Smoke scripts must propagate build, test, and host exit codes. They must not
+silently convert failures into success. Capture host logs and the extracted
+artifact manifest for every failed matrix job.

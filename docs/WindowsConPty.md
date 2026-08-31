@@ -18,18 +18,14 @@ Windows ConPTY provides a pseudo-terminal implementation that allows Dotty to:
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────┐
-│           Dotty.App (Avalonia)          │
-├─────────────────────────────────────────┤
-│        TerminalSession (ViewModel)      │
-├─────────────────────────────────────────┤
-│     Dotty.NativePty (new project)     │
-│  ┌─────────────────┐ ┌────────────────┐ │
-│  │   WindowsPty    │ │    UnixPty     │ │
-│  │  (ConPTY API)   │ │ (pty-helper.c) │ │
-│  └─────────────────┘ └────────────────┘ │
-└─────────────────────────────────────────┘
+```text
+Dotty host (Silk.NET/OpenGL)
+        │
+TerminalSession
+        │
+Dotty.NativePty
+        │
+WindowsPty → Windows ConPTY
 ```
 
 ## Key Components
@@ -76,21 +72,17 @@ var pty = PtyFactory.Create();  // Returns WindowsPty on Windows, UnixPty on Uni
 
 ### Prerequisites
 
-1. Visual Studio 2022 or .NET 10.0 SDK
-2. Windows 10/11 SDK
+1. Windows 10 build 17763 or Windows 11
+2. .NET 10 SDK
+3. Windows SDK and a desktop OpenGL 3.3 driver
 
 ### Build Steps
 
 ```powershell
-# Clone the repository
 git clone https://github.com/dominic-codespoti/dotty.git
 cd dotty
-
-# Build the solution
-dotnet build Dotty.sln
-
-# Run the application
-dotnet run --project src/Dotty.App/Dotty.App.csproj
+dotnet build Dotty.slnx -c Release
+dotnet run --project src/Dotty/Dotty.csproj
 ```
 
 ## Testing
@@ -131,51 +123,23 @@ dotnet run --project src/Dotty.App/Dotty.App.csproj
 
 ### Automated Testing
 
-Create a test script `test-conpty.ps1`:
+Run the host-native PTY and platform tests from the repository root:
 
 ```powershell
-# Test Windows ConPTY implementation
-param(
-    [Parameter()]
-    [string]$DottyPath = ".\src\Dotty.App\bin\Debug\net10.0\Dotty.App.exe"
-)
-
-# Check OS version
-$osVersion = [System.Environment]::OSVersion.Version
-if ($osVersion.Build -lt 17763) {
-    Write-Error "Windows build $($osVersion.Build) does not support ConPTY. Requires build 17763 or later."
-    exit 1
-}
-
-# Test platform detection
-Add-Type -Path ".\src\Dotty.Abstractions\bin\Debug\net10.0\Dotty.Abstractions.dll"
-Add-Type -Path ".\src\Dotty.NativePty\bin\Debug\net10.0\Dotty.NativePty.dll"
-
-$platform = [Dotty.Abstractions.Pty.PtyPlatform]
-Write-Host "IsWindows: $($platform::IsWindows)"
-Write-Host "IsConPtySupported: $($platform::IsConPtySupported)"
-Write-Host "Default Shell: $($platform::GetDefaultShell())"
-
-# Test PTY creation
-$factory = [Dotty.NativePty.PtyFactory]
-Write-Host "IsSupported: $($factory::IsSupported)"
-
-if (-not $factory::IsSupported) {
-    Write-Error "PTY not supported: $($factory::GetUnsupportedReason())"
-    exit 1
-}
-
-Write-Host "All tests passed!"
+dotnet test --project tests\Dotty.NativePty.Tests\Dotty.NativePty.Tests.csproj `
+  -c Release --filter "FullyQualifiedName~WindowsPtyTests|FullyQualifiedName~PtyPlatformTests"
+dotnet test --solution Dotty.slnx -c Release
 ```
+
+The Windows matrix must execute `WindowsPtyTests`; it must not filter them out.
 
 ## Debugging
 
-### Enable Debug Logging
-
 Set environment variable before launching:
+
 ```powershell
 $env:DOTTY_DEBUG = "1"
-dotnet run --project src/Dotty.App
+dotnet run --project src/Dotty/Dotty.csproj
 ```
 
 ### Common Issues
@@ -221,10 +185,10 @@ as async `FileStream` instances throws this exception.
 3. Empty `DOTTY_SHELL`/`SHELL` environment values being treated as a valid shell command
 
 **Solution**:
-1. Ensure `CreatePipe` passes `SECURITY_ATTRIBUTES` by reference
-2. Pass `HPCON` directly to `UpdateProcThreadAttribute` with `cbSize = IntPtr.Size`
-3. Treat empty or whitespace shell environment values as unset and fall back to platform default
-4. Verify that `powershell.exe` (or chosen shell) appears as a child process of `Dotty.App.exe`
+1. Ensure `CreatePipe` passes `SECURITY_ATTRIBUTES` by reference.
+2. Pass `HPCON` directly to `UpdateProcThreadAttribute` with `cbSize = IntPtr.Size`.
+3. Treat empty or whitespace shell environment values as unset.
+4. Verify that `powershell.exe` (or the chosen shell) is a child of `dotty.exe`.
 
 #### Issue: Prompt text appears in old output rows until window is maximized
 
@@ -264,12 +228,11 @@ PowerShell cursor math (PSReadLine) can drift and write input on stale rows.
 2. **Handle Security**: Pipe handles are properly secured with inheritance flags
 3. **No Elevation Required**: Standard user privileges work for most shells
 
-## Future Improvements
+## Future improvements
 
-1. Windows Terminal integration for shared settings
-2. Windows clipboard integration for copy/paste
-3. Acrylic/Mica background effects on Windows 11
-4. Tab tear-out to new windows (when Avalonia supports it)
+1. Windows Terminal integration for shared settings.
+2. Acrylic/Mica background effects on Windows 11.
+3. Tab tear-out to new windows.
 
 ## References
 

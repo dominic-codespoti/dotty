@@ -70,24 +70,14 @@ internal sealed class BufferEraser
             ref var cell = ref buffer.GetCellRef(cursor.Row, cursor.Col);
             if (cell.IsContinuation)
             {
-                cell.Reset();
+                buffer.ClearCell(cursor.Row, cursor.Col);
                 cursor.MoveBackward(rows, columns);
-                continue;
+                break;
             }
 
             if (!cell.IsEmpty)
             {
-                int width = Math.Max(1, (int)cell.Width);
-                cell.Reset();
-                for (int i = 1; i < width && cursor.Col + i < columns; i++)
-                {
-                    ref var cont = ref buffer.GetCellRef(cursor.Row, cursor.Col + i);
-                    if (!cont.IsContinuation)
-                    {
-                        break;
-                    }
-                    cont.Reset();
-                }
+                buffer.ClearCell(cursor.Row, cursor.Col);
             }
             break;
         }

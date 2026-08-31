@@ -82,8 +82,7 @@ cd dotty
 
 ### .NET Version
 
-- **Target Framework**: .NET 10.0
-- **Minimum Supported**: .NET 9.0 (may work but not officially supported)
+- **Target and minimum supported**: .NET 10.0
 
 ### Native Dependencies
 
@@ -99,15 +98,17 @@ On Linux and macOS, Dotty requires a native PTY helper (`pty-helper`) written in
 ### Solution Structure
 
 ```
-Dotty.sln
+Dotty.slnx
 ├── src/
-│   ├── Dotty.App/                    # Avalonia UI application
-│   ├── Dotty.Terminal/               # Terminal core engine
-│   ├── Dotty.NativePty/              # POSIX PTY helper (C + C# wrapper)
-│   ├── Dotty.Abstractions/           # Shared interfaces
-│   └── Dotty.Config.SourceGenerator/ # Compile-time config generator
+│   ├── Dotty/                       # Silk.NET/GLFW GPU executable
+│   ├── Dotty.Runtime/               # Tabs, panes, input, scripting
+│   ├── Dotty.Rendering.Gpu/         # Shared atlas and GPU frame data
+│   ├── Dotty.Terminal/              # Terminal core engine
+│   ├── Dotty.NativePty/             # POSIX PTY helper (C + C# wrapper)
+│   ├── Dotty.Abstractions/          # Shared interfaces
+│   └── Dotty.Config.SourceGenerator/# Compile-time config generator
 └── tests/
-    └── Dotty.App.Tests/              # Unit and integration tests
+    └── Dotty.App.Tests/             # Host, input, and runtime tests
 ```
 
 ## Building the Project
@@ -119,20 +120,20 @@ Dotty.sln
 cd src/Dotty.NativePty && make && cd ../..
 
 # Restore dependencies
-dotnet restore Dotty.sln
+dotnet restore Dotty.slnx
 
 # Build entire solution
-dotnet build Dotty.sln -c Release
+dotnet build Dotty.slnx -c Release
 ```
 
 ### Quick Build (Iterative Development)
 
 ```bash
 # Build without native helper (uses existing binary if present)
-dotnet build Dotty.sln -c Debug
+dotnet build Dotty.slnx -c Debug
 
 # Run the application
-dotnet run --project src/Dotty.App
+dotnet run --project src/Dotty
 ```
 
 ### Native AOT Publishing
@@ -141,7 +142,7 @@ For production releases with Native AOT:
 
 ```bash
 # Linux x64
-dotnet publish src/Dotty.App/Dotty.App.csproj \
+dotnet publish src/Dotty/Dotty.csproj \
   -c Release \
   -r linux-x64 \
   --self-contained true \
@@ -157,19 +158,19 @@ dotnet publish src/Dotty.App/Dotty.App.csproj \
 
 ## Running Tests
 
-Dotty uses **xUnit** for unit testing with **Avalonia.Headless** for UI component testing.
+Dotty uses **xUnit** for unit and integration testing across its runtime, rendering, parser, and PTY layers.
 
 ### Run All Tests
 
 ```bash
 # Run all tests
-dotnet test Dotty.sln
+dotnet test --solution Dotty.slnx
 
 # Run with verbose output
-dotnet test Dotty.sln --verbosity normal
+dotnet test --solution Dotty.slnx --verbosity normal
 
 # Run specific test project
-dotnet test tests/Dotty.App.Tests
+dotnet test --project tests/Dotty.App.Tests/Dotty.App.Tests.csproj
 ```
 
 ### Platform-Specific Test Filtering
@@ -178,10 +179,10 @@ Tests can be filtered by platform requirements:
 
 ```bash
 # Skip Unix-specific tests on Windows
-dotnet test Dotty.sln --filter "FullyQualifiedName!~Unix"
+dotnet test --solution Dotty.slnx --filter "FullyQualifiedName!~Unix"
 
 # Run only parser tests
-dotnet test Dotty.sln --filter "FullyQualifiedName~Parser"
+dotnet test --solution Dotty.slnx --filter "FullyQualifiedName~Parser"
 ```
 
 ### Test Categories
@@ -207,7 +208,7 @@ dotnet test Dotty.sln --filter "FullyQualifiedName~Parser"
 
 ```bash
 # Generate TRX test results for CI
-dotnet test Dotty.sln --logger trx --results-directory ./TestResults
+dotnet test --solution Dotty.slnx --report-xunit-trx --results-directory ./TestResults
 ```
 
 ## Code Style Guidelines
@@ -295,19 +296,22 @@ When working with `Dotty.Config.SourceGenerator`:
 
 ### Architecture Layers
 
-```
+```text
 ┌─────────────────────────────────────────────┐
-│           Dotty.App (UI Layer)              │
-│     Avalonia-based GUI application          │
+│             Dotty (GPU Host)                │
+│ Silk.NET/GLFW window and OpenGL submission  │
+├─────────────────────────────────────────────┤
+│    Dotty.Runtime + Dotty.Rendering.Gpu      │
+│   tabs, panes, input, scenes, A8 atlas      │
 ├─────────────────────────────────────────────┤
 │         Dotty.Terminal (Core Layer)         │
-│   Terminal engine, parsers, buffers         │
+│   terminal engine, parsers, buffers         │
 ├─────────────────────────────────────────────┤
 │        Dotty.NativePty (Native Layer)       │
 │    POSIX PTY helper (C + C# wrapper)        │
 ├─────────────────────────────────────────────┤
 │      Dotty.Abstractions (Contracts)         │
-│    Shared interfaces, zero dependencies     │
+│    shared interfaces, zero dependencies     │
 └─────────────────────────────────────────────┘
 ```
 
@@ -315,13 +319,16 @@ When working with `Dotty.Config.SourceGenerator`:
 
 | Directory | Purpose |
 |-----------|---------|
-| `src/Dotty.App/` | Avalonia application, views, view models |
-| `src/Dotty.Terminal/` | Terminal buffer, ANSI parser, rendering logic |
+| `src/Dotty/` | Silk.NET/GLFW GPU host and composition root |
+| `src/Dotty/Host/` | Window lifecycle and host services |
+| `src/Dotty/Input/` | Keyboard repeat/dispatch and mouse interaction controllers |
+| `src/Dotty/Rendering/` | Font metrics and terminal scene composition |
+| `src/Dotty.Terminal/` | Terminal buffer, ANSI parser, rendering contracts |
 | `src/Dotty.NativePty/` | C pty-helper and C# bindings |
 | `src/Dotty.Abstractions/` | Interfaces, config contracts, theme definitions |
 | `src/Dotty.Config.SourceGenerator/` | Roslyn source generator for config |
-| `tests/Dotty.App.Tests/` | xUnit tests, headless UI tests |
-| `docs/` | Architecture documentation, guides |
+| `tests/Dotty.App.Tests/` | xUnit host, input, rendering, and integration tests |
+| `docs/` | Architecture documentation and guides |
 | `artifacts/perf/` | Benchmark harnesses |
 
 ## Pull Request Process
@@ -330,12 +337,12 @@ When working with `Dotty.Config.SourceGenerator`:
 
 1. **Ensure tests pass**:
    ```bash
-   dotnet test Dotty.sln
+   dotnet test --solution Dotty.slnx
    ```
 
 2. **Check code formatting**:
    ```bash
-   dotnet format --verify-no-changes Dotty.sln
+   dotnet format --verify-no-changes Dotty.slnx
    ```
 
 3. **Update documentation** if your changes affect:
@@ -348,7 +355,7 @@ When working with `Dotty.Config.SourceGenerator`:
 ### PR Checklist
 
 - [ ] Code builds without warnings (`dotnet build -c Release`)
-- [ ] All tests pass (`dotnet test`)
+- [ ] All tests pass (`dotnet test --solution Dotty.slnx`)
 - [ ] Code follows style guidelines
 - [ ] Documentation updated (if applicable)
 - [ ] Commit messages are clear and descriptive
@@ -399,15 +406,15 @@ docs(readme): update build instructions for macOS
 | Document | Description |
 |----------|-------------|
 | [docs/Architecture.md](docs/Architecture.md) | Architectural overview |
-| [docs/rendering.md](docs/rendering.md) | Rendering system details |
-| [docs/parsing.md](docs/parsing.md) | ANSI/VT parser implementation |
+| [docs/Rendering.md](docs/Rendering.md) | Rendering system details |
+| [docs/Parsing.md](docs/Parsing.md) | ANSI/VT parser implementation |
 | [docs/Testing.md](docs/Testing.md) | Testing strategy and patterns |
-| [docs/guides/configuration.md](docs/guides/configuration.md) | Configuration system guide |
-| [docs/architecture/config-source-generator.md](docs/architecture/config-source-generator.md) | Source generator architecture |
+| [docs/Configuration.md](docs/Configuration.md) | JSON configuration and hot reload |
+| [docs/PlatformSupport.md](docs/PlatformSupport.md) | OS setup, diagnostics, and release gates |
 
 ### External References
 
-- [Avalonia UI Documentation](https://docs.avaloniaui.net/)
+- [Silk.NET Documentation](https://dotnet.github.io/Silk.NET/)
 - [.NET Native AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
 - [POSIX Pseudo-Terminals](https://pubs.opengroup.org/onlinepubs/9699919799/functions/openpty.html)
 - [XTerm Control Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
@@ -416,12 +423,11 @@ docs(readme): update build instructions for macOS
 
 ### Common Build Issues
 
-#### "No precompiled XAML found" error
+#### OpenGL/GLFW cannot initialize
 
-**Solution**: Ensure Avalonia SDK is properly referenced. Clean and rebuild:
+**Solution**: Ensure a working display server is available. For headless runs, launch Dotty under Xvfb:
 ```bash
-dotnet clean Dotty.sln
-dotnet build Dotty.sln
+xvfb-run -a dotnet run --project src/Dotty/Dotty.csproj
 ```
 
 #### Native PTY helper not found (Linux/macOS)
@@ -435,7 +441,7 @@ cd src/Dotty.NativePty && make && cd ../..
 
 **Solution**: This is expected. Use the filter:
 ```bash
-dotnet test Dotty.sln --filter "FullyQualifiedName!~Unix"
+dotnet test --solution Dotty.slnx --filter "FullyQualifiedName!~Unix"
 ```
 
 ### Getting Help

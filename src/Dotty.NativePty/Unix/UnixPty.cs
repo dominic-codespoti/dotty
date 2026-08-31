@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
@@ -21,11 +22,16 @@ public sealed class UnixPty : IPty
     private Stream? _errorStream;
     private string? _controlSocketPath;
     private Stream? _controlSocketStream;
+    private (int Columns, int Rows)? _pendingResize;
+    private readonly SemaphoreSlim _controlWriteLock = new(1, 1);
     private int _startupColumns = 80;
     private int _startupRows = 24;
     private bool _isDisposed;
     private bool _isStarted;
     private readonly object _stateLock = new();
+
+    public string? LastError { get; private set; }
+    public PtyErrorCode? LastErrorCode { get; private set; }
 
     /// <inheritdoc />
     public bool IsRunning 
@@ -80,56 +86,112 @@ public sealed class UnixPty : IPty
             if (_isStarted)
                 throw new InvalidOperationException("PTY session is already started.");
 
-            string? helperExe = FindHelperExecutable();
-            if (string.IsNullOrEmpty(helperExe) || !File.Exists(helperExe))
+            string? helperExe = FindHelperExecutableForCurrentProcess();
+            if (string.IsNullOrEmpty(helperExe))
             {
-                throw new PtyException("Failed to find pty-helper executable. Please build the native helper: cd src/Dotty.NativePty && make");
+                throw new PtyException(
+                    PtyErrorCode.NativeHelperMissing,
+                    "The pty-helper executable was not found. Place it beside the application or add it to PATH.");
             }
 
-            shell ??= PtyPlatform.GetDefaultShell();
-            
+            if (!IsExecutable(helperExe))
+            {
+                throw new PtyException(
+                    PtyErrorCode.NativeHelperNotExecutable,
+                    $"The pty-helper at '{helperExe}' is not executable.");
+            }
+
+            string resolvedShell = string.IsNullOrWhiteSpace(shell)
+                ? PtyPlatform.GetDefaultShell()
+                : shell;
+            List<string> shellArguments;
+            try
+            {
+                shellArguments = ParseCommandLine(resolvedShell);
+            }
+            catch (FormatException ex)
+            {
+                throw new PtyException(PtyErrorCode.InvalidShell, ex.Message, ex);
+            }
+
+            if (shellArguments.Count == 0)
+            {
+                throw new PtyException(PtyErrorCode.InvalidShell, "The configured shell command is empty.");
+            }
+
+            string executable = shellArguments[0];
+            if (Path.IsPathFullyQualified(executable) && !File.Exists(executable))
+            {
+                throw new PtyException(
+                    PtyErrorCode.InvalidShell,
+                    $"The configured shell '{executable}' does not exist.");
+            }
+
+            string workingDirectoryPath = workingDirectory
+                ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(workingDirectoryPath))
+                workingDirectoryPath = Environment.CurrentDirectory;
+            if (!Directory.Exists(workingDirectoryPath))
+            {
+                throw new PtyException(
+                    PtyErrorCode.InvalidWorkingDirectory,
+                    $"The PTY working directory '{workingDirectoryPath}' does not exist.");
+            }
+
             var psi = new ProcessStartInfo
             {
                 FileName = helperExe,
-                Arguments = $"\"{shell}\"",
                 UseShellExecute = false,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                WorkingDirectory = workingDirectory ?? Environment.GetEnvironmentVariable("HOME") ?? "/"
+                WorkingDirectory = workingDirectoryPath,
             };
-
-            // Add environment variables
-            if (environmentVariables != null)
-            {
-                foreach (var kvp in environmentVariables)
-                {
-                    psi.EnvironmentVariables[kvp.Key] = kvp.Value;
-                }
-            }
-
-            // Terminal identity: child programs (clear, vim, htop, ls --color,
-            // everything terminfo-based) query TERM. Launchers and non-
-            // interactive parents often lack TERM or set dumb — a terminal
-            // emulator must declare its own capabilities. Dotty parses
-            // xterm-256color + truecolor SGR sequences.
-            psi.EnvironmentVariables["TERM"] = "xterm-256color";
-            psi.EnvironmentVariables["COLORTERM"] = "truecolor";
-
-            // Create a unique control socket path for resize messages
-            var controlPath = Path.Combine(Path.GetTempPath(), $"dotty-control-{Guid.NewGuid():N}.sock");
+            foreach (var argument in shellArguments)
+                psi.ArgumentList.Add(argument);
+            if (shellArguments.Count == 1 && IsInteractiveShell(executable))
+                psi.ArgumentList.Add("-i");
+            // Unix-domain socket path limits vary; stay below the portable
+            // sockaddr_un sun_path limit.
+            string controlPath = CreateControlSocketPath();
             psi.EnvironmentVariables["DOTTY_CONTROL_SOCKET"] = controlPath;
             _controlSocketPath = controlPath;
             _startupColumns = Math.Max(1, columns);
             _startupRows = Math.Max(1, rows);
+            _pendingResize = null;
             psi.EnvironmentVariables["DOTTY_INITIAL_COLS"] = _startupColumns.ToString();
             psi.EnvironmentVariables["DOTTY_INITIAL_ROWS"] = _startupRows.ToString();
 
-            _helperProcess = Process.Start(psi);
+            // Add environment variables before forcing terminal identity.
+            if (environmentVariables != null)
+            {
+                foreach (var kvp in environmentVariables)
+                    psi.EnvironmentVariables[kvp.Key] = kvp.Value;
+            }
+
+            psi.EnvironmentVariables["TERM"] = "xterm-256color";
+            psi.EnvironmentVariables["COLORTERM"] = "truecolor";
+
+            try
+            {
+                _helperProcess = Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                LastError = ex.Message;
+                throw new PtyException(
+                    PtyErrorCode.ProcessStartFailed,
+                    $"Failed to start pty-helper at '{helperExe}'.",
+                    ex);
+            }
+
             if (_helperProcess == null)
             {
-                throw new PtyException("Failed to start pty-helper process.");
+                LastError = "Process.Start returned null.";
+                throw new PtyException(
+                    PtyErrorCode.ProcessStartFailed,
+                    "Failed to start the pty-helper process.");
             }
 
             _inputStream = _helperProcess.StandardInput.BaseStream;
@@ -176,13 +238,24 @@ public sealed class UnixPty : IPty
     /// <inheritdoc />
     public void Resize(int columns, int rows)
     {
-        if (_isDisposed)
-            throw new ObjectDisposedException(nameof(UnixPty));
-        
-        if (_controlSocketStream == null)
-            return; // Silently ignore if control socket not connected yet
+        columns = Math.Max(1, columns);
+        rows = Math.Max(1, rows);
 
-        _ = SendResizeMessageAsync(columns, rows);
+        Stream? controlSocket;
+        lock (_stateLock)
+        {
+            if (_isDisposed)
+                throw new ObjectDisposedException(nameof(UnixPty));
+
+            controlSocket = _controlSocketStream;
+            if (controlSocket == null)
+            {
+                _pendingResize = (columns, rows);
+                return;
+            }
+        }
+
+        _ = SendResizeMessageAsync(columns, rows, controlSocket);
     }
 
     /// <inheritdoc />
@@ -271,85 +344,263 @@ public sealed class UnixPty : IPty
 
     private async Task ConnectToControlSocketAsync(string path)
     {
+        Socket? socket = null;
+        Exception? lastFailure = null;
         try
         {
-            var sw = Stopwatch.StartNew();
-            Socket? sock = null;
-            
-            while (sw.Elapsed < TimeSpan.FromSeconds(5))
+            var stopwatch = Stopwatch.StartNew();
+            while (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
             {
                 try
                 {
-                    sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                    var end = new UnixDomainSocketEndPoint(path);
-                    await Task.Run(() => sock.Connect(end));
+                    socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                    await socket.ConnectAsync(new UnixDomainSocketEndPoint(path)).ConfigureAwait(false);
                     break;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    try { sock?.Dispose(); } catch { }
-                    await Task.Delay(100);
+                    lastFailure = ex;
+                    try { socket?.Dispose(); } catch { }
+                    socket = null;
+                    await Task.Delay(100).ConfigureAwait(false);
                 }
             }
 
-            if (sock == null || !sock.Connected)
+            if (socket == null || !socket.Connected)
             {
-                try { sock?.Dispose(); } catch { }
+                try { socket?.Dispose(); } catch { }
+                SetError(
+                    PtyErrorCode.ControlSocketUnavailable,
+                    lastFailure?.Message ?? $"Timed out connecting to '{path}'.");
                 return;
             }
 
-            _controlSocketStream = new NetworkStream(sock, ownsSocket: true);
-            
-            // Send initial resize to set the size
-            await SendResizeMessageAsync(_startupColumns, _startupRows);
+            var stream = new NetworkStream(socket, ownsSocket: true);
+            (int Columns, int Rows)? pending;
+            lock (_stateLock)
+            {
+                if (_isDisposed)
+                {
+                    stream.Dispose();
+                    return;
+                }
+
+                _controlSocketStream = stream;
+                pending = _pendingResize;
+                _pendingResize = null;
+            }
+
+            await SendResizeMessageAsync(_startupColumns, _startupRows, stream).ConfigureAwait(false);
+            if (pending.HasValue)
+            {
+                await SendResizeMessageAsync(
+                    pending.Value.Columns,
+                    pending.Value.Rows,
+                    stream).ConfigureAwait(false);
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            try { socket?.Dispose(); } catch { }
+            SetError(PtyErrorCode.ControlSocketUnavailable, ex.Message);
+        }
     }
 
-    private async Task SendResizeMessageAsync(int cols, int rows)
+    private async Task SendResizeMessageAsync(int cols, int rows, Stream? controlSocket = null)
     {
-        if (_controlSocketStream == null) return;
-        
+        controlSocket ??= _controlSocketStream;
+        if (controlSocket == null)
+            return;
+
+        await _controlWriteLock.WaitAsync().ConfigureAwait(false);
         try
         {
             var msg = $"{{\"type\":\"resize\",\"cols\":{cols},\"rows\":{rows}}}\n";
             var bytes = Encoding.UTF8.GetBytes(msg);
-            await _controlSocketStream.WriteAsync(bytes, 0, bytes.Length);
-            await _controlSocketStream.FlushAsync();
+            await controlSocket.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
+            await controlSocket.FlushAsync().ConfigureAwait(false);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            SetError(PtyErrorCode.ResizeFailed, ex.Message);
+        }
+        finally
+        {
+            _controlWriteLock.Release();
+        }
     }
 
-    private string? FindHelperExecutable()
+    private static bool IsInteractiveShell(string executable)
+    {
+        string name = Path.GetFileNameWithoutExtension(executable).ToLowerInvariant();
+        return name is "sh" or "bash" or "zsh" or "fish" or "dash"
+            or "ksh" or "csh" or "tcsh" or "pwsh" or "powershell";
+    }
+ 
+    private static List<string> ParseCommandLine(string command)
+    {
+        var arguments = new List<string>();
+        var token = new StringBuilder();
+        char quote = '\0';
+        bool escaped = false;
+        bool tokenStarted = false;
+
+        foreach (char character in command)
+        {
+            if (escaped)
+            {
+                token.Append(character);
+                escaped = false;
+                tokenStarted = true;
+                continue;
+            }
+
+            if (character == '\\' && quote != '\'')
+            {
+                escaped = true;
+                tokenStarted = true;
+                continue;
+            }
+
+            if (quote != '\0')
+            {
+                if (character == quote)
+                    quote = '\0';
+                else
+                    token.Append(character);
+                tokenStarted = true;
+                continue;
+            }
+
+            if (character is '\'' or '"')
+            {
+                quote = character;
+                tokenStarted = true;
+                continue;
+            }
+
+            if (char.IsWhiteSpace(character))
+            {
+                if (tokenStarted)
+                {
+                    arguments.Add(token.ToString());
+                    token.Clear();
+                    tokenStarted = false;
+                }
+                continue;
+            }
+
+            token.Append(character);
+            tokenStarted = true;
+        }
+
+        if (escaped)
+            token.Append('\\');
+        if (quote != '\0')
+            throw new FormatException("The configured shell command has an unterminated quote.");
+        if (tokenStarted)
+            arguments.Add(token.ToString());
+        return arguments;
+    }
+
+    private static string CreateControlSocketPath()
+    {
+        const string fileNamePrefix = "dotty-control-";
+        string fileName = $"{fileNamePrefix}{Guid.NewGuid():N}.sock";
+        string path = Path.Combine(Path.GetTempPath(), fileName);
+        if (path.Length < 90)
+            return path;
+
+        if (Directory.Exists("/tmp"))
+        {
+            path = Path.Combine("/tmp", fileName);
+            if (path.Length < 90)
+                return path;
+        }
+
+        throw new PtyException(
+            PtyErrorCode.ControlSocketUnavailable,
+            "The temporary directory path is too long for a Unix-domain socket.");
+    }
+
+    internal static string? FindHelperExecutableForCurrentProcess()
     {
         try
         {
-            var cur = new DirectoryInfo(AppContext.BaseDirectory ?? ".");
-            for (int i = 0; i < 8 && cur != null; i++)
+            string baseDirectory = AppContext.BaseDirectory;
+            string adjacent = Path.Combine(baseDirectory, "pty-helper");
+            if (File.Exists(adjacent))
+                return Path.GetFullPath(adjacent);
+
+            var current = new DirectoryInfo(baseDirectory);
+            for (int i = 0; i < 16 && current != null; i++)
             {
-                string candidate1 = Path.Combine(cur.FullName, "src", "Dotty.NativePty", "bin", "pty-helper");
-                string candidate2 = Path.Combine(cur.FullName, "Dotty.NativePty", "bin", "pty-helper");
+                string repoCandidate = Path.Combine(
+                    current.FullName,
+                    "src",
+                    "Dotty.NativePty",
+                    "bin",
+                    "pty-helper");
+                string projectCandidate = Path.Combine(
+                    current.FullName,
+                    "Dotty.NativePty",
+                    "bin",
+                    "pty-helper");
 
-                if (File.Exists(candidate1)) return Path.GetFullPath(candidate1);
-                if (File.Exists(candidate2)) return Path.GetFullPath(candidate2);
+                if (File.Exists(repoCandidate))
+                    return Path.GetFullPath(repoCandidate);
+                if (File.Exists(projectCandidate))
+                    return Path.GetFullPath(projectCandidate);
 
-                cur = cur.Parent;
+                current = current.Parent;
             }
         }
-        catch { }
+        catch
+        {
+        }
 
-        // Check in PATH
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
+        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
         if (!string.IsNullOrEmpty(pathEnv))
         {
-            foreach (var dir in pathEnv.Split(':'))
+            foreach (var directory in pathEnv.Split(
+                Path.PathSeparator,
+                StringSplitOptions.RemoveEmptyEntries))
             {
-                var fullPath = Path.Combine(dir, "pty-helper");
-                if (File.Exists(fullPath))
-                    return fullPath;
+                try
+                {
+                    string candidate = Path.Combine(directory, "pty-helper");
+                    if (File.Exists(candidate))
+                        return Path.GetFullPath(candidate);
+                }
+                catch
+                {
+                }
             }
         }
 
         return null;
+    }
+
+    internal static bool IsExecutable(string path)
+    {
+        try
+        {
+            if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+                return false;
+
+            var mode = File.GetUnixFileMode(path);
+            return mode.HasFlag(UnixFileMode.UserExecute)
+                || mode.HasFlag(UnixFileMode.GroupExecute)
+                || mode.HasFlag(UnixFileMode.OtherExecute);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+    private void SetError(PtyErrorCode code, string message)
+    {
+        LastErrorCode = code;
+        LastError = $"{code}: {message}";
     }
 }

@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using Xunit;
-using Dotty.App.Services;
+using Dotty.Runtime.Themes;
 
 namespace Dotty.App.Tests;
 

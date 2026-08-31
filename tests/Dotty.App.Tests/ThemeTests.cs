@@ -1,7 +1,7 @@
 using Xunit;
 using Dotty.Abstractions.Themes;
 using Dotty.Abstractions.Config;
-using Dotty.App.Configuration;
+using Dotty.Runtime.Themes;
 
 namespace Dotty.App.Tests;
 
@@ -89,16 +89,19 @@ public class ThemeTests
     }
 
     [Fact]
-    public void ConfigBridge_FromHex_PreservesArgbOrdering()
+    public void ColorSchemeBase_FromHex_PreservesArgbOrdering()
     {
-        var color = ConfigBridge.ToColor(ConfigBridge.FromHex("#FF1E1E2E"));
+        uint argb = ColorSchemeBase.FromHex("#FF1E1E2E");
+        byte a = (byte)((argb >> 24) & 0xFF);
+        byte r = (byte)((argb >> 16) & 0xFF);
+        byte g = (byte)((argb >> 8) & 0xFF);
+        byte b = (byte)(argb & 0xFF);
 
-        Assert.Equal(0xFF, color.A);
-        Assert.Equal(0x1E, color.R);
-        Assert.Equal(0x1E, color.G);
-        Assert.Equal(0x2E, color.B);
+        Assert.Equal(0xFF, a);
+        Assert.Equal(0x1E, r);
+        Assert.Equal(0x1E, g);
+        Assert.Equal(0x2E, b);
     }
-
     [Fact]
     public void ColorSchemeBase_ToHex_ConvertsCorrectly()
     {

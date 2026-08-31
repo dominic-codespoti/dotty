@@ -56,6 +56,51 @@ public class TerminalAdapterSyncUpdateTests
     }
 
     [Fact]
+    public void DuplicateEnableAndDisableAreNoOps()
+    {
+        var adapter = new TerminalAdapter(24, 80);
+        int renderCount = 0;
+        adapter.RenderRequested += _ => renderCount++;
+
+        adapter.OnSetSynchronizedUpdate(true);
+        adapter.OnSetSynchronizedUpdate(true);
+        adapter.OnSetSynchronizedUpdate(false);
+        adapter.OnSetSynchronizedUpdate(false);
+
+        Assert.Equal(0, renderCount);
+    }
+
+    [Fact]
+    public void DisableWithoutDirtyStateDoesNotFlush()
+    {
+        var adapter = new TerminalAdapter(24, 80);
+        int renderCount = 0;
+        adapter.RenderRequested += _ => renderCount++;
+
+        adapter.OnSetSynchronizedUpdate(true);
+        adapter.OnSetSynchronizedUpdate(false);
+
+        Assert.Equal(0, renderCount);
+    }
+
+    [Fact]
+    public void MultipleWritesProduceOneNotificationWhenDisabled()
+    {
+        var adapter = new TerminalAdapter(24, 80);
+        int renderCount = 0;
+        adapter.RenderRequested += _ => renderCount++;
+
+        adapter.OnSetSynchronizedUpdate(true);
+        adapter.OnPrint("one".AsSpan());
+        adapter.OnPrint("two".AsSpan());
+        adapter.OnPrint("three".AsSpan());
+        adapter.OnSetSynchronizedUpdate(false);
+
+        Assert.Equal(1, renderCount);
+        Assert.False(adapter.SynchronizedUpdateActive);
+    }
+
+    [Fact]
     public void OriginMode_Cha_DoesNotRebaseCurrentRow()
     {
         var adapter = new TerminalAdapter(20, 80);

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Dotty.App.Rendering;
+using Dotty.Rendering.Gpu;
 using SkiaSharp;
 using Xunit;
 

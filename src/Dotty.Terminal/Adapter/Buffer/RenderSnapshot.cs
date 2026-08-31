@@ -1,6 +1,6 @@
 using System;
 using System.Buffers;
-
+using Dotty.Abstractions.Config;
 namespace Dotty.Terminal.Adapter;
 
 /// <summary>
@@ -30,6 +30,8 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     public int CursorRow { get; set; }
     public int CursorCol { get; set; }
     public ulong GlobalGeneration;
+    public TerminalCursorShape CursorShape { get; set; } = TerminalCursorShape.Block;
+    public bool CursorBlinking { get; set; } = true;
 
     /// <summary>Materialized scrollback text for the visible range, newest = 0.</summary>
     public string[] ScrollbackText = Array.Empty<string>();
@@ -55,8 +57,12 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         int scrollbackCount,
         bool altActive,
         int cursorRow,
-        int cursorCol)
+        int cursorCol,
+        TerminalCursorShape cursorShape = TerminalCursorShape.Block,
+        bool cursorBlinking = true,
+        int scrollOffset = 0)
     {
+        int adjustedCursorRow = scrollOffset > 0 ? (cursorRow + scrollOffset) : cursorRow;
         var snap = new RenderSnapshot
         {
             Rows = screen.Rows,
@@ -65,11 +71,12 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
             Head = screen.Head,
             ScrollbackCount = scrollbackCount,
             IsAlternateScreenActive = altActive,
-            CursorRow = cursorRow,
+            CursorRow = adjustedCursorRow,
             CursorCol = cursorCol,
+            CursorShape = cursorShape,
+            CursorBlinking = cursorBlinking,
             Styles = styles,
         };
-
         int rows = screen.Rows;
         int cols = screen.Columns;
         int visibleCellCount = rows * cols;
@@ -90,8 +97,8 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
                 long coldRowBytes = (long)cols * sizeof(ColdCell);
                 for (int r = 0; r < rows; r++)
                 {
-                    int pRow = screen.GetPhysicalRow(r);
-                    snap.RowMap[r] = pRow;
+                    int logicalRow = r - scrollOffset;
+                    int pRow = screen.GetPhysicalRow(logicalRow);
                     snap.RowOffsets[r] = r * cols;
                     System.Buffer.MemoryCopy(
                         (void*)(screen.CellsPtr + (nint)pRow * cols * sizeof(CellHot)),
@@ -118,7 +125,9 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         int scrollbackCount,
         bool altActive,
         int cursorRow,
-        int cursorCol)
+        int cursorCol,
+        TerminalCursorShape cursorShape = TerminalCursorShape.Block,
+        bool cursorBlinking = true)
     {
         var snap = new RenderSnapshot
         {
@@ -130,6 +139,8 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
             IsAlternateScreenActive = altActive,
             CursorRow = cursorRow,
             CursorCol = cursorCol,
+            CursorShape = cursorShape,
+            CursorBlinking = cursorBlinking,
             Styles = styles,
         };
 

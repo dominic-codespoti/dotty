@@ -20,6 +20,9 @@ internal sealed class ScreenManager : IDisposable
     }
 
     public Screen Active => _usingAlt ? _alt! : _main;
+ 
+    internal Screen Main => _main;
+    internal Screen? Alternate => _alt;
 
     public void ClearAll()
     {
@@ -52,27 +55,24 @@ internal sealed class ScreenManager : IDisposable
         }
     }
 
-    public void Resize(int rows, int columns)
+ 
+    internal void Reflow(int rows, int columns, Func<Screen, bool, Screen> transform)
     {
-        // When alternate screen is active, _main and _savedMain reference the SAME Screen
-        // object.  Resize it once and keep both pointers in sync; resizing via _savedMain
-        // after already disposing the old object via _main would be a use-after-free.
         bool mainIsSaved = _savedMain != null && ReferenceEquals(_main, _savedMain);
 
         var oldMain = _main;
-        _main = _main.Resize(rows, columns);
+        _main = transform(_main, false);
         if (!ReferenceEquals(oldMain, _main))
             oldMain.Dispose();
 
         if (mainIsSaved)
         {
-            // Synchronise _savedMain to the newly resized screen without a second resize.
             _savedMain = _main;
         }
         else if (_savedMain != null)
         {
             var oldSaved = _savedMain;
-            _savedMain = _savedMain.Resize(rows, columns);
+            _savedMain = transform(_savedMain, false);
             if (!ReferenceEquals(oldSaved, _savedMain))
                 oldSaved.Dispose();
         }
@@ -80,7 +80,7 @@ internal sealed class ScreenManager : IDisposable
         if (_alt != null)
         {
             var oldAlt = _alt;
-            _alt = _alt.Resize(rows, columns);
+            _alt = transform(_alt, true);
             if (!ReferenceEquals(oldAlt, _alt))
                 oldAlt.Dispose();
         }

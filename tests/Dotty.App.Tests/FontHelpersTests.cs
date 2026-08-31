@@ -1,4 +1,4 @@
-using Dotty.App.Services;
+using Dotty.Runtime.Fonts;
 using Dotty.Abstractions.Config;
 using Xunit;
 

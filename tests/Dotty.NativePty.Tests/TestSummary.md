@@ -178,7 +178,7 @@ jobs:
       - name: Build
         run: dotnet build
       - name: Test
-        run: dotnet test tests/Dotty.NativePty.Tests
+        run: dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj
 
   test-linux:
     runs-on: ubuntu-latest
@@ -193,7 +193,7 @@ jobs:
       - name: Build
         run: dotnet build
       - name: Test
-        run: dotnet test tests/Dotty.NativePty.Tests
+        run: dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj
 
   test-macos:
     runs-on: macos-latest
@@ -208,7 +208,7 @@ jobs:
       - name: Build
         run: dotnet build
       - name: Test
-        run: dotnet test tests/Dotty.NativePty.Tests
+        run: dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj
 ```
 
 ### Test Execution Notes

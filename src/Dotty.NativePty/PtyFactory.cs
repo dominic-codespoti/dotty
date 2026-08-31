@@ -15,6 +15,11 @@ public static class PtyFactory
     /// <exception cref="PlatformNotSupportedException">Thrown when the current platform is not supported.</exception>
     public static IPty Create()
     {
+        if (!PtyPlatform.IsSupportedArchitecture)
+        {
+            throw new PlatformNotSupportedException(
+                $"Architecture '{PtyPlatform.ProcessArchitecture}' is not supported for runtime '{PtyPlatform.RuntimeIdentifier}'.");
+        }
         if (PtyPlatform.IsWindows)
         {
 #if WINDOWS
@@ -72,11 +77,7 @@ public static class PtyFactory
         {
             try
             {
-                if (PtyPlatform.IsWindows)
-                {
-                    return PtyPlatform.IsConPtySupported;
-                }
-                return PtyPlatform.IsUnix;
+                return GetCapabilities().IsSupported;
             }
             catch
             {
@@ -91,15 +92,81 @@ public static class PtyFactory
     /// </summary>
     public static string? GetUnsupportedReason()
     {
-        if (IsSupported)
-            return null;
+        var capabilities = GetCapabilities();
+        return capabilities.IsSupported
+            ? null
+            : capabilities.Diagnostic ?? "The current platform cannot create a PTY.";
+    }
+    public static PtyCapabilities GetCapabilities()
+    {
+        var runtime = PtyPlatform.RuntimeIdentifier;
+        var architecture = PtyPlatform.ProcessArchitecture;
+        if (!PtyPlatform.IsSupportedArchitecture)
+        {
+            return new PtyCapabilities(
+                runtime,
+                architecture,
+                PtyBackend.None,
+                PlatformSupported: false,
+                NativeDependencyAvailable: false,
+                $"Architecture '{architecture}' is not supported for runtime '{runtime}'.");
+        }
 
         if (PtyPlatform.IsWindows)
         {
-            return $"Windows build {Environment.OSVersion.Version.Build} does not support ConPTY. " +
-                   "Windows 10 version 1809 (build 17763) or later is required.";
+#if WINDOWS
+            bool conPty = PtyPlatform.IsConPtySupported;
+            return new PtyCapabilities(
+                runtime,
+                architecture,
+                PtyBackend.ConPty,
+                PlatformSupported: true,
+                NativeDependencyAvailable: conPty,
+                conPty
+                    ? null
+                    : "Windows ConPTY requires build 17763 or newer.");
+#else
+            return new PtyCapabilities(
+                runtime,
+                architecture,
+                PtyBackend.ConPty,
+                PlatformSupported: true,
+                NativeDependencyAvailable: false,
+                "Windows support is not enabled in this build.");
+#endif
         }
 
-        return $"Platform '{System.Runtime.InteropServices.RuntimeInformation.OSDescription}' is not supported.";
+        if (PtyPlatform.IsUnix)
+        {
+            string? helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+            if (helper == null)
+            {
+                return new PtyCapabilities(
+                    runtime,
+                    architecture,
+                    PtyBackend.UnixHelper,
+                    PlatformSupported: true,
+                    NativeDependencyAvailable: false,
+                    "The packaged pty-helper executable was not found.");
+            }
+
+            bool executable = Unix.UnixPty.IsExecutable(helper);
+            return new PtyCapabilities(
+                runtime,
+                architecture,
+                PtyBackend.UnixHelper,
+                PlatformSupported: true,
+                NativeDependencyAvailable: executable,
+                executable ? null : $"The pty-helper at '{helper}' is not executable.");
+        }
+
+        return new PtyCapabilities(
+            runtime,
+            architecture,
+            PtyBackend.None,
+            PlatformSupported: false,
+            NativeDependencyAvailable: false,
+            $"Platform '{System.Runtime.InteropServices.RuntimeInformation.OSDescription}' is not supported.");
     }
 }
+ 

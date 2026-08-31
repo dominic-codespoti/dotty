@@ -491,20 +491,7 @@ namespace Dotty.Terminal.Parser
                         {
                             bool enable = final == 'h';
                             for (int pIdx = 0; pIdx < paramCount; pIdx++)
-                            {
-                                int code = parsedParams[pIdx];
-                                if (code == 1049) Handler?.OnSetAlternateScreen(enable);
-                                else if (code == 25) Handler?.OnSetCursorVisibility(enable);
-                                else if (code == 6) Handler?.OnSetOriginMode(enable);
-                                else if (code == 1) Handler?.OnSetApplicationCursorKeys(enable);
-                                else if (code == 7) Handler?.OnSetAutoWrap(enable);
-                                else if (code == 2004) Handler?.OnSetBracketedPasteMode(enable);
-                                else if (code == 1004) Handler?.OnSetFocusReporting(enable);
-                                else if (code == 1000 || code == 1002 || code == 1003 || code == 1005 || code == 1006 || code == 1015) 
-                                    Handler?.OnSetMouseMode(code, enable);
-                                else if (code == 2026) 
-                                    Handler?.OnSetSynchronizedUpdate(enable);
-                            }
+                                HandlePrivateMode(parsedParams[pIdx], enable);
                         }
                         break;
                     case 'M':
@@ -529,6 +516,45 @@ namespace Dotty.Terminal.Parser
             else
             {
                 HandleCsiFallback(final, paramBytes);
+            }
+        }
+
+        private void HandlePrivateMode(int code, bool enabled)
+        {
+            switch (code)
+            {
+                case 1049:
+                    Handler?.OnSetAlternateScreen(enabled);
+                    break;
+                case 25:
+                    Handler?.OnSetCursorVisibility(enabled);
+                    break;
+                case 6:
+                    Handler?.OnSetOriginMode(enabled);
+                    break;
+                case 1:
+                    Handler?.OnSetApplicationCursorKeys(enabled);
+                    break;
+                case 7:
+                    Handler?.OnSetAutoWrap(enabled);
+                    break;
+                case 2004:
+                    Handler?.OnSetBracketedPasteMode(enabled);
+                    break;
+                case 1004:
+                    Handler?.OnSetFocusReporting(enabled);
+                    break;
+                case 1000:
+                case 1002:
+                case 1003:
+                case 1005:
+                case 1006:
+                case 1015:
+                    Handler?.OnSetMouseMode(code, enabled);
+                    break;
+                case 2026:
+                    Handler?.OnSetSynchronizedUpdate(enabled);
+                    break;
             }
         }
 
@@ -648,41 +674,49 @@ namespace Dotty.Terminal.Parser
                     Handler?.OnSaveCursor();
                     break;
                 case 'u':
-                    Handler?.OnRestoreCursor();
+                    if (@params.StartsWith("?", StringComparison.Ordinal))
+                    {
+                        var kittyParams = @params.Substring(1);
+                        if (kittyParams.Length == 0)
+                        {
+                            Handler?.OnQueryKittyKeyboard();
+                        }
+                        else
+                        {
+                            int separator = kittyParams.IndexOf(';');
+                            var modeText = separator >= 0
+                                ? kittyParams.Substring(0, separator)
+                                : kittyParams;
+                            if (int.TryParse(modeText, out int kittyMode))
+                                Handler?.OnSetKittyKeyboardMode(kittyMode);
+                        }
+                    }
+                    else
+                    {
+                        Handler?.OnRestoreCursor();
+                    }
                     break;
                 case 'h':
                 case 'l':
-                    try
+                    var privateParams = @params;
+                    bool privateMode = false;
+                    if (privateParams.StartsWith("?", StringComparison.Ordinal)
+                        || privateParams.StartsWith(">", StringComparison.Ordinal))
                     {
-                        var p = @params;
-                        bool isPrivate = false;
-                        if (p.StartsWith("?") || p.StartsWith(">"))
-                        {
-                            isPrivate = true;
-                            p = p.Substring(1);
-                        }
+                        privateMode = true;
+                        privateParams = privateParams.Substring(1);
+                    }
 
-                        if (isPrivate)
+                    if (privateMode)
+                    {
+                        bool enable = final == 'h';
+                        string[] modeParts = privateParams.Split(';', StringSplitOptions.RemoveEmptyEntries);
+                        foreach (var modePart in modeParts)
                         {
-                            bool enable = final == 'h';
-                            string[] modeParts = p.Split(';', StringSplitOptions.RemoveEmptyEntries);
-                            foreach (var mp in modeParts)
-                            {
-                                if (int.TryParse(mp, out var code))
-                                {
-                                    if (code == 1049) Handler?.OnSetAlternateScreen(enable);
-                                    else if (code == 25) Handler?.OnSetCursorVisibility(enable);
-                                    else if (code == 6) Handler?.OnSetOriginMode(enable);
-                                    else if (code == 1) Handler?.OnSetApplicationCursorKeys(enable);
-                                    else if (code == 7) Handler?.OnSetAutoWrap(enable);
-                                    else if (code == 2004) Handler?.OnSetBracketedPasteMode(enable);
-                                    else if (code == 1000 || code == 1002 || code == 1003 || code == 1005 || code == 1006 || code == 1015) 
-                                        Handler?.OnSetMouseMode(code, enable);
-                                }
-                            }
+                            if (int.TryParse(modePart, out int code))
+                                HandlePrivateMode(code, enable);
                         }
                     }
-                    catch { }
                     break;
                 case 'M':
                 case 'm':

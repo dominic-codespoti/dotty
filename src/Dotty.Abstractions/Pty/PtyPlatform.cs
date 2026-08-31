@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace Dotty.Abstractions.Pty;
@@ -27,6 +28,47 @@ public static class PtyPlatform
     /// Gets a value indicating whether the current platform is a Unix-like system (Linux or macOS).
     /// </summary>
     public static bool IsUnix => IsLinux || IsMacOS;
+ 
+    /// <summary>
+    /// Runtime identifiers supported by the current release artifact policy.
+    /// </summary>
+    public static IReadOnlyList<string> SupportedRuntimeIdentifiers { get; } =
+        new[] { "linux-x64", "linux-arm64", "osx-x64", "osx-arm64", "win-x64", "win-arm64" };
+
+    /// <summary>
+    /// Gets the current runtime identifier and process architecture.
+    /// </summary>
+    public static string RuntimeIdentifier
+    {
+        get
+        {
+            string architecture = ProcessArchitecture switch
+            {
+                Architecture.X64 => "x64",
+                Architecture.X86 => "x86",
+                Architecture.Arm64 => "arm64",
+                Architecture.Arm => "arm",
+                _ => ProcessArchitecture.ToString().ToLowerInvariant(),
+            };
+            string operatingSystem = IsWindows
+                ? "win"
+                : IsLinux
+                    ? "linux"
+                    : IsMacOS
+                        ? "osx"
+                        : "unknown";
+            return $"{operatingSystem}-{architecture}";
+        }
+    }
+    public static Architecture ProcessArchitecture => RuntimeInformation.ProcessArchitecture;
+
+    /// <summary>
+    /// Returns true for architectures covered by the native PTY and graphics
+    /// artifact policy. Other architectures remain unsupported until packaged
+    /// native assets and runtime smoke coverage exist.
+    /// </summary>
+    public static bool IsSupportedArchitecture =>
+        ProcessArchitecture is Architecture.X64 or Architecture.Arm64;
     
     /// <summary>
     /// Gets a value indicating whether ConPTY is supported on this Windows version.

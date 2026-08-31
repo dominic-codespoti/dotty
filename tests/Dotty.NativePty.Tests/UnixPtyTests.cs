@@ -62,6 +62,16 @@ public class UnixPtyTests : IDisposable
         pty.Dispose();
     }
 
+    [ConditionalFacts.UnixOnlyFact]
+    public void UnixPty_HelperDiscoveryFindsExecutable()
+    {
+        var helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+
+        helper.Should().NotBeNullOrWhiteSpace();
+        File.Exists(helper!).Should().BeTrue();
+        Unix.UnixPty.IsExecutable(helper!).Should().BeTrue();
+    }
+
     #endregion
 
     #region Start() Tests
@@ -774,6 +784,7 @@ public class UnixPtyTests : IDisposable
     #endregion
 }
 
+#if !WINDOWS
 /// <summary>
 /// Extension methods for PTY testing.
 /// </summary>
@@ -788,3 +799,4 @@ internal static class UnixPtyTestExtensions
         return await pty.WaitForExitAsync(cts.Token);
     }
 }
+#endif

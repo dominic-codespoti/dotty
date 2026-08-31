@@ -84,4 +84,24 @@ public enum TerminalAction
 
     /// <summary>Scroll to next shell prompt.</summary>
     NextPrompt,
+    /// <summary>Split the active pane vertically (left/right).</summary>
+    SplitVertical,
+
+    /// <summary>Split the active pane horizontally (top/bottom).</summary>
+    SplitHorizontal,
+
+    /// <summary>Navigate pane focus to the left pane.</summary>
+    FocusPaneLeft,
+
+    /// <summary>Navigate pane focus to the right pane.</summary>
+    FocusPaneRight,
+
+    /// <summary>Navigate pane focus to the upper pane.</summary>
+    FocusPaneUp,
+
+    /// <summary>Navigate pane focus to the lower pane.</summary>
+    FocusPaneDown,
+
+    /// <summary>Close the focused pane.</summary>
+    ClosePane,
 }

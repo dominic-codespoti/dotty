@@ -857,7 +857,7 @@ In VS Code, press F5 and select "DebugRoslynComponent" profile.
 The easiest method is debugging through unit tests:
 
 1. Add a breakpoint in your generator code
-2. Run the test in debug mode: `dotnet test --filter "FullyQualifiedName~MyTest" -v n`
+2. Run the test in debug mode: `dotnet test --project path/to/tests.csproj --filter "FullyQualifiedName~MyTest" -v n`
 3. Or use VS Code's test explorer
 
 ### Viewing Generated Code

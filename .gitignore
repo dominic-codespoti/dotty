@@ -18,4 +18,5 @@ artifacts/
 # OS-specific files
 .DS_Store
 Thumbs.db
+tests/TestResults/
 tests/*/TestResults/

@@ -1,8 +1,6 @@
 using System;
 using Xunit;
 using Dotty.Terminal.Adapter;
-using Xunit;
-
 namespace Dotty.Terminal.Tests;
 
 /// <summary>
@@ -112,5 +110,35 @@ public class ScrollGenerationTests
         buf.SetAlternateScreen(false);
         for (int r = 0; r < 24; r++)
             Assert.True(buf.GetRowGeneration(r) > 0, "toggle back must bump every row's generation");
+    }
+    [Fact]
+    public void CaptureRenderSnapshotVisible_WithScrollOffset_CapturesShiftedScrollbackRows()
+    {
+        var buf = CreateBuffer(rows: 5, cols: 20);
+        // Write line 0-4
+        for (int i = 0; i < 5; i++)
+        {
+            buf.SetCursor(i, 0);
+            buf.WriteText($"Line {i}".AsSpan(), default);
+        }
+
+        // Scroll up by 2 lines -> Line 0 and Line 1 become scrollback rows
+        buf.ScrollUpLines(2);
+        buf.SetCursor(3, 0);
+        buf.WriteText("Line 5".AsSpan(), default);
+        buf.SetCursor(4, 0);
+        buf.WriteText("Line 6".AsSpan(), default);
+
+        // Capture with scrollOffset = 2 (scrolled up to top)
+        using var snap = buf.CaptureRenderSnapshotVisible(scrollOffset: 2);
+        Assert.Equal(5, snap.Rows);
+
+        var row0Cells = snap.GetRowCells(0);
+        Assert.Equal((uint)'L', row0Cells[0].Rune);
+        Assert.Equal((uint)'i', row0Cells[1].Rune);
+        Assert.Equal((uint)'n', row0Cells[2].Rune);
+        Assert.Equal((uint)'e', row0Cells[3].Rune);
+        Assert.Equal((uint)' ', row0Cells[4].Rune);
+        Assert.Equal((uint)'0', row0Cells[5].Rune);
     }
 }

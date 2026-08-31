@@ -4,15 +4,15 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Dotty.Abstractions.Config;
 using Dotty.Terminal.Adapter.Buffer;
-
 namespace Dotty.Terminal.Adapter;
 
 /// <summary>
 /// Very small screen model for now: stores visible lines and a simple scrollback.
 /// Designed to be called from parser callbacks; it is not thread-safe by itself.
 /// </summary>
-public class TerminalBuffer : IRenderSource
+public partial class TerminalBuffer : IRenderSource
 {
     public object SyncRoot { get; } = new object();
 
@@ -74,9 +74,7 @@ public class TerminalBuffer : IRenderSource
     private bool _isAlternate;
     private int _savedTotalScrolled = 0;
     private bool _hasAlternateSavedCursor = false;
-    private int _alternateSavedCursorRow;
-    private int _alternateSavedCursorCol;
-    private bool _alternateSavedCursorVisible;
+    private CursorState _alternateSavedCursorState;
 
     private ulong[] _rowGenerations = Array.Empty<ulong>();
     private ulong _globalGeneration;
@@ -111,25 +109,8 @@ public class TerminalBuffer : IRenderSource
 
     public void Resize(int rows, int cols)
     {
-        bool fullScreenScroll = (_scrollTop == 0 && _scrollBottom == Rows - 1);
-
-        Rows = rows;
-        Columns = cols;
-        _screens.Resize(rows, cols);
-        _cursor.SetSize(rows, cols);
-
-        if (fullScreenScroll)
-        {
-            _scrollBottom = rows - 1;
-        }
-        else
-        {
-            _scrollBottom = Math.Min(_scrollBottom, rows - 1);
-        }
-        _scrollTop = Math.Min(_scrollTop, _scrollBottom);
-
-        Array.Resize(ref _rowGenerations, rows);
-        unchecked { _globalGeneration++; }
+        lock (SyncRoot)
+            ResizeWithReflow(rows, cols);
     }
 
     public void SetAlternateScreen(bool active)
@@ -140,9 +121,7 @@ public class TerminalBuffer : IRenderSource
         if (active)
         {
             _hasAlternateSavedCursor = true;
-            _alternateSavedCursorRow = _cursor.Row;
-            _alternateSavedCursorCol = _cursor.Col;
-            _alternateSavedCursorVisible = _cursor.Visible;
+            _alternateSavedCursorState = _cursor.CaptureState();
 
             // Save main screen scrollback count and reset for alt screen.
             // Alt screen has no scrollback, so any LineFeed/ScrollUpLines
@@ -161,9 +140,7 @@ public class TerminalBuffer : IRenderSource
             _totalScrolled = _savedTotalScrolled;
             if (_hasAlternateSavedCursor)
             {
-                _cursor.Set(Math.Clamp(_alternateSavedCursorRow, 0, Rows - 1),
-                    Math.Clamp(_alternateSavedCursorCol, 0, Columns - 1), Rows, Columns);
-                _cursor.SetVisible(_alternateSavedCursorVisible);
+                _cursor.RestoreState(_alternateSavedCursorState, Rows, Columns);
                 _hasAlternateSavedCursor = false;
             }
         }
@@ -190,13 +167,8 @@ public class TerminalBuffer : IRenderSource
 
         // DECSTBM homes the cursor after setting margins.
         _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
-
-    public void SetCursorVisible(bool visible)
-    {
-        _cursor.SetVisible(visible);
-    }
-
     public ushort GetOrCreateHyperlinkId(string uri)
     {
         if (string.IsNullOrEmpty(uri))
@@ -237,26 +209,33 @@ public class TerminalBuffer : IRenderSource
     public int CursorRow => _cursor.Row;
     public int CursorCol => _cursor.Col;
     public bool CursorVisible => _cursor.Visible;
+    public TerminalCursorShape CursorShape { get; private set; } = TerminalCursorShape.Block;
+    public bool CursorBlinking { get; private set; } = true;
+
+    public void SetCursorStyle(TerminalCursorShape shape, bool blinking)
+    {
+        CursorShape = shape;
+        CursorBlinking = blinking;
+    }
+ 
+    public void SetCursorVisible(bool visible) => _cursor.SetVisible(visible);
+
 
     // Saved cursor state for DECSC/DECRC
     private bool _hasSavedCursor = false;
-    private int _savedCursorRow;
-    private int _savedCursorCol;
-    private bool _savedCursorVisible;
+    private CursorState _savedCursorState;
 
     public void SaveCursor()
     {
         _hasSavedCursor = true;
-        _savedCursorRow = _cursor.Row;
-        _savedCursorCol = _cursor.Col;
-        _savedCursorVisible = _cursor.Visible;
+        _savedCursorState = _cursor.CaptureState();
     }
 
     public void RestoreCursor()
     {
         if (!_hasSavedCursor) return;
-        _cursor.Set(Math.Clamp(_savedCursorRow, 0, Rows - 1), Math.Clamp(_savedCursorCol, 0, Columns - 1), Rows, Columns);
-        _cursor.SetVisible(_savedCursorVisible);
+        _cursor.RestoreState(_savedCursorState, Rows, Columns);
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
         _hasSavedCursor = false;
         MarkAllRowsDirty();
     }
@@ -474,6 +453,7 @@ public class TerminalBuffer : IRenderSource
         {
             _cursor.Set(Math.Clamp(row, 0, Rows - 1), Math.Clamp(col, 0, Columns - 1), Rows, Columns);
         }
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
     public readonly struct ScrollbackLine
@@ -564,7 +544,9 @@ public class TerminalBuffer : IRenderSource
             ScrollbackCount,
             IsAlternateScreenActive,
             CursorRow,
-            CursorCol);
+            CursorCol,
+            CursorShape,
+            CursorBlinking);
         snapshot.GlobalGeneration = Generation;
 
         int count = sbEnd - sbStart + 1;
@@ -589,7 +571,7 @@ public class TerminalBuffer : IRenderSource
     /// slices instead of the whole arena. The raster reads ~viewport-rows x
     /// columns; a full-arena memcpy per content frame is pure overhead.
     /// </summary>
-    public RenderSnapshot CaptureRenderSnapshotVisible(int sbStart, int sbEnd)
+    public RenderSnapshot CaptureRenderSnapshotVisible(int sbStart = 0, int sbEnd = -1, int scrollOffset = 0)
     {
         var styles = StyleSet.CaptureStyles();
         var snapshot = RenderSnapshot.CaptureVisible(
@@ -599,7 +581,10 @@ public class TerminalBuffer : IRenderSource
             ScrollbackCount,
             IsAlternateScreenActive,
             CursorRow,
-            CursorCol);
+            CursorCol,
+            CursorShape,
+            CursorBlinking,
+            scrollOffset);
         snapshot.GlobalGeneration = Generation;
 
         int count = sbEnd - sbStart + 1;
@@ -642,13 +627,14 @@ public class TerminalBuffer : IRenderSource
         {
             _cursor.Set(Math.Clamp(row, 0, Rows - 1), Math.Clamp(col, 0, Columns - 1), Rows, Columns);
         }
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
-
     public void SetOriginMode(bool enabled)
     {
         _originMode = enabled;
         // DECOM resets the cursor to the current home position.
         _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
         // Changing origin may change visible content; mark all rows dirty.
         MarkAllRowsDirty();
     }
@@ -669,11 +655,13 @@ public class TerminalBuffer : IRenderSource
 
         newCol = Math.Clamp(newCol, 0, Columns - 1);
         _cursor.Set(newRow, newCol, Rows, Columns);
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
     public void CarriageReturn()
     {
         _cursor.CarriageReturn();
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
     public void LineFeed()
@@ -694,21 +682,24 @@ public class TerminalBuffer : IRenderSource
         {
             return;
         }
-        // Otherwise behave like a normal line feed (move cursor down)
-        _cursor.MoveBy(1, 0, Rows, Columns);
-    }
 
+        // Otherwise behave like a normal line feed (move cursor down).
+        _cursor.MoveBy(1, 0, Rows, Columns);
+        ActiveBuffer.ClearRowContinuation(_cursor.Row);
+    }
     public void ReverseIndex()
     {
         if (_cursor.Row == _scrollTop)
         {
             ScrollDownLines(1);
+            ActiveBuffer.ClearRowContinuation(_cursor.Row);
             return;
         }
 
         if (_cursor.Row <= _scrollBottom)
         {
             _cursor.MoveBy(-1, 0, Rows, Columns);
+            ActiveBuffer.ClearRowContinuation(_cursor.Row);
         }
     }
 
@@ -788,6 +779,7 @@ public class TerminalBuffer : IRenderSource
             }
         }
         ActiveBuffer.RecalculateRowMaxCol(row);
+        ActiveBuffer.RecalculateRowEndCol(row);
     }
 
     public void EraseCharacters(int count)
@@ -837,6 +829,8 @@ public class TerminalBuffer : IRenderSource
             int srcPhys = ActiveBuffer.GetPhysicalRow(r - count);
             ActiveBuffer.RowMaxCol[dstPhys] = ActiveBuffer.RowMaxCol[srcPhys];
             ActiveBuffer.RowColdFlags[dstPhys] = ActiveBuffer.RowColdFlags[srcPhys];
+            ActiveBuffer.RowContinuesPrevious[dstPhys] = ActiveBuffer.RowContinuesPrevious[srcPhys];
+            ActiveBuffer.RowEndCol[dstPhys] = ActiveBuffer.RowEndCol[srcPhys];
         }
         // clear inserted lines
         for (int r = row; r < row + count; r++)
@@ -875,6 +869,8 @@ public class TerminalBuffer : IRenderSource
             int srcPhys = ActiveBuffer.GetPhysicalRow(r + count);
             ActiveBuffer.RowMaxCol[dstPhys] = ActiveBuffer.RowMaxCol[srcPhys];
             ActiveBuffer.RowColdFlags[dstPhys] = ActiveBuffer.RowColdFlags[srcPhys];
+            ActiveBuffer.RowContinuesPrevious[dstPhys] = ActiveBuffer.RowContinuesPrevious[srcPhys];
+            ActiveBuffer.RowEndCol[dstPhys] = ActiveBuffer.RowEndCol[srcPhys];
         }
         // clear trailing lines
         for (int r = bottom - count + 1; r <= bottom; r++)

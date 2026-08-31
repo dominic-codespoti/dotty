@@ -4,7 +4,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <!--
@@ -16,16 +15,14 @@
   -->
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dotty.Terminal\Dotty.Terminal.csproj" />
-    <ProjectReference Include="..\..\src\Dotty.App\Dotty.App.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.Rendering.Gpu\Dotty.Rendering.Gpu.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.Runtime\Dotty.Runtime.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
-    <PackageReference Include="Avalonia" />
-    <PackageReference Include="Avalonia.Desktop" />
-    <PackageReference Include="Avalonia.Skia" />
     <PackageReference Include="SkiaSharp" />
     <PackageReference Include="SkiaSharp.HarfBuzz" />
   </ItemGroup>

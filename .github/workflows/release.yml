@@ -13,7 +13,7 @@ on:
 
 env:
   DOTNET_VERSION: '10.0.x'
-  PROJECT_PATH: 'src/Dotty.App/Dotty.App.csproj'
+  PROJECT_PATH: 'src/Dotty/Dotty.csproj'
   SOLUTION_PATH: 'Dotty.slnx'
 
 jobs:
@@ -76,7 +76,7 @@ jobs:
         run: dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
 
       - name: Run Linux release validation tests
-        run: dotnet test ${{ env.SOLUTION_PATH }} -c Release --no-build
+        run: dotnet test --solution ${{ env.SOLUTION_PATH }} -c Release --no-build
 
   # Build for Linux x64
   build-linux:
@@ -117,14 +117,13 @@ jobs:
             -r linux-x64 \
             --self-contained true \
             -p:PublishSingleFile=true \
+            -p:RequireUnixPtyHelper=true \
             -o ./publish/linux-x64
 
-      - name: Copy pty-helper to output
+      - name: Verify Linux artifact
         run: |
-          cp src/Dotty.NativePty/bin/pty-helper ./publish/linux-x64/
-          mv ./publish/linux-x64/Dotty.App ./publish/linux-x64/dotty
-          chmod +x ./publish/linux-x64/pty-helper
-          chmod +x ./publish/linux-x64/dotty
+          test -x ./publish/linux-x64/dotty
+          test -x ./publish/linux-x64/pty-helper
 
       - name: Create tarball
         run: |
@@ -195,14 +194,13 @@ jobs:
             -r ${{ matrix.rid }} \
             --self-contained true \
             -p:PublishSingleFile=true \
+            -p:RequireUnixPtyHelper=true \
             -o ./publish/${{ matrix.rid }}
 
-      - name: Copy pty-helper to output
+      - name: Verify macOS artifact
         run: |
-          cp src/Dotty.NativePty/bin/pty-helper ./publish/${{ matrix.rid }}/
-          mv ./publish/${{ matrix.rid }}/Dotty.App ./publish/${{ matrix.rid }}/dotty
-          chmod +x ./publish/${{ matrix.rid }}/pty-helper
-          chmod +x ./publish/${{ matrix.rid }}/dotty
+          test -x ./publish/${{ matrix.rid }}/dotty
+          test -x ./publish/${{ matrix.rid }}/pty-helper
 
       - name: Create tarball
         run: |
@@ -259,6 +257,15 @@ jobs:
             --self-contained true `
             -p:PublishSingleFile=true `
             -o .\publish\win-x64
+      - name: Verify Windows artifact
+        shell: pwsh
+        run: |
+          if (!(Test-Path "publish\win-x64\dotty.exe")) {
+            throw "Published executable dotty.exe is missing."
+          }
+          if (!(Test-Path "publish\win-x64\libSkiaSharp.dll")) {
+            throw "Windows SkiaSharp native asset is missing."
+          }
 
       - name: Create zip archive
         run: |
@@ -273,10 +280,38 @@ jobs:
           path: dotty-*.zip
           retention-days: 1
 
+  smoke-release-assets:
+    name: Smoke release archives
+    needs: [validate-release, build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          pattern: dotty-*
+
+      - name: Verify every archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_count="$(find ./artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)"
+          test "$archive_count" -eq 4
+          for archive in ./artifacts/*/*.tar.gz; do
+            [ -f "$archive" ] || continue
+            listing="$(tar -tzf "$archive")"
+            printf '%s\n' "$listing" | grep -Eq '/dotty$'
+            printf '%s\n' "$listing" | grep -Eq '/pty-helper$'
+          done
+          for archive in ./artifacts/*/*.zip; do
+            [ -f "$archive" ] || continue
+            listing="$(unzip -Z1 "$archive")"
+            printf '%s\n' "$listing" | grep -Eq '(^|/)dotty\.exe$'
+          done
   # Create GitHub Release
   create-release:
     name: Create Release
-    needs: [validate-release, build-linux, build-macos, build-windows]
+    needs: [validate-release, build-linux, build-macos, build-windows, smoke-release-assets]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -297,6 +332,28 @@ jobs:
           mkdir -p ./release-assets
           find ./artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} ./release-assets/ \;
           ls -la ./release-assets/
+      - name: Smoke extracted Linux artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find ./release-assets -name 'dotty-*-linux-x64.tar.gz' -print -quit)"
+          test -n "$archive"
+          smoke_dir="$(mktemp -d)"
+          tar -xzf "$archive" -C "$smoke_dir"
+          package_dir="$(find "$smoke_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$package_dir"
+          test -x "$package_dir/dotty"
+          test -x "$package_dir/pty-helper"
+          set +e
+          timeout 10s env HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
+            DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
+            xvfb-run -a "$package_dir/dotty" > "$smoke_dir/smoke.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 124 ]; then
+            cat "$smoke_dir/smoke.log"
+            exit 1
+          fi
 
       - name: Generate release notes
         id: release_notes
@@ -332,7 +389,7 @@ jobs:
 
           **Windows (x64):**
           1. Extract `dotty-${VERSION}-win-x64.zip`
-          2. Run `Dotty.exe`
+          2. Run `dotty.exe`
 
           ### System Requirements
           - Linux: kernel 3.10+, glibc 2.17+
@@ -342,12 +399,18 @@ jobs:
           ### Checksums
           EOF
           
-          # Generate checksums
-          cd ./release-assets
-          sha256sum * > ../CHECKSUMS.txt
-          cat ../CHECKSUMS.txt >> ../RELEASE_NOTES.md
-          cd ..
-
+          # Generate a deterministic artifact manifest and checksums.
+          (
+            cd ./release-assets
+            printf '%s\n' *.tar.gz *.zip | sort
+          ) > ARTIFACT_MANIFEST.txt
+          (
+            cd ./release-assets
+            sha256sum *.tar.gz *.zip
+          ) > CHECKSUMS.txt
+          cp ARTIFACT_MANIFEST.txt ./release-assets/MANIFEST.txt
+          cp CHECKSUMS.txt ./release-assets/SHA256SUMS
+          cat CHECKSUMS.txt >> RELEASE_NOTES.md
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:

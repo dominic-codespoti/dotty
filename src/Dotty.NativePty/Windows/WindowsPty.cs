@@ -2,6 +2,7 @@
 
 using System;
 using System.ComponentModel;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -29,6 +30,9 @@ public sealed class WindowsPty : IPty
     private bool _isDisposed;
     private bool _isStarted;
     private readonly object _stateLock = new();
+
+    public string? LastError { get; private set; }
+    public PtyErrorCode? LastErrorCode { get; private set; }
 
     /// <inheritdoc />
     public bool IsRunning { get; private set; }
@@ -66,9 +70,17 @@ public sealed class WindowsPty : IPty
         {
             if (_isStarted)
                 throw new InvalidOperationException("PTY session is already started.");
-            
+
             if (!PtyPlatform.IsConPtySupported)
-                throw new PtyException("ConPTY is not supported on this Windows version. Requires Windows 10 build 17763 or later.");
+            {
+                throw new PtyException(
+                    PtyErrorCode.ConPtyUnavailable,
+                    "ConPTY requires Windows 10 build 17763 or later.");
+            }
+
+            ValidateDimensions(columns, rows);
+            LastError = null;
+            LastErrorCode = null;
 
             try
             {
@@ -89,10 +101,22 @@ public sealed class WindowsPty : IPty
                 // Monitor process exit
                 _ = Task.Run(MonitorProcessExit);
             }
-            catch (Exception ex) when (ex is not PtyException and not InvalidOperationException)
+            catch (PtyException ex)
             {
                 CleanupResources();
-                throw new PtyException($"Failed to start Windows ConPTY: {ex.Message}", ex);
+                LastErrorCode = ex.Code;
+                LastError = ex.Message;
+                throw;
+            }
+            catch (Exception ex)
+            {
+                CleanupResources();
+                LastErrorCode = PtyErrorCode.ProcessStartFailed;
+                LastError = ex.Message;
+                throw new PtyException(
+                    PtyErrorCode.ProcessStartFailed,
+                    $"Failed to start Windows ConPTY: {ex.Message}",
+                    ex);
             }
         }
     }
@@ -100,17 +124,24 @@ public sealed class WindowsPty : IPty
     /// <inheritdoc />
     public void Resize(int columns, int rows)
     {
-        if (_isDisposed)
-            throw new ObjectDisposedException(nameof(WindowsPty));
-        
-        if (_pseudoConsoleHandle == IntPtr.Zero)
-            throw new InvalidOperationException("Pseudo console is not created.");
-
-        var size = new Coord((short)columns, (short)rows);
-        
-        if (!NativeMethods.ResizePseudoConsole(_pseudoConsoleHandle, size))
+        lock (_stateLock)
         {
-            throw new PtyException($"Failed to resize pseudo console. Error: {Marshal.GetLastWin32Error()}");
+            if (_isDisposed)
+                throw new ObjectDisposedException(nameof(WindowsPty));
+            if (_pseudoConsoleHandle == IntPtr.Zero)
+                throw new InvalidOperationException("Pseudo console is not started.");
+
+            ValidateDimensions(columns, rows);
+            var size = new Coord((short)columns, (short)rows);
+            if (!NativeMethods.ResizePseudoConsole(_pseudoConsoleHandle, size))
+            {
+                int error = Marshal.GetLastWin32Error();
+                LastErrorCode = PtyErrorCode.ResizeFailed;
+                LastError = $"Windows error {error}.";
+                throw new PtyException(
+                    PtyErrorCode.ResizeFailed,
+                    $"Failed to resize pseudo console. Error: {error}");
+            }
         }
     }
 
@@ -165,17 +196,16 @@ public sealed class WindowsPty : IPty
     /// <inheritdoc />
     public async Task<int> WaitForExitAsync(CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (_processInfo.hProcess == IntPtr.Zero)
             throw new InvalidOperationException("Process is not started.");
 
         var processHandle = new IntPtr(_processInfo.hProcess);
-        
         using var registration = cancellationToken.Register(() => Kill(force: true));
 
-        // Wait for process to exit
         while (true)
         {
-            if (NativeMethods.WaitForSingleObject(processHandle, 100) == 0) // WAIT_OBJECT_0
+            if (NativeMethods.WaitForSingleObject(processHandle, 100) == 0)
             {
                 if (NativeMethods.GetExitCodeProcess(processHandle, out uint exitCode))
                 {
@@ -185,10 +215,8 @@ public sealed class WindowsPty : IPty
                 return -1;
             }
 
-            if (cancellationToken.IsCancellationRequested)
-                throw new OperationCanceledException();
-
-            await Task.Delay(10, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -203,6 +231,16 @@ public sealed class WindowsPty : IPty
             Kill(force: true);
             CleanupResources();
             _isDisposed = true;
+        }
+    }
+
+    private static void ValidateDimensions(int columns, int rows)
+    {
+        if (columns <= 0 || rows <= 0 || columns > short.MaxValue || rows > short.MaxValue)
+        {
+            throw new PtyException(
+                PtyErrorCode.InvalidDimensions,
+                $"Console dimensions must be between 1 and {short.MaxValue}; received {columns}x{rows}.");
         }
     }
 
@@ -265,13 +303,19 @@ public sealed class WindowsPty : IPty
     }
 
     private void StartShellProcess(
-        string? shell, 
+        string? shell,
         string? workingDirectory,
         System.Collections.Generic.IDictionary<string, string>? environmentVariables)
     {
-        shell ??= PtyPlatform.GetDefaultShell();
-        
-        // Prepare startup info with pseudo console attribute
+        if (!string.IsNullOrWhiteSpace(workingDirectory) && !Directory.Exists(workingDirectory))
+        {
+            throw new PtyException(
+                PtyErrorCode.InvalidWorkingDirectory,
+                $"The PTY working directory '{workingDirectory}' does not exist.");
+        }
+        string resolvedShell = string.IsNullOrWhiteSpace(shell)
+            ? PtyPlatform.GetDefaultShell()
+            : shell;
         var startupInfoEx = new StartupInfoEx();
         startupInfoEx.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
         
@@ -327,7 +371,7 @@ public sealed class WindowsPty : IPty
 
             try
             {
-                var (applicationName, commandLine) = BuildProcessStartInfo(shell);
+                var (applicationName, commandLine) = BuildProcessStartInfo(resolvedShell);
 
                 // Create the process
                 var creationFlags = 0x00080000 /* EXTENDED_STARTUPINFO_PRESENT */ | 0x00000400 /* CREATE_UNICODE_ENVIRONMENT */;
@@ -346,7 +390,7 @@ public sealed class WindowsPty : IPty
 
                 if (!success)
                 {
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to create process: {shell}");
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to create process: {resolvedShell}");
                 }
             }
             finally
@@ -376,89 +420,147 @@ public sealed class WindowsPty : IPty
 
     private static (string? ApplicationName, StringBuilder CommandLine) BuildProcessStartInfo(string shell)
     {
-        if (string.IsNullOrWhiteSpace(shell))
-        {
-            return (null, new StringBuilder("cmd.exe"));
-        }
-
         if (File.Exists(shell))
-        {
             return (shell, new StringBuilder(QuoteCommandLineArgument(shell)));
-        }
 
-        if (TryExtractQuotedExecutable(shell, out var quotedExecutable, out var quotedArguments))
+        for (int whitespace = 0; whitespace < shell.Length; whitespace++)
         {
-            return (File.Exists(quotedExecutable) ? quotedExecutable : null, new StringBuilder(BuildCommandLine(quotedExecutable, quotedArguments)));
-        }
-
-        if (TryResolveExecutablePath(shell, out var executablePath, out var arguments))
-        {
-            return (executablePath, new StringBuilder(BuildCommandLine(executablePath, arguments)));
-        }
-
-        return (null, new StringBuilder(shell));
-    }
-
-    private static bool TryExtractQuotedExecutable(string shell, out string executable, out string arguments)
-    {
-        executable = string.Empty;
-        arguments = string.Empty;
-
-        if (string.IsNullOrEmpty(shell) || shell[0] != '"')
-        {
-            return false;
-        }
-
-        var closingQuote = shell.IndexOf('"', 1);
-        if (closingQuote <= 1)
-        {
-            return false;
-        }
-
-        executable = shell[1..closingQuote];
-        arguments = shell[(closingQuote + 1)..].TrimStart();
-        return true;
-    }
-
-    private static bool TryResolveExecutablePath(string shell, out string executable, out string arguments)
-    {
-        executable = string.Empty;
-        arguments = string.Empty;
-
-        for (var index = 0; index < shell.Length; index++)
-        {
-            if (!char.IsWhiteSpace(shell[index]))
-            {
+            if (!char.IsWhiteSpace(shell[whitespace]))
                 continue;
+
+            string candidate = shell[..whitespace].Trim();
+            if (candidate.Length == 0 || candidate[0] == '"' || !File.Exists(candidate))
+                continue;
+
+            string trailingArguments = shell[(whitespace + 1)..].TrimStart();
+            string commandLine = QuoteCommandLineArgument(candidate);
+            if (trailingArguments.Length > 0)
+                commandLine += " " + trailingArguments;
+            return (candidate, new StringBuilder(commandLine));
+        }
+
+        var arguments = ParseWindowsCommandLine(shell);
+        if (arguments.Count == 0)
+            return (null, new StringBuilder("cmd.exe"));
+
+        string executable = arguments[0];
+        string? applicationName = File.Exists(executable) ? executable : null;
+        if (Path.IsPathFullyQualified(executable) && applicationName == null)
+        {
+            throw new PtyException(
+                PtyErrorCode.InvalidShell,
+                $"The configured shell '{executable}' does not exist.");
+        }
+
+        return (
+            applicationName,
+            new StringBuilder(BuildCommandLine(executable, arguments)));
+    }
+
+    private static List<string> ParseWindowsCommandLine(string commandLine)
+    {
+        var arguments = new List<string>();
+        var token = new StringBuilder();
+        bool inQuotes = false;
+        int index = 0;
+
+        while (index < commandLine.Length)
+        {
+            while (index < commandLine.Length && char.IsWhiteSpace(commandLine[index]))
+                index++;
+            if (index >= commandLine.Length)
+                break;
+
+            token.Clear();
+            while (index < commandLine.Length)
+            {
+                int slashCount = 0;
+                while (index < commandLine.Length && commandLine[index] == '\\')
+                {
+                    slashCount++;
+                    index++;
+                }
+
+                if (index < commandLine.Length && commandLine[index] == '"')
+                {
+                    token.Append('\\', slashCount / 2);
+                    if ((slashCount & 1) != 0)
+                    {
+                        token.Append('"');
+                        index++;
+                    }
+                    else if (index + 1 < commandLine.Length && commandLine[index + 1] == '"')
+                    {
+                        token.Append('"');
+                        index += 2;
+                    }
+                    else
+                    {
+                        inQuotes = !inQuotes;
+                        index++;
+                    }
+                    continue;
+                }
+
+                token.Append('\\', slashCount);
+                if (index >= commandLine.Length)
+                    break;
+                if (!inQuotes && char.IsWhiteSpace(commandLine[index]))
+                    break;
+                token.Append(commandLine[index++]);
             }
 
-            var candidate = shell[..index].Trim();
-            if (!File.Exists(candidate))
-            {
-                continue;
-            }
-
-            executable = candidate;
-            arguments = shell[index..].TrimStart();
-            return true;
+            arguments.Add(token.ToString());
+            inQuotes = false;
         }
 
-        return false;
+        return arguments;
     }
 
-    private static string BuildCommandLine(string executable, string arguments)
+    private static string BuildCommandLine(string executable, IReadOnlyList<string> arguments)
     {
-        var quotedExecutable = QuoteCommandLineArgument(executable);
-        return string.IsNullOrWhiteSpace(arguments)
-            ? quotedExecutable
-            : $"{quotedExecutable} {arguments}";
+        var builder = new StringBuilder(QuoteCommandLineArgument(executable));
+        for (int index = 1; index < arguments.Count; index++)
+        {
+            builder.Append(' ');
+            builder.Append(QuoteCommandLineArgument(arguments[index]));
+        }
+        return builder.ToString();
     }
 
     private static string QuoteCommandLineArgument(string value)
     {
-        return value.Contains(' ') && !value.StartsWith('"')
-            ? $"\"{value}\""
-            : value;
+        if (value.Length == 0)
+            return "\"\"";
+        if (!value.Any(char.IsWhiteSpace) && !value.Contains('"'))
+            return value;
+
+        var builder = new StringBuilder(value.Length + 2);
+        builder.Append('"');
+        int backslashes = 0;
+        foreach (char character in value)
+        {
+            if (character == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                builder.Append('\\', backslashes * 2 + 1);
+                builder.Append('"');
+            }
+            else
+            {
+                builder.Append('\\', backslashes);
+                builder.Append(character);
+            }
+            backslashes = 0;
+        }
+        builder.Append('\\', backslashes * 2);
+        builder.Append('"');
+        return builder.ToString();
     }
 
     private IntPtr CreateEnvironmentBlock(System.Collections.IDictionary environment)

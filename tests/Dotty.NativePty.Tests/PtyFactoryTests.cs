@@ -472,6 +472,22 @@ public class PtyFactoryTests
         }
     }
 
+    [Fact]
+    public void PtyFactory_GetCapabilities_ReportsBackendAndDiagnostics()
+    {
+        var capabilities = PtyFactory.GetCapabilities();
+
+        capabilities.RuntimeIdentifier.Should().NotBeNullOrWhiteSpace();
+        capabilities.Architecture.Should().Be(PtyPlatform.ProcessArchitecture);
+        if (PtyPlatform.IsWindows)
+            capabilities.Backend.Should().Be(PtyBackend.ConPty);
+        else if (PtyPlatform.IsUnix)
+            capabilities.Backend.Should().Be(PtyBackend.UnixHelper);
+
+        if (!capabilities.IsSupported)
+            capabilities.Diagnostic.Should().NotBeNullOrWhiteSpace();
+    }
+
     #endregion
 
     #region Error Handling Tests

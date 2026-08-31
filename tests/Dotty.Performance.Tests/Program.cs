@@ -68,6 +68,11 @@ public class Program
             Console.WriteLine("Running Rendering Benchmarks...");
             summaries.Add(BenchmarkRunner.Run<RenderingBenchmarks>(benchmarkConfig));
         }
+        if (string.IsNullOrEmpty(filter) || filter.Contains("silk", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("Running Silk CPU Rendering Benchmarks...");
+            summaries.Add(BenchmarkRunner.Run<SilkRenderingBenchmarks>(benchmarkConfig));
+        }
 
         if (string.IsNullOrEmpty(filter) || filter.Contains("startup"))
         {

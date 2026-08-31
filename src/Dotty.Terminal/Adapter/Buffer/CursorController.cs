@@ -3,6 +3,12 @@ namespace Dotty.Terminal.Adapter;
 /// <summary>
 /// Manages cursor position and visibility with bounds-aware movement helpers.
 /// </summary>
+internal readonly record struct CursorState(
+    int Row,
+    int Column,
+    bool Visible,
+    bool WrapPending);
+
 internal sealed class CursorController
 {
     public int Row { get; private set; }
@@ -23,6 +29,17 @@ internal sealed class CursorController
     {
         Row = Clamp(Row, rows);
         Col = Clamp(Col, cols);
+    }
+ 
+    internal CursorState CaptureState() =>
+        new(Row, Col, Visible, WrapPending);
+
+    internal void RestoreState(CursorState state, int rows, int cols)
+    {
+        Row = Clamp(state.Row, rows);
+        Col = Clamp(state.Column, cols);
+        Visible = state.Visible;
+        WrapPending = state.WrapPending;
     }
 
     public void Set(int row, int col, int rows, int cols)

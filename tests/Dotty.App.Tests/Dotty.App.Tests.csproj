@@ -3,25 +3,20 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Dotty.Abstractions\Dotty.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\Dotty.Terminal\Dotty.Terminal.csproj" />
-    <ProjectReference Include="..\..\src\Dotty.App\Dotty.App.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.NativePty\Dotty.NativePty.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.Rendering.Gpu\Dotty.Rendering.Gpu.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.Runtime\Dotty.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Dotty\Dotty.csproj" />
   </ItemGroup>
-
   <ItemGroup>
-    <PackageReference Include="Avalonia.Wayland" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
-    <!-- Avalonia packages are required for types like Typeface/GlyphTypeface used indirectly by the app code. -->
-    <PackageReference Include="Avalonia" />
-    <PackageReference Include="Avalonia.Desktop" />
-    <!-- Avalonia headless testing for UI tests -->
-    <PackageReference Include="Avalonia.Headless" />
-    <PackageReference Include="Avalonia.Headless.XUnit" />
     <PackageReference Include="Moq" />
   </ItemGroup>
 

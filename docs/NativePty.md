@@ -1,27 +1,21 @@
 # Native PTY Integration
 
-Dotty now supports both Unix (Linux/macOS) and Windows platforms through a unified abstraction layer.
+Dotty uses one `IPty` contract with a native backend selected at runtime:
 
-## Architecture Overview
+```text
+Dotty host (Silk.NET/OpenGL)
+        │
+TerminalSession
+        │
+Dotty.NativePty
+   ┌────┴────┐
+UnixPty   WindowsPty
+   │          │
+pty-helper  Windows ConPTY
+```
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Dotty.App (Avalonia)                     │
-├─────────────────────────────────────────────────────────────┤
-│              TerminalSession (ViewModel)                    │
-├─────────────────────────────────────────────────────────────┤
-│         Dotty.NativePty (Cross-Platform PTY)              │
-│  ┌─────────────────────┐      ┌─────────────────────────┐   │
-│  │     UnixPty         │      │      WindowsPty         │   │
-│  │  (Managed Wrapper)  │      │    (ConPTY API)         │   │
-│  └──────────┬──────────┘      └──────────┬──────────────┘   │
-│             │                            │                  │
-│  ┌──────────▼──────────┐      ┌──────────▼──────────────┐   │
-│  │   pty-helper.c      │      │  kernel32.dll P/Invoke  │   │
-│  │   (forkpty-based)   │      │  CreatePseudoConsole    │   │
-│  └─────────────────────┘      └─────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-```
+The terminal core is platform-neutral. Native PTY startup, resize, process
+cleanup, and artifact provisioning are platform-specific.
 
 ## Common Interface: IPty
 
@@ -48,39 +42,27 @@ public interface IPty : IDisposable
 
 **File**: `src/Dotty.NativePty/Unix/UnixPty.cs`
 
-The Unix implementation wraps the existing C-based `pty-helper` process:
+`UnixPty` launches the packaged `pty-helper` executable, redirects its standard
+streams, and sends resize messages over a Unix-domain socket.
 
-1. **Process**: Starts `pty-helper` binary with the desired shell
-2. **I/O**: Uses redirected stdin/stdout streams
-3. **Resize**: Communicates via Unix domain socket (`DOTTY_CONTROL_SOCKET`)
-4. **Cleanup**: Handles process termination and socket cleanup
+**Helper**: `src/Dotty.NativePty/pty-helper.c`
 
-**C Helper**: `src/Dotty.NativePty/pty-helper.c`
-
-The native C helper:
-- Uses `posix_openpt()` and `forkpty()` for PTY creation
-- Spawns the shell as a child process
-- Proxies PTY master ↔ stdin/stdout
-- Listens on Unix socket for resize JSON messages
-- Handles `SIGINT`, `SIGTERM`, `SIGHUP` for cleanup
+The POSIX helper uses `posix_openpt`, `grantpt`, `unlockpt`, `fork`, `setsid`,
+and a controlling-terminal ioctl. It proxies PTY I/O and accepts resize
+messages over a Unix-domain socket.
 
 ### Windows Implementation
 
 **File**: `src/Dotty.NativePty/Windows/WindowsPty.cs`
 
-The Windows implementation uses the ConPTY API directly via P/Invoke:
+`WindowsPty` uses Windows ConPTY APIs directly:
 
-1. **Pipes**: Creates anonymous pipes for PTY I/O
-2. **ConPTY**: Calls `CreatePseudoConsole()` with pipe handles
-3. **Process**: Uses `CreateProcess()` with `EXTENDED_STARTUPINFO_PRESENT` and `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
-4. **Resize**: Calls `ResizePseudoConsole()` directly
-5. **Cleanup**: Closes handles and pseudo console reference
+1. Create anonymous PTY pipes.
+2. Call `CreatePseudoConsole`.
+3. Attach the child with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`.
+4. Resize with `ResizePseudoConsole`.
+5. Close the process and native handles deterministically.
 
-**Key Windows APIs**:
-- `CreatePseudoConsole` - Creates the pseudo console
-- `ResizePseudoConsole` - Resizes the PTY
-- `ClosePseudoConsole` - Cleans up the PTY
-- `InitializeProcThreadAttributeList` / `UpdateProcThreadAttribute` - Sets up ConPTY attribute
 
 ## Factory Pattern
 
@@ -100,39 +82,41 @@ if (PtyFactory.IsSupported) {
 
 ## Platform Support
 
-| Platform | Min Version | Implementation | Status |
-|----------|-------------|----------------|--------|
-| Linux    | Any modern  | pty-helper.c   | ✅ Supported |
-| macOS    | Any modern  | pty-helper.c   | ✅ Supported |
-| Windows  | 10 (1809)   | ConPTY API     | ✅ Supported |
-| Windows  | < 10 (1809) | -              | ❌ Not Supported |
+| Platform | Release target | Build-only target | Backend |
+|---|---|---|---|
+| Linux | x64 | arm64 | POSIX helper |
+| macOS | x64, arm64 | — | POSIX helper |
+| Windows 10 build 17763+ / Windows 11 | x64 | arm64 | ConPTY |
+
+The factory reports the runtime identifier, architecture, selected backend,
+and missing native dependencies through `PtyCapabilities`.
 
 ## Building
 
 ### Linux/macOS
 
 ```bash
-cd src/Dotty.NativePty
-make
+make -C src/Dotty.NativePty
+dotnet build Dotty.slnx -c Release
 ```
 
 ### Windows
 
-No separate native build required - uses P/Invoke to system APIs.
+No separate native helper build is required. Build on Windows so the
+`WINDOWS` compilation constant includes the ConPTY implementation:
 
 ```powershell
-dotnet build src/Dotty.NativePty/Dotty.NativePty.csproj
-dotnet build src/Dotty.App/Dotty.App.csproj
+dotnet build Dotty.slnx -c Release
 ```
 
 ## Migration from Legacy Code
 
-The old `TerminalSession.cs` directly managed the pty-helper process. The new architecture:
+The older host directly managed the pty-helper process. The current architecture:
 
-1. **Extracted PTY logic** into `Dotty.NativePty` project
-2. **Created IPty interface** for cross-platform abstraction
-3. **TerminalSession now** uses `PtyFactory.Create()` instead of direct process management
-4. **Platform detection** is automatic and cached
+1. **Extracts PTY logic** into the `Dotty.NativePty` project.
+2. **Uses `IPty`** for cross-platform abstraction.
+3. **Lets `TerminalSession`** use `PtyFactory.Create()` instead of direct process management.
+4. **Reports capabilities** when the platform or native dependency is unavailable.
 
 ## Security Considerations
 
@@ -158,11 +142,11 @@ echo '{"type":"resize","cols":100,"rows":30}' | nc -U /tmp/dotty-debug.sock
 
 # Enable verbose logging (if implemented)
 $env:DOTTY_DEBUG_PTY = "1"
-dotnet run --project src/Dotty.App
+dotnet run --project src/Dotty/Dotty.csproj
 ```
 
 ## References
 
 - [Windows ConPTY Documentation](https://docs.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session)
-- [POSIX forkpty](https://man7.org/linux/man-pages/man3/forkpty.3.html)
+- [POSIX PTY functions](https://man7.org/linux/man-pages/man3/posix_openpt.3.html)
 - [Dotty Windows ConPTY Guide](./WindowsConPty.md)

@@ -204,26 +204,33 @@ bash .opencode/skills/terminal-tester/dotty-interact.sh close
 
 ## TCP Command Interface (Reference)
 
-The app listens on a TCP port (set via `DOTTY_TEST_PORT` env var). Available commands:
+When `DOTTY_TEST_PORT` is set, the Silk.NET host listens on loopback
+`127.0.0.1`. Each connection sends one newline-delimited command:
 
 | Command | Description |
 |---------|-------------|
-| `TYPE:text` | Send text to the active terminal |
-| `DUMP` | Dump screen as ANSI-colored text |
-| `GET_STATE` | Get cursor position and terminal dimensions |
-| `STATS` | Get application statistics (tabs, sessions) |
-| `SCREENSHOT` | Get a screenshot (base64-encoded PNG) |
-| `NEW_TAB` | Create a new tab |
-| `CLOSE_TAB` | Close the active tab |
-| `NEXT_TAB` / `PREV_TAB` | Switch tabs |
-| `WAIT_FOR_IDLE` | Wait for rendering to complete |
-| `RESIZE:cols:rows` | Resize terminal (e.g. `RESIZE:80:24`) |
+| `TYPE:text` | Send UTF-8 text to the active terminal |
+| `KEY:name` | Send a special key such as `Enter`, `Tab`, or `CtrlC` |
+| `DUMP` | Dump visible screen text and cursor metadata |
+| `GET_STATE` | Get cursor position and terminal dimensions as JSON |
+| `STATS` | Get tab count and active tab index |
+| `WAIT_FOR_IDLE` | Wait for queued host work to drain |
+| `RESIZE:cols:rows` | Resize all terminal sessions |
 | `SHUTDOWN` | Gracefully shut down the app |
 
-## Troubleshooting
+The checked-in harness uses Python sockets and does not require `nc`:
 
-- **"dotnet: command not found"**: Ensure .NET 10 SDK is installed and in PATH
-- **"make: command not found"**: Install make and gcc: `sudo apt install build-essential`
-- **"Connection refused"**: The app may not have started yet. Increase sleep time or check logs.
-- **Empty DUMP output**: Make sure the app started with `DOTTY_TEST_PORT` set and that the active tab has a running terminal session.
-- **Screenshot shows blank**: Xvfb may not be available, or the app window hasn't rendered yet.
+```bash
+DOTTY_TEST_STATE_DIR=/tmp/dotty-harness \
+  bash .opencode/skills/terminal-tester/dotty-interact.sh launch
+```
+
+Troubleshooting:
+
+- **"dotnet: command not found"**: Install the .NET 10 SDK and add it to PATH.
+- **"make: command not found"**: Install `make` and a C compiler.
+- **"Connection refused"**: Check the per-run `app.log`; the host may have
+  failed graphics/PTY startup.
+- **Empty DUMP output**: Confirm the host started with `DOTTY_TEST_PORT` and
+  that its initial tab/session is running.
+- **Headless GUI failure**: Use `xvfb-run` for X11 or Weston for Wayland.

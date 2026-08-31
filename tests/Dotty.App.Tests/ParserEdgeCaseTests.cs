@@ -30,6 +30,7 @@ public class ParserEdgeCaseTests
         public List<(int shape, int count)> CursorShapeCalls { get; } = new();
         public int MouseEventCount;
         public string PrintedText = "";
+        public List<string> FocusReports { get; } = new();
 
         object? ITerminalHandler.Buffer => null;
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
@@ -92,7 +93,7 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnSetKittyKeyboardMode(int mode) => Events.Add($"KITTY:{mode}");
         void ITerminalHandler.OnQueryKittyKeyboard() => Events.Add("KITTY_QUERY");
         void ITerminalHandler.FlushRender() { }
-        void ITerminalHandler.OnSetFocusReporting(bool enabled) { }
+        void ITerminalHandler.OnSetFocusReporting(bool enabled) => FocusReports.Add(enabled ? "FOCUS:True" : "FOCUS:False");
         void ITerminalHandler.OnWindowReport(int command) { }
     }
 
@@ -103,6 +104,80 @@ public class ParserEdgeCaseTests
         p.Handler = h;
         return (p, h);
     }
+ 
+    private static (CaptureHandler Handler, BasicAnsiParser Parser) ParseSequence(string sequence, bool split)
+    {
+        var (parser, handler) = Setup();
+        var bytes = Encoding.UTF8.GetBytes(sequence);
+        if (split)
+        {
+            for (int i = 0; i < bytes.Length; i++)
+                parser.Feed(bytes.AsSpan(i, 1));
+        }
+        else
+        {
+            parser.Feed(bytes);
+        }
+
+        return (handler, parser);
+    }
+
+    private static string Describe(CaptureHandler handler) =>
+        string.Join("|", handler.Events
+            .Concat(handler.FocusReports)
+            .Concat(handler.CursorMoves.Select(move => $"CUP:{move.row},{move.col}"))
+            .Concat(new[]
+            {
+                $"TEXT:{handler.PrintedText}",
+                $"IL:{handler.InsertLinesCount}",
+                $"DL:{handler.DeleteLinesCount}",
+                $"KITTY:{handler.Events.Count(eventName => eventName.StartsWith("KITTY:", StringComparison.Ordinal))}",
+            }));
+
+    [Theory]
+    [InlineData("\x1b[?1h")]
+    [InlineData("\x1b[?1l")]
+    [InlineData("\x1b[?2004h")]
+    [InlineData("\x1b[?2004l")]
+    [InlineData("\x1b[?1004h")]
+    [InlineData("\x1b[?1004l")]
+    [InlineData("\x1b[?2026h")]
+    [InlineData("\x1b[?2026l")]
+    [InlineData("\x1b[?1u")]
+    [InlineData("\x1b[?u")]
+    public void P0Modes_OneChunkAndEveryByteHaveIdenticalCallbacks(string sequence)
+    {
+        var oneChunk = ParseSequence(sequence, split: false).Handler;
+        var everyByte = ParseSequence(sequence, split: true).Handler;
+
+        Assert.Equal(Describe(oneChunk), Describe(everyByte));
+    }
+
+    [Fact]
+    public void P0Modes_OverCapacityPrivateSequence_UsesFallbackWithoutDivergence()
+    {
+        const string sequence = "\x1b[?1;0;0;0;0;0;0;0;0h";
+
+        var oneChunk = ParseSequence(sequence, split: false).Handler;
+        var everyByte = ParseSequence(sequence, split: true).Handler;
+
+        Assert.Equal(Describe(oneChunk), Describe(everyByte));
+        Assert.Contains("DECCKM:True", oneChunk.Events);
+        var fastPath = ParseSequence("\x1b[?1h", split: false).Handler;
+        Assert.Equal(Describe(fastPath), Describe(oneChunk));
+    }
+
+    [Fact]
+    public void P0Modes_MalformedUnknownSequence_DoesNotDesynchronizeFollowingText()
+    {
+        var (parser, handler) = Setup();
+        var exception = Record.Exception(() => parser.Feed("\x1b[?2026;123:456hOK"u8));
+
+        Assert.Null(exception);
+        Assert.Equal("OK", handler.PrintedText);
+        Assert.Contains("SYNC:True", handler.Events);
+    }
+
 
     // ================================================================
     // CSI wiring: each sequence dispatches to the correct handler

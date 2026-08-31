@@ -475,6 +475,17 @@ public class WindowsPtyTests : IDisposable
         Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24));
     }
 
+    [Fact]
+    public void WindowsPty_Start_RejectsInvalidDimensions()
+    {
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+
+        using var pty = new Windows.WindowsPty();
+        var exception = Assert.Throws<PtyException>(() => pty.Start(columns: 0, rows: 24));
+
+        exception.Code.Should().Be(PtyErrorCode.InvalidDimensions);
+    }
+
     #endregion
 
     #region Kill Tests

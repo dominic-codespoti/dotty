@@ -1,26 +1,26 @@
 # Dotty
 
-A high-performance terminal emulator for .NET, built with Avalonia UI and optimized for speed and memory efficiency.
+A high-performance terminal emulator for .NET, built with Silk.NET, OpenGL,
+and a cell-preserving terminal core.
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](License.md)
 
 ## Overview
 
-*Last updated: 2026-06-17*
+*Last updated: 2026-08-31*
 
 Dotty is a modern terminal emulator composed of:
-- **Dotty.App** — Avalonia-based GUI application with hardware-accelerated rendering
-- **Dotty.Terminal** — High-performance terminal core with zero-allocation parsing
-- **Dotty.NativePty** — POSIX-native PTY helper for proper pseudo-terminal support
-- **Dotty.Abstractions** — Clean interfaces for extensibility
+- **Dotty** — Silk.NET/OpenGL desktop host.
+- **Dotty.Terminal** — High-performance terminal core with zero-allocation parsing.
+- **Dotty.NativePty** — Unix helper and Windows ConPTY backends.
+- **Dotty.Abstractions** — Platform-neutral contracts.
 
 ### Key Features
 
-- Hardware-accelerated rendering via SkiaSharp (ligatures, underline styles, rounded corners)
-- Optimized ANSI/VT parser with minimal allocations
-- Native PTY support on Linux/Unix systems
-- Efficient buffer management with scrollback support
+- Hardware-accelerated OpenGL rendering with SkiaSharp font shaping
+- Native PTY support on Linux, macOS, and Windows
+- Efficient cell-preserving buffer and scrollback reflow
 - Ligature support via HarfBuzz font shaping
 - Undercurl, dotted, and dashed underline rendering
 - Rounded rectangle clip regions for modern terminal aesthetics
@@ -31,142 +31,106 @@ Dotty is a modern terminal emulator composed of:
 
 ### Prerequisites
 
-- .NET 10 SDK (or .NET 9)
-- Linux/Unix system (for native PTY support)
-- `make`, `gcc`/`clang`
+- .NET 10 SDK or runtime
+- Desktop OpenGL 3.3 core support
+- Linux/macOS source builds additionally require `make` and `gcc` or `clang`
+
+### Supported Platforms
+
+| Platform | Release target | Build-only target | PTY backend |
+|---|---|---|---|
+| Linux | x64 | arm64 | POSIX `pty-helper` |
+| macOS | Intel, Apple Silicon | — | POSIX `pty-helper` |
+| Windows 10 build 17763+ / Windows 11 | x64 | arm64 | ConPTY |
+
+Linux arm64 and Windows arm64 are build targets until native runtime smoke
+coverage promotes them to supported release targets.
 
 ### Build
 
-```bash
-# Build native PTY helper
-cd src/Dotty.NativePty && make
+On Linux or macOS, build the POSIX helper first:
 
-# Build solution
-cd ../..
-dotnet build Dotty.sln -c Release
+```bash
+make -C src/Dotty.NativePty
+```
+
+On Windows, no separate native helper build is required; ConPTY is provided by
+the OS. All platforms then build the solution:
+
+```bash
+dotnet build Dotty.slnx -c Release
 ```
 
 ### Run
 
 ```bash
-dotnet run --project src/Dotty.App
+dotnet run --project src/Dotty/Dotty.csproj
 ```
 
 ### Test
 
 ```bash
-dotnet test tests/Dotty.App.Tests
+dotnet test --solution Dotty.slnx -c Release
 ```
 
 ## Configuration
 
-Dotty features a **dual configuration system**: compile-time C# source generation for zero-overhead defaults, plus runtime C# hot-reload for live configuration changes without restarting.
+Dotty loads JSON configuration at startup and watches the file for atomic
+updates. The active path is:
 
-### Quick Start
+- Linux: `$XDG_CONFIG_HOME/dotty/config.json`, or `~/.config/dotty/config.json`
+- macOS: `~/Library/Application Support/Dotty/config.json`
+- Windows: `%APPDATA%/Dotty/config.json`
 
-Dotty automatically creates a configuration project on first run:
+Set `DOTTY_CONFIG_HOME` to override the platform directory. The file is
+created with defaults on first run.
 
-- **Linux/macOS**: `~/.config/dotty/Dotty.UserConfig/`
-- **Windows**: `%APPDATA%/dotty/Dotty.UserConfig/`
-
-The generated project includes:
-- `Config.cs` with sensible defaults (DarkPlus theme, JetBrains Mono 15pt)
-- `.csproj` with NuGet reference to `Dotty.Abstractions` for full IntelliSense
-- Helpful comments explaining all available options
-
-**To customize:**
-```bash
-# 1. Open the config folder in your IDE
-code ~/.config/dotty/Dotty.UserConfig/
-
-# 2. Edit Config.cs (see example below)
-
-# 3. Rebuild dotty to apply changes
-dotnet build
-```
-
-**Quick Example:**
-```csharp
-using Dotty.Abstractions.Config;
-using Dotty.Abstractions.Themes;
-
-namespace Dotty.UserConfig;
-
-public partial class MyDottyConfig : IDottyConfig
+```json
 {
-    // Font: JetBrains Mono at 14pt
-    public string? FontFamily => "JetBrains Mono, Fira Code, monospace";
-    public double? FontSize => 14.0;
-    
-    // Theme: Dracula
-    public IColorScheme? Colors => BuiltInThemes.Dracula;
-    
-    // Cursor: Blinking beam
-    public ICursorSettings? Cursor => new CursorSettings
-    {
-        Shape = CursorShape.Beam,
-        Blink = true
-    };
+  "font": {
+    "family": "JetBrains Mono, Cascadia Code, monospace",
+    "size": 14,
+    "lineHeight": 1.25
+  },
+  "window": {
+    "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 },
+    "opacity": 1
+  },
+  "theme": "DarkPlus",
+  "cursor": { "shape": "Block", "blink": true, "blinkIntervalMs": 500 },
+  "keybindings": {
+    "ctrl+shift+t": "NewTab",
+    "ctrl+shift+w": "ClosePane"
+  }
 }
 ```
 
-### Runtime Configuration Hot-Reload
+Changes are debounced and applied on the desktop UI thread. Invalid JSON keeps
+the last valid configuration and is reported through the host diagnostics.
+Themes belong in the platform themes directory; Lua startup scripts (`config.lua`
+or `init.lua`) belong in the platform configuration directory. See
+[Configuration Guide](docs/Configuration.md) for the complete field list and
+[Platform Support](docs/PlatformSupport.md) for path and troubleshooting details.
 
-Dotty watches your `Config.cs` file and automatically rebuilds + hot-reloads configuration without restarting the application:
+## Documentation
 
-```bash
-# Edit config — changes apply live
-code ~/.config/dotty/Dotty.UserConfig/Config.cs
-```
-
-The `CSharpConfigWatcher` monitors your config file for changes, triggers a background build via the .NET SDK, and pushes the new configuration to the running application through a web socket channel. No restart needed.
-
-### Key Features
-
-| Feature | Benefit |
-|---------|---------|
-| **Type-safe** | Compile-time validation catches config errors before runtime |
-| **Zero reflection** | All values resolved at compile time—no startup overhead |
-| **AOT compatible** | Works with .NET Native AOT publishing |
-| **Full IntelliSense** | IDE autocomplete and error checking via NuGet package |
-| **Runtime hot-reload** | Edit Config.cs and see changes instantly — no restart |
-| **Web socket config push** | New assemblies loaded live via CSharpConfigWatcher |
-| **11 built-in themes** | DarkPlus, Dracula, TokyoNight, Catppuccin, Gruvbox, and more |
-| **Custom themes** | Create your own color schemes by extending `ColorSchemeBase` |
-| **Transparency support** | Window opacity, blur, and acrylic effects |
-
-### Default Settings
-
-| Setting | Default Value |
-|---------|-----------------|
-| **Theme** | DarkPlus (VS Code: Dark+) |
-| **Font** | JetBrains Mono, 15pt |
-| **Cursor** | Block shape, blinking |
-| **Scrollback** | 10,000 lines |
-| **Window** | 80 columns × 24 rows |
-
-### Documentation
-
-- **[Configuration Guide](docs/guides/configuration.md)** — Complete user guide with examples and troubleshooting
-- **[Architecture](docs/architecture/ConfigSourceGenerator.md)** — How the source generator works
-- **[Advanced Topics](docs/ConfigurationAdvanced.md)** — Custom themes, transparency, and more
-
-### Regenerate Config
-
-```bash
-dotty --generate-config  # ⚠️ Overwrites existing config
-```
+- [Platform support and setup](docs/PlatformSupport.md)
+- [Configuration Guide](docs/Configuration.md)
+- [Native PTY architecture](docs/NativePty.md)
+- [Windows ConPTY guide](docs/WindowsConPty.md)
+- [End-to-end smoke testing](docs/E2ETesting.md)
 
 ## Repository Structure
 
 ```
 src/
-  Dotty.App/         — Avalonia UI application
-  Dotty.Terminal/    — Terminal engine (parsers, buffers, adapters)
-  Dotty.NativePty/   — C-based POSIX PTY helper
-  Dotty.Abstractions/ — Shared interfaces
-tests/               — Unit tests
-docs/                — Architecture and implementation docs
+  Dotty/             — Silk.NET/OpenGL desktop host
+  Dotty.Terminal/    — Terminal engine (parser, buffer, adapter)
+  Dotty.Runtime/     — Sessions, tabs, input, config, scripting
+  Dotty.NativePty/   — Unix helper and Windows ConPTY backends
+  Dotty.Abstractions/ — Shared platform-neutral contracts
+tests/               — Unit, native PTY, and rendering tests
+docs/                — Architecture and platform guides
 ```
 
 ## Documentation

@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 using Dotty.Abstractions.Themes;
-using Dotty.App.Services;
+using Dotty.Runtime.Themes;
 
 namespace Dotty.App.Tests;
 

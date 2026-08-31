@@ -1,5 +1,6 @@
 using System;
 using Dotty.Abstractions.Adapter;
+using Dotty.Abstractions.Config;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -40,7 +41,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public int CursorShape { get; private set; }
     public bool KeypadApplicationMode { get; private set; }
-
+    public bool ApplicationCursorKeysEnabled { get; private set; }
     public MouseMode CurrentMouseMode { get; private set; } = MouseMode.None;
     public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
     public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
@@ -53,7 +54,7 @@ public class TerminalAdapter : ITerminalHandler
     public event Action<string>? RenderRequested;
     public event Action<string>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
-#pragma warning disable CS0067 // Event is never used, but required by interface
+    public event Action? Bell;
     public event Action<string>? LinkOpened;
 #pragma warning restore CS0067
 
@@ -454,6 +455,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnBell()
     {
+        Bell?.Invoke();
     }
 
     public void OnCursorHorizontalAbsolute(int col)
@@ -555,10 +557,20 @@ public class TerminalAdapter : ITerminalHandler
         Trace?.Invoke($"CBT({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
-
     public void OnSetCursorShape(int shape)
     {
         CursorShape = shape;
+        var (cursorShape, blinking) = shape switch
+        {
+            0 or 1 => (TerminalCursorShape.Block, true),
+            2 => (TerminalCursorShape.Block, false),
+            3 => (TerminalCursorShape.Underline, true),
+            4 => (TerminalCursorShape.Underline, false),
+            5 => (TerminalCursorShape.Beam, true),
+            6 => (TerminalCursorShape.Beam, false),
+            _ => (TerminalCursorShape.Block, true),
+        };
+        _buffer.SetCursorStyle(cursorShape, blinking);
         RequestRender();
     }
 
@@ -569,7 +581,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnSetApplicationCursorKeys(bool enabled)
     {
-        // TODO: track application cursor keys mode if needed
+        ApplicationCursorKeysEnabled = enabled;
     }
 
     public void OnSendDeviceAttributes(int daType)
@@ -621,9 +633,15 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnSetSynchronizedUpdate(bool enabled)
     {
+        if (_synchronizedUpdateActive == enabled)
+            return;
+
         _synchronizedUpdateActive = enabled;
-        if (!enabled) FlushRender();
+        if (!enabled)
+            FlushRender();
     }
+
+    public bool SynchronizedUpdateActive => _synchronizedUpdateActive;
 
     private bool _focusReportingEnabled;
 

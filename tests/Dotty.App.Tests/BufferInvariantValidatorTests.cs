@@ -155,4 +155,46 @@ public class BufferInvariantValidatorTests
         // GetRowText renders the width-2 glyph's continuation cell as a space.
         Assert.StartsWith("ab界 cdefghij", tb.GetRowText(2));
     }
+    [Fact]
+    public void RowEndColIncludesExplicitSpaces()
+    {
+        var tb = new TerminalBuffer(rows: 2, columns: 8);
+        tb.WriteText("ab  ".AsSpan(), CellAttributes.Default);
+
+        var screen = tb.ActiveScreenForTests;
+        int physicalRow = screen.GetPhysicalRow(0);
+        Assert.Equal(3, screen.RowEndCol[physicalRow]);
+        AssertClean(tb);
+    }
+
+    [Fact]
+    public void OrphanContinuationMetadataIsRejected()
+    {
+        var tb = new TerminalBuffer(rows: 2, columns: 8);
+        var screen = tb.ActiveScreenForTests;
+        screen.RowContinuesPrevious[screen.GetPhysicalRow(1)] = true;
+        screen.RowEndCol[screen.GetPhysicalRow(1)] = 0;
+
+        var violations = tb.ValidateInvariants();
+
+        Assert.Contains(violations, violation => violation.Contains("orphan continuation-row metadata"));
+    }
+
+    [Fact]
+    public void ReflowFallbackPreservesUnmarkedCells()
+    {
+        var screen = new Screen(rows: 1, columns: 4, scrollbackCapacity: 0);
+        screen.GetCellRef(0, 0).SetAscii('A');
+        screen.GetCellRef(0, 1).SetAscii('B');
+
+        var resized = screen.Reflow(
+            rows: 1,
+            columns: 2,
+            new ReflowCursorAnchor(0, 0),
+            out _);
+        Assert.Equal('A', (char)resized.GetCell(0, 0).Rune);
+        Assert.Equal('B', (char)resized.GetCell(0, 1).Rune);
+        screen.Dispose();
+        resized.Dispose();
+    }
 }

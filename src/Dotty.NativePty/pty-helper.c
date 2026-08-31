@@ -63,12 +63,17 @@ static void *proxy_stdin_to_master(void *arg) {
 
 static void handle_control_messages(const char *path) {
     if (!path) return;
+    if (strlen(path) >= sizeof(((struct sockaddr_un *)0)->sun_path)) {
+        fprintf(stderr, "pty-helper: control socket path is too long\n");
+        return;
+    }
+
     int lsock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (lsock < 0) return;
     struct sockaddr_un addr;
     memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    memcpy(addr.sun_path, path, strlen(path) + 1);
     unlink(path);
     if (bind(lsock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
         close(lsock);
@@ -134,7 +139,9 @@ static void cleanup_and_exit(int signo) {
     if (g_control_path) {
         unlink(g_control_path);
     }
-    // ensure master closed
+    if (child_pid > 0) {
+        kill(child_pid, SIGHUP);
+    }
     if (master_fd >= 0) close(master_fd);
     _exit(128 + (signo & 0xff));
 }
@@ -283,9 +290,7 @@ int main(int argc, char **argv) {
     // Close master; threads will exit when read/write return
     if (master_fd >= 0) close(master_fd);
     if (control_path && control_sock_fd >= 0) close(control_sock_fd);
-
-    // Give threads a moment
-    sleep(1);
+    if (control_path) unlink(control_path);
 
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);

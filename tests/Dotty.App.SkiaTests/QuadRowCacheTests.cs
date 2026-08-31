@@ -1,5 +1,5 @@
 using System;
-using Dotty.App.Rendering;
+using Dotty.Rendering.Gpu;
 using SkiaSharp;
 using Xunit;
 

@@ -1,581 +1,158 @@
-# Dotty Configuration System
+# Dotty Configuration
 
-Dotty uses a C# Source Generator-based configuration system that allows users to customize terminal settings using C# code that gets compiled into the application at build time.
+Dotty uses a JSON configuration file at runtime. It loads the last valid
+configuration at startup, watches the file for editor write/rename patterns,
+and applies accepted changes on the desktop UI thread.
 
-## Overview
+## File location
 
-The configuration system consists of:
+The configuration directory is selected by the host platform:
 
-1. **Configuration Interfaces** (`Dotty.Abstractions.Config`) - Define the contract for configuration
-2. **Source Generator** (`Dotty.Config.SourceGenerator`) - Scans for IDottyConfig implementations and generates a static `Config` class
-3. **Generated Code** (`Dotty.Generated` namespace) - Static configuration values available at runtime
-4. **ConfigBridge** (`Dotty.App.Configuration`) - Helper to convert generated values to Avalonia types
+- Linux: `$XDG_CONFIG_HOME/dotty`, or `~/.config/dotty`
+- macOS: `~/Library/Application Support/Dotty`
+- Windows: `%APPDATA%/Dotty`
 
-## Quick Start
+The file is `config.json`. Set `DOTTY_CONFIG_HOME` to override the complete
+configuration directory. This override is useful for tests, portable installs,
+and parallel development sessions.
 
-### NuGet Package
+Dotty creates the directory and a default `config.json` when the file is
+missing. Writes are atomic: a temporary file is written and moved over the
+previous file. A malformed replacement leaves the last valid in-memory config
+active and records the parse error in `UserConfigService.LastError`.
 
-Dotty.Abstractions is available on NuGet.org, providing full IntelliSense and LSP support for your configuration:
-
-**Package:** [Dotty.Abstractions 0.1.0](https://www.nuget.org/packages/Dotty.Abstractions/)
-
-```bash
-dotnet add package Dotty.Abstractions --version 0.1.0
-```
-
-### 1. First Run (Automatic Config Generation)
-
-On first startup, Dotty automatically creates:
-
-- **Linux/macOS**: `~/.config/dotty/Config.cs`
-- **Windows**: `%APPDATA%/dotty/Config.cs`
-
-The generated file is **ordinary C#** (not a `.csx` script). `using Dotty.Abstractions.*;` and similar are standard C# directives — Dotty uses `CSharpSyntaxTree.ParseText` for runtime compilation, which requires valid C# syntax, not file-based-app `#:` directives.
-
-Dotty also creates `Dotty.UserConfig.csproj` beside it when missing; that project exists only to give C# language servers package-backed IntelliSense and go-to-definition. Dotty never builds or restores it at runtime. The flat file is conditionally included as a `Compile` item during application builds.
-
-Existing `Dotty.UserConfig/Config.cs` installations are copied to the flat path on first startup. The legacy directory is preserved for manual cleanup.
-
-### 2. Open the File
-
-```bash
-code ~/.config/dotty/Config.cs
-# or: rider ~/.config/dotty/Config.cs
-```
-
-Any editor with C# language support can edit the file. Open `Dotty.UserConfig.csproj` when you want project-backed references and definition navigation.
-### 3. Customizing Your Configuration
-
-Edit the `Config.cs` file in your IDE:
-
-```csharp
-// Change the theme
-public IColorScheme? Colors => BuiltInThemes.Dracula;
-
-// Adjust font size
-public double? FontSize => 14.0;
-
-// Increase scrollback
-public int? ScrollbackLines => 50000;
-```
-
-### 4. Rebuilding to Apply Changes
-
-After editing, rebuild Dotty to apply your configuration changes:
-
-```bash
-dotnet build
-# or
-dotnet build -c Release
-```
-
-The Source Generator will pick up your changes and generate a new static `Config` class.
-
-> **Note:** You only need to rebuild the main Dotty application. The flat config file is included conditionally as an ordinary `Compile` item.
-
-### 5. Regenerating Config (Optional)
-
-To regenerate the flat config file:
-
-```bash
-dotty --generate-config
-```
-
-⚠️ This will overwrite your existing config! Back up first.
-
-## Configuration Options
-
-### Font Settings
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `FontFamily` | `string?` | JetBrains Mono | Comma-separated font stack |
-| `FontSize` | `double?` | 15.0 | Font size in points |
-| `CellPadding` | `double?` | 1.5 | Cell padding in pixels |
-| `ContentPadding` | `Thickness?` | 0,0,0,0 | Padding around terminal area |
-
-### Color Scheme (IColorScheme)
-
-All colors in ARGB format (0xAARRGGBB):
-
-- `Background` - Terminal background
-- `Foreground` - Text color
-- `AnsiBlack` through `AnsiWhite` (0-7) - Standard ANSI colors
-- `AnsiBrightBlack` through `AnsiBrightWhite` (8-15) - Bright ANSI colors
-
-### Key Bindings (IKeyBindings)
-
-Key bindings map Avalonia `Key` + `KeyModifiers` to `TerminalAction`:
-
-```csharp
-public TerminalAction? GetAction(Key key, KeyModifiers modifiers)
-{
-    if (key == Key.T && modifiers == (KeyModifiers.Control | KeyModifiers.Shift))
-        return TerminalAction.NewTab;
-    
-    return null; // Use default for unhandled keys
-}
-```
-
-Available actions:
-- `NewTab`, `CloseTab`, `NextTab`, `PreviousTab`
-- `SwitchTab1` through `SwitchTab9`
-- `Copy`, `Paste`, `Clear`
-- `ToggleFullscreen`, `ZoomIn`, `ZoomOut`, `ResetZoom`
-- `Search`, `DuplicateTab`, `CloseOtherTabs`
-- `Quit`
-
-### Terminal Settings
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `ScrollbackLines` | `int?` | 10000 | Scrollback buffer size |
-| `InactiveTabDestroyDelayMs` | `int?` | 5000 | Delay before destroying inactive tab visuals |
-| `SelectionColor` | `uint?` | 0xA03385DB | Selection highlight color (ARGB) |
-| `TabBarBackgroundColor` | `uint?` | 0xFF1A1A1A | Tab bar background (ARGB) |
-
-### Window Opacity
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `Opacity` (on theme) | `byte` | 100 | Window opacity 0-100 (100 = fully opaque) |
-
-Window transparency is controlled through the color scheme's `Opacity` property:
-
-```csharp
-// Create a translucent theme
-public class TranslucentTheme : DarkPlusTheme
-{
-    public override byte Opacity => 85; // 85% opaque, 15% transparent
-}
-
-public partial class MyConfig : IDottyConfig
-{
-    public IColorScheme? Colors => new TranslucentTheme();
-}
-```
-
-### Window Settings (IWindowDimensions)
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `Columns` | `int` | 80 | Initial terminal columns |
-| `Rows` | `int` | 24 | Initial terminal rows |
-| `WidthPixels` | `int?` | null | Optional fixed width in pixels |
-| `HeightPixels` | `int?` | null | Optional fixed height in pixels |
-| `StartFullscreen` | `bool` | false | Start in fullscreen mode |
-| `Title` | `string?` | "Dotty" | Window title |
-
-### Cursor Settings (ICursorSettings)
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `Shape` | `CursorShape` | Block | Block, Beam, or Underline |
-| `Blink` | `bool` | true | Cursor blinking |
-| `BlinkIntervalMs` | `int` | 500 | Blink interval in milliseconds |
-| `Color` | `uint?` | null | Cursor color (null = use foreground) |
-| `ShowUnfocused` | `bool` | false | Show cursor when terminal not focused |
-
-## Theming
-
-Dotty provides a comprehensive theming system with built-in popular themes and support for custom themes.
-
-### Using Built-in Themes
-
-The easiest way to customize colors is to use a built-in theme:
-
-```csharp
-using Dotty.Abstractions.Config;
-using Dotty.Abstractions.Themes;
-
-public partial class MyConfig : IDottyConfig
-{
-    // Use a built-in theme
-    public IColorScheme? Colors => BuiltInThemes.Dracula;
-}
-```
-
-### Available Built-in Themes
-
-#### Dark Themes
-
-| Theme | Description |
-|-------|-------------|
-| `BuiltInThemes.DarkPlus` | VS Code Dark+ theme (default) - great readability, familiar to VS Code users |
-| `BuiltInThemes.Dracula` | Popular dark theme with vibrant, saturated colors |
-| `BuiltInThemes.OneDark` | Inspired by Atom editor - muted, professional appearance |
-| `BuiltInThemes.GruvboxDark` | Warm dark theme with earthy tones - easy on the eyes |
-| `BuiltInThemes.CatppuccinMocha` | Pastel dark theme with soft, soothing colors |
-| `BuiltInThemes.TokyoNight` | Modern theme with deep blues and purples |
-
-#### Light Themes
-
-| Theme | Description |
-|-------|-------------|
-| `BuiltInThemes.LightPlus` | VS Code Light+ theme - clean and bright |
-| `BuiltInThemes.OneLight` | Balanced light theme - refined alternative to plain white |
-| `BuiltInThemes.GruvboxLight` | Warm light variant of Gruvbox |
-| `BuiltInThemes.CatppuccinLatte` | Light counterpart to Catppuccin Mocha |
-| `BuiltInThemes.SolarizedLight` | Low-contrast theme designed to reduce eye strain |
-
-### Dynamic Theme Switching
-
-Since Dotty uses AOT compilation, runtime theme switching is limited but possible using compile-time expressions:
-
-```csharp
-// Time-based theme switching (day/night)
-public IColorScheme? Colors => DateTime.Now.Hour is >= 6 and < 18 
-    ? BuiltInThemes.LightPlus 
-    : BuiltInThemes.DarkPlus;
-
-// You can also use environment variables or other compile-time conditions
-```
-
-### Creating Custom Themes
-
-#### Option 1: Inherit from ColorSchemeBase (Recommended)
-
-```csharp
-using Dotty.Abstractions.Themes;
-
-public class MyCustomTheme : ColorSchemeBase
-{
-    public MyCustomTheme() : base(
-        background: 0xFF1A1A1A,        // Dark gray
-        foreground: 0xFFF0F0F0,        // Light gray
-        ansiBlack: 0xFF000000,
-        ansiRed: 0xFFFF0000,
-        ansiGreen: 0xFF00FF00,
-        ansiYellow: 0xFFFFFF00,
-        ansiBlue: 0xFF0000FF,
-        ansiMagenta: 0xFFFF00FF,
-        ansiCyan: 0xFF00FFFF,
-        ansiWhite: 0xFFFFFFFF,
-        ansiBrightBlack: 0xFF555555,
-        ansiBrightRed: 0xFFFF5555,
-        ansiBrightGreen: 0xFF55FF55,
-        ansiBrightYellow: 0xFFFFFF55,
-        ansiBrightBlue: 0xFF5555FF,
-        ansiBrightMagenta: 0xFFFF55FF,
-        ansiBrightCyan: 0xFF55FFFF,
-        ansiBrightWhite: 0xFFFFFFFF
-    )
-    {
-    }
-    
-    // Optional: Override opacity (0-100, default is 100)
-    public override byte Opacity => 95; // 5% transparent
-}
-
-// Use it in your config
-public partial class MyConfig : IDottyConfig
-{
-    public IColorScheme? Colors => new MyCustomTheme();
-}
-}
-```
-
-#### Option 2: Implement IColorScheme Directly
-
-```csharp
-using Dotty.Abstractions.Config;
-
-public class MySimpleTheme : IColorScheme
-{
-    public uint Background => 0xFF1A1A1A;
-    public uint Foreground => 0xFFF0F0F0;
-    
-    public uint AnsiBlack => 0xFF000000;
-    public uint AnsiRed => 0xFFFF0000;
-    // ... implement all 16 ANSI colors
-}
-```
-
-#### Option 3: Override Specific Colors from Base Theme
-
-```csharp
-using Dotty.Abstractions.Themes;
-
-public partial class MyConfig : IDottyConfig
-{
-    // Use Dracula but with a pure black background
-    public IColorScheme? Colors => new ThemeOverride(
-        baseTheme: BuiltInThemes.Dracula,
-        background: 0xFF000000,
-        foreground: 0xFFFFFFFF
-    );
-}
-
-// ThemeOverride helper class (from samples/Config.cs)
-public class ThemeOverride : ColorSchemeBase
-{
-    public ThemeOverride(
-        IColorScheme baseTheme,
-        uint? background = null,
-        uint? foreground = null,
-        /* ... other color overrides ... */)
-        : base(
-            background ?? baseTheme.Background,
-            foreground ?? baseTheme.Foreground,
-            // ... pass through other colors with fallbacks
-        )
-    {
-    }
-}
-```
-
-### Color Format
-
-Colors are specified in ARGB format (Alpha, Red, Green, Blue) as unsigned 32-bit integers:
-
-```csharp
-// Format: 0xAARRGGBB
-uint color = 0xFFFF0000;      // Pure red (opaque)
-uint color = 0xFF00FF00;      // Pure green (opaque)
-uint color = 0xFF0000FF;      // Pure blue (opaque)
-uint color = 0xFF1E1E1E;      // Dark gray (VS Code Dark+ background)
-uint color = 0xFFD4D4D4;      // Light gray (VS Code Dark+ foreground)
-```
-
-For fully opaque colors, the alpha component (first byte) should be `0xFF`.
-
-### Helper Methods
-
-The `ColorSchemeBase` class provides utility methods:
-
-```csharp
-// Convert from hex string
-uint color = ColorSchemeBase.FromHex("#FF5733");     // Returns 0xFFFF5733
-uint color = ColorSchemeBase.FromHex("#80FF5733");   // Returns 0x80FF5733 (with alpha)
-
-// Convert to hex string
-string hex = ColorSchemeBase.ToHex(0xFFFF5733);      // Returns "#FFFF5733"
-
-// Create from RGB components
-uint color = ColorSchemeBase.FromRgb(255, 87, 51);   // Returns 0xFFFF5733
-uint color = ColorSchemeBase.FromRgb(255, 87, 51, 128); // With alpha
-
-// Calculate contrast ratio (for accessibility)
-double contrast = ColorSchemeBase.CalculateContrastRatio(foreground, background);
-// WCAG AA requires at least 4.5:1 for normal text
-```
-
-### Getting Themes by Name
-
-```csharp
-// Get theme by name (case-insensitive, with variants)
-var theme = BuiltInThemes.GetByName("dracula");     // Returns Dracula theme
-var theme = BuiltInThemes.GetByName("dark-plus");   // Returns DarkPlus theme
-var theme = BuiltInThemes.GetByName("unknown");     // Returns DarkPlus (default)
-
-// Access theme arrays
-var allDarkThemes = BuiltInThemes.DarkThemes;       // All dark themes
-var allLightThemes = BuiltInThemes.LightThemes;     // All light themes
-var allThemes = BuiltInThemes.AllThemes;            // All themes
-```
-
-## Using Generated Configuration
-
-The source generator creates a static `Config` class in the `Dotty.Generated` namespace:
-
-```csharp
-// Access configuration values
-string fontFamily = Dotty.Generated.Config.FontFamily;
-double fontSize = Dotty.Generated.Config.FontSize;
-uint background = Dotty.Generated.Config.Background;
-
-// Get Avalonia types using ConfigBridge
-using Dotty.App.Configuration;
-
-FontFamily family = ConfigBridge.GetFontFamily();
-IBrush backgroundBrush = ConfigBridge.GetBackgroundBrush();
-Color bgColor = ConfigBridge.GetBackgroundColor();
-
-// Get ANSI colors
-IBrush redBrush = ConfigBridge.GetAnsiColorBrush(1);   // ANSI Red
-IBrush blueBrush = ConfigBridge.GetAnsiColorBrush(4);  // ANSI Blue
-
-// Key bindings
-TerminalAction? action = Dotty.Generated.Config.GetActionForKey(
-    Avalonia.Input.Key.T, 
-    Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Shift
-);
-```
-
-## AOT Compatibility
-
-All generated code is AOT-compatible:
-- No reflection
-- All values are constants or switch expressions
-- No runtime code generation
-- Fully trimmable
-
-## Technical Details
-
-### Source Generator Flow
-
-1. **Compilation Scan**: The generator scans the compilation for classes implementing `IDottyConfig`
-2. **Analysis**: If a config class is found, its properties are analyzed
-3. **Code Generation**: Three files are generated:
-   - `Dotty.Generated.Config.g.cs` - Static configuration class
-   - `Dotty.Generated.ColorScheme.g.cs` - Color scheme record
-   - `Dotty.Generated.KeyBindings.g.cs` - Key binding helpers and enum
-
-### Generated Config Class
-
-```csharp
-public static class Config
-{
-    public static string FontFamily => "JetBrains Mono";
-    public static double FontSize => 15.0;
-    public static uint Background => 0xFF1E1E1E;  // From selected theme
-    // ... more properties
-    
-    public static ColorScheme Colors => ColorScheme.Default;
-    
-    public static TerminalAction? GetActionForKey(Key key, KeyModifiers modifiers)
-    {
-        return (key, modifiers) switch
-        {
-            (Key.T, KeyModifiers.Control | KeyModifiers.Shift) => TerminalAction.NewTab,
-            // ... more bindings
-            _ => null
-        };
-    }
-}
-```
-
-## Sample Configurations
-
-See `/home/dom/projects/dotnet-term/samples/Config.cs` for complete examples:
-- Using built-in themes
-- Time-based theme switching
-- Creating custom themes
-- Overriding theme colors
-- Custom key bindings
-- Cursor settings
-
-## Runtime Configuration Hot-Reload
-
-Dotty supports **runtime configuration hot-reload** via the `CSharpConfigWatcher` service, which monitors your config file for changes and applies them without restarting the application.
-
-### How It Works
-
-```
-Config.cs edit → FileSystemWatcher → CSharpConfigWatcher →
-  CSharpSyntaxTree.ParseText → in-memory assembly load →
-    RuntimeSettings → App applies new settings
-```
-
-1. **File Monitoring**: `CSharpConfigWatcher` watches `~/.config/dotty/Config.cs` (or the preserved legacy path when migration cannot write).
-2. **In-memory Compilation**: On change, the ordinary C# file is compiled directly with Roslyn; the editor project is not involved.
-3. **Assembly Load**: The compiled assembly is loaded into a collectible context.
-4. **Live Apply**: `RuntimeSettings` applies the new configuration (fonts, colors, cursor, etc.) instantly.
-
-### Supported Hot-Reload Changes
-
-| Setting | Hot-Reload Support |
-|---------|-------------------|
-| Theme / colors | ✅ Live update |
-| Font size | ✅ Live update |
-| Font family | ✅ Live update |
-| Cursor shape/blink | ✅ Live update |
-| Window opacity | ✅ Live update |
-| Scrollback lines | ✅ On next buffer operation |
-| Key bindings | ⚠️ Restart recommended |
-| Window dimensions | ⚠️ Restart recommended |
-
-### Limitations
-
-- Key bindings and window dimensions require a restart
-- Very rapid successive edits may be debounced
-- Build errors in config are reported in application logs
-
-## ANSI Color Palette Live-Update
-
-The 16 ANSI terminal colors (black, red, green, yellow, blue, magenta, cyan, white + bright variants) can be updated at runtime through `RuntimeSettings`.
-
-### Color Resolution Chain
-
-When the terminal needs an ANSI color, it resolves through this fallback chain:
-
-```
-ApplyAnsiColorPalette():
-  1. RuntimeSettings.Current.Ansi{0-15}   (hot-reloadable hex strings from
-     ↓                                     settings.json or websocket push)
-  2. theme IColorScheme (if provided)      (the active theme object)
-  3. Generated.Config.Colors              (compile-time defaults)
-```
-
-This allows the palette to be updated live — an automation script or config edit
-can push new ANSI colors without restarting the terminal.
-
-### Color Fallback for Default Foreground/Background
-
-The default terminal foreground and background colors follow a similar chain:
-
-```
-ApplyDefaultsToResources():
-  1. RuntimeSettings.Current.Background / Foreground  (persisted hex strings)
-  2. Defaults.DefaultBackground / Defaults.DefaultForeground (generated config)
-```
-
-Previously the default foreground was hardcoded to `SKColors.White` in the canvas
-paint setup, which made text invisible with light themes. Now `EnsureMetrics()`
-reads `RuntimeSettings.Current.Foreground` at paint creation time.
-
-### Persistence via settings.json
-
-Runtime color overrides are persisted to `~/.config/dotty/settings.json` by
-`FileSystemConfigWatcher`. The JSON file uses a source-generated serializer
-context (`RuntimeSettingsJsonContext`) for AOT compatibility:
+## Example
 
 ```json
 {
-  "Background": "#1a1b26",
-  "Foreground": "#c0caf5",
-  "AnsiBlack": "#1d202f",
-  "AnsiRed": "#f7768e",
-  ...
+  "font": {
+    "family": "JetBrains Mono, Cascadia Code, Liberation Mono, monospace",
+    "size": 14,
+    "lineHeight": 1.25
+  },
+  "window": {
+    "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 },
+    "opacity": 1,
+    "title": "Dotty"
+  },
+  "tabBar": {
+    "show": true,
+    "height": 38,
+    "style": "Pill"
+  },
+  "cursor": {
+    "shape": "Block",
+    "blink": true,
+    "blinkIntervalMs": 500
+  },
+  "theme": "DarkPlus",
+  "selectionColor": "#264F78",
+  "panes": {
+    "dividerThickness": 2,
+    "activeBorder": true
+  },
+  "keybindings": {
+    "ctrl+shift+t": "NewTab",
+    "ctrl+shift+w": "ClosePane",
+    "ctrl+shift+c": "Copy",
+    "ctrl+shift+v": "Paste",
+    "ctrl+shift+f": "Search"
+  }
 }
 ```
 
+Unknown JSON properties are ignored. Property names are case-insensitive and
+trailing commas/comments are accepted by the source-generated JSON context.
+
+## Options
+
+### `font`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `family` | string | platform-neutral fallback stack | Comma-separated family names; first installed family wins. |
+| `size` | number | `14` | Font size in points; non-finite or non-positive values are normalized. |
+| `lineHeight` | number | `1.25` | Line-height multiplier; values below `0.1` are clamped. |
+
+The renderer measures the selected typeface at the current framebuffer scale.
+Cell width and height remain finite and positive even when a platform font
+reports incomplete metrics.
+
+### `window`
+
+| Property | Type | Default |
+|---|---|---|
+| `padding.left` / `top` / `right` / `bottom` | number | `14`, `8`, `14`, `8` |
+| `opacity` | number | `1` |
+| `title` | string | `Dotty` |
+
+### `tabBar`
+
+| Property | Type | Default |
+|---|---|---|
+| `show` | boolean | `true` |
+| `height` | number | `38` |
+| `style` | string | `Pill` |
+
+Supported styles are `Pill`, `Compact`, and `Minimal`.
+
+### `cursor`
+
+| Property | Type | Default |
+|---|---|---|
+| `shape` | string | `Block` |
+| `blink` | boolean | `true` |
+| `blinkIntervalMs` | integer | `500` |
+
+Supported shapes are `Block`, `Beam`, and `Underline`.
+
+### `theme`, `selectionColor`, and `panes`
+
+`theme` names a built-in or user theme. `selectionColor` accepts the color
+syntax understood by the active theme loader. `panes.dividerThickness` controls
+the split-pane divider and `panes.activeBorder` controls the active-pane border.
+
+User theme JSON files are loaded from `<config-directory>/themes`. See
+[Themes](Themes.md) for the schema and validation rules.
+
+### `keybindings`
+
+Keys are normalized chords containing `ctrl`, `shift`, `alt`, or `super` plus a
+key name. Values are `TerminalAction` names:
+
+- tabs: `NewTab`, `CloseTab`, `NextTab`, `PreviousTab`, `SwitchTab1` … `SwitchTab9`;
+- panes: `ClosePane`, `SplitVertical`, `SplitHorizontal`, `FocusPaneLeft`,
+  `FocusPaneRight`, `FocusPaneUp`, `FocusPaneDown`;
+- editing: `Copy`, `Paste`, `Search`, `Clear`.
+
+Unknown action names are ignored and built-in bindings remain active.
+
+## Lua and theme paths
+
+Lua startup scripts (`config.lua` or `init.lua`) are loaded from the
+configuration directory. User themes are loaded from
+`<config-directory>/themes`. `LuaScriptHost.GetConfigLuaPath()` and
+`UserThemeLoader` use the same platform path resolver as `config.json`.
+
+## Live reload lifecycle
+
+The watcher handles `Changed`, `Created`, `Deleted`, `Renamed`, and watcher
+error events. Reloads are versioned and debounced so an editor's temporary file
+cannot apply an older snapshot after a newer write. The host sets
+`UserConfigService.CallbackDispatcher` to queue callbacks on the window thread.
+On shutdown it unsubscribes the event, cancels pending reloads, disposes the
+watcher, and clears the dispatcher.
+
 ## Troubleshooting
 
-### Config changes not reflecting
+1. Print the expected directory from the platform support guide and check
+   `DOTTY_CONFIG_HOME`.
+2. Validate that `config.json` is complete JSON after the editor finishes its
+   atomic rename.
+3. Check `UserConfigService.LastError` in a diagnostic host.
+4. Restore the last known-good file if a setting is rejected.
+5. If a font is unavailable, provide a comma-separated fallback stack ending in
+   `monospace`.
 
-1. Ensure your config class implements `IDottyConfig`
-2. Make the class `partial`
-3. Rebuild the project to trigger source generation
-4. For runtime hot-reload, check the application logs for build errors
-
-### IntelliSense not working
-
-The generated file uses ordinary C# syntax. Dotty creates `Dotty.UserConfig.csproj` beside it for project-backed IntelliSense and go-to-definition.
-
-Open that project in your IDE, or open `~/.config/dotty/Config.cs` directly for standalone editing. The project is editor-only; Dotty's runtime compiler does not use or restore it.
-### AOT build errors
-
-Ensure you're using constant values (literals) in your config class. The source generator needs to be able to extract these values at build time.
-
-### Theme colors look wrong
-
-- Make sure colors are in ARGB format (0xAARRGGBB)
-- For fully opaque colors, use 0xFF as the alpha component
-- Check that your theme implements all 18 color properties (Background, Foreground, 16 ANSI colors)
-
-## Changelog
-
-| Date | Change |
-|------|--------|
-| 2026-06-17 | Documented ANSI color palette live-update mechanism, default fg/bg color fallback chain, `settings.json` persistence via `FileSystemConfigWatcher` |
-| 2026-06-15 | Added runtime hot-reload section (`CSharpConfigWatcher`, `GeneratedConfigAssembly`, websocket config push) |
-| 2026-06-10 | Initial documentation of source-generator-based config system |
-
----
-
-## See Also
-
-- [Themes Guide](Themes.md) - Detailed theme documentation with color swatches
-- [Architecture Overview](Architecture.md) - Dotty's technical architecture
-- [Sample Configurations](/home/dom/projects/dotnet-term/samples/Config.cs) - Complete configuration examples
+See [Platform Support](PlatformSupport.md) for native dependencies, graphics
+startup failures, and release smoke requirements.

@@ -11,9 +11,8 @@ namespace Dotty.Abstractions.Themes;
 /// </example>
 public static class BuiltInThemes
 {
-    // Cache for theme instances to avoid recreating
-    private static readonly Dictionary<string, IColorScheme> _themeCache = new(StringComparer.OrdinalIgnoreCase);
-
+    // Thread-safe cache for theme instances to avoid recreating
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, IColorScheme> _themeCache = new(StringComparer.OrdinalIgnoreCase);
     // Lazy-initialized theme instances
     private static readonly Lazy<IColorScheme> _darkPlus = new(() => GetOrCreateTheme("DarkPlus"));
     private static readonly Lazy<IColorScheme> _dracula = new(() => GetOrCreateTheme("Dracula"));
@@ -32,21 +31,12 @@ public static class BuiltInThemes
     /// </summary>
     private static IColorScheme GetOrCreateTheme(string themeName)
     {
-        if (_themeCache.TryGetValue(themeName, out var cached))
+        return _themeCache.GetOrAdd(themeName, name =>
         {
-            return cached;
-        }
-
-        var definition = BuiltInThemeRegistry.GetByNameOrDefault(themeName);
-        if (definition == null)
-        {
-            // Fallback to DarkPlus if somehow registry fails
-            definition = BuiltInThemeRegistry.GetByNameOrDefault("DarkPlus")!;
-        }
-
-        var theme = new JsonBackedColorScheme(definition);
-        _themeCache[themeName] = theme;
-        return theme;
+            var definition = BuiltInThemeRegistry.GetByNameOrDefault(name)
+                ?? BuiltInThemeRegistry.GetByNameOrDefault("DarkPlus")!;
+            return new JsonBackedColorScheme(definition);
+        });
     }
 
     // Dark themes

@@ -4,23 +4,19 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Folder Name="/artifacts/" />
-  <Folder Name="/artifacts/perf/" />
-  <Folder Name="/artifacts/perf/PerfHarness/">
-    <Project Path="artifacts/perf/PerfHarness/PerfHarness/PerfHarness.csproj" />
-  </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Dotty/Dotty.csproj" />
     <Project Path="src/Dotty.Abstractions/Dotty.Abstractions.csproj" />
-    <Project Path="src/Dotty.App/Dotty.App.csproj" />
     <Project Path="src/Dotty.Config.SourceGenerator/Dotty.Config.SourceGenerator.csproj" />
     <Project Path="src/Dotty.NativePty/Dotty.NativePty.csproj" />
+    <Project Path="src/Dotty.Rendering.Gpu/Dotty.Rendering.Gpu.csproj" />
+    <Project Path="src/Dotty.Runtime/Dotty.Runtime.csproj" />
     <Project Path="src/Dotty.Terminal/Dotty.Terminal.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj" />
     <Project Path="tests/Dotty.App.Tests/Dotty.App.Tests.csproj" />
     <Project Path="tests/Dotty.Config.SourceGenerator.Tests/Dotty.Config.SourceGenerator.Tests.csproj" />
-    <Project Path="tests/Dotty.E2E.Tests/Dotty.E2E.Tests.csproj" />
     <Project Path="tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj" />
     <Project Path="tests/Dotty.Performance.Tests/Dotty.Performance.Tests.csproj" />
     <Project Path="tests/Dotty.Terminal.Tests/Dotty.Terminal.Tests.csproj" />

@@ -14,7 +14,7 @@ on:
 
 env:
   DOTNET_VERSION: '10.0.x'
-  PROJECT_PATH: 'src/Dotty.App/Dotty.App.csproj'
+  PROJECT_PATH: 'src/Dotty/Dotty.csproj'
   SOLUTION_PATH: 'Dotty.slnx'
 
 jobs:
@@ -66,14 +66,13 @@ jobs:
             --self-contained true \
             -p:PublishSingleFile=true \
             -p:Version=${{ steps.version.outputs.version }} \
+            -p:RequireUnixPtyHelper=true \
             -o ./publish/linux-x64
 
-      - name: Copy pty-helper to output
+      - name: Verify Linux artifact
         run: |
-          cp src/Dotty.NativePty/bin/pty-helper ./publish/linux-x64/
-          mv ./publish/linux-x64/Dotty.App ./publish/linux-x64/dotty
-          chmod +x ./publish/linux-x64/pty-helper
-          chmod +x ./publish/linux-x64/dotty
+          test -x ./publish/linux-x64/dotty
+          test -x ./publish/linux-x64/pty-helper
 
       - name: Create tarball
         run: |
@@ -152,14 +151,13 @@ jobs:
             --self-contained true \
             -p:PublishSingleFile=true \
             -p:Version=${{ steps.version.outputs.version }} \
+            -p:RequireUnixPtyHelper=true \
             -o ./publish/${{ matrix.rid }}
 
-      - name: Copy pty-helper to output
+      - name: Verify macOS artifact
         run: |
-          cp src/Dotty.NativePty/bin/pty-helper ./publish/${{ matrix.rid }}/
-          mv ./publish/${{ matrix.rid }}/Dotty.App ./publish/${{ matrix.rid }}/dotty
-          chmod +x ./publish/${{ matrix.rid }}/pty-helper
-          chmod +x ./publish/${{ matrix.rid }}/dotty
+          test -x ./publish/${{ matrix.rid }}/dotty
+          test -x ./publish/${{ matrix.rid }}/pty-helper
 
       - name: Create tarball
         run: |
@@ -241,10 +239,70 @@ jobs:
           path: dotty-*.zip
           retention-days: 7
 
+  # Build-only promotion candidate for Windows ARM64.
+  build-windows-arm64-nightly:
+    name: Nightly Windows arm64 build
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore Windows ARM64 RID
+        run: dotnet restore ${{ env.PROJECT_PATH }} -r win-arm64
+
+      - name: Publish Windows ARM64 build
+        run: |
+          dotnet publish ${{ env.PROJECT_PATH }} `
+            -c Release `
+            -r win-arm64 `
+            --self-contained false `
+            -p:PublishAot=false `
+            -p:PublishTrimmed=false `
+            -o .\publish\win-arm64
+      - name: Verify Windows ARM64 executable
+        shell: pwsh
+        run: |
+          if (!(Test-Path "publish\win-arm64\dotty.exe")) {
+            throw "Published Windows ARM64 executable dotty.exe is missing."
+          }
+
+  # Build-only promotion candidate for Linux ARM64.
+  build-linux-arm64-nightly:
+    name: Nightly Linux arm64 build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore Linux ARM64 RID
+        run: dotnet restore ${{ env.PROJECT_PATH }} -r linux-arm64
+
+      - name: Publish Linux ARM64 build
+        run: |
+          dotnet publish ${{ env.PROJECT_PATH }} \
+            -c Release \
+            -r linux-arm64 \
+            --self-contained false \
+            -p:PublishAot=false \
+            -p:PublishTrimmed=false \
+            -o ./publish/linux-arm64
+
+      - name: Verify Linux ARM64 executable
+        run: test -x ./publish/linux-arm64/dotty
+
   # Create or update nightly release
   create-nightly-release:
-    name: Create Nightly Release
-    needs: [build-linux-nightly, build-macos-nightly, build-windows-nightly]
+    needs: [build-linux-nightly, build-linux-arm64-nightly, build-macos-nightly, build-windows-nightly, build-windows-arm64-nightly]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -314,7 +372,7 @@ jobs:
 
           **Windows (x64):**
           1. Extract \`dotty-${VERSION}-win-x64.zip\`
-          2. Run \`Dotty.exe\`
+          2. Run \`dotty.exe\`
 
           ### Changes in this build
           $(git log -20 --oneline --no-decorate)
@@ -322,9 +380,17 @@ jobs:
           ### Checksums
           EOF
           
-          cd ./release-assets
-          sha256sum * >> ../NIGHTLY_NOTES.md
-          cd ..
+          (
+            cd ./release-assets
+            printf '%s\n' *.tar.gz *.zip | sort
+          ) > ARTIFACT_MANIFEST.txt
+          (
+            cd ./release-assets
+            sha256sum *.tar.gz *.zip
+          ) > CHECKSUMS.txt
+          cp ARTIFACT_MANIFEST.txt ./release-assets/MANIFEST.txt
+          cp CHECKSUMS.txt ./release-assets/SHA256SUMS
+          cat CHECKSUMS.txt >> NIGHTLY_NOTES.md
 
       - name: Create or update nightly release
         uses: softprops/action-gh-release@v1

@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace Dotty.Terminal.Adapter;
 
-public unsafe class Screen : IDisposable
+public unsafe partial class Screen : IDisposable
 {
     public IntPtr CellsPtr => _cellsPtr;
     public IntPtr ColdCellsPtr => _coldCellsPtr;
@@ -24,6 +24,8 @@ public unsafe class Screen : IDisposable
     // Allows BufferTextWriter to skip the per-cell cold-reset loop entirely on clean rows.
     public bool[] RowColdFlags => _rowColdFlags;
     private bool[] _rowColdFlags;
+    public bool[] RowContinuesPrevious { get; }
+    public int[] RowEndCol { get; }
 
     public int GetRowMaxCol(int logicalRow)
     {
@@ -43,6 +45,38 @@ public unsafe class Screen : IDisposable
     {
         if (logicalRow < 0 || logicalRow >= Rows) return;
         _rowMaxCol[GetPhysicalRow(logicalRow)] = -1;
+    }
+ 
+    public int GetRowEndCol(int logicalRow)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return -1;
+        return RowEndCol[GetPhysicalRow(logicalRow)];
+    }
+
+    public bool GetRowContinuesPrevious(int logicalRow)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return false;
+        return RowContinuesPrevious[GetPhysicalRow(logicalRow)];
+    }
+
+    internal void MarkRowEnd(int logicalRow, int col)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return;
+        int pRow = GetPhysicalRow(logicalRow);
+        if (col > RowEndCol[pRow])
+            RowEndCol[pRow] = Math.Min(col, Columns - 1);
+    }
+
+    internal void SetRowContinuation(int logicalRow, bool continues)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return;
+        RowContinuesPrevious[GetPhysicalRow(logicalRow)] = continues;
+    }
+
+    internal void ClearRowContinuation(int logicalRow)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return;
+        RowContinuesPrevious[GetPhysicalRow(logicalRow)] = false;
     }
 
     public void MarkRender() { }
@@ -67,6 +101,9 @@ public unsafe class Screen : IDisposable
         _rowMaxCol = new int[total];
         Array.Fill(_rowMaxCol, -1);
         _rowColdFlags = new bool[total];
+        RowContinuesPrevious = new bool[total];
+        RowEndCol = new int[total];
+        Array.Fill(RowEndCol, -1);
     }
 
     public void Dispose()
@@ -226,12 +263,13 @@ public unsafe class Screen : IDisposable
         int total = _scrollbackCapacity + Rows;
         int pRow = (_head - 1 - scrollbackIndex + total * 2) % total;
         int maxCol = _rowMaxCol[pRow];
+        int endCol = RowEndCol[pRow] >= 0 ? RowEndCol[pRow] : maxCol;
 
-        if (maxCol < 0) return string.Empty;
+        if (endCol < 0) return string.Empty;
 
         int offset = pRow * Columns;
-        using var sb = ZStr.CreateStringBuilder(maxCol + 1);
-        for (int i = 0; i <= maxCol; i++)
+        using var sb = ZStr.CreateStringBuilder(endCol + 1);
+        for (int i = 0; i <= endCol; i++)
         {
             ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + i);
             if (cell.IsContinuation || cell.Rune == 0)
@@ -256,7 +294,8 @@ public unsafe class Screen : IDisposable
     {
         int total = _scrollbackCapacity + Rows;
         int pRow = (_head - 1 - scrollbackIndex + total * 2) % total;
-        return Math.Max(0, _rowMaxCol[pRow] + 1);
+        int endCol = RowEndCol[pRow] >= 0 ? RowEndCol[pRow] : _rowMaxCol[pRow];
+        return Math.Max(0, endCol + 1);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -269,6 +308,17 @@ public unsafe class Screen : IDisposable
             .Fill(new ColdCell { GraphemeIndex = -1 });
         _rowMaxCol[physicalRow] = -1;
         _rowColdFlags[physicalRow] = false;
+        RowContinuesPrevious[physicalRow] = false;
+        RowEndCol[physicalRow] = -1;
+    }
+ 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CopyRowMetadata(int destinationPhysicalRow, int sourcePhysicalRow)
+    {
+        _rowMaxCol[destinationPhysicalRow] = _rowMaxCol[sourcePhysicalRow];
+        _rowColdFlags[destinationPhysicalRow] = _rowColdFlags[sourcePhysicalRow];
+        RowContinuesPrevious[destinationPhysicalRow] = RowContinuesPrevious[sourcePhysicalRow];
+        RowEndCol[destinationPhysicalRow] = RowEndCol[sourcePhysicalRow];
     }
 
     public void ClearRow(int logicalRow)
@@ -285,6 +335,8 @@ public unsafe class Screen : IDisposable
             coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
         Array.Fill(_rowMaxCol, -1);
         Array.Fill(_rowColdFlags, false);
+        Array.Fill(RowContinuesPrevious, false);
+        Array.Fill(RowEndCol, -1);
     }
 
     public void RecalculateRowMaxCol(int logicalRow)
@@ -304,6 +356,26 @@ public unsafe class Screen : IDisposable
         }
         _rowMaxCol[pRow] = maxCol;
     }
+ 
+    public void RecalculateRowEndCol(int logicalRow)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return;
+        int pRow = GetPhysicalRow(logicalRow);
+        int offset = pRow * Columns;
+        int end = -1;
+        for (int col = Columns - 1; col >= 0; col--)
+        {
+            ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + col);
+            ref var cold = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + col);
+            if (cell.Rune != 0 || cell.PackedFlags != 0 || cell.StyleId != 0
+                || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+            {
+                end = col;
+                break;
+            }
+        }
+        RowEndCol[pRow] = end;
+    }
 
     /// <summary>
     /// Scans every physical row (visible + scrollback ring) for invariant violations:
@@ -314,6 +386,8 @@ public unsafe class Screen : IDisposable
     ///    ASCII writer relies on to skip cold-cell cleanup.
     /// 4. <see cref="RowMaxCol"/> is an upper bound on the row's last
     ///    non-space content column.
+    /// 5. <see cref="RowEndCol"/> bounds all written cell metadata.
+    /// 6. Continuation-row metadata never points at an orphan row.
     /// Test/debug aid only; O(rows × columns), never called on the live path.
     /// </summary>
     public List<string> ValidateInvariants()
@@ -325,12 +399,16 @@ public unsafe class Screen : IDisposable
             int offset = p * Columns;
             bool rowHasCold = false;
             int lastContentCol = -1;
+            int lastDataCol = -1;
             for (int c = 0; c < Columns; c++)
             {
                 ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + c);
                 ref var cold = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + c);
                 if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
                     rowHasCold = true;
+                if (cell.Rune != 0 || cell.PackedFlags != 0 || cell.StyleId != 0
+                    || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                    lastDataCol = c;
                 if (cell.IsContinuation)
                 {
                     if (cell.Rune != 0)
@@ -352,6 +430,16 @@ public unsafe class Screen : IDisposable
                             violations.Add($"phys row {p} col {c}: width {w} missing continuation at col {cc}");
                     }
                 }
+            }
+            if (RowEndCol[p] < -1 || RowEndCol[p] >= Columns)
+                violations.Add($"phys row {p}: RowEndCol {RowEndCol[p]} is outside row bounds");
+            if (RowEndCol[p] >= 0 && lastDataCol > RowEndCol[p])
+                violations.Add($"phys row {p}: RowEndCol {RowEndCol[p]} below data column {lastDataCol}");
+            if (RowContinuesPrevious[p])
+            {
+                int previous = (p + total - 1) % total;
+                if (RowEndCol[p] < 0 || RowEndCol[previous] < 0)
+                    violations.Add($"phys row {p}: orphan continuation-row metadata");
             }
             if (!_rowColdFlags[p] && rowHasCold)
                 violations.Add($"phys row {p}: cold metadata present while RowColdFlags is false");
@@ -427,6 +515,8 @@ public unsafe class Screen : IDisposable
         }
 
         RecalculateRowMaxCol(logicalRow);
+        RecalculateRowEndCol(logicalRow);
+        RowContinuesPrevious[pRow] = false;
     }
 
     public void ScrollUpRegion(int top, int bottom, int lines)
@@ -455,21 +545,13 @@ public unsafe class Screen : IDisposable
         if (lines >= regionHeight)
         {
             for (int r = top; r <= bottom; r++)
-            {
-                int pRow = GetPhysicalRow(r);
-                new Span<CellHot>((void*)(_cellsPtr + pRow * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-                var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + pRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-                for (int i = 0; i < Columns; i++)
-                    coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-                _rowMaxCol[pRow] = -1;
-            }
+                ClearPhysicalRow(GetPhysicalRow(r));
             return;
         }
 
         // Non-full-screen single-line: memory copy
         if (lines == 1)
         {
-            int physicalTop = GetPhysicalRow(top);
             for (int r = top; r < bottom; r++)
             {
                 int srcPhys = GetPhysicalRow(r + 1);
@@ -484,21 +566,12 @@ public unsafe class Screen : IDisposable
                     (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
                     (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
                     coldRowBytes, coldRowBytes);
-                _rowMaxCol[dstPhys] = _rowMaxCol[srcPhys];
-                _rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
+                CopyRowMetadata(dstPhys, srcPhys);
             }
-            int newBot = GetPhysicalRow(bottom);
-            new Span<CellHot>((void*)(_cellsPtr + newBot * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-            var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + newBot * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-            for (int i = 0; i < Columns; i++)
-                coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-            _rowMaxCol[newBot] = -1;
+            ClearPhysicalRow(GetPhysicalRow(bottom));
             return;
         }
 
-        int[] savedRows = new int[lines];
-        for (int i = 0; i < lines; i++)
-            savedRows[i] = GetPhysicalRow(top + i);
 
         for (int r = top + lines; r <= bottom; r++)
         {
@@ -514,19 +587,11 @@ public unsafe class Screen : IDisposable
                 (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
                 (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
                 coldRowBytes, coldRowBytes);
-            _rowMaxCol[dstPhys] = _rowMaxCol[srcPhys];
-            _rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
+            CopyRowMetadata(dstPhys, srcPhys);
         }
 
         for (int l = 0; l < lines; l++)
-        {
-            int phys = GetPhysicalRow(bottom - lines + 1 + l);
-            new Span<CellHot>((void*)(_cellsPtr + phys * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-            var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + phys * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-            for (int i = 0; i < Columns; i++)
-                coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-            _rowMaxCol[phys] = -1;
-        }
+            ClearPhysicalRow(GetPhysicalRow(bottom - lines + 1 + l));
     }
 
     public void ScrollDownRegion(int top, int bottom, int lines)
@@ -550,18 +615,14 @@ public unsafe class Screen : IDisposable
         if (lines >= regionHeight)
         {
             for (int r = top; r <= bottom; r++)
-            {
-                int pRow = GetPhysicalRow(r);
-                new Span<CellHot>((void*)(_cellsPtr + pRow * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-                var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + pRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-                for (int i = 0; i < Columns; i++)
-                    coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-                _rowMaxCol[pRow] = -1;
-            }
+                ClearPhysicalRow(GetPhysicalRow(r));
             return;
         }
 
         int[] savedMaxCols = new int[regionHeight];
+        bool[] savedColdFlags = new bool[regionHeight];
+        bool[] savedContinuations = new bool[regionHeight];
+        int[] savedEndCols = new int[regionHeight];
         var savedCells = new CellHot[regionHeight * Columns];
         var savedCold = new ColdCell[regionHeight * Columns];
         int rowSizeBytes = Columns * Unsafe.SizeOf<CellHot>();
@@ -569,7 +630,11 @@ public unsafe class Screen : IDisposable
         for (int r = top; r <= bottom; r++)
         {
             int srcPhys = GetPhysicalRow(r);
-            savedMaxCols[r - top] = _rowMaxCol[srcPhys];
+            int savedIndex = r - top;
+            savedMaxCols[savedIndex] = _rowMaxCol[srcPhys];
+            savedColdFlags[savedIndex] = _rowColdFlags[srcPhys];
+            savedContinuations[savedIndex] = RowContinuesPrevious[srcPhys];
+            savedEndCols[savedIndex] = RowEndCol[srcPhys];
             fixed (CellHot* pDst = &savedCells[(r - top) * Columns])
             {
                 System.Buffer.MemoryCopy(
@@ -588,29 +653,32 @@ public unsafe class Screen : IDisposable
 
         for (int r = bottom; r >= top + lines; r--)
         {
-            int srcPhys = GetPhysicalRow(r - lines);
+            int srcIndex = r - lines - top;
             int dstPhys = GetPhysicalRow(r);
-            System.Buffer.MemoryCopy(
-                (void*)(_cellsPtr + srcPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                (void*)(_cellsPtr + dstPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                rowSizeBytes, rowSizeBytes);
-            System.Buffer.MemoryCopy(
-                (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                coldRowSizeBytes, coldRowSizeBytes);
-            _rowMaxCol[dstPhys] = _rowMaxCol[srcPhys];
-            _rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
+            fixed (CellHot* pSrc = &savedCells[srcIndex * Columns])
+            {
+                System.Buffer.MemoryCopy(
+                    pSrc,
+                    (void*)(_cellsPtr + dstPhys * Columns * Unsafe.SizeOf<CellHot>()),
+                    rowSizeBytes,
+                    rowSizeBytes);
+            }
+            fixed (ColdCell* pSrc = &savedCold[srcIndex * Columns])
+            {
+                System.Buffer.MemoryCopy(
+                    pSrc,
+                    (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
+                    coldRowSizeBytes,
+                    coldRowSizeBytes);
+            }
+            _rowMaxCol[dstPhys] = savedMaxCols[srcIndex];
+            _rowColdFlags[dstPhys] = savedColdFlags[srcIndex];
+            RowContinuesPrevious[dstPhys] = savedContinuations[srcIndex];
+            RowEndCol[dstPhys] = savedEndCols[srcIndex];
         }
 
         for (int r = top; r < top + lines; r++)
-        {
-            int pRow = GetPhysicalRow(r);
-            new Span<CellHot>((void*)(_cellsPtr + pRow * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-            var coldSpan = new Span<ColdCell>((void*)(_coldCellsPtr + pRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns);
-            for (int i = 0; i < Columns; i++)
-                coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-            _rowMaxCol[pRow] = -1;
-        }
+            ClearPhysicalRow(GetPhysicalRow(r));
     }
 
     public void ClearFromColumn(int logicalRow, int startCol)
@@ -629,9 +697,13 @@ public unsafe class Screen : IDisposable
         if (rows == Rows && columns == Columns)
             return this;
 
-        var resized = new Screen(rows, columns, _scrollbackCapacity);
-        CopyTo(resized);
-        return resized;
+        return ReflowWithOptions(
+            rows,
+            columns,
+            new ReflowCursorAnchor(0, 0),
+            out _,
+            scrollbackRows: _scrollbackCapacity,
+            includeScrollback: true);
     }
 
     public void CopyTo(Screen destination)
@@ -656,6 +728,8 @@ public unsafe class Screen : IDisposable
                 coldRowSizeBytes, coldRowSizeBytes);
             destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], cols - 1);
             destination._rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
+            destination.RowContinuesPrevious[dstPhys] = RowContinuesPrevious[srcPhys];
+            destination.RowEndCol[dstPhys] = Math.Min(RowEndCol[srcPhys], cols - 1);
             // Narrowing cuts the continuation column of a wide glyph at the new
             // edge; drop the dangling base so no raw cell scan sees an
             // unterminated width.
@@ -663,11 +737,9 @@ public unsafe class Screen : IDisposable
                 destination.ClearTruncatedWideGlyph(dstPhys, destination.Columns - 1);
         }
 
-        // Preserve scrollback ring buffer across all resize shapes.
-        // When columns shrink, rows are truncated at the new width.
-        // When columns grow, rows are padded with blank cells (destination is zero-init).
-        // Full re-flow (re-wrapping long lines) is not yet implemented, but truncation is
-        // far better than losing the entire history on every resize.
+        // Compatibility copy for callers that need the raw cell arena. The
+        // TerminalBuffer resize path uses Reflow so logical soft wraps remain
+        // cell-preserving.
         {
             int srcTotal = _scrollbackCapacity + Rows;
             int dstTotal = destination._scrollbackCapacity + destination.Rows;
@@ -694,6 +766,8 @@ public unsafe class Screen : IDisposable
                 // Clamp maxCol to the new width in case we just truncated the row.
                 destination._rowMaxCol[dstPhys] = Math.Min(_rowMaxCol[srcPhys], destination.Columns - 1);
                 destination._rowColdFlags[dstPhys] = _rowColdFlags[srcPhys];
+                destination.RowContinuesPrevious[dstPhys] = RowContinuesPrevious[srcPhys];
+                destination.RowEndCol[dstPhys] = Math.Min(RowEndCol[srcPhys], destination.Columns - 1);
                 if (Columns > destination.Columns)
                     destination.ClearTruncatedWideGlyph(dstPhys, destination.Columns - 1);
             }
@@ -747,6 +821,19 @@ public unsafe class Screen : IDisposable
             }
         }
         _rowMaxCol[dstPhys] = maxCol;
+        int endCol = -1;
+        for (int j = Columns - 1; j >= 0; j--)
+        {
+            var cell = UnsafeAsRef<CellHot>(_cellsPtr, offset + j);
+            var cold = UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + j);
+            if (cell.Rune != 0 || cell.PackedFlags != 0 || cell.StyleId != 0
+                || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+            {
+                endCol = j;
+                break;
+            }
+        }
+        RowEndCol[dstPhys] = endCol;
     }
 
     public void ReadSnapshot(ref CellHot[] cellsSnapshot, ref ColdCell[] coldSnapshot, ref int[] rowMapSnapshot)

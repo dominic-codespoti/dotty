@@ -80,6 +80,21 @@ public interface IPty : IDisposable
 /// </summary>
 public class PtyException : Exception
 {
-    public PtyException(string message) : base(message) { }
-    public PtyException(string message, Exception inner) : base(message, inner) { }
+    public PtyErrorCode Code { get; }
+
+    public PtyException(string message)
+        : this(PtyErrorCode.NativeOperationFailed, message)
+    {
+    }
+
+    public PtyException(string message, Exception inner)
+        : this(PtyErrorCode.NativeOperationFailed, message, inner)
+    {
+    }
+
+    public PtyException(PtyErrorCode code, string message, Exception? inner = null)
+        : base(message, inner)
+    {
+        Code = code;
+    }
 }

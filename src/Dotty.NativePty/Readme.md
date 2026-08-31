@@ -1,11 +1,9 @@
-pty-helper - minimal native PTY launcher
-
+pty-helper - POSIX PTY launcher used by Dotty on Linux and macOS
 Overview
 --------
-This small native helper allocates a PTY, forks, attaches the slave to the child
-process's stdio (0/1/2), and proxies the master file descriptor to the helper's
-stdin/stdout. It also accepts an optional unix-domain control socket (DOTTY_CONTROL_SOCKET)
-that can be used to send resize JSON messages from the GUI, for example:
+This helper allocates a PTY, forks, attaches the slave to the child process's
+stdio, and proxies the master file descriptor to stdin/stdout. It accepts an
+optional Unix-domain control socket (`DOTTY_CONTROL_SOCKET`) for resize JSON:
 
   {"type":"resize","cols":100,"rows":30}\n
 Build
@@ -17,7 +15,7 @@ From the repo root:
   cd src/Dotty.NativePty
   make
 
-The built binary will be at `src/Dotty.NativePty/bin/pty-helper`.
+The built binary will be at `bin/pty-helper`.
 
 Usage
 -----
@@ -39,6 +37,9 @@ Example (used by GUI):
 
 Integration
 -----------
-Update `Dotty.App` to prefer launching this helper binary (in repo `bin` path) instead
-of trying to call forkpty from managed code. The GUI should continue to proxy stdio
-and connect to the control socket to send resize messages.
+`Dotty.NativePty` selects `UnixPty` on Linux/macOS and `WindowsPty` through
+ConPTY on Windows. The host resolves a packaged Unix helper beside the
+application before checking development paths or `PATH`.
+
+For diagnostics, launch the actual host project:
+`dotnet run --project src/Dotty/Dotty.csproj`.

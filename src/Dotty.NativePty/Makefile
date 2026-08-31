@@ -1,8 +1,8 @@
-BINDIR := bin
-TARGET := $(BINDIR)/pty-helper
-CC := gcc
-CFLAGS := -O2 -Wall -Wextra -g
-LDFLAGS := -lpthread
+BINDIR ?= bin
+TARGET ?= $(BINDIR)/pty-helper
+CC ?= cc
+CFLAGS ?= -O2 -Wall -Wextra
+LDFLAGS ?= -lpthread
 
 all: $(TARGET)
 

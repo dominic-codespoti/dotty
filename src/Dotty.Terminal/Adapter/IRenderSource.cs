@@ -1,4 +1,5 @@
 using System;
+using Dotty.Abstractions.Config;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -16,6 +17,8 @@ public interface IRenderSource
     bool IsAlternateScreenActive { get; }
     int CursorRow { get; }
     int CursorCol { get; }
+    TerminalCursorShape CursorShape { get; }
+    bool CursorBlinking { get; }
     ReadOnlySpan<ulong> RowGenerations { get; }
 
     /// <summary>Zero-copy read-only view of one visible row's hot cells.</summary>

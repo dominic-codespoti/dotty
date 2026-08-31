@@ -21,6 +21,7 @@
     <ProjectReference Include="../../src/Dotty.Terminal/Dotty.Terminal.csproj" />
     <ProjectReference Include="../../src/Dotty.NativePty/Dotty.NativePty.csproj" />
     <ProjectReference Include="../../src/Dotty.Abstractions/Dotty.Abstractions.csproj" />
+    <ProjectReference Include="../../src/Dotty.Rendering.Gpu/Dotty.Rendering.Gpu.csproj" />
   </ItemGroup>
 
   <!-- BenchmarkDotNet and Performance Testing Packages -->
@@ -30,6 +31,10 @@
     <PackageReference Include="BenchmarkDotNet.Annotations" />
     <PackageReference Include="System.Diagnostics.PerformanceCounter" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Condition="$([MSBuild]::IsOSPlatform('Linux'))" />
+    <PackageReference Include="SkiaSharp.NativeAssets.macOS" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
   </ItemGroup>
 
   <!-- Test Data Resources -->

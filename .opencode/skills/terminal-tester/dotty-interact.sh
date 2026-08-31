@@ -3,9 +3,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-PORT_FILE="/tmp/dotty-test-port"
-PID_FILE="/tmp/dotty-test-pid"
-
+STATE_DIR="${DOTTY_TEST_STATE_DIR:-${TMPDIR:-/tmp}/dotty-interact-${USER:-unknown}}"
+PORT_FILE="$STATE_DIR/port"
+PID_FILE="$STATE_DIR/pid"
+APP_LOG="$STATE_DIR/app.log"
+PYTHON_BIN="${DOTTY_TEST_PYTHON:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
+    PYTHON_BIN=python
+fi
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    echo "ERROR: Python 3 is required by dotty-interact.sh." >&2
+    exit 1
+fi
 usage() {
     cat <<'USAGE'
 Usage: dotty-interact.sh <command> [args]
@@ -37,9 +46,15 @@ USAGE
 get_port() {
     if [ ! -f "$PORT_FILE" ]; then
         echo "ERROR: No port file found. Run 'launch' first." >&2
-        exit 1
+        return 1
     fi
-    cat "$PORT_FILE"
+    local port
+    port=$(cat "$PORT_FILE")
+    if [[ ! "$port" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Invalid port file: $PORT_FILE" >&2
+        return 1
+    fi
+    printf '%s\n' "$port"
 }
 
 send_tcp() {
@@ -47,92 +62,125 @@ send_tcp() {
     local port
     port=$(get_port)
 
-    if command -v nc &>/dev/null; then
-        # Use nc with 2-second timeout
-        printf '%s\n' "$command" | nc -w 2 "127.0.0.1" "$port" 2>/dev/null || true
-    else
-        # Fallback: use bash /dev/tcp
-        exec 3<>"/dev/tcp/127.0.0.1/$port"
-        printf '%s\n' "$command" >&3
-        local line
-        while IFS= read -r line <&3; do
-            echo "$line"
-        done
-        exec 3>&-
+    if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+        echo "ERROR: Python is required for the cross-platform control transport." >&2
+        return 1
     fi
+
+    "$PYTHON_BIN" - "$port" "$command" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+command = sys.argv[2]
+with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+    connection.sendall((command + "\n").encode("utf-8"))
+    chunks = []
+    while True:
+        chunk = connection.recv(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+sys.stdout.write(b"".join(chunks).decode("utf-8", "replace"))
+PY
+}
+
+port_ready() {
+    local port="$1"
+    "$PYTHON_BIN" - "$port" 2>/dev/null <<'PY'
+import socket
+import sys
+
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.5):
+    pass
+PY
 }
 
 build_app() {
     echo "=== Building Dotty ==="
-    if [ ! -f "$PROJECT_ROOT/src/Dotty.NativePty/pty-helper" ]; then
+    mkdir -p "$STATE_DIR"
+    local helper="$PROJECT_ROOT/src/Dotty.NativePty/bin/pty-helper"
+    if [ ! -x "$helper" ]; then
         echo "Building PTY helper..."
-        make -C "$PROJECT_ROOT/src/Dotty.NativePty" 2>&1 || echo "WARNING: PTY helper build failed. Trying dotnet build anyway..."
+        make -C "$PROJECT_ROOT/src/Dotty.NativePty"
     fi
-    dotnet build "$PROJECT_ROOT/src/Dotty.App/Dotty.App.csproj" -c Debug --verbosity quiet 2>&1 || true
+    dotnet build "$PROJECT_ROOT/src/Dotty/Dotty.csproj" -c Debug --nologo --verbosity quiet
     echo "Build complete."
 }
 
 launch_app() {
-    # Clean stale state
-    rm -f "$PORT_FILE" "$PID_FILE"
+    mkdir -p "$STATE_DIR"
+    if [ -f "$PID_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$PID_FILE")
+        if [[ "$old_pid" =~ ^[0-9]+$ ]] && kill -0 "$old_pid" 2>/dev/null; then
+            echo "ERROR: An existing Dotty process is tracked by $PID_FILE; run 'close' first." >&2
+            return 1
+        fi
+    fi
+    rm -f "$PORT_FILE" "$PID_FILE" "$APP_LOG"
 
     build_app
 
     local port
-    # Find a free port by trying binds
-    port=$(python3 -c "
-import socket
-s = socket.socket()
-s.bind(('127.0.0.1', 0))
-print(s.getsockname()[1])
-s.close()
-" 2>/dev/null) || port=$((20000 + RANDOM % 10000))
+    port=$("$PYTHON_BIN" -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()")
+    local app_home="$STATE_DIR/home"
+    mkdir -p "$app_home"
 
     echo "=== Launching Dotty on port $port ==="
     echo "$port" > "$PORT_FILE"
 
-    local use_xvfb=false
-    if command -v xvfb-run &>/dev/null; then
-        use_xvfb=true
-    fi
-
-    if $use_xvfb; then
-        DOTTY_TEST_PORT="$port" xvfb-run -a dotnet run --project "$PROJECT_ROOT/src/Dotty.App" --no-build &
+    local -a app_command
+    app_command=(dotnet run --project "$PROJECT_ROOT/src/Dotty/Dotty.csproj" -c Debug --no-build --no-restore)
+    if command -v xvfb-run >/dev/null 2>&1; then
+        env HOME="$app_home" XDG_CONFIG_HOME="$app_home/.config" \
+            DOTTY_CONFIG_HOME="$app_home/.config/dotty" DOTTY_TEST_PORT="$port" \
+            DOTNET_CLI_TELEMETRY_OPTOUT=1 xvfb-run -a "${app_command[@]}" > "$APP_LOG" 2>&1 &
     else
-        DOTTY_TEST_PORT="$port" dotnet run --project "$PROJECT_ROOT/src/Dotty.App" --no-build &
+        env HOME="$app_home" XDG_CONFIG_HOME="$app_home/.config" \
+            DOTTY_CONFIG_HOME="$app_home/.config/dotty" DOTTY_TEST_PORT="$port" \
+            DOTNET_CLI_TELEMETRY_OPTOUT=1 "${app_command[@]}" > "$APP_LOG" 2>&1 &
     fi
 
     local pid=$!
     echo "$pid" > "$PID_FILE"
-
     echo "Waiting for app to become ready..."
     local waited=0
-    while [ $waited -lt 30 ]; do
-        if nc -z 127.0.0.1 "$port" 2>/dev/null; then
+    while [ "$waited" -lt 60 ]; do
+        if port_ready "$port"; then
             echo "App is ready on port $port (PID: $pid)"
             return 0
         fi
-        sleep 1
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "ERROR: Dotty exited before opening its control port." >&2
+            cat "$APP_LOG" >&2
+            return 1
+        fi
+        sleep 0.5
         waited=$((waited + 1))
     done
 
-    echo "ERROR: App failed to start within 30 seconds"
-    rm -f "$PORT_FILE" "$PID_FILE"
+    echo "ERROR: App failed to start within 30 seconds" >&2
+    cat "$APP_LOG" >&2
     return 1
 }
 
 cmd_type() {
     local text="$1"
     echo "TYPING: $text"
-    send_tcp "TYPE:$text"
-    echo "OK"
+    local response
+    response=$(send_tcp "TYPE:$text")
+    printf '%s\n' "$response"
+    [[ "$response" == OK* ]]
 }
 
 cmd_key() {
     local keyname="$1"
     echo "KEY: $keyname"
-    send_tcp "KEY:$keyname"
-    echo "OK"
+    local response
+    response=$(send_tcp "KEY:$keyname")
+    printf '%s\n' "$response"
+    [[ "$response" == OK* ]]
 }
 
 cmd_dump() {
@@ -246,29 +294,26 @@ cmd_state() {
     local raw
     raw=$(send_tcp "GET_STATE")
 
-    # Strip BOM if present
-    raw="${raw#"$(printf '\xEF\xBB\xBF')"}"
-    raw="${raw#"$(printf '\xFE\xFF')"}"
-    raw="${raw#"$(printf '\xFF\xFE')"}"
+    if command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+        RAW_RESPONSE="$raw" "$PYTHON_BIN" - <<'PY'
+import json
+import os
 
-    if command -v python3 &>/dev/null; then
-        python3 -c "
-import json, sys
-raw = '''$raw'''
+raw = os.environ["RAW_RESPONSE"].lstrip("\ufeff")
 try:
-    d = json.loads(raw)
-    print('Terminal State:')
-    print(f'  Dimensions: {d.get(\"rows\",\"?\")}x{d.get(\"cols\",\"?\")}')
-    print(f'  Cursor: ({d.get(\"cursorRow\",\"?\")},{d.get(\"cursorCol\",\"?\")})')
-    print(f'  Scrollback: {d.get(\"scrollbackLines\",\"?\")} lines')
-    print(f'  Alternate Screen: {d.get(\"isAlternateScreen\",\"?\")}')
-    print(f'  Title: {d.get(\"title\",\"\")}')
-except Exception as e:
-    print('Raw response:', raw)
-    print('Parse error:', e)
-" 2>/dev/null || echo "Raw response: $raw"
+    state = json.loads(raw)
+    print("Terminal State:")
+    print(f"  Dimensions: {state.get('rows', '?')}x{state.get('cols', '?')}")
+    print(f"  Cursor: ({state.get('cursorRow', '?')},{state.get('cursorCol', '?')})")
+    print(f"  Scrollback: {state.get('scrollbackLines', '?')} lines")
+    print(f"  Alternate Screen: {state.get('isAlternateScreen', '?')}")
+    print(f"  Title: {state.get('title', '')}")
+except (TypeError, ValueError) as error:
+    print("Raw response:", raw)
+    print("Parse error:", error)
+PY
     else
-        echo "$raw"
+        printf '%s\n' "$raw"
     fi
 }
 
@@ -280,44 +325,47 @@ cmd_send() {
 
 cmd_close() {
     echo "=== Shutting down Dotty ==="
-
-    # 1. Try graceful shutdown via TCP
     local port=""
-    if [ -f "$PORT_FILE" ]; then
-        port=$(cat "$PORT_FILE")
-        printf 'SHUTDOWN\n' | nc -w 2 127.0.0.1 "$port" 2>/dev/null || true
-        sleep 2
-    fi
-
-    # 2. If still running, kill via PID file
     local pid=""
-    if [ -f "$PID_FILE" ]; then
-        pid=$(cat "$PID_FILE")
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            echo "Graceful shutdown incomplete, sending SIGTERM to PID $pid..."
-            kill "$pid" 2>/dev/null || true
-            sleep 2
-            if kill -0 "$pid" 2>/dev/null; then
-                echo "Sending SIGKILL..."
-                kill -9 "$pid" 2>/dev/null || true
+
+    if [ -f "$PORT_FILE" ]; then
+        port=$(get_port)
+        if port_ready "$port"; then
+            local response
+            if response=$(send_tcp "SHUTDOWN"); then
+                printf '%s\n' "$response"
+            else
+                echo "WARNING: Control shutdown request failed; using the tracked process." >&2
             fi
         fi
     fi
 
-    # 3. Last resort: force kill any remaining Dotty processes
-    if [ -n "$port" ] && nc -z 127.0.0.1 "$port" 2>/dev/null; then
-        echo "Process still listening, force killing..."
-        for proc_dir in /proc/[0-9]*/; do
-            [ -d "$proc_dir" ] || continue
-            local cfile="${proc_dir}cmdline"
-            [ -f "$cfile" ] || continue
-            if grep -q "Dotty\.App" "$cfile" 2>/dev/null; then
-                proc_pid="${proc_dir%/}"
-                proc_pid="${proc_pid##*/}"
-                kill -9 "$proc_pid" 2>/dev/null || true
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE")
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            echo "Waiting for tracked Dotty process $pid to exit..."
+            for _ in $(seq 1 25); do
+                if ! kill -0 "$pid" 2>/dev/null; then break; fi
+                sleep 0.2
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "Graceful shutdown incomplete, sending SIGTERM to PID $pid..."
+                kill "$pid"
+                for _ in $(seq 1 25); do
+                    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+                    sleep 0.2
+                done
             fi
-        done
-        sleep 1
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "Sending SIGKILL to tracked PID $pid..."
+                kill -KILL "$pid"
+                sleep 0.5
+            fi
+            if kill -0 "$pid" 2>/dev/null; then
+                echo "ERROR: Tracked Dotty process $pid did not exit." >&2
+                return 1
+            fi
+        fi
     fi
 
     rm -f "$PORT_FILE" "$PID_FILE"
@@ -331,7 +379,7 @@ if [ $# -eq 0 ]; then
 fi
 
 CMD="${1:-help}"
-shift || true
+shift
 
 case "$CMD" in
     launch)
@@ -365,18 +413,17 @@ case "$CMD" in
         sleep "${1:-1}"
         ;;
     wait)
-        local port
         port=$(get_port)
-        local waited=0
-        while [ $waited -lt 30 ]; do
-            if nc -z 127.0.0.1 "$port" 2>/dev/null; then
+        waited=0
+        while [ "$waited" -lt 60 ]; do
+            if port_ready "$port"; then
                 echo "READY"
                 exit 0
             fi
-            sleep 1
+            sleep 0.5
             waited=$((waited + 1))
         done
-        echo "TIMEOUT"
+        echo "TIMEOUT" >&2
         exit 1
         ;;
     help|--help|-h)

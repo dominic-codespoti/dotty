@@ -41,6 +41,18 @@ dotnet run -c Release -- --filter memory
 dotnet run -c Release -- --filter rendering
 ```
 
+### Silk CPU rendering benchmarks
+
+The Silk suite measures the CPU-side frame builder and glyph-atlas work used by
+`Dotty.Silk` without creating a GLFW/OpenGL window:
+
+```bash
+dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode quick --filter silk
+```
+
+The live Silk OpenGL/VSync cadence is environment-dependent and is measured
+separately from BenchmarkDotNet.
+
 ### Running Detailed Mode (Development)
 
 ```bash

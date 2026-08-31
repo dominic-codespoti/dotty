@@ -138,12 +138,14 @@ internal sealed class BufferTextWriter
             int row = _cursor.Row;
             int col = _cursor.Col;
             int cols = _ctx.Columns;
+            bool consumedWrap = false;
 
             if (_ctx._autoWrap && _cursor.WrapPending)
             {
                 _ctx.LineFeed();
                 _ctx.CarriageReturn();
                 _cursor.SetWrapPending(false);
+                consumedWrap = true;
                 row = _cursor.Row;
                 col = 0;
             }
@@ -251,6 +253,9 @@ internal sealed class BufferTextWriter
             }
 
             buf.UpdateRowMaxCol(row, endCol);
+            buf.MarkRowEnd(row, endCol);
+            if (consumedWrap)
+                buf.SetRowContinuation(row, true);
             RequestMarkRowDirty(row);
 
             remaining -= chunkLen;
@@ -292,12 +297,14 @@ internal sealed class BufferTextWriter
             int row = _cursor.Row;
             int col = _cursor.Col;
             int cols = _ctx.Columns;
+            bool consumedWrap = false;
 
             if (_ctx._autoWrap && _cursor.WrapPending)
             {
                 _ctx.LineFeed();
                 _ctx.CarriageReturn();
                 _cursor.SetWrapPending(false);
+                consumedWrap = true;
                 row = _cursor.Row;
                 col = 0;
             }
@@ -403,6 +410,9 @@ internal sealed class BufferTextWriter
             }
 
             buf.UpdateRowMaxCol(row, endCol);
+            buf.MarkRowEnd(row, endCol);
+            if (consumedWrap)
+                buf.SetRowContinuation(row, true);
             RequestMarkRowDirty(row);
 
             remaining -= chunkLen;
@@ -445,6 +455,7 @@ internal sealed class BufferTextWriter
     private void WriteGraphemeAscii(char ch, ushort styleId, ushort hyperlinkId)
     {
         bool autoWrap = _ctx._autoWrap;
+        bool consumedWrap = false;
         int startCol;
         if (autoWrap)
         {
@@ -453,6 +464,7 @@ internal sealed class BufferTextWriter
                 _ctx.LineFeed();
                 _ctx.CarriageReturn();
                 _cursor.SetWrapPending(false);
+                consumedWrap = true;
             }
             _cursor.EnsureSpace(1, _ctx.Rows, _ctx.Columns);
             startCol = _cursor.Col;
@@ -491,6 +503,9 @@ internal sealed class BufferTextWriter
         }
 
         buf.UpdateRowMaxCol(currentRow, startCol);
+        buf.MarkRowEnd(currentRow, startCol);
+        if (consumedWrap)
+            buf.SetRowContinuation(currentRow, true);
 
         if (autoWrap)
         {
@@ -526,6 +541,7 @@ internal sealed class BufferTextWriter
         }
 
         bool autoWrap = _ctx._autoWrap;
+        bool consumedWrap = false;
         int startCol;
         if (autoWrap)
         {
@@ -534,6 +550,7 @@ internal sealed class BufferTextWriter
                 _ctx.LineFeed();
                 _ctx.CarriageReturn();
                 _cursor.SetWrapPending(false);
+                consumedWrap = true;
             }
             _cursor.EnsureSpace(width, _ctx.Rows, _ctx.Columns);
             startCol = _cursor.Col;
@@ -586,6 +603,9 @@ internal sealed class BufferTextWriter
         }
 
         buf.UpdateRowMaxCol(currentRow, startCol + width - 1);
+        buf.MarkRowEnd(currentRow, startCol + width - 1);
+        if (consumedWrap)
+            buf.SetRowContinuation(currentRow, true);
 
         if (autoWrap)
         {

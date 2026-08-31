@@ -28,13 +28,16 @@ Both Ghostty and Wezterm are written in low-level systems programming languages 
 
 ## 3. Platform & PTY Integration
 
-*   **Dotty:** Currently UNIX-only (macOS/Linux), relying on a standalone C proxy (`pty-helper.c`) and standard POSIX sockets (`forkpty`).
-*   **Ghostty:** Deep native integration on macOS (AppKit) and Linux (GTK).
-*   **Wezterm:** Truly cross-platform, offering native Windows support via modern Windows ConPTY, alongside macOS and Linux.
+Dotty uses a platform-neutral `IPty` abstraction:
 
-**Where Dotty Differs/Misses:**
-*   **Windows Support:** Dotty completely lacks a Windows `ConPty` bridge. Wezterm supports this seamlessly out of the box.
-*   **Process Isolation:** Dotty's `pty-helper.c` is a clever workaround for .NET's threading/fork limitations, whereas Rust and Zig can natively handle `fork()` and process spawning without managed runtime conflicts.
+- Linux and macOS use the POSIX `pty-helper` backend.
+- Windows 10 build 17763+ and Windows 11 use ConPTY.
+- The desktop host is Silk.NET/OpenGL.
+
+Release artifacts currently target Linux x64, macOS x64/arm64, and Windows
+x64. Linux arm64 and Windows arm64 are build targets pending runtime smoke
+coverage. Helper discovery and artifact provisioning are part of the release
+contract; the helper must not depend on repository-relative paths.
 
 ## 4. Advanced Features & Multiplexing
 

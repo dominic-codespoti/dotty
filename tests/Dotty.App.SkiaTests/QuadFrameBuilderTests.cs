@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Dotty.App.Rendering;
+using Dotty.Rendering.Gpu;
 using Dotty.Terminal.Adapter;
 using SkiaSharp;
 using Xunit;
@@ -196,5 +196,71 @@ public sealed class QuadFrameBuilderTests
         // Subsequent build of the same buffer with warm atlas should report no dirty rows
         var result2 = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, geo);
         Assert.Empty(result2.DirtyAtlasRows);
+    }
+
+    [Fact]
+    public void GlyphPlacement_MatchesAtlasBearingsAndBaselineOffset()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 10);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("Ag".AsSpan(), CellAttributes.Default);
+
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var geo = new FrameGeometry(CellW, CellH, 1, 10);
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, geo);
+
+        Assert.Equal(2, result.InstanceCount);
+
+        string[] graphemes = ["A", "g"];
+        for (int i = 0; i < result.InstanceCount; i++)
+        {
+            var inst = result.Instances[i];
+            var key = new GlyphKey(graphemes[i], SKTypeface.Default, TextSize, bold: false);
+            Assert.True(atlas.TryGetGlyph(key, out var info));
+
+            Assert.Equal((short)(info.BaselineOffset + info.TopBearing), inst.OffY);
+            Assert.Equal((short)info.LeftBearing, inst.OffX);
+        }
+    }
+
+    [Fact]
+    public void StyledWhitespace_EmitsBackgroundCellInstances()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 10);
+        var expectedFg = SgrColorArgb.FromRgb(255, 255, 255);
+        var expectedBg = SgrColorArgb.FromRgb(50, 100, 150);
+        var attrs = new CellAttributes
+        {
+            Foreground = expectedFg,
+            Background = expectedBg
+        };
+
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("\uE0B0 A".AsSpan(), attrs);
+
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var geo = new FrameGeometry(CellW, CellH, 1, 10);
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, geo);
+
+        Assert.Equal(3, result.InstanceCount);
+
+        for (int i = 0; i < result.InstanceCount; i++)
+        {
+            var inst = result.Instances[i];
+            Assert.Equal((ushort)i, inst.Col);
+            Assert.Equal((ushort)0, inst.Row);
+            Assert.Equal(expectedBg.R, inst.BgR);
+            Assert.Equal(expectedBg.G, inst.BgG);
+            Assert.Equal(expectedBg.B, inst.BgB);
+            Assert.Equal(255, inst.BgA);
+        }
+
+        var spaceInst = result.Instances[1];
+        Assert.Equal((ushort)1, spaceInst.Col);
+        Assert.Equal(expectedFg.R, spaceInst.FgR);
+        Assert.Equal(expectedFg.G, spaceInst.FgG);
+        Assert.Equal(expectedFg.B, spaceInst.FgB);
     }
 }

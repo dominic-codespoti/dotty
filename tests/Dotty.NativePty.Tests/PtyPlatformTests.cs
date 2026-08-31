@@ -440,5 +440,28 @@ public class PtyPlatformTests
         }
     }
 
+    [Fact]
+    public void SupportedRuntimeIdentifiers_ContainShippedTargets()
+    {
+        PtyPlatform.SupportedRuntimeIdentifiers.Should().Contain(new[]
+        {
+            "linux-x64",
+            "linux-arm64",
+            "osx-x64",
+            "osx-arm64",
+            "win-x64",
+            "win-arm64",
+        });
+    }
+
+    [Fact]
+    public void ProcessArchitecture_IsSupportedOnlyForPublishedArchitectures()
+    {
+        bool expected = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
+            is System.Runtime.InteropServices.Architecture.X64
+            or System.Runtime.InteropServices.Architecture.Arm64;
+
+        PtyPlatform.IsSupportedArchitecture.Should().Be(expected);
+    }
     #endregion
 }

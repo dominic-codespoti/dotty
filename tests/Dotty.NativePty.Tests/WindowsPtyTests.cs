@@ -327,41 +327,106 @@ public class WindowsPtyTests : IDisposable
         // Arrange
         const string marker = "TEST_OUTPUT_UNIQUE";
         _pty = new Windows.WindowsPty();
-        _pty.Start(shell: $"cmd.exe /c echo {marker}", columns: 80, rows: 24);
+        _pty.Start(shell: "cmd.exe", columns: 80, rows: 24);
 
         var outputStream = _pty.OutputStream;
         outputStream.Should().NotBeNull();
 
-        // The command emits a finite response immediately, so the test can
-        // exercise the synchronous ConPTY output channel without a second
-        // blocking reader that cannot be cancelled portably on Windows.
-        var buffer = new byte[4096];
+        // ConPTY requires the output pipe to be serviced continuously while
+        // input is sent. Keep the asynchronous reader active before writing
+        // the command so startup and command output share one drain.
         var output = new StringBuilder();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var markerObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var readerCts = new CancellationTokenSource();
+        var readerToken = readerCts.Token;
+        var reader = Task.Run(async () =>
+        {
+            var buffer = new byte[4096];
+
+            try
+            {
+                while (!readerToken.IsCancellationRequested)
+                {
+                    var read = await outputStream!.ReadAsync(buffer.AsMemory(), readerToken);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    lock (output)
+                    {
+                        output.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                        if (output.ToString().Contains(marker, StringComparison.Ordinal))
+                        {
+                            markerObserved.TrySetResult();
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (readerToken.IsCancellationRequested)
+            {
+                // The bounded test wait cancels the pending synchronous read.
+            }
+            catch (ObjectDisposedException) when (readerToken.IsCancellationRequested)
+            {
+                // Cleanup may close the stream while releasing a pending read.
+            }
+            catch (IOException) when (readerToken.IsCancellationRequested)
+            {
+                // Cleanup may close the pipe while releasing a pending read.
+            }
+        });
 
         try
         {
-            while (!cts.Token.IsCancellationRequested)
-            {
-                var read = await outputStream!.ReadAsync(buffer, 0, buffer.Length, cts.Token);
-                if (read == 0)
-                {
-                    break;
-                }
+            await Task.Delay(500); // Wait for shell to start
 
-                output.Append(Encoding.UTF8.GetString(buffer, 0, read));
-                if (output.ToString().Contains(marker, StringComparison.Ordinal))
-                {
-                    break;
-                }
+            var inputStream = _pty.InputStream!;
+            var command = $"echo {marker}\r\n";
+            var bytes = Encoding.ASCII.GetBytes(command);
+            inputStream.Write(bytes, 0, bytes.Length);
+            inputStream.Flush();
+
+            try
+            {
+                await markerObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                // Preserve the captured output for the assertion below.
             }
         }
-        catch (OperationCanceledException)
+        finally
         {
-            // Timeout - continue with what we have.
+            readerCts.Cancel();
+
+            try
+            {
+                await reader.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            catch (TimeoutException)
+            {
+                // A synchronous pipe read must not make test teardown
+                // unbounded if cancellation is unavailable on this runner.
+                if (_pty.IsRunning)
+                {
+                    _pty.Kill(force: true);
+                }
+
+                _pty.Dispose();
+            }
         }
 
-        output.ToString().Should().Contain(marker);
+        lock (output)
+        {
+            var capturedOutput = output.ToString();
+            capturedOutput.Should().Contain(
+                marker,
+                "The captured ConPTY output was: {0}",
+                capturedOutput);
+        }
     }
 
     /// <summary>

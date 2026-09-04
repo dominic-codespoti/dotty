@@ -174,9 +174,9 @@ jobs:
 
       - name: Restore and build
         run: |
-          dotnet restore "${{ env.SOLUTION_PATH }}"
+          dotnet restore "${{ env.PROJECT_PATH }}" -r linux-x64
           make -C src/Dotty.NativePty
-          dotnet build "${{ env.PROJECT_PATH }}" -c Release --no-restore
+          dotnet build "${{ env.PROJECT_PATH }}" -c Release -r linux-x64 --no-restore
 
       - name: Smoke X11 desktop startup
         shell: bash
@@ -188,7 +188,7 @@ jobs:
           timeout 12s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" \
             XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
-            xvfb-run -a dotnet run --project "${{ env.PROJECT_PATH }}" -c Release --no-build \
+            xvfb-run -a dotnet run --project "${{ env.PROJECT_PATH }}" -c Release -r linux-x64 --no-build \
             > "$smoke_dir/x11.log" 2>&1
           status=$?
           set -e
@@ -223,7 +223,7 @@ jobs:
             XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" WAYLAND_DISPLAY=wayland-1 \
             DISPLAY= GLFW_PLATFORM=wayland \
-            dotnet run --project "${{ env.PROJECT_PATH }}" -c Release --no-build \
+            dotnet run --project "${{ env.PROJECT_PATH }}" -c Release -r linux-x64 --no-build \
             > "$smoke_dir/wayland.log" 2>&1
           status=$?
           set -e
@@ -240,9 +240,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-15
-          - windows-latest
+        include:
+          - os: macos-15
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -260,7 +262,7 @@ jobs:
           fi
 
       - name: Restore dependencies
-        run: dotnet restore "${{ env.SOLUTION_PATH }}"
+        run: dotnet restore "${{ env.PROJECT_PATH }}" -r "${{ matrix.rid }}"
 
       - name: Build native helper (macOS only)
         if: matrix.os == 'macos-15'
@@ -268,7 +270,7 @@ jobs:
         run: make
 
       - name: Build desktop host
-        run: dotnet build "${{ env.PROJECT_PATH }}" -c Release --no-restore
+        run: dotnet build "${{ env.PROJECT_PATH }}" -c Release -r "${{ matrix.rid }}" --no-restore
 
       - name: Smoke desktop startup
         shell: bash
@@ -285,7 +287,7 @@ jobs:
           "$timeout_cmd" 12s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" \
             XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
-            dotnet run --project "${{ env.PROJECT_PATH }}" -c Release --no-build \
+            dotnet run --project "${{ env.PROJECT_PATH }}" -c Release -r "${{ matrix.rid }}" --no-build \
             > "$smoke_dir/desktop.log" 2>&1
           status=$?
           set -e

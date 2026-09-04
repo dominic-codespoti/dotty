@@ -315,6 +315,9 @@ public sealed class WindowsPty : IPty
             : shell;
         var startupInfoEx = new StartupInfoEx();
         startupInfoEx.StartupInfo.cb = Marshal.SizeOf<StartupInfoEx>();
+        // Prevent CreateProcess from duplicating the parent's standard handles
+        // when the child is attached to this pseudoconsole.
+        startupInfoEx.StartupInfo.dwFlags = 0x00000100; // STARTF_USESTDHANDLES
         
         // Create the attribute list for the pseudo console
         const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;

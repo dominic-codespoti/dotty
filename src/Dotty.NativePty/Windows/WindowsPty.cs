@@ -208,6 +208,7 @@ public sealed class WindowsPty : IPty
         {
             if (NativeMethods.WaitForSingleObject(processHandle, 100) == 0)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (NativeMethods.GetExitCodeProcess(processHandle, out uint exitCode))
                 {
                     IsRunning = false;

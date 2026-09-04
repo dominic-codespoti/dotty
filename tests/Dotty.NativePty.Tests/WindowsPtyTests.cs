@@ -333,12 +333,14 @@ public class WindowsPtyTests : IDisposable
         var outputStream = _pty.OutputStream;
         outputStream.Should().NotBeNull();
 
-        // Send a command
+        await PtyTestHelpers.WaitForPtyReadyAsync(outputStream!, TimeSpan.FromSeconds(5));
+
+        // Send a command using synchronous I/O required by ConPTY pipes.
         var inputStream = _pty.InputStream!;
         var command = "echo TEST_OUTPUT_UNIQUE\r\n";
         var bytes = Encoding.ASCII.GetBytes(command);
-        await inputStream.WriteAsync(bytes, 0, bytes.Length);
-        await inputStream.FlushAsync();
+        inputStream.Write(bytes, 0, bytes.Length);
+        inputStream.Flush();
 
         // Act
         await Task.Delay(500); // Wait for output

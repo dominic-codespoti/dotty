@@ -690,7 +690,7 @@ public class WindowsPtyTests : IDisposable
         
         // Arrange
         _pty = new Windows.WindowsPty();
-        _pty.Start(shell: "cmd.exe /c timeout /t 10");
+        _pty.Start(shell: "cmd.exe /c ping -n 11 127.0.0.1 > nul");
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
         // Act & Assert

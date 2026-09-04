@@ -133,14 +133,15 @@ public sealed class WindowsPty : IPty
 
             ValidateDimensions(columns, rows);
             var size = new Coord((short)columns, (short)rows);
-            if (!NativeMethods.ResizePseudoConsole(_pseudoConsoleHandle, size))
+            int result = NativeMethods.ResizePseudoConsole(_pseudoConsoleHandle, size);
+            if (result != 0)
             {
-                int error = Marshal.GetLastWin32Error();
+                string hresult = $"0x{result:X8}";
                 LastErrorCode = PtyErrorCode.ResizeFailed;
-                LastError = $"Windows error {error}.";
+                LastError = $"Windows HRESULT {hresult}.";
                 throw new PtyException(
                     PtyErrorCode.ResizeFailed,
-                    $"Failed to resize pseudo console. Error: {error}");
+                    $"Failed to resize pseudo console. HRESULT: {hresult}");
             }
         }
     }

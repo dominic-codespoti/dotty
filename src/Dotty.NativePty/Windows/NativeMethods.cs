@@ -34,9 +34,8 @@ internal static class NativeMethods
     /// <summary>
     /// Resizes the internal buffers for a pseudoconsole to the given size.
     /// </summary>
-    [DllImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool ResizePseudoConsole(IntPtr hPC, Coord size);
+    [DllImport("kernel32.dll", SetLastError = false)]
+    internal static extern int ResizePseudoConsole(IntPtr hPC, Coord size);
 
     #endregion
 

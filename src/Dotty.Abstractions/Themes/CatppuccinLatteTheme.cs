@@ -13,7 +13,7 @@ public sealed class CatppuccinLatteTheme : ColorSchemeBase
     // Catppuccin Latte color palette
     // Background: #EFF1F5 -> 0xFFEFF1F5 (base)
     // Foreground: #4C4F69 -> 0xFF4C4F69 (text)
-    
+
     // ANSI colors mapped from Catppuccin Latte palette
     // Using surface colors for the palette
     // Black: #5C5F77 (subtext0), Red: #D20F39, Green: #40A02B

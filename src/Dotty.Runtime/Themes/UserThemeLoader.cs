@@ -95,7 +95,7 @@ public sealed class UserThemeLoader
         }
 
         var json = File.ReadAllText(filePath);
-        
+
         // First, try to deserialize as ThemeDefinition directly (single theme file)
         var theme = TryDeserializeSingleTheme(json);
         if (theme != null)
@@ -156,7 +156,7 @@ public sealed class UserThemeLoader
         {
             // Use filename without extension as fallback
             var fileName = Path.GetFileNameWithoutExtension(filePath);
-            
+
             // Create a new theme with the fixed name (records are immutable)
             theme = theme with { CanonicalName = fileName };
         }

@@ -45,10 +45,10 @@ public class TestConfig : IDottyConfig
         // Assert - verify generated source contains expected values
         // (Skip compilation error check due to missing Avalonia references in test context)
         generatedSources.Should().Contain(s => s.HintName.Contains("Config.g.cs"));
-        
+
         var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
         var configCode = configSource.SourceText.ToString();
-        
+
         // DarkPlus background is 0xFF1E1E1E
         configCode.Should().Contain("0xFF1E1E1E");
     }
@@ -80,10 +80,10 @@ public class TestConfig : IDottyConfig
         // Assert - verify generated source contains expected values
         // (Skip compilation error check due to missing Avalonia references in test context)
         generatedSources.Should().Contain(s => s.HintName.Contains("Config.g.cs"));
-        
+
         var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
         var configCode = configSource.SourceText.ToString();
-        
+
         // Dracula background is 0xFF282A36
         configCode.Should().Contain("0xFF282A36");
     }
@@ -113,7 +113,7 @@ public class TestConfig : IDottyConfig
         // Assert
         var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
         var configCode = configSource.SourceText.ToString();
-        
+
         configCode.Should().Contain("FontFamily => \"Fira Code\"");
         configCode.Should().Contain("FontSize => 12");
     }
@@ -138,10 +138,10 @@ public class SomeOtherClass
         // Assert
         // Generator should still run and produce default config
         generatedSources.Should().Contain(s => s.HintName.Contains("Config.g.cs"));
-        
+
         var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
         var configCode = configSource.SourceText.ToString();
-        
+
         // Should contain default values
         configCode.Should().Contain("FontFamily");
         configCode.Should().Contain("FontSize");
@@ -172,7 +172,7 @@ public class TestConfig : IDottyConfig
         // Assert
         var configSource = generatedSources.First(s => s.HintName.Contains("Config.g.cs"));
         var configCode = configSource.SourceText.ToString();
-        
+
         // Should have DarkPlus background as fallback
         configCode.Should().Contain("0xFF1E1E1E");
     }
@@ -222,7 +222,7 @@ public class TestConfig : IDottyConfig
     private static async Task<(Compilation Compilation, ImmutableArray<GeneratedSourceResult> GeneratedSources)> RunGeneratorAsync(string source)
     {
         var syntaxTree = CSharpSyntaxTree.ParseText(source);
-        
+
         // Collect all necessary assembly references
         var references = new List<MetadataReference>
         {
@@ -243,7 +243,7 @@ public class TestConfig : IDottyConfig
             var configPath = Path.GetDirectoryName(config.Location)!;
             // Navigate from Dotty.Abstractions/bin/Release/net10.0 to Dotty.App/bin/Release/net10.0
             var appBinPath = Path.GetFullPath(Path.Combine(configPath, "..", "..", "..", "..", "src", "Dotty.App", "bin", "Release", "net10.0"));
-            
+
             if (Directory.Exists(appBinPath))
             {
                 var avaloniaDlls = Directory.GetFiles(appBinPath, "Avalonia*.dll");

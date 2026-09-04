@@ -20,7 +20,7 @@ public abstract class ColorSchemeBase : Config.IColorScheme
     {
         if (ansiColors == null)
             throw new ArgumentNullException(nameof(ansiColors));
-        
+
         if (ansiColors.Length != 16)
             throw new ArgumentException("ANSI colors array must contain exactly 16 colors", nameof(ansiColors));
 
@@ -96,7 +96,7 @@ public abstract class ColorSchemeBase : Config.IColorScheme
     {
         if (index < 0 || index >= 16)
             throw new ArgumentOutOfRangeException(nameof(index), "ANSI color index must be 0-15");
-        
+
         return _ansiColors[index];
     }
 
@@ -122,7 +122,7 @@ public abstract class ColorSchemeBase : Config.IColorScheme
             throw new ArgumentException("Hex string cannot be null or empty", nameof(hex));
 
         var span = hex.AsSpan().Trim();
-        
+
         // Remove # prefix if present
         if (span.Length > 0 && span[0] == '#')
             span = span.Slice(1);
@@ -203,7 +203,7 @@ public abstract class ColorSchemeBase : Config.IColorScheme
     public void ValidateAccessibility()
     {
         double contrast = CalculateContrastRatio(Foreground, Background);
-        
+
         // WCAG AA requires 4.5:1 for normal text, 7:1 for AAA
         if (contrast < 4.5)
         {

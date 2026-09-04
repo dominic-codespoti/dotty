@@ -20,7 +20,7 @@ internal sealed class ScreenManager : IDisposable
     }
 
     public Screen Active => _usingAlt ? _alt! : _main;
- 
+
     internal Screen Main => _main;
     internal Screen? Alternate => _alt;
 
@@ -55,7 +55,7 @@ internal sealed class ScreenManager : IDisposable
         }
     }
 
- 
+
     internal void Reflow(int rows, int columns, Func<Screen, bool, Screen> transform)
     {
         bool mainIsSaved = _savedMain != null && ReferenceEquals(_main, _savedMain);

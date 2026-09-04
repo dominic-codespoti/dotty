@@ -38,9 +38,9 @@ public class ThroughputBenchmarks : PerformanceTestBase
         // Generate 10MB in chunks to avoid huge allocations
         const int chunkSize = 100000;
         const int chunks = 100;
-        
+
         var chunk = TestDataGenerator.GeneratePlainText(chunkSize);
-        
+
         for (int i = 0; i < chunks; i++)
         {
             _parser.Feed(chunk);
@@ -90,7 +90,7 @@ public class ThroughputBenchmarks : PerformanceTestBase
             sb.Append("Text ");
         }
         sb.Append("\u001b[0m");
-        
+
         _parser.Feed(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
     }
 
@@ -99,12 +99,12 @@ public class ThroughputBenchmarks : PerformanceTestBase
     {
         var sb = new System.Text.StringBuilder();
         var random = new Random(42);
-        
+
         for (int i = 0; i < 10000; i++)
         {
             sb.Append($"\u001b[{random.Next(1, 25)};{random.Next(1, 81)}H");
         }
-        
+
         _parser.Feed(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
     }
 
@@ -118,10 +118,10 @@ public class ThroughputBenchmarks : PerformanceTestBase
         // Simulate realistic mixed terminal output
         var logs = TestDataGenerator.GenerateLogOutput(500);
         _parser.Feed(logs);
-        
+
         var code = TestDataGenerator.GeneratePlainText(5000);
         _parser.Feed(code);
-        
+
         var ansi = TestDataGenerator.GenerateBasicAnsiText(5000, 0.1);
         _parser.Feed(ansi);
     }
@@ -135,7 +135,7 @@ public class ThroughputBenchmarks : PerformanceTestBase
             // Command input
             var cmd = System.Text.Encoding.UTF8.GetBytes($"echo Line {i}\r\n");
             _parser.Feed(cmd);
-            
+
             // Command output
             var output = System.Text.Encoding.UTF8.GetBytes($"Line {i}\r\n");
             _parser.Feed(output);
@@ -150,7 +150,7 @@ public class ThroughputBenchmarks : PerformanceTestBase
     public void Burst_100KBx10()
     {
         var chunk = TestDataGenerator.GeneratePlainText(100000);
-        
+
         for (int i = 0; i < 10; i++)
         {
             _parser.Feed(chunk);
@@ -161,7 +161,7 @@ public class ThroughputBenchmarks : PerformanceTestBase
     public void Burst_10KBx100()
     {
         var chunk = TestDataGenerator.GeneratePlainText(10000);
-        
+
         for (int i = 0; i < 100; i++)
         {
             _parser.Feed(chunk);

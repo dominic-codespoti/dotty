@@ -25,7 +25,7 @@ public readonly record struct SgrColorArgb(uint Argb)
     private static readonly object s_paletteLock = new();
 
     public bool IsEmpty => Argb == 0;
-    
+
     public byte A => (byte)(Argb >> 24);
     public byte R => (byte)(Argb >> 16);
     public byte G => (byte)(Argb >> 8);
@@ -138,7 +138,7 @@ public readonly record struct SgrColorArgb(uint Argb)
     private static SgrColorArgb[] InitializePalette256()
     {
         var palette = new SgrColorArgb[256];
-        
+
         // First 16 colors are standard ANSI (will be overridden by SetAnsiPalette if theme is set)
         // Normal colors (indices 0-7)
         palette[0] = new SgrColorArgb(0xFF000000u);  // Black

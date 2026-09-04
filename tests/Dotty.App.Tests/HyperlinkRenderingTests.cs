@@ -275,8 +275,8 @@ public class HyperlinkRenderingTests
     {
         var buffer = new TerminalBuffer(rows: 10, columns: 80);
         buffer.SetCursor(9, 79);
-        buffer.WriteText("X".AsSpan(), new CellAttributes 
-        { 
+        buffer.WriteText("X".AsSpan(), new CellAttributes
+        {
             HyperlinkId = buffer.GetOrCreateHyperlinkId("https://example.com")
         });
 

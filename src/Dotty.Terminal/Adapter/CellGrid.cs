@@ -33,11 +33,11 @@ public sealed class CellGrid
         int rows = _cells.GetLength(0);
         int cols = _cells.GetLength(1);
         for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
-        {
-            _cells[r, c].Reset();
-            _coldCells[r, c].Reset();
-        }
+            for (int c = 0; c < cols; c++)
+            {
+                _cells[r, c].Reset();
+                _coldCells[r, c].Reset();
+            }
     }
 
     public void ClearCell(int row, int col)
@@ -71,18 +71,18 @@ public sealed class CellGrid
     public void ScrollUp(int lines)
     {
         for (int i = 0; i < Rows - lines; i++)
-        for (int j = 0; j < Columns; j++)
-        {
-            _cells[i, j] = _cells[i + lines, j];
-            _coldCells[i, j] = _coldCells[i + lines, j];
-        }
+            for (int j = 0; j < Columns; j++)
+            {
+                _cells[i, j] = _cells[i + lines, j];
+                _coldCells[i, j] = _coldCells[i + lines, j];
+            }
 
         for (int i = Rows - lines; i < Rows; i++)
-        for (int j = 0; j < Columns; j++)
-        {
-            _cells[i, j].Reset();
-            _coldCells[i, j].Reset();
-        }
+            for (int j = 0; j < Columns; j++)
+            {
+                _cells[i, j].Reset();
+                _coldCells[i, j].Reset();
+            }
     }
 
     public void Resize(int rows, int columns)
@@ -99,14 +99,14 @@ public sealed class CellGrid
         int copyRows = Math.Min(rows, Rows);
         int copyCols = Math.Min(columns, Columns);
         for (int r = 0; r < copyRows; r++)
-        for (int c = 0; c < copyCols; c++)
-        {
-            newCells[r, c] = _cells[r, c];
-            newCold[r, c] = _coldCells[r, c];
-        }
+            for (int c = 0; c < copyCols; c++)
+            {
+                newCells[r, c] = _cells[r, c];
+                newCold[r, c] = _coldCells[r, c];
+            }
         for (int r = copyRows; r < rows; r++)
-        for (int c = 0; c < columns; c++)
-            newCold[r, c].GraphemeIndex = -1;
+            for (int c = 0; c < columns; c++)
+                newCold[r, c].GraphemeIndex = -1;
 
         _cells = newCells;
         _coldCells = newCold;

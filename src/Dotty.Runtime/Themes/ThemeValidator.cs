@@ -248,7 +248,7 @@ public sealed class ThemeValidator
     private static uint HexToUint(string hex)
     {
         var span = hex.AsSpan().Trim();
-        
+
         // Remove prefix if present
         if (span.Length > 1 && span[0] == '0' && (span[1] == 'x' || span[1] == 'X'))
             span = span.Slice(2);

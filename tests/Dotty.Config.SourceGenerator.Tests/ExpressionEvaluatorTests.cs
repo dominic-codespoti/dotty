@@ -462,7 +462,7 @@ public class ExpressionEvaluatorTests
                     var isEnum = field.ContainingType?.TypeKind == TypeKind.Enum ||
                                  field.Type?.TypeKind == TypeKind.Enum ||
                                  field.Type?.BaseType?.SpecialType == SpecialType.System_Enum;
-                    
+
                     if (isEnum)
                     {
                         return field.Name;
@@ -573,7 +573,7 @@ public class ExpressionEvaluatorTests
         if (constantValue.HasValue)
         {
             var value = constantValue.Value;
-            
+
             // For member access expressions that resolve to enum values,
             // return the member name instead of the numeric value
             if (expression is MemberAccessExpressionSyntax memberAccessForEnum)
@@ -581,7 +581,7 @@ public class ExpressionEvaluatorTests
                 // Just return the identifier text (e.g., "Blur" from "TransparencyLevel.Blur")
                 return memberAccessForEnum.Name.Identifier.ValueText;
             }
-            
+
             return value;
         }
 

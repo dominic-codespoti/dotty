@@ -85,14 +85,14 @@ public class MemoryBenchmarks : PerformanceTestBase
     public void Scrollback_Read100()
     {
         var buffer = new TerminalBuffer(24, 80);
-        
+
         // Populate scrollback
         for (int i = 0; i < 1000; i++)
         {
             buffer.WriteText($"Line {i}: Content", CellAttributes.Default);
             buffer.LineFeed();
         }
-        
+
         // Read history
         for (int i = 0; i < 100; i++)
         {
@@ -110,7 +110,7 @@ public class MemoryBenchmarks : PerformanceTestBase
         var adapter = new TerminalAdapter(24, 80);
         var parser = new BasicAnsiParser();
         parser.Handler = adapter;
-        
+
         var data = TestDataGenerator.GeneratePlainText(10000);
         parser.Feed(data);
     }
@@ -121,7 +121,7 @@ public class MemoryBenchmarks : PerformanceTestBase
         var adapter = new TerminalAdapter(24, 80);
         var parser = new BasicAnsiParser();
         parser.Handler = adapter;
-        
+
         var data = TestDataGenerator.GenerateBasicAnsiText(10000, 0.1);
         parser.Feed(data);
     }
@@ -136,7 +136,7 @@ public class MemoryBenchmarks : PerformanceTestBase
         var grid = new CellGrid(24, 80);
         var styleSet = new StyleSet();
         ushort styleId = styleSet.GetOrCreateId(new CellAttributes { Bold = true, Italic = true, UnderlineStyle = UnderlineStyle.Single });
-        
+
         for (int row = 0; row < 24; row++)
         {
             for (int col = 0; col < 80; col++)
@@ -151,7 +151,7 @@ public class MemoryBenchmarks : PerformanceTestBase
     public void Cell_SetCharacter()
     {
         var grid = new CellGrid(24, 80);
-        
+
         for (int row = 0; row < 24; row++)
         {
             for (int col = 0; col < 80; col++)
@@ -167,7 +167,7 @@ public class MemoryBenchmarks : PerformanceTestBase
         var grid = new CellGrid(24, 80);
         var styleSet = new StyleSet();
         ushort boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
-        
+
         // Fill first
         for (int row = 0; row < 24; row++)
         {
@@ -178,7 +178,7 @@ public class MemoryBenchmarks : PerformanceTestBase
                 cell.StyleId = boldId;
             }
         }
-        
+
         // Reset
         grid.ClearAll();
     }
@@ -188,19 +188,19 @@ public class MemoryBenchmarks : PerformanceTestBase
     #region SGR Parsing
 
     [Benchmark(Description = "SGR Parse: Simple")]
-    public CellAttributes Sgr_ParseSimple() => 
+    public CellAttributes Sgr_ParseSimple() =>
         SgrParserArgb.Apply("1;31", CellAttributes.Default);
 
     [Benchmark(Description = "SGR Parse: 256 Color")]
-    public CellAttributes Sgr_Parse256Color() => 
+    public CellAttributes Sgr_Parse256Color() =>
         SgrParserArgb.Apply("38;5;196", CellAttributes.Default);
 
     [Benchmark(Description = "SGR Parse: TrueColor")]
-    public CellAttributes Sgr_ParseTrueColor() => 
+    public CellAttributes Sgr_ParseTrueColor() =>
         SgrParserArgb.Apply("38;2;255;100;50", CellAttributes.Default);
 
     [Benchmark(Description = "SGR Parse: Complex")]
-    public CellAttributes Sgr_ParseComplex() => 
+    public CellAttributes Sgr_ParseComplex() =>
         SgrParserArgb.Apply("1;3;4;38;2;255;0;0;48;2;0;0;255", CellAttributes.Default);
 
     #endregion

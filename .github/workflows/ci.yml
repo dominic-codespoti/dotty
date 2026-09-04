@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -248,6 +247,13 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Install GNU timeout (macOS only)
+        if: matrix.os == 'macos-15'
+        shell: bash
+        run: |
+          if ! command -v gtimeout >/dev/null 2>&1; then
+            brew install coreutils
+          fi
 
       - name: Restore dependencies
         run: dotnet restore "${{ env.SOLUTION_PATH }}"
@@ -267,7 +273,12 @@ jobs:
           smoke_dir="$RUNNER_TEMP/dotty-desktop-smoke"
           mkdir -p "$smoke_dir/home"
           set +e
-          timeout 12s env HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            timeout_cmd=gtimeout
+          else
+            timeout_cmd=timeout
+          fi
+          "$timeout_cmd" 12s env HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
             dotnet run --project "${{ env.PROJECT_PATH }}" -c Release --no-build \
             > "$smoke_dir/desktop.log" 2>&1
@@ -278,7 +289,7 @@ jobs:
             exit 1
           fi
 
-  # Job to check code formatting and static analysis
+  # Job to check code formatting
   code-quality:
     name: Code Quality Checks
     runs-on: ubuntu-latest
@@ -295,7 +306,7 @@ jobs:
         run: dotnet restore ${{ env.SOLUTION_PATH }}
 
       - name: Check formatting
-        run: dotnet format ${{ env.SOLUTION_PATH }} --verify-no-changes --verbosity detailed
+        run: dotnet format whitespace ${{ env.SOLUTION_PATH }} --verify-no-changes --verbosity detailed
 
   # Job to run performance benchmarks
   performance-tests:

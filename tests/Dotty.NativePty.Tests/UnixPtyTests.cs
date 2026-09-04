@@ -167,7 +167,7 @@ public class UnixPtyTests : IDisposable
 
             // Assert
             PtyTestHelpers.AssertPtyRunning(_pty);
-            
+
             // Cleanup for next iteration
             _pty.Kill(force: true);
             _pty.Dispose();
@@ -286,7 +286,7 @@ public class UnixPtyTests : IDisposable
         // Arrange
         _pty = new Unix.UnixPty();
         _pty.Start(shell: "/bin/sh");
-        
+
         await Task.Delay(500); // Wait for shell to start
 
         var outputStream = _pty.OutputStream;
@@ -496,7 +496,7 @@ public class UnixPtyTests : IDisposable
 
         // Assert
         _pty.IsRunning.Should().BeFalse("Process should not be running after Kill()");
-        
+
         // Verify process is gone
         Thread.Sleep(1000);
         PtyTestHelpers.ProcessExists(processId).Should().BeFalse("Process should be terminated");
@@ -518,7 +518,7 @@ public class UnixPtyTests : IDisposable
 
         // Assert
         _pty.IsRunning.Should().BeFalse("Process should not be running after force Kill()");
-        
+
         // Verify process is gone
         Thread.Sleep(500);
         PtyTestHelpers.ProcessExists(processId).Should().BeFalse("Process should be terminated");
@@ -561,7 +561,7 @@ public class UnixPtyTests : IDisposable
         var eventFired = false;
         int receivedExitCode = -999;
         var tcs = new TaskCompletionSource<int>();
-        
+
         _pty.ProcessExited += (sender, exitCode) =>
         {
             eventFired = true;
@@ -570,7 +570,7 @@ public class UnixPtyTests : IDisposable
         };
 
         _pty.Start(shell: "/bin/sh");
-        
+
         // Give time for event handler to be registered
         await Task.Delay(100);
 
@@ -596,7 +596,7 @@ public class UnixPtyTests : IDisposable
         _pty = new Unix.UnixPty();
         var exitCodeReceived = -1;
         var tcs = new TaskCompletionSource<int>();
-        
+
         _pty.ProcessExited += (sender, exitCode) =>
         {
             exitCodeReceived = exitCode;
@@ -604,7 +604,7 @@ public class UnixPtyTests : IDisposable
         };
 
         _pty.Start(shell: "/bin/sh");
-        
+
         // Give the event handler time to register
         await Task.Delay(100);
 
@@ -659,7 +659,7 @@ public class UnixPtyTests : IDisposable
         {
             _pty = new Unix.UnixPty();
             _pty.Start(shell: "/bin/sh");
-            
+
             // Use Kill to terminate and get exit code
             _pty.Kill(force: true);
 
@@ -669,7 +669,7 @@ public class UnixPtyTests : IDisposable
             // Assert - exit code after Kill() is typically 137 (128 + SIGKILL(9))
             // We just verify that WaitForExitAsync completes and returns a code
             actualExitCode.Should().BeGreaterThanOrEqualTo(0, "Exit code should be non-negative");
-            
+
             // Cleanup for next iteration
             _pty.Dispose();
         }
@@ -687,7 +687,7 @@ public class UnixPtyTests : IDisposable
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
         // Act & Assert
-        await Assert.ThrowsAsync<OperationCanceledException>(() => 
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
             _pty.WaitForExitAsync(cts.Token));
     }
 
@@ -711,7 +711,7 @@ public class UnixPtyTests : IDisposable
 
         // Assert
         _pty.IsRunning.Should().BeFalse();
-        
+
         // Verify process is gone
         Thread.Sleep(500);
         PtyTestHelpers.ProcessExists(processId).Should().BeFalse();
@@ -773,7 +773,7 @@ public class UnixPtyTests : IDisposable
     {
         // If this test runs and passes, the helper was found
         _pty = new Unix.UnixPty();
-        
+
         // Act - if this doesn't throw, helper was found
         _pty.Start();
 

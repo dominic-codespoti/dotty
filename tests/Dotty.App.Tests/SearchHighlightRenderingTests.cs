@@ -67,7 +67,7 @@ public class SearchHighlightRenderingTests
     {
         // Arrange
         var buffer = CreateBuffer(5, 40);
-        
+
         // Add visible content
         buffer.SetCursor(0, 0);
         buffer.WriteText("visible test content".AsSpan(), CellAttributes.Default);
@@ -244,7 +244,7 @@ public class SearchHighlightRenderingTests
         // This test documents the expected highlight colors
         // In the actual rendering code:
         // var regularHighlightColor = new SKColor(255, 255, 0, 60);  // Transparent yellow
-        
+
         // Arrange - simulated color values
         byte expectedR = 255;
         byte expectedG = 255;
@@ -264,7 +264,7 @@ public class SearchHighlightRenderingTests
         // This test documents the expected highlight colors
         // In the actual rendering code:
         // var currentHighlightColor = new SKColor(255, 165, 0, 100); // Brighter orange
-        
+
         // Arrange - simulated color values
         byte expectedR = 255;
         byte expectedG = 165;
@@ -294,7 +294,7 @@ public class SearchHighlightRenderingTests
     {
         // Regular: (255, 255, 0, 60) - Yellow
         // Current: (255, 165, 0, 100) - Orange
-        
+
         var regular = (255, 255, 0, 60);
         var current = (255, 165, 0, 100);
 
@@ -580,7 +580,7 @@ public class SearchHighlightRenderingTests
         // Leave lines empty
 
         var search = new TerminalSearch(buffer);
-        
+
         // Act & Assert - should not crash
         search.Search("test");
         Assert.Equal(0, search.MatchCount);

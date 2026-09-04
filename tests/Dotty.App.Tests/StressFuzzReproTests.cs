@@ -67,12 +67,12 @@ public class StressFuzzReproTests
                     case 2:
                         tb.SetCursor(r, 0);
                         tb.EraseLine(rnd.Next(0, 3));
-                        events.Add($"EraseLine row={r} mode={rnd.Next(0,3)}");
+                        events.Add($"EraseLine row={r} mode={rnd.Next(0, 3)}");
                         break;
                     case 3:
                         tb.SetCursor(r, c);
                         tb.EraseDisplay(rnd.Next(0, 3));
-                        events.Add($"EraseDisplay at {r} mode={rnd.Next(0,3)}");
+                        events.Add($"EraseDisplay at {r} mode={rnd.Next(0, 3)}");
                         break;
                     case 4:
                         tb.LineFeed();
@@ -87,11 +87,11 @@ public class StressFuzzReproTests
                         break;
                     case 6:
                         tb.SetOriginMode(rnd.Next(0, 2) == 0 ? false : true);
-                        events.Add($"SetOriginMode {rnd.Next(0,2)==0}");
+                        events.Add($"SetOriginMode {rnd.Next(0, 2) == 0}");
                         break;
                     case 7:
                         tb.SetAlternateScreen(rnd.Next(0, 2) == 0 ? false : true);
-                        events.Add($"SetAlternateScreen {rnd.Next(0,2)==0}");
+                        events.Add($"SetAlternateScreen {rnd.Next(0, 2) == 0}");
                         break;
                     case 8:
                         // Manual corruption: flip continuation flags or widths in the backing cells

@@ -591,7 +591,7 @@ public class TerminalSearchTests
         // Write text and scroll it into scrollback
         buffer.SetCursor(0, 0);
         buffer.WriteText("scrollback text".AsSpan(), CellAttributes.Default);
-        
+
         // Push into scrollback by scrolling up
         for (int i = 0; i < 5; i++)
         {

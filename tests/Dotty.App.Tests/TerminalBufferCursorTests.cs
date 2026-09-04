@@ -352,4 +352,4 @@ public class TerminalBufferCursorTests
         Assert.Equal(0, buffer.ScrollbackCount);
     }
 }
- 
+

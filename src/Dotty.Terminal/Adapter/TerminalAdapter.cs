@@ -189,10 +189,12 @@ public class TerminalAdapter : ITerminalHandler
                 var base64Part = payloadStr.Substring(semiIdx + 1);
                 if (base64Part != "?")
                 {
-                    try {
+                    try
+                    {
                         var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64Part));
                         ClipboardWriteRequested?.Invoke(decoded);
-                    } catch { }
+                    }
+                    catch { }
                 }
             }
         }

@@ -57,6 +57,8 @@ public sealed class TerminalMouseController
     public bool LeftMouseDown { get; private set; }
     public bool IsDraggingScrollbar { get; private set; }
     public bool IsScrollbarHovered { get; private set; }
+    public int HoveredTabIndex { get; private set; } = -1;
+    public TabBarHitType HoveredTabHitType { get; private set; } = TabBarHitType.None;
 
     public TerminalMouseController(ITerminalMouseHost host, Func<long>? clockMilliseconds = null)
     {
@@ -271,7 +273,8 @@ public sealed class TerminalMouseController
         var geom = _host.Geometry;
         float physX = position.X * geom.Scale;
         float physY = position.Y * geom.Scale;
-
+        HoveredTabIndex = -1;
+        HoveredTabHitType = TabBarHitType.None;
         // 1. Check Context Menu hover
         var activeContextMenu = _host.ActiveContextMenu;
         if (activeContextMenu != null && activeContextMenu.IsVisible)
@@ -292,8 +295,10 @@ public sealed class TerminalMouseController
         // 2. Check Tab Bar hover
         if (geom.ShowTabBar && _host.TabManager != null && physY < geom.TopOffset)
         {
-            var hit = TabBarHitTester.HitTest(physX, physY, geom.FramebufferWidth, _host.TabManager.Count, _host.TabManager.ActiveIndex, geom.TopOffset);
-            if (hit is TabBarHitResult.SelectTab or TabBarHitResult.CloseTab or TabBarHitResult.NewTab)
+            var hit = TabBarHitTester.HitTest(physX, physY, geom.FramebufferWidth, _host.TabManager.Count, _host.TabManager.ActiveIndex, out int hitTabIndex, geom.TopOffset);
+            HoveredTabIndex = hitTabIndex;
+            HoveredTabHitType = hit;
+            if (hit is TabBarHitType.SelectTab or TabBarHitType.CloseTab or TabBarHitType.NewTab)
             {
                 _host.SetPointerCursor(StandardCursor.Hand);
             }

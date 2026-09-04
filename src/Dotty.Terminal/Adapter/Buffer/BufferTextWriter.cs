@@ -161,7 +161,7 @@ internal sealed class BufferTextWriter
             int endCol = col + chunkLen - 1;
             ref CellHot cellData = ref Unsafe.AsRef<CellHot>((void*)buf.CellsPtr);
             ref ColdCell coldData = ref Unsafe.AsRef<ColdCell>((void*)buf.ColdCellsPtr);
-            
+
             // Check first cell for continuation/width (rare, only at row start)
             {
                 ref CellHot first = ref Unsafe.Add(ref cellData, baseIdx);

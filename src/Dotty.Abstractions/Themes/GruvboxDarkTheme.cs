@@ -13,7 +13,7 @@ public sealed class GruvboxDarkTheme : ColorSchemeBase
     // Gruvbox Dark color palette (dark mode, medium contrast)
     // Background: #282828 -> 0xFF282828
     // Foreground: #EBDBB2 -> 0xFFEBDBB2
-    
+
     // ANSI colors
     // Black: #282828, Red: #CC241D, Green: #98971A, Yellow: #D79921
     // Blue: #458588, Magenta: #B16286, Cyan: #689D6A, White: #A89984

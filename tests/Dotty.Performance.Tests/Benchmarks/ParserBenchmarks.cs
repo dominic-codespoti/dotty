@@ -14,13 +14,13 @@ public class ParserBenchmarks : PerformanceTestBase
 {
     private BasicAnsiParser _parser = null!;
     private TerminalAdapter _adapter = null!;
-    
+
     // Test data at different sizes
     private byte[] _plainTextTiny = null!;
     private byte[] _plainTextSmall = null!;
     private byte[] _plainTextMedium = null!;
     private byte[] _plainTextLarge = null!;
-    
+
     private byte[] _ansiBasicTiny = null!;
     private byte[] _ansiBasicSmall = null!;
     private byte[] _ansiExtended = null!;
@@ -46,7 +46,7 @@ public class ParserBenchmarks : PerformanceTestBase
         _plainTextSmall = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.Small);
         _plainTextMedium = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.Medium);
         _plainTextLarge = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.Large);
-        
+
         _ansiBasicTiny = TestDataGenerator.GenerateBasicAnsiText(TestDataGenerator.Sizes.Tiny, 0.05);
         _ansiBasicSmall = TestDataGenerator.GenerateBasicAnsiText(TestDataGenerator.Sizes.Small, 0.05);
         _ansiExtended = TestDataGenerator.GenerateExtendedAnsiText(TestDataGenerator.Sizes.Small);

@@ -40,7 +40,7 @@ public static class BuiltInThemes
     }
 
     // Dark themes
-    
+
     /// <summary>
     /// VS Code Dark+ theme - the default theme for Dotty.
     /// A balanced dark theme with good contrast and readability.
@@ -76,7 +76,7 @@ public static class BuiltInThemes
     public static IColorScheme TokyoNight => _tokyoNight.Value;
 
     // Light themes
-    
+
     /// <summary>
     /// VS Code Light+ theme - a clean, bright theme.
     /// Good for well-lit environments.
@@ -151,7 +151,7 @@ public static class BuiltInThemes
 
         // Use the canonical name for consistent caching
         var theme = GetOrCreateTheme(definition.CanonicalName ?? "DarkPlus");
-        
+
         // Also cache by the requested name for faster future lookups
         if (!string.Equals(name, definition.CanonicalName, StringComparison.OrdinalIgnoreCase))
         {

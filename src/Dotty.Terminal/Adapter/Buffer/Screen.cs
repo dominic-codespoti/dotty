@@ -46,7 +46,7 @@ public unsafe partial class Screen : IDisposable
         if (logicalRow < 0 || logicalRow >= Rows) return;
         _rowMaxCol[GetPhysicalRow(logicalRow)] = -1;
     }
- 
+
     public int GetRowEndCol(int logicalRow)
     {
         if (logicalRow < 0 || logicalRow >= Rows) return -1;
@@ -311,7 +311,7 @@ public unsafe partial class Screen : IDisposable
         RowContinuesPrevious[physicalRow] = false;
         RowEndCol[physicalRow] = -1;
     }
- 
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CopyRowMetadata(int destinationPhysicalRow, int sourcePhysicalRow)
     {
@@ -356,7 +356,7 @@ public unsafe partial class Screen : IDisposable
         }
         _rowMaxCol[pRow] = maxCol;
     }
- 
+
     public void RecalculateRowEndCol(int logicalRow)
     {
         if (logicalRow < 0 || logicalRow >= Rows) return;

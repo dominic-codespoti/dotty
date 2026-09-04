@@ -173,7 +173,7 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        mockPty.Setup(p => p.Start(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), 
+        mockPty.Setup(p => p.Start(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
             It.IsAny<string>(), It.IsAny<IDictionary<string, string>>()));
 
         // Act
@@ -271,7 +271,7 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        mockPty.Setup(p => p.Start(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), 
+        mockPty.Setup(p => p.Start(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
             It.IsAny<string>(), It.IsAny<IDictionary<string, string>>()))
             .Throws(new InvalidOperationException("PTY session is already started."));
 
@@ -289,7 +289,7 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        mockPty.Setup(p => p.Start(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(), 
+        mockPty.Setup(p => p.Start(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<int>(),
             It.IsAny<string>(), It.IsAny<IDictionary<string, string>>()))
             .Throws(new PtyException("Failed to create PTY"));
 
@@ -416,7 +416,7 @@ public class IPtyContractTests
         mockPty.Object.Kill();
 
         // Assert
-        mockPty.Verify(p => p.Kill(false), Times.Once, 
+        mockPty.Verify(p => p.Kill(false), Times.Once,
             "Default Kill() should use force=false");
     }
 
@@ -501,7 +501,7 @@ public class IPtyContractTests
             .ThrowsAsync(new InvalidOperationException("Process is not started."));
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             mockPty.Object.WaitForExitAsync());
     }
 
@@ -521,7 +521,7 @@ public class IPtyContractTests
             .ThrowsAsync(new OperationCanceledException());
 
         // Act & Assert
-        await Assert.ThrowsAsync<OperationCanceledException>(() => 
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
             mockPty.Object.WaitForExitAsync(cts.Token));
     }
 
@@ -562,7 +562,7 @@ public class IPtyContractTests
         mockPty.Object.ProcessExited += handler;
 
         // Act
-        var exception = Record.Exception(() => 
+        var exception = Record.Exception(() =>
             mockPty.Object.ProcessExited -= handler);
 
         // Assert
@@ -579,8 +579,8 @@ public class IPtyContractTests
         // Arrange
         var mockPty = new Mock<IPty>();
         int receivedExitCode = -999;
-        
-        mockPty.Object.ProcessExited += (sender, exitCode) => 
+
+        mockPty.Object.ProcessExited += (sender, exitCode) =>
         {
             receivedExitCode = exitCode;
         };
@@ -589,7 +589,7 @@ public class IPtyContractTests
         // This test verifies the event signature and handler behavior
         var raiseEvent = mockPty.Object.GetType()
             .GetEvent("ProcessExited")?.EventHandlerType;
-        
+
         // Assert - event is defined and is of correct type
         raiseEvent.Should().NotBeNull("ProcessExited event should exist");
         raiseEvent.Should().BeAssignableTo<EventHandler<int>>().GetType();
@@ -611,7 +611,7 @@ public class IPtyContractTests
         mockPty.As<IDisposable>().Setup(d => d.Dispose());
 
         // Act
-        var exception = Record.Exception(() => 
+        var exception = Record.Exception(() =>
             ((IDisposable)mockPty.Object).Dispose());
 
         // Assert
@@ -654,7 +654,7 @@ public class IPtyContractTests
             .Throws(new ObjectDisposedException("WindowsPty"));
 
         // Act & Assert
-        Assert.Throws<ObjectDisposedException>(() => 
+        Assert.Throws<ObjectDisposedException>(() =>
             mockPty.Object.Resize(80, 24));
     }
 
@@ -672,7 +672,7 @@ public class IPtyContractTests
         // Arrange
         var mockStream = new Mock<Stream>();
         mockStream.SetupGet(s => s.CanWrite).Returns(true);
-        
+
         var mockPty = new Mock<IPty>();
         mockPty.SetupGet(p => p.InputStream).Returns(mockStream.Object);
 
@@ -693,7 +693,7 @@ public class IPtyContractTests
         // Arrange
         var mockStream = new Mock<Stream>();
         mockStream.SetupGet(s => s.CanRead).Returns(true);
-        
+
         var mockPty = new Mock<IPty>();
         mockPty.SetupGet(p => p.OutputStream).Returns(mockStream.Object);
 
@@ -714,7 +714,7 @@ public class IPtyContractTests
         // Arrange
         var inputStream = new Mock<Stream>().Object;
         var outputStream = new Mock<Stream>().Object;
-        
+
         var mockPty = new Mock<IPty>();
         mockPty.SetupGet(p => p.InputStream).Returns(inputStream);
         mockPty.SetupGet(p => p.OutputStream).Returns(outputStream);

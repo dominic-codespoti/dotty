@@ -115,7 +115,7 @@ public class BaselineComparer
                 Passed = result.MeanMs <= maxAllowed
             };
             comparisons.Add(comparison);
-            
+
             if (!comparison.Passed)
             {
                 passed = false;
@@ -136,7 +136,7 @@ public class BaselineComparer
                 Passed = result.P95Ms <= baseline.MaxLatencyMs
             };
             comparisons.Add(comparison);
-            
+
             if (!comparison.Passed)
             {
                 passed = false;
@@ -157,7 +157,7 @@ public class BaselineComparer
                 Passed = result.ThroughputOpsPerSec >= baseline.MinThroughput
             };
             comparisons.Add(comparison);
-            
+
             if (!comparison.Passed)
             {
                 passed = false;
@@ -178,7 +178,7 @@ public class BaselineComparer
                 Passed = result.AllocatedBytesPerOp <= baseline.MaxAllocationsPerOp
             };
             comparisons.Add(comparison);
-            
+
             if (!comparison.Passed)
             {
                 passed = false;
@@ -210,23 +210,23 @@ public class BaselineComparer
             ["Parser_AnsiBasic_1KB"] = new() { ExpectedMeanMs = 0.15, MaxAllocationsPerOp = 2048 },
             ["Parser_AnsiExtended_1KB"] = new() { ExpectedMeanMs = 0.2, MaxAllocationsPerOp = 3072 },
             ["Parser_AnsiTrueColor_1KB"] = new() { ExpectedMeanMs = 0.25, MaxAllocationsPerOp = 4096 },
-            
+
             // Rendering benchmarks
             ["Render_FullScreen_80x24"] = new() { ExpectedMeanMs = 1.0, MaxLatencyMs = 5.0 },
             ["Render_FullScreen_120x40"] = new() { ExpectedMeanMs = 2.0, MaxLatencyMs = 10.0 },
             ["Render_Scroll_LargeBuffer"] = new() { ExpectedMeanMs = 0.5, MaxLatencyMs = 2.0 },
             ["Render_PartialUpdate"] = new() { ExpectedMeanMs = 0.2, MaxLatencyMs = 1.0 },
-            
+
             // Memory benchmarks
             ["Memory_GridAllocation_80x24"] = new() { MaxAllocationsPerOp = 10000 },
             ["Memory_GridAllocation_120x40"] = new() { MaxAllocationsPerOp = 20000 },
             ["Memory_BufferResize"] = new() { MaxAllocationsPerOp = 50000 },
             ["Memory_ScrollbackCompaction"] = new() { MaxAllocationsPerOp = 100000 },
-            
+
             // Throughput benchmarks
             ["Throughput_Sustained_10MB"] = new() { MinThroughput = 10000000 }, // 10 MB/s
             ["Throughput_Peak_ShortBurst"] = new() { MinThroughput = 50000000 }, // 50 MB/s
-            
+
             // Startup benchmarks
             ["Startup_Cold"] = new() { ExpectedMeanMs = 500, MaxLatencyMs = 1000 },
             ["Startup_Warm"] = new() { ExpectedMeanMs = 100, MaxLatencyMs = 200 },
@@ -241,16 +241,16 @@ public class BaselineThreshold
 {
     [JsonPropertyName("expectedMeanMs")]
     public double ExpectedMeanMs { get; set; }
-    
+
     [JsonPropertyName("maxLatencyMs")]
     public double MaxLatencyMs { get; set; }
-    
+
     [JsonPropertyName("minThroughput")]
     public double MinThroughput { get; set; }
-    
+
     [JsonPropertyName("maxAllocationsPerOp")]
     public double MaxAllocationsPerOp { get; set; }
-    
+
     [JsonPropertyName("regressionThreshold")]
     public double RegressionThreshold { get; set; } = 0.10;
 }

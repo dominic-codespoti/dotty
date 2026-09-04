@@ -30,7 +30,7 @@ internal sealed class CursorController
         Row = Clamp(Row, rows);
         Col = Clamp(Col, cols);
     }
- 
+
     internal CursorState CaptureState() =>
         new(Row, Col, Visible, WrapPending);
 

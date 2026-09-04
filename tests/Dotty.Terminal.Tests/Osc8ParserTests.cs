@@ -23,13 +23,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // OSC 8 start: ESC ] 8 ; ; URL BEL
         var input = "\u001b]8;;https://example.com\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -42,13 +42,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // OSC 8 start: ESC ] 8 ; ; URL ESC \
         var input = "\u001b]8;;https://example.com\u001b\\";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -61,13 +61,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // OSC 8 with id parameter: ESC ] 8 ; id=xyz ; URL BEL
         var input = "\u001b]8;id=xyz;https://example.com\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert - the URL is extracted; id is handled at adapter level
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -80,13 +80,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // OSC 8 with multiple params: ESC ] 8 ; id=xyz:foo=bar ; URL BEL
         var input = "\u001b]8;id=xyz:foo=bar;https://example.com\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -99,13 +99,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // OSC 8 end: ESC ] 8 ; ; BEL
         var input = "\u001b]8;;\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert - empty URI signals end of hyperlink
         Assert.Single(handler.Osc8Calls);
         Assert.Equal(string.Empty, handler.Osc8Calls[0]);
@@ -118,13 +118,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // OSC 8 end: ESC ] 8 ; ; ESC \
         var input = "\u001b]8;;\u001b\\";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal(string.Empty, handler.Osc8Calls[0]);
@@ -141,13 +141,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // OSC 8 followed by text: ESC ] 8 ; ; URL BEL text
         var input = "\u001b]8;;https://example.com\u0007Click here";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -162,13 +162,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Full hyperlink flow: ESC ] 8 ; ; URL BEL text ESC ] 8 ; ; BEL
         var input = "\u001b]8;;https://example.com\u0007Click here\u001b]8;;\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Equal(2, handler.Osc8Calls.Count);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -184,13 +184,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Two hyperlinks in sequence
         var input = "\u001b]8;;https://first.com\u0007First\u001b]8;;\u0007 \u001b]8;;https://second.com\u0007Second\u001b]8;;\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Equal(4, handler.Osc8Calls.Count);
         Assert.Equal("https://first.com", handler.Osc8Calls[0]);
@@ -210,13 +210,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Empty URL in OSC 8
         var input = "\u001b]8;;;\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal(";", handler.Osc8Calls[0]);
@@ -229,13 +229,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Missing semicolon - should not crash
         var input = "\u001b]8https://example.com\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert - no OSC 8 call made (code would be parsed as 8https... which fails)
         Assert.Empty(handler.Osc8Calls);
     }
@@ -247,19 +247,19 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Unterminated OSC sequence
         var input = "\u001b]8;;https://example.com";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert - no complete OSC 8 call yet
         Assert.Empty(handler.Osc8Calls);
-        
+
         // Complete with BEL
         parser.Feed(Encoding.UTF8.GetBytes("\u0007"));
-        
+
         // Now it should be processed
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -272,13 +272,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // URL with unicode characters
         var input = "\u001b]8;;https://example.com/\u4e2d\u6587\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert - Unicode URL should be extracted correctly
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com/\u4e2d\u6587", handler.Osc8Calls[0]);
@@ -291,14 +291,14 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Very long URL (2000 chars)
         var longPath = new string('a', 2000);
         var input = $"\u001b]8;;https://example.com/{longPath}\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal($"https://example.com/{longPath}", handler.Osc8Calls[0]);
@@ -313,13 +313,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // URL with query parameters
         var input = "\u001b]8;;https://example.com/search?q=test&page=1\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert - OSC 8 payload ";;;" means code="" and data=";" (after first semicolon)
         // The handler extracts everything after the first semicolon
         Assert.Single(handler.Osc8Calls);
@@ -333,13 +333,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // URL with fragment
         var input = "\u001b]8;;https://example.com/page#section1\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com/page#section1", handler.Osc8Calls[0]);
@@ -352,13 +352,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // URL with special characters that need encoding
         var input = "\u001b]8;;https://example.com/path%20with%20spaces\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com/path%20with%20spaces", handler.Osc8Calls[0]);
@@ -371,7 +371,7 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Test various URL schemes
         var inputs = new[]
         {
@@ -380,7 +380,7 @@ public class Osc8ParserTests
             "\u001b]8;;file:///path/to/file\u0007",
             "\u001b]8;;ftp://ftp.example.com\u0007"
         };
-        
+
         var expected = new[]
         {
             "http://example.com",
@@ -388,14 +388,14 @@ public class Osc8ParserTests
             "file:///path/to/file",
             "ftp://ftp.example.com"
         };
-        
+
         // Act & Assert
         for (int i = 0; i < inputs.Length; i++)
         {
             parser.Feed(Encoding.UTF8.GetBytes(inputs[i]));
             Assert.Equal(expected[i], handler.Osc8Calls[i]);
         }
-        
+
         Assert.Equal(4, handler.Osc8Calls.Count);
     }
 
@@ -410,19 +410,19 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Send OSC 8 in chunks
         parser.Feed(Encoding.UTF8.GetBytes("\u001b]8;;"));
         Assert.Empty(handler.Osc8Calls);
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("https://"));
         Assert.Empty(handler.Osc8Calls);
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("example.com"));
         Assert.Empty(handler.Osc8Calls);
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("\u0007"));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -435,15 +435,15 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Send OSC 8 with ESC \ terminator in chunks
         parser.Feed(Encoding.UTF8.GetBytes("\u001b]8;;"));
         parser.Feed(Encoding.UTF8.GetBytes("https://example.com"));
         parser.Feed(Encoding.UTF8.GetBytes("\u001b"));
         Assert.Empty(handler.Osc8Calls);
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("\\"));
-        
+
         // Assert
         Assert.Single(handler.Osc8Calls);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -460,13 +460,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Text before, hyperlink, text after
         var input = "Before \u001b]8;;https://example.com\u0007Link\u001b]8;;\u0007 After";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Equal(2, handler.Osc8Calls.Count);
         // Parser may split text into multiple print calls
@@ -483,13 +483,13 @@ public class Osc8ParserTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Hyperlink spanning lines
         var input = "\u001b]8;;https://example.com\u0007Line1\nLine2\u001b]8;;\u0007";
-        
+
         // Act
         parser.Feed(Encoding.UTF8.GetBytes(input));
-        
+
         // Assert
         Assert.Equal(2, handler.Osc8Calls.Count);
         Assert.Equal("https://example.com", handler.Osc8Calls[0]);
@@ -520,7 +520,7 @@ public class Osc8ParserTests
         void ITerminalHandler.OnClearScrollback() { }
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> parameters) { }
         void ITerminalHandler.OnBell() { }
-        
+
         void ITerminalHandler.OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload)
         {
             OscCalls.Add((code, payload.ToString()));
@@ -540,7 +540,7 @@ public class Osc8ParserTests
                 }
             }
         }
-        
+
         void ITerminalHandler.OnMoveCursor(int row, int col) { }
         void ITerminalHandler.OnCursorUp(int n) { }
         void ITerminalHandler.OnCursorDown(int n) { }

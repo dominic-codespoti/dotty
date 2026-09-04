@@ -96,7 +96,7 @@ public sealed class P0TerminalCompatibilityTests
         Assert.Equal(expected, Encoding.UTF8.GetString(bytes));
     }
 
- 
+
     [Theory]
     [InlineData(false, "a\nb")]
     [InlineData(true, "\x1b[200~a\nb\x1b[201~")]

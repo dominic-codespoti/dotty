@@ -22,7 +22,7 @@ public class PerformanceReport
         _baselineComparer = new BaselineComparer(
             baselineFile ?? Path.Combine(outputDirectory, "baselines.json"),
             regressionThreshold: 0.10);
-        
+
         Directory.CreateDirectory(outputDirectory);
     }
 
@@ -152,11 +152,11 @@ public class PerformanceReport
                 Q1Ms = r.ResultStatistics?.Q1 ?? 0,
                 Q3Ms = r.ResultStatistics?.Q3 ?? 0,
                 P50Ms = r.ResultStatistics?.Median ?? 0,
-                P95Ms = r.AllMeasurements?.Any() == true ? 
+                P95Ms = r.AllMeasurements?.Any() == true ?
                     r.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(r.AllMeasurements.Count * 0.95)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
-                P99Ms = r.AllMeasurements?.Any() == true ? 
+                P99Ms = r.AllMeasurements?.Any() == true ?
                     r.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(r.AllMeasurements.Count * 0.99)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
-                ThroughputOpsPerSec = r.ResultStatistics != null ? 
+                ThroughputOpsPerSec = r.ResultStatistics != null ?
                     1.0 / (r.ResultStatistics.Mean / 1000.0) : 0,
                 AllocatedBytesPerOp = (double)(r.GcStats.GetTotalAllocatedBytes(false) ?? 0L),
                 Gen0Collections = r.GcStats.Gen0Collections,
@@ -221,12 +221,12 @@ public class PerformanceReport
         {
             var result = ExtractResult(report);
             var comparison = _baselineComparer.Compare(report.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo, result);
-            
+
             foreach (var comp in comparison.Comparisons)
             {
                 var cssClass = comp.PercentageDiff < -5 ? "improved" :
                                comp.PercentageDiff > 5 ? "regressed" : "unchanged";
-                
+
                 html += $@"
                 <tr>
                     <td>{report.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo} - {comp.Metric}</td>
@@ -280,12 +280,12 @@ public class PerformanceReport
         {
             MeanMs = report.ResultStatistics?.Mean ?? 0,
             P50Ms = report.ResultStatistics?.Median ?? 0,
-            P95Ms = report.AllMeasurements?.Any() == true ? 
+            P95Ms = report.AllMeasurements?.Any() == true ?
                 report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.95)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
-            P99Ms = report.AllMeasurements?.Any() == true ? 
+            P99Ms = report.AllMeasurements?.Any() == true ?
                 report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.99)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
             StdDevMs = report.ResultStatistics?.StandardDeviation ?? 0,
-            ThroughputOpsPerSec = report.ResultStatistics != null ? 
+            ThroughputOpsPerSec = report.ResultStatistics != null ?
                 1.0 / (report.ResultStatistics.Mean / 1000.0) : 0,
             AllocatedBytesPerOp = (double)(report.GcStats.GetTotalAllocatedBytes(false) ?? 0L),
             Gen0Collections = report.GcStats.Gen0Collections,
@@ -299,13 +299,13 @@ public class PerformanceReport
         string[] suffixes = { "B", "KB", "MB", "GB" };
         int suffixIndex = 0;
         double value = bytes;
-        
+
         while (value >= 1024 && suffixIndex < suffixes.Length - 1)
         {
             value /= 1024;
             suffixIndex++;
         }
-        
+
         return $"{value:F2} {suffixes[suffixIndex]}";
     }
 }

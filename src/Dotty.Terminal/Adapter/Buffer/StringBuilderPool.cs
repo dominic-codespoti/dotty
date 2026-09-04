@@ -116,7 +116,7 @@ public ref struct ValueStringBuilder
     public void Append(string? value)
     {
         if (value is null) return;
-        
+
         int length = value.Length;
         if (length == 0) return;
 
@@ -145,7 +145,7 @@ public ref struct ValueStringBuilder
             Append((char)('0' + value));
             return;
         }
-        
+
         Span<char> buffer = stackalloc char[11]; // int.MinValue is 11 chars
         if (value.TryFormat(buffer, out int charsWritten))
         {
@@ -307,7 +307,7 @@ public ref struct ValueStringBuilder
     private void Grow(int additionalCapacity)
     {
         int newCapacity = Math.Max(_buffer.Length * 2, _length + additionalCapacity);
-        
+
         char[] newBuffer = ArrayPool<char>.Shared.Rent(newCapacity);
         _buffer.AsSpan(0, _length).CopyTo(newBuffer);
 
@@ -315,7 +315,7 @@ public ref struct ValueStringBuilder
         {
             ArrayPool<char>.Shared.Return(_buffer);
         }
-        
+
         _buffer = newBuffer;
     }
 
@@ -449,7 +449,7 @@ public static class StringBuilderPool
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ValueStringBuilder Rent(int capacity = 256)
         => new ValueStringBuilder(notNested: false, initialCapacity: capacity);
-    
+
     /// <summary>
     /// Gets the string and disposes the builder.
     /// </summary>

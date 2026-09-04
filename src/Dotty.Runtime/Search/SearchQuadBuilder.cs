@@ -165,7 +165,10 @@ public static class SearchQuadBuilder
                 var key = new GlyphKey(grapheme, typeface, textSize, false);
 
                 int countBefore = atlas.EntryCount;
-                if (atlas.EnsureGlyph(key, out var glyphInfo))
+                bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
+                if (!glyphOk)
+                    glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+                if (glyphOk)
                 {
                     if (atlas.EntryCount > countBefore)
                         dirtyAtlasRows?.Add(inputRow);
@@ -209,7 +212,10 @@ public static class SearchQuadBuilder
                 var key = new GlyphKey(grapheme, typeface, textSize, false);
 
                 int countBefore = atlas.EntryCount;
-                if (atlas.EnsureGlyph(key, out var glyphInfo))
+                bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
+                if (!glyphOk)
+                    glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+                if (glyphOk)
                 {
                     if (atlas.EntryCount > countBefore)
                         dirtyAtlasRows?.Add(badgeRow);
@@ -265,7 +271,10 @@ public static class SearchQuadBuilder
 
         var key = new GlyphKey(glyphText, typeface, textSize, false);
         int countBefore = atlas.EntryCount;
-        if (atlas.EnsureGlyph(key, out var glyphInfo))
+        bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
+        if (!glyphOk)
+            glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+        if (glyphOk)
         {
             if (atlas.EntryCount > countBefore)
                 dirtyAtlasRows?.Add(row);

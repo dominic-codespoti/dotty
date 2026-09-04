@@ -68,8 +68,8 @@ public static class PtyTestHelpers
     /// Reads from a PTY output stream until a pattern is found or timeout occurs.
     /// </summary>
     public static async Task<string> ReadUntilAsync(
-        Stream stream, 
-        string pattern, 
+        Stream stream,
+        string pattern,
         TimeSpan? timeout = null)
     {
         timeout ??= DefaultTimeout;
@@ -90,7 +90,7 @@ public static class PtyTestHelpers
                     {
                         var chunk = Encoding.UTF8.GetString(buffer, 0, read);
                         result.Append(chunk);
-                        
+
                         if (result.ToString().Contains(pattern))
                         {
                             break;
@@ -141,7 +141,7 @@ public static class PtyTestHelpers
     {
         timeout ??= DefaultTimeout;
         var cts = new CancellationTokenSource(timeout.Value);
-        
+
         // Wait for some output indicating the shell is ready
         try
         {
@@ -303,7 +303,7 @@ public static class PtyTestHelpers
     /// Retries an action until it succeeds or timeout occurs.
     /// </summary>
     public static async Task<T> RetryAsync<T>(
-        Func<Task<T>> action, 
+        Func<Task<T>> action,
         TimeSpan? timeout = null,
         int retryDelayMs = 100)
     {

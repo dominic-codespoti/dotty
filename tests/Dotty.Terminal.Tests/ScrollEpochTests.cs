@@ -140,5 +140,6 @@ public class ScrollGenerationTests
         Assert.Equal((uint)'e', row0Cells[3].Rune);
         Assert.Equal((uint)' ', row0Cells[4].Rune);
         Assert.Equal((uint)'0', row0Cells[5].Rune);
+        Assert.Equal("Line 0".PadRight(20), snap.GetVisibleRowText(0));
     }
 }

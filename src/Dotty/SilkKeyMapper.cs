@@ -2,6 +2,7 @@ using System;
 using SilkKey = Silk.NET.Input.Key;
 
 namespace Dotty.Silk;
+
 using Dotty.Runtime.Input;
 
 /// <summary>

@@ -141,7 +141,7 @@ public sealed class TerminalKeyboardDispatcherTests
 
         Assert.Equal("sh", dispatcher.SearchQuery);
     }
- 
+
     [Fact]
     public void HandleKeyDown_ApplicationCursorMode_WritesApplicationArrow()
     {

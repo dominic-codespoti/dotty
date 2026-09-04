@@ -37,12 +37,12 @@ public readonly record struct MenuItemLayout(
 public sealed class ContextMenuLayout
 {
     public const float DefaultMinWidth = 180f;
-    public const float DefaultItemHeight = 26f;
-    public const float DefaultSeparatorHeight = 9f;
-    public const float DefaultPaddingX = 6f;
-    public const float DefaultPaddingY = 6f;
-    public const float DefaultIconWidth = 18f;
-    public const float DefaultShortcutGap = 16f;
+    public const float DefaultItemHeight = 30f;
+    public const float DefaultSeparatorHeight = 10f;
+    public const float DefaultPaddingX = 8f;
+    public const float DefaultPaddingY = 8f;
+    public const float DefaultIconWidth = 22f;
+    public const float DefaultShortcutGap = 20f;
     public const float DefaultShadowOffset = 4f;
 
     /// <summary>Total bounding box of the menu popup background (including padding).</summary>
@@ -209,18 +209,21 @@ public sealed class ContextMenuLayout
                 }
 
                 float shortcutW = !string.IsNullOrEmpty(item.Shortcut) ? item.Shortcut.Length * charWidth : 0f;
+                float shortcutColumnLeft = itemBounds.Right - maxShortcutWidth;
                 MenuRect shortcutRect = default;
                 if (shortcutW > 0f)
                 {
+                    // Keep every shortcut on the same right edge while the
+                    // label column reserves room for the longest shortcut.
                     shortcutRect = new MenuRect(
-                        itemBounds.Right - shortcutW - 4f,
+                        itemBounds.Right - shortcutW,
                         currentY,
                         shortcutW,
                         rowHeight);
                 }
 
-                float labelW = shortcutW > 0f
-                    ? Math.Max(0f, shortcutRect.Left - cursorX - 4f)
+                float labelW = maxShortcutWidth > 0f
+                    ? Math.Max(0f, shortcutColumnLeft - cursorX - DefaultShortcutGap)
                     : Math.Max(0f, itemBounds.Right - cursorX);
 
                 var labelRect = new MenuRect(cursorX, currentY, labelW, rowHeight);

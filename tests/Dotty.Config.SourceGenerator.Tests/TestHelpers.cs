@@ -92,7 +92,7 @@ public static class TestHelpers
     public static void SetColorSchemeByName(string themeName, ConfigValues values)
     {
         var normalizedName = themeName.Replace("Theme", "");
-        
+
         switch (normalizedName)
         {
             case "DarkPlus":
@@ -492,7 +492,7 @@ public class TestConfig : IDottyConfig
         {
             syntaxTree.Should().NotBeNull();
             syntaxTree.GetRoot().DescendantNodes().Should().NotBeEmpty();
-            
+
             var diagnostics = syntaxTree.GetDiagnostics();
             var errors = diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error);
             errors.Should().BeEmpty();

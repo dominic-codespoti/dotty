@@ -104,7 +104,7 @@ public class ParserEdgeCaseTests
         p.Handler = h;
         return (p, h);
     }
- 
+
     private static (CaptureHandler Handler, BasicAnsiParser Parser) ParseSequence(string sequence, bool split)
     {
         var (parser, handler) = Setup();

@@ -91,6 +91,7 @@ public sealed class GlyphAtlas : IDisposable
     private const int DefaultInitialSize = 1024;
     private const int Padding = 2;          // gap between entries (sampling bleed)
     private const int MaxGlyphDimension = 512;
+    private const string FallbackGrapheme = "\uFFFD";
     private readonly object _lock = new();
     private readonly SKTypeface _typeface;
     private readonly float _textSize;
@@ -101,6 +102,8 @@ public sealed class GlyphAtlas : IDisposable
     private SKCanvas _canvas;
     private int _nextShelfY;
     private bool _disposed;
+    private GlyphInfo _fallbackGlyph;
+    private bool _hasFallbackGlyph;
     /// <summary>Recency stamp + refcount, maintained by <see cref="GlyphAtlasService"/> under its lock.</summary>
     internal long LastUsedStamp { get; set; }
     internal int RefCount { get; set; }
@@ -122,13 +125,47 @@ public sealed class GlyphAtlas : IDisposable
     public int Width => _bitmap.Width;
     public int Height => _bitmap.Height;
     public long SizeBytes => (long)_bitmap.Width * _bitmap.Height; // A8: 1 byte/px
-    public int EntryCount { get { lock (_lock) return _map.Count; } }
+    public int EntryCount
+    {
+        get
+        {
+            lock (_lock)
+                return _map.Count - (_hasFallbackGlyph ? 1 : 0);
+        }
+    }
     /// <summary>
     /// The A8 atlas bitmap. Callers must hold the atlas reference (service
     /// Acquire) and take the <see cref="TryGetGlyph"/>-style lock discipline
     /// around any read or texture upload.
     /// </summary>
     public SKBitmap AtlasBitmap { get { lock (_lock) return _bitmap; } }
+
+    /// <summary>
+    /// Runs an atlas upload operation while the backing bitmap remains
+    /// immutable and alive. Growth replaces and disposes the bitmap under the
+    /// same lock, so texture uploaders must use this method instead of keeping
+    /// <see cref="AtlasBitmap"/> beyond its getter call.
+    /// </summary>
+    public int WithAtlasBitmap(Action<SKBitmap> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            action(_bitmap);
+            return ContentVersion;
+        }
+    }
+
+    /// <summary>Returns the pre-reserved tofu glyph used when the atlas is full.</summary>
+    public bool TryGetFallbackGlyph(out GlyphInfo info)
+    {
+        lock (_lock)
+        {
+            info = _fallbackGlyph;
+            return _hasFallbackGlyph;
+        }
+    }
 
     private struct Shelf
     {
@@ -144,6 +181,16 @@ public sealed class GlyphAtlas : IDisposable
         _fallbackChain = fallbackChain;
         _bitmap = CreateAtlasBitmap(Math.Clamp(initialSize, 64, MaxAtlasSize));
         _canvas = new SKCanvas(_bitmap);
+
+        // Reserve a replacement glyph before normal content can fill the
+        // atlas. This keeps the frame builder's failure path visible instead
+        // of silently dropping a glyph when growth reaches MaxAtlasSize.
+        var fallbackKey = new GlyphKey(FallbackGrapheme, _typeface, _textSize, bold: false);
+        if (EnsureGlyph(fallbackKey, out var fallbackGlyph))
+        {
+            _fallbackGlyph = fallbackGlyph;
+            _hasFallbackGlyph = true;
+        }
     }
 
     private static SKBitmap CreateAtlasBitmap(int size)
@@ -163,8 +210,9 @@ public sealed class GlyphAtlas : IDisposable
 
     /// <summary>
     /// Ensures the glyph is rasterized and packed. Returns false (with the
-    /// atlas left valid) when the atlas is full — the caller falls back to
-    /// the direct Skia path for that glyph.
+    /// atlas left valid) when the requested glyph cannot be represented.
+    /// Call <see cref="TryGetFallbackGlyph"/> to render the reserved tofu
+    /// replacement in that case.
     /// </summary>
     public bool EnsureGlyph(GlyphKey key, out GlyphInfo info)
     {
@@ -357,7 +405,7 @@ public sealed class GlyphAtlas : IDisposable
             canvas.DrawText(key.Grapheme, 0f, -fm.Ascent, SKTextAlign.Left, font, paint);
         canvas.Flush();
 
-        var pixmap = new SKPixmap();
+        using var pixmap = new SKPixmap();
         if (!surface.PeekPixels(pixmap))
         {
             return new GlyphRaster(surface.Snapshot(), 0, 0, 0, 0, advance, -fm.Ascent, 0f, 0f);

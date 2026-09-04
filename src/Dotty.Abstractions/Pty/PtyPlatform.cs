@@ -13,22 +13,22 @@ public static class PtyPlatform
     /// Gets a value indicating whether the current platform is Windows.
     /// </summary>
     public static bool IsWindows => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-    
+
     /// <summary>
     /// Gets a value indicating whether the current platform is Linux.
     /// </summary>
     public static bool IsLinux => RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
-    
+
     /// <summary>
     /// Gets a value indicating whether the current platform is macOS.
     /// </summary>
     public static bool IsMacOS => RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
-    
+
     /// <summary>
     /// Gets a value indicating whether the current platform is a Unix-like system (Linux or macOS).
     /// </summary>
     public static bool IsUnix => IsLinux || IsMacOS;
- 
+
     /// <summary>
     /// Runtime identifiers supported by the current release artifact policy.
     /// </summary>
@@ -69,7 +69,7 @@ public static class PtyPlatform
     /// </summary>
     public static bool IsSupportedArchitecture =>
         ProcessArchitecture is Architecture.X64 or Architecture.Arm64;
-    
+
     /// <summary>
     /// Gets a value indicating whether ConPTY is supported on this Windows version.
     /// ConPTY requires Windows 10 version 1809 (build 17763) or later.
@@ -79,7 +79,7 @@ public static class PtyPlatform
         get
         {
             if (!IsWindows) return false;
-            
+
             // ConPTY requires Windows 10 build 17763 (version 1809) or later
             // Windows 10 build numbers: 10240 (1507), 10586 (1511), 14393 (1607), 
             // 15063 (1703), 16299 (1709), 17134 (1803), 17763 (1809), etc.
@@ -87,7 +87,7 @@ public static class PtyPlatform
             return osVersion.Build >= 17763;
         }
     }
-    
+
     /// <summary>
     /// Gets the default shell path for the current platform.
     /// </summary>
@@ -105,16 +105,16 @@ public static class PtyPlatform
             var pwshPath = GetPowerShellCorePath();
             if (!string.IsNullOrEmpty(pwshPath))
                 return pwshPath!;
-            
+
             // Last-resort fallback for unusual locked-down environments.
             return Environment.GetEnvironmentVariable("ComSpec") ?? "cmd.exe";
         }
-        
+
         // Unix-like systems
         var shell = Environment.GetEnvironmentVariable("SHELL");
         if (!string.IsNullOrEmpty(shell) && System.IO.File.Exists(shell))
             return shell;
-        
+
         // Common fallback shells
         string[] fallbackShells = { "/bin/bash", "/bin/zsh", "/bin/sh" };
         foreach (var sh in fallbackShells)
@@ -122,10 +122,10 @@ public static class PtyPlatform
             if (System.IO.File.Exists(sh))
                 return sh;
         }
-        
+
         return "/bin/sh";
     }
-    
+
     /// <summary>
     /// Attempts to find PowerShell Core (pwsh.exe) on Windows.
     /// </summary>
@@ -136,13 +136,13 @@ public static class PtyPlatform
             @"C:\Program Files\PowerShell\7\pwsh.exe",
             @"C:\Program Files\PowerShell\6\pwsh.exe",
         };
-        
+
         foreach (var path in commonPaths)
         {
             if (System.IO.File.Exists(path))
                 return path;
         }
-        
+
         // Try to find via PATH
         var pathEnv = Environment.GetEnvironmentVariable("PATH");
         if (!string.IsNullOrEmpty(pathEnv))
@@ -154,10 +154,10 @@ public static class PtyPlatform
                     return fullPath;
             }
         }
-        
+
         return null;
     }
-    
+
     /// <summary>
     /// Attempts to find Windows PowerShell (powershell.exe).
     /// </summary>
@@ -170,7 +170,7 @@ public static class PtyPlatform
             if (System.IO.File.Exists(psPath))
                 return psPath;
         }
-        
+
         return null;
     }
 }

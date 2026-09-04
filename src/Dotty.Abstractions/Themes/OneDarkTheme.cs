@@ -13,7 +13,7 @@ public sealed class OneDarkTheme : ColorSchemeBase
     // One Dark color palette
     // Background: #282C34 -> 0xFF282C34
     // Foreground: #ABB2BF -> 0xFFABB2BF
-    
+
     // ANSI colors (adapted from One Dark syntax colors)
     // Black: #282C34, Red: #E06C75, Green: #98C379, Yellow: #E5C07B
     // Blue: #61AFEF, Magenta: #C678DD, Cyan: #56B6C2, White: #ABB2BF

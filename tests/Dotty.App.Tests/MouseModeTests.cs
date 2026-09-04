@@ -391,23 +391,27 @@ public class MouseModeTests
         public List<(int button, int col, int row, bool isPress)> MouseEventCalls { get; } = new();
 
         object? ITerminalHandler.Buffer => null;
-        event Action<string>? ITerminalHandler.RenderRequested {
-            add {}
-            remove {}
+        event Action<string>? ITerminalHandler.RenderRequested
+        {
+            add { }
+            remove { }
         }
-        event Action<string>? ITerminalHandler.ClipboardWriteRequested {
-            add {}
-            remove {}
+        event Action<string>? ITerminalHandler.ClipboardWriteRequested
+        {
+            add { }
+            remove { }
         }
-        event Action<string>? ITerminalHandler.TitleChanged {
-            add {}
-            remove {}
+        event Action<string>? ITerminalHandler.TitleChanged
+        {
+            add { }
+            remove { }
         }
-        event Action<string>? ITerminalHandler.LinkOpened {
-            add {}
-            remove {}
+        event Action<string>? ITerminalHandler.LinkOpened
+        {
+            add { }
+            remove { }
         }
-        void ITerminalHandler.OnHyperlink(string uri) {} 
+        void ITerminalHandler.OnHyperlink(string uri) { }
         // add { } remove { } }
 
         void ITerminalHandler.RequestRenderExtern() { }

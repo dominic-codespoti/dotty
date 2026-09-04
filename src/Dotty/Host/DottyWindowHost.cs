@@ -171,7 +171,7 @@ internal static class DottyWindowHost
         _luaHost.ConfigReloaded += () => OnConfigChanged(UserConfigService.Current);
         _keybindings.RegisterDefaults();
         _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
-        int barRows = _showTabBar ? 1 : 0;
+        int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
         float topOffset = barRows * _cellHeight * _scale;
         _window.Size = new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale));
         StartControlServer();
@@ -217,7 +217,7 @@ internal static class DottyWindowHost
             config.Font.LineHeight,
             _scale);
     }
- 
+
     private static void RefreshFontResources()
     {
         var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
@@ -252,7 +252,7 @@ internal static class DottyWindowHost
         float padX = (float)(pad.Left + pad.Right) * _scale;
         float padY = (float)(pad.Top + pad.Bottom) * _scale;
 
-        int barRows = _showTabBar ? 1 : 0;
+        int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
         float topOffset = barRows * _cellHeight * _scale;
 
         _cols = Math.Max(1, (int)((size.X - padX) / (_cellWidth * _scale)));
@@ -506,6 +506,7 @@ internal static class DottyWindowHost
         {
             _renderer.Render(
                 ReadOnlySpan<CellInstance>.Empty,
+                ReadOnlySpan<ChromeQuadInstance>.Empty,
                 _atlas.Width,
                 _atlas.Height,
                 framebufferWidth,
@@ -541,7 +542,7 @@ internal static class DottyWindowHost
         var padding = UserConfigService.Current.Window.Padding;
         float padLeft = (float)padding.Left * _scale;
         float padTop = (float)padding.Top * _scale;
-        int barRows = _showTabBar ? 1 : 0;
+        int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
 
         var frame = _sceneComposer.Compose(
             activeTab,
@@ -566,10 +567,13 @@ internal static class DottyWindowHost
                 _keyboardDispatcher?.SearchQuery ?? string.Empty,
                 _keyboardDispatcher?.ActiveMatchIndex ?? -1,
                 _keyboardDispatcher?.SearchMatches?.Count ?? 0),
-            _activeContextMenu);
+            _activeContextMenu,
+            _mouseController?.HoveredTabIndex ?? -1,
+            _mouseController?.HoveredTabHitType ?? TabBarHitType.None);
 
         _renderer.Render(
             frame.AsSpan(),
+            frame.AsChromeSpan(),
             _atlas.Width,
             _atlas.Height,
             framebufferWidth,
@@ -583,7 +587,9 @@ internal static class DottyWindowHost
             true,
             padLeft,
             padTop,
-            barRows);
+            barRows,
+            frame.MenuInstanceStart,
+            frame.MenuChromeStart);
         _window.SwapBuffers();
     }
 
@@ -607,7 +613,7 @@ internal static class DottyWindowHost
         _cursorBlinkVisible = true;
         _lastCursorBlinkTimestampMs = GetClockMilliseconds();
     }
- 
+
     private static void OnWindowFocusChanged(bool focused)
     {
         WindowFocusRouter.Route(
@@ -720,7 +726,7 @@ internal static class DottyWindowHost
             {
                 var size = _window.FramebufferSize;
                 var padding = UserConfigService.Current.Window.Padding;
-                int barRows = _showTabBar ? 1 : 0;
+                int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
                 return new TerminalMouseGeometry(
                     Scale: _scale,
                     CellWidth: _cellWidth,
@@ -756,7 +762,7 @@ internal static class DottyWindowHost
 
         public void ClearTerminal(TerminalTab activeTab) =>
             activeTab.Session.WriteInput(new byte[] { 0x0c });
- 
+
         public void WriteInput(TerminalTab activeTab, byte[] bytes) =>
             activeTab.Session.WriteInput(bytes);
 

@@ -34,8 +34,8 @@ public sealed class UnixPty : IPty
     public PtyErrorCode? LastErrorCode { get; private set; }
 
     /// <inheritdoc />
-    public bool IsRunning 
-    { 
+    public bool IsRunning
+    {
         get
         {
             try
@@ -75,8 +75,8 @@ public sealed class UnixPty : IPty
 
     /// <inheritdoc />
     public void Start(
-        string? shell = null, 
-        int columns = 80, 
+        string? shell = null,
+        int columns = 80,
         int rows = 24,
         string? workingDirectory = null,
         System.Collections.Generic.IDictionary<string, string>? environmentVariables = null)
@@ -210,7 +210,7 @@ public sealed class UnixPty : IPty
                 }
                 catch { }
             };
-            
+
             // Enable raising events AFTER handler is attached
             // This ensures we don't miss any exit events
             _helperProcess.EnableRaisingEvents = true;
@@ -280,7 +280,7 @@ public sealed class UnixPty : IPty
                     {
                         // Try graceful termination by closing input
                         _inputStream?.Close();
-                        
+
                         // Wait a bit for graceful exit
                         if (!_helperProcess.WaitForExit(2000))
                         {
@@ -312,7 +312,7 @@ public sealed class UnixPty : IPty
             // Convert TaskCanceledException to OperationCanceledException for consistent API behavior
             throw new OperationCanceledException(cancellationToken);
         }
-        
+
         return _helperProcess.ExitCode;
     }
 
@@ -325,7 +325,7 @@ public sealed class UnixPty : IPty
                 return;
 
             Kill(force: true);
-            
+
             try { _inputStream?.Dispose(); } catch { }
             try { _outputStream?.Dispose(); } catch { }
             try { _errorStream?.Dispose(); } catch { }
@@ -436,7 +436,7 @@ public sealed class UnixPty : IPty
         return name is "sh" or "bash" or "zsh" or "fish" or "dash"
             or "ksh" or "csh" or "tcsh" or "pwsh" or "powershell";
     }
- 
+
     private static List<string> ParseCommandLine(string command)
     {
         var arguments = new List<string>();

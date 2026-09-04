@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using Dotty.Abstractions.Themes;
 using Dotty.Rendering.Gpu;
+using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.Selection;
 using Dotty.Runtime.Tabs;
@@ -143,5 +145,51 @@ public sealed class TerminalSceneComposerTests
             new SearchOverlayRenderState(false, string.Empty, -1, 0),
             null);
         Assert.Contains(frame.Instances.AsSpan(0, frame.InstanceCount).ToArray(), instance => instance.BgA == 50);
+    }
+
+    [Fact]
+    public void Compose_ContextMenuRecordsOverlayRangesAfterBaseScene()
+    {
+        using var tab = new TerminalTab(rows: 4, columns: 20);
+        using var manager = new TerminalTabManager();
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var selection = new TextSelectionService();
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f, selection);
+        var theme = BuiltInThemes.DarkPlus;
+        var menu = new ContextMenuModel(
+            x: 40f,
+            y: 20f,
+            items: new List<ContextMenuItem>
+            {
+                new("copy", "Copy", "Ctrl+C", null),
+                ContextMenuItem.Separator(),
+                new("close", "Close", "Ctrl+W", null)
+            });
+
+        var frame = composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            new SgrColorArgb(0x803385DB),
+            framebufferWidth: 400,
+            framebufferHeight: 160,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: 1,
+            rows: 4,
+            columns: 20,
+            padding: NoPadding(),
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0),
+            activeContextMenu: menu);
+
+        Assert.InRange(frame.MenuInstanceStart, 0, frame.InstanceCount - 1);
+        Assert.InRange(frame.MenuChromeStart, 0, frame.ChromeQuadCount - 1);
+        Assert.True(frame.MenuInstanceStart < frame.InstanceCount);
+        Assert.True(frame.MenuChromeStart < frame.ChromeQuadCount);
     }
 }

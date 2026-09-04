@@ -8,7 +8,7 @@ namespace Dotty.Performance.Tests.Data;
 public static class TestDataGenerator
 {
     private static readonly Random Random = new(42); // Seeded for reproducibility
-    
+
     // Sample text content for realistic workloads
     private static readonly string[] CodeSamples = new[]
     {
@@ -93,7 +93,7 @@ public static class TestDataGenerator
     {
         var sb = new StringBuilder(charCount);
         int remaining = charCount;
-        
+
         while (remaining > 0)
         {
             string line = CodeSamples[Random.Next(CodeSamples.Length)];
@@ -120,7 +120,7 @@ public static class TestDataGenerator
     {
         var sb = new StringBuilder(charCount * 2);
         int remaining = charCount;
-        
+
         while (remaining > 0)
         {
             // Add ANSI code with probability based on density
@@ -134,7 +134,7 @@ public static class TestDataGenerator
             {
                 word = word.Substring(0, remaining);
             }
-            
+
             sb.Append(word);
             sb.Append(' ');
             remaining -= word.Length + 1;
@@ -162,7 +162,7 @@ public static class TestDataGenerator
     {
         var sb = new StringBuilder(charCount * 2);
         int remaining = charCount;
-        
+
         while (remaining > 0)
         {
             // Add 256-color foreground
@@ -184,7 +184,7 @@ public static class TestDataGenerator
             {
                 word = word.Substring(0, remaining);
             }
-            
+
             sb.Append(word);
             sb.Append(' ');
             remaining -= word.Length + 1;
@@ -206,7 +206,7 @@ public static class TestDataGenerator
     {
         var sb = new StringBuilder(charCount * 3);
         int remaining = charCount;
-        
+
         while (remaining > 0)
         {
             // Add TrueColor foreground
@@ -223,7 +223,7 @@ public static class TestDataGenerator
             {
                 word = word.Substring(0, remaining);
             }
-            
+
             sb.Append(word);
             sb.Append(' ');
             remaining -= word.Length + 1;
@@ -240,7 +240,7 @@ public static class TestDataGenerator
     {
         var sb = new StringBuilder(charCount * 2);
         int remaining = charCount;
-        
+
         while (remaining > 0)
         {
             int choice = Random.Next(10);
@@ -276,17 +276,17 @@ public static class TestDataGenerator
     public static byte[] GenerateLogOutput(int lineCount)
     {
         var sb = new StringBuilder(lineCount * 100);
-        
+
         for (int i = 0; i < lineCount; i++)
         {
             var logLine = LogSamples[i % LogSamples.Length];
-            
+
             // Add color based on log level
             string colorCode = logLine.Contains("[ERROR]") ? "\u001b[31m" :
                               logLine.Contains("[WARN]") ? "\u001b[33m" :
                               logLine.Contains("[DEBUG]") ? "\u001b[36m" :
                               "\u001b[32m";
-            
+
             sb.Append(colorCode);
             sb.Append(logLine);
             sb.Append("\u001b[0m\n");
@@ -301,17 +301,17 @@ public static class TestDataGenerator
     public static byte[] GenerateShellSession(int commandCount)
     {
         var sb = new StringBuilder(commandCount * 200);
-        
+
         for (int i = 0; i < commandCount; i++)
         {
             // Prompt
             sb.Append(ShellPrompts[i % ShellPrompts.Length]);
-            
+
             // Command (colored)
             sb.Append("\u001b[1m");
             sb.Append(GetRandomCommand());
             sb.Append("\u001b[0m\n");
-            
+
             // Output
             int outputLines = Random.Next(1, 10);
             for (int j = 0; j < outputLines; j++)
@@ -337,7 +337,7 @@ public static class TestDataGenerator
     public static byte[] GenerateScrollingWorkload(int lines)
     {
         var sb = new StringBuilder(lines * 80);
-        
+
         for (int i = 0; i < lines; i++)
         {
             sb.Append($"[{i:D6}] ");
@@ -354,10 +354,10 @@ public static class TestDataGenerator
     public static byte[] GenerateFullScreenRedraw(int rows, int cols)
     {
         var sb = new StringBuilder(rows * cols * 2);
-        
+
         // Clear screen and home cursor
         sb.Append("\u001b[2J\u001b[H");
-        
+
         for (int row = 0; row < rows; row++)
         {
             for (int col = 0; col < cols; col++)
@@ -367,11 +367,11 @@ public static class TestDataGenerator
                     // Add some color changes
                     sb.Append($"\u001b[{Random.Next(30, 38)}m");
                 }
-                
+
                 char c = (char)('A' + Random.Next(26));
                 sb.Append(c);
             }
-            
+
             if (row < rows - 1)
             {
                 sb.Append('\n');
@@ -388,29 +388,29 @@ public static class TestDataGenerator
     {
         var updates = new List<byte[]>();
         var sb = new StringBuilder();
-        
+
         for (int i = 0; i < updateCount; i++)
         {
             sb.Clear();
-            
+
             // Random cursor movement
             if (Random.Next(5) == 0)
             {
                 sb.Append($"\u001b[{Random.Next(1, 25)};{Random.Next(1, 80)}H");
             }
-            
+
             // Add some text
             for (int j = 0; j < charsPerUpdate; j++)
             {
                 sb.Append(GetRandomWord());
                 sb.Append(' ');
-                
+
                 if (Random.Next(20) == 0)
                 {
                     sb.Append('\n');
                 }
             }
-            
+
             updates.Add(Encoding.UTF8.GetBytes(sb.ToString()));
         }
 
@@ -423,7 +423,7 @@ public static class TestDataGenerator
     public static byte[] GenerateMouseEvents(int eventCount)
     {
         var sb = new StringBuilder(eventCount * 20);
-        
+
         for (int i = 0; i < eventCount; i++)
         {
             int button = Random.Next(4);
@@ -444,7 +444,7 @@ public static class TestDataGenerator
     public static byte[] GenerateOscSequences(int count)
     {
         var sb = new StringBuilder(count * 100);
-        
+
         for (int i = 0; i < count; i++)
         {
             int oscCode = Random.Next(4);
@@ -455,7 +455,7 @@ public static class TestDataGenerator
                 2 => $"\u001b]8;;https://example.com/{i}\u0007", // Hyperlink
                 _ => $"\u001b]52;c;{Convert.ToBase64String(Encoding.UTF8.GetBytes($"clipboard{i}"))}\u0007" // Clipboard
             };
-            
+
             sb.Append(sequence);
         }
 
@@ -479,15 +479,15 @@ public static class TestDataGenerator
     {
         string[] words = new[]
         {
-            "terminal", "emulator", "performance", "benchmark", 
-            "rendering", "parsing", "ansi", "sequence", 
+            "terminal", "emulator", "performance", "benchmark",
+            "rendering", "parsing", "ansi", "sequence",
             "cursor", "scroll", "buffer", "memory",
             "throughput", "latency", "optimization", "dotnet",
             "async", "await", "span", "memory",
             "console", "output", "input", "command",
             "shell", "bash", "zsh", "fish"
         };
-        
+
         return words[Random.Next(words.Length)];
     }
 
@@ -500,7 +500,7 @@ public static class TestDataGenerator
             "dotnet build", "npm install", "cargo build",
             "python script.py", "vim file.txt", "ssh server"
         };
-        
+
         return commands[Random.Next(commands.Length)];
     }
 }

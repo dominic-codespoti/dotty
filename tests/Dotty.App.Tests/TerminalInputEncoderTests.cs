@@ -256,4 +256,4 @@ public class TerminalInputEncoderTests
         Assert.Null(encoder.Encode(TerminalKey.Unknown, TerminalKeyModifiers.None));
     }
 }
- 
+

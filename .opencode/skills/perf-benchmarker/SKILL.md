@@ -84,7 +84,7 @@ python3 artifacts/perf/terminal_output_bench.py --runs 3 --lines 500000
 python3 artifacts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include dotty,kitty
 
 # Custom Dotty binary (e.g. ReadyToRun publish)
-python3 artifacts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include dotty --app /path/to/Dotty.App
+python3 artifacts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include dotty --app /path/to/dotty
 ```
 
 ### How It Works
@@ -121,7 +121,7 @@ Launches Dotty as a real GUI app, communicates over TCP, and measures tab creati
 
 ```bash
 # Build Release first
-dotnet build src/Dotty.App/Dotty.App.csproj -c Release
+dotnet build src/Dotty/Dotty.csproj -c Release
 
 # Eager tabs (default): each tab is activated immediately
 python3 artifacts/perf/gui_harness_bench.py --runs 2 --new-tabs 20 --switches 200
@@ -173,12 +173,12 @@ Microbenchmarks always run under the JIT. The cross-terminal harness can test ei
 
 ```bash
 # JIT build
-dotnet build src/Dotty.App/Dotty.App.csproj -c Release
-python3 artifacts/perf/terminal_output_bench.py --app src/Dotty.App/bin/Release/net10.0/Dotty.App
+dotnet build src/Dotty/Dotty.csproj -c Release
+python3 artifacts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/dotty
 
 # R2R publish
-dotnet publish src/Dotty.App/Dotty.App.csproj -c Release -r linux-x64 --self-contained true -p:PublishReadyToRun=true
-python3 artifacts/perf/terminal_output_bench.py --app src/Dotty.App/bin/Release/net10.0/linux-x64/publish/Dotty.App
+dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained true -p:PublishReadyToRun=true
+python3 artifacts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/linux-x64/publish/dotty
 ```
 
 The harness auto-detects the R2R binary if present.

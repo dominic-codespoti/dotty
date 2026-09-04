@@ -16,7 +16,7 @@ public class ThemeResolver
     {
         _themes = new Dictionary<string, ThemeData>(StringComparer.OrdinalIgnoreCase);
         _aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        
+
         InitializeThemes();
     }
 

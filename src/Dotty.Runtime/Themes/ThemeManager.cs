@@ -106,7 +106,7 @@ public sealed class ThemeManager
         // Notify subscribers
         ThemeChanged?.Invoke(this, new ThemeChangedEventArgs(previousTheme, theme));
 
-        
+
         return true;
     }
 
@@ -117,14 +117,14 @@ public sealed class ThemeManager
     public void LoadUserThemes()
     {
         var previousUserThemes = UserThemes.ToList();
-        
+
         _registry.Refresh();
-        
+
         // If the current theme was a user theme that no longer exists, 
         // or if it was overridden, we may need to reapply
         var currentName = GetThemeName(_currentTheme);
         var newTheme = _registry.GetByName(currentName);
-        
+
         if (newTheme != null && !ReferenceEquals(newTheme, _currentTheme))
         {
             // The theme was reloaded - reapply it
@@ -179,7 +179,7 @@ public sealed class ThemeManager
         b = b <= 0.03928 ? b / 12.92 : Math.Pow((b + 0.055) / 1.055, 2.4);
 
         var luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        
+
         // Dark if luminance < 0.5
         return luminance < 0.5;
     }
@@ -192,7 +192,7 @@ public sealed class ThemeManager
         // Try to find the theme in the registry to get its name
         // This is a heuristic - we can't directly get the name from IColorScheme
         // So we compare with known themes
-        
+
         foreach (var builtin in Dotty.Abstractions.Themes.BuiltInThemes.AllThemes)
         {
             if (ThemesEqual(theme, builtin))
@@ -201,7 +201,7 @@ public sealed class ThemeManager
                 return GetBuiltInThemeName(builtin);
             }
         }
-        
+
         return "Unknown";
     }
 

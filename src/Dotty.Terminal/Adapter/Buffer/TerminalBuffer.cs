@@ -109,8 +109,15 @@ public partial class TerminalBuffer : IRenderSource
 
     public void Resize(int rows, int cols)
     {
+        if (rows == Rows && cols == Columns)
+            return;
+
         lock (SyncRoot)
+        {
+            if (rows == Rows && cols == Columns)
+                return;
             ResizeWithReflow(rows, cols);
+        }
     }
 
     public void SetAlternateScreen(bool active)
@@ -217,7 +224,7 @@ public partial class TerminalBuffer : IRenderSource
         CursorShape = shape;
         CursorBlinking = blinking;
     }
- 
+
     public void SetCursorVisible(bool visible) => _cursor.SetVisible(visible);
 
 
@@ -807,9 +814,10 @@ public partial class TerminalBuffer : IRenderSource
         int regionHeight = bottom - row + 1;
         if (count >= regionHeight)
         {
-            // clear region: every row is exposed; plain identity+epoch bump.
+            // clear region: every row is exposed; use ClearRow (vectorized)
+            // instead of per-cell ClearCell which does 2× row scan per cell.
             for (int r = row; r <= bottom; r++)
-            for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
+                ActiveBuffer.ClearRow(r);
             MarkRowRangeDirty(row, bottom - row + 1);
             return;
         }
@@ -834,7 +842,7 @@ public partial class TerminalBuffer : IRenderSource
         }
         // clear inserted lines
         for (int r = row; r < row + count; r++)
-        for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
+            ActiveBuffer.ClearRow(r);
         BumpIdentity(row, regionHeight);
     }
 
@@ -847,9 +855,9 @@ public partial class TerminalBuffer : IRenderSource
         int regionHeight = bottom - row + 1;
         if (count >= regionHeight)
         {
-            // clear region: every row is exposed; plain identity+epoch bump.
+            // clear region: every row is exposed; use ClearRow (vectorized)
             for (int r = row; r <= bottom; r++)
-            for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
+                ActiveBuffer.ClearRow(r);
             MarkRowRangeDirty(row, bottom - row + 1);
             return;
         }
@@ -874,7 +882,7 @@ public partial class TerminalBuffer : IRenderSource
         }
         // clear trailing lines
         for (int r = bottom - count + 1; r <= bottom; r++)
-        for (int c = 0; c < Columns; c++) ActiveBuffer.ClearCell(r, c);
+            ActiveBuffer.ClearRow(r);
         BumpIdentity(row, regionHeight);
     }
 
@@ -915,7 +923,7 @@ public partial class TerminalBuffer : IRenderSource
     {
         if (string.IsNullOrEmpty(hex) || hex.Length < 7 || hex[0] != '#')
             return default;
-        
+
         // Parse hex color #RRGGBB
         if (uint.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out uint rgb))
         {

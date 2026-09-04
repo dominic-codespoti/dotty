@@ -67,7 +67,7 @@ public class StartupBenchmarks : PerformanceTestBase
     public TerminalBuffer Init_TerminalBuffer_80x24() => new(24, 80);
 
     [Benchmark(Description = "Init: TerminalBuffer with Scrollback")]
-    public TerminalBuffer Init_TerminalBuffer_WithScrollback() => 
+    public TerminalBuffer Init_TerminalBuffer_WithScrollback() =>
         new(24, 80);
 
     #endregion

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
@@ -14,6 +15,11 @@ public class Program
 {
     private const string OutputDirectory = "./BenchmarkDotNet.Artifacts/performance";
 
+    private static readonly string[] ValidFilterCategories =
+    [
+        "parser", "memory", "rendering", "silk", "startup", "throughput", "bulk"
+    ];
+
     public static void Main(string[] args)
     {
         Console.WriteLine("=== Dotty Terminal Emulator - Performance Test Suite ===");
@@ -24,86 +30,140 @@ public class Program
         var mode = GetBenchmarkMode(args);
         var filter = GetBenchmarkFilter(args);
 
-        // Setup configuration
-        var benchmarkConfig = mode switch
-        {
-            "quick" or "ci" => CreateQuickConfig(),
-            "memory" => CreateMemoryConfig(),
-            "parser" => CreateParserConfig(),
-            "rendering" => CreateRenderingConfig(),
-            _ => CreateDetailedConfig()
-        };
-
-        // Apply filter if specified
+        // Validate filter if specified
         if (!string.IsNullOrEmpty(filter))
         {
-            benchmarkConfig = benchmarkConfig.WithOptions(ConfigOptions.DisableLogFile);
-            Console.WriteLine($"Running benchmarks matching: {filter}");
+            bool isValid = ValidFilterCategories.Any(c => filter.Contains(c, StringComparison.OrdinalIgnoreCase));
+            if (!isValid)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"Error: Unknown filter '{filter}'.");
+                Console.ResetColor();
+                Console.WriteLine($"Available categories: {string.Join(", ", ValidFilterCategories)}");
+                return;
+            }
         }
-
-        Console.WriteLine($"Configuration: {mode ?? "detailed"}");
-        Console.WriteLine();
-
-        // Create output directory
-        Directory.CreateDirectory(OutputDirectory);
-
-        // Run benchmarks
-        var summaries = new List<BenchmarkDotNet.Reports.Summary>();
-
-        if (string.IsNullOrEmpty(filter) || filter.Contains("parser"))
+        else
         {
-            Console.WriteLine("Running Parser Benchmarks...");
-            summaries.Add(BenchmarkRunner.Run<ParserBenchmarks>(benchmarkConfig));
-            summaries.Add(BenchmarkRunner.Run<ParserMicroBenchmarks>(benchmarkConfig));
+            // Melt warning when running full suite without filter
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.WriteLine("WARNING: Running full performance benchmark suite without --filter.");
+            Console.WriteLine("This will consume 100% CPU across multiple benchmarks for 45s+ and generate high system load.");
+            Console.WriteLine("Tip: Target specific benchmarks using '--filter <category>' (e.g., '--filter bulk', '--filter parser') or use '--mode quick'.");
+            Console.ResetColor();
+            Console.WriteLine();
         }
 
-        if (string.IsNullOrEmpty(filter) || filter.Contains("memory"))
+        try
         {
-            Console.WriteLine("Running Memory Benchmarks...");
-            summaries.Add(BenchmarkRunner.Run<MemoryBenchmarks>(benchmarkConfig));
-        }
+            // Setup configuration
+            var benchmarkConfig = mode switch
+            {
+                "quick" or "ci" => CreateQuickConfig(),
+                "memory" => CreateMemoryConfig(),
+                "parser" => CreateParserConfig(),
+                "rendering" => CreateRenderingConfig(),
+                _ => CreateDetailedConfig()
+            };
 
-        if (string.IsNullOrEmpty(filter) || filter.Contains("rendering"))
+            // Apply filter if specified
+            if (!string.IsNullOrEmpty(filter))
+            {
+                benchmarkConfig = benchmarkConfig.WithOptions(ConfigOptions.DisableLogFile);
+                Console.WriteLine($"Running benchmarks matching: {filter}");
+            }
+
+            Console.WriteLine($"Configuration: {mode ?? "detailed"}");
+            Console.WriteLine();
+
+            // Create output directory
+            Directory.CreateDirectory(OutputDirectory);
+
+            // Run benchmarks
+            var summaries = new List<BenchmarkDotNet.Reports.Summary>();
+
+            if (string.IsNullOrEmpty(filter) || filter.Contains("parser", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Parser Benchmarks...");
+                summaries.Add(BenchmarkRunner.Run<ParserBenchmarks>(benchmarkConfig));
+                summaries.Add(BenchmarkRunner.Run<ParserMicroBenchmarks>(benchmarkConfig));
+            }
+
+            if (string.IsNullOrEmpty(filter) || filter.Contains("memory", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Memory Benchmarks...");
+                summaries.Add(BenchmarkRunner.Run<MemoryBenchmarks>(benchmarkConfig));
+            }
+
+            if (string.IsNullOrEmpty(filter) || filter.Contains("rendering", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Rendering Benchmarks...");
+                summaries.Add(BenchmarkRunner.Run<RenderingBenchmarks>(benchmarkConfig));
+            }
+            if (string.IsNullOrEmpty(filter) || filter.Contains("silk", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Silk CPU Rendering Benchmarks...");
+                summaries.Add(BenchmarkRunner.Run<SilkRenderingBenchmarks>(benchmarkConfig));
+            }
+
+            if (string.IsNullOrEmpty(filter) || filter.Contains("startup", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Startup Benchmarks...");
+                summaries.Add(BenchmarkRunner.Run<StartupBenchmarks>(benchmarkConfig));
+            }
+
+            if (string.IsNullOrEmpty(filter) || filter.Contains("throughput", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Throughput Benchmarks...");
+                summaries.Add(BenchmarkRunner.Run<ThroughputBenchmarks>(benchmarkConfig));
+                summaries.Add(BenchmarkRunner.Run<LatencyBenchmarks>(benchmarkConfig));
+            }
+
+            if (string.IsNullOrEmpty(filter) || filter.Contains("bulk", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Bulk Output Benchmarks...");
+                summaries.Add(BenchmarkRunner.Run<BulkOutputBenchmark>(benchmarkConfig));
+            }
+
+            // Generate reports
+            GenerateReports(summaries);
+
+            // Check for regressions if in CI mode
+            if (mode == "ci" || mode == "quick")
+            {
+                CheckRegressions(summaries);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("=== Performance Test Suite Complete ===");
+        }
+        finally
         {
-            Console.WriteLine("Running Rendering Benchmarks...");
-            summaries.Add(BenchmarkRunner.Run<RenderingBenchmarks>(benchmarkConfig));
+            DotNetBuildServerShutdown();
         }
-        if (string.IsNullOrEmpty(filter) || filter.Contains("silk", StringComparison.OrdinalIgnoreCase))
+    }
+
+    /// <summary>
+    /// Shuts down background MSBuild and Roslyn compiler build server daemons to prevent ghost processes from lingering.
+    /// </summary>
+    private static void DotNetBuildServerShutdown()
+    {
+        try
         {
-            Console.WriteLine("Running Silk CPU Rendering Benchmarks...");
-            summaries.Add(BenchmarkRunner.Run<SilkRenderingBenchmarks>(benchmarkConfig));
+            var psi = new ProcessStartInfo("dotnet", "build-server shutdown")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(5000);
         }
-
-        if (string.IsNullOrEmpty(filter) || filter.Contains("startup"))
+        catch
         {
-            Console.WriteLine("Running Startup Benchmarks...");
-            summaries.Add(BenchmarkRunner.Run<StartupBenchmarks>(benchmarkConfig));
+            // Non-critical cleanup; ignore failure
         }
-
-        if (string.IsNullOrEmpty(filter) || filter.Contains("throughput"))
-        {
-            Console.WriteLine("Running Throughput Benchmarks...");
-            summaries.Add(BenchmarkRunner.Run<ThroughputBenchmarks>(benchmarkConfig));
-            summaries.Add(BenchmarkRunner.Run<LatencyBenchmarks>(benchmarkConfig));
-        }
-
-        if (string.IsNullOrEmpty(filter) || filter.Contains("bulk"))
-        {
-            Console.WriteLine("Running Bulk Output Benchmarks...");
-            summaries.Add(BenchmarkRunner.Run<BulkOutputBenchmark>(benchmarkConfig));
-        }
-
-        // Generate reports
-        GenerateReports(summaries);
-
-        // Check for regressions if in CI mode
-        if (mode == "ci" || mode == "quick")
-        {
-            CheckRegressions(summaries);
-        }
-
-        Console.WriteLine();
-        Console.WriteLine("=== Performance Test Suite Complete ===");
     }
 
     private static IConfig CreateDetailedConfig() =>
@@ -210,7 +270,7 @@ public class Program
                 Console.WriteLine($"  - {regression}");
             }
             Console.WriteLine();
-            
+
             // Exit with error code in CI mode
             if (Environment.GetEnvironmentVariable("CI") == "true")
             {

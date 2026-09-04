@@ -85,7 +85,7 @@ public sealed class TerminalSearch
     public void SetBuffer(TerminalBuffer buffer)
     {
         if (buffer == null) throw new ArgumentNullException(nameof(buffer));
-        
+
         // Only update if it's a different buffer
         if (_buffer != buffer)
         {
@@ -312,7 +312,7 @@ public sealed class TerminalSearch
         // Skip continuation cells entirely so wide characters like "世界" 
         // appear consecutively in the output string for proper searching
         var sb = new System.Text.StringBuilder(_buffer.Columns);
-        
+
         for (int col = 0; col < _buffer.Columns; col++)
         {
             var cell = _buffer.GetCell(row, col);
@@ -336,7 +336,7 @@ public sealed class TerminalSearch
                 }
             }
         }
-        
+
         return sb.ToString();
     }
 }

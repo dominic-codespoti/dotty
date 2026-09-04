@@ -101,15 +101,15 @@ public class MoreReproTests
         var tb = new TerminalBuffer(rows: 30, columns: 120);
 
         for (int r = 25; r < 29; r++)
-        for (int c = 50; c < 100; c += 2)
-        {
-            tb.SetCursor(r, c);
-            tb.WriteText((c % 4 == 0 ? "界" : "o").AsSpan(), CellAttributes.Default);
-            if (c % 7 == 0)
+            for (int c = 50; c < 100; c += 2)
             {
-                tb.EraseLine(0);
+                tb.SetCursor(r, c);
+                tb.WriteText((c % 4 == 0 ? "界" : "o").AsSpan(), CellAttributes.Default);
+                if (c % 7 == 0)
+                {
+                    tb.EraseLine(0);
+                }
             }
-        }
 
         AssertNoOrphanedBases(tb);
     }

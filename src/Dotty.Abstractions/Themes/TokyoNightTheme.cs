@@ -13,7 +13,7 @@ public sealed class TokyoNightTheme : ColorSchemeBase
     // Tokyo Night color palette
     // Background: #1A1B26 -> 0xFF1A1B26 (bg)
     // Foreground: #A9B1D6 -> 0xFFA9B1D6 (fg)
-    
+
     // ANSI colors
     // Black: #414868, Red: #F7768E, Green: #73DACA, Yellow: #E0AF68
     // Blue: #7AA2F7, Magenta: #BB9AF7, Cyan: #7DCFFF, White: #787C99

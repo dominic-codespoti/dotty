@@ -868,7 +868,7 @@ cd /path/to/dotty
 dotnet build
 
 # Or build the specific project
-dotnet build src/Dotty.App/Dotty.App.csproj
+dotnet build src/Dotty/Dotty.csproj
 ```
 
 #### Full Rebuild (Clean Build)
@@ -896,7 +896,7 @@ cd /path/to/dotty
 dotnet build --configuration Release
 
 # Or with self-contained publish
-dotnet publish src/Dotty.App/Dotty.App.csproj \
+dotnet publish src/Dotty/Dotty.csproj \
     --configuration Release \
     --self-contained \
     --runtime linux-x64 \
@@ -907,10 +907,10 @@ dotnet publish src/Dotty.App/Dotty.App.csproj \
 
 ```bash
 # Run from build output
-./src/Dotty.App/bin/Debug/net8.0/Dotty.App
+./src/Dotty/bin/Debug/net10.0/dotty
 
 # Or if published
-./publish/Dotty.App
+./publish/dotty
 ```
 
 ### Build Verification
@@ -925,7 +925,7 @@ Check if your configuration was applied:
 
 2. **Run with verbose logging:**
    ```bash
-   DOTTY_LOG_LEVEL=Debug ./src/Dotty.App/bin/Debug/net8.0/Dotty.App
+   DOTTY_LOG_LEVEL=Debug ./src/Dotty/bin/Debug/net10.0/dotty
    ```
 
 3. **Check generated files** (optional):
@@ -940,7 +940,7 @@ Add an alias to your shell for quick rebuilding:
 
 ```bash
 # Add to ~/.bashrc or ~/.zshrc
-alias dotty-rebuild='cd /path/to/dotty && dotnet build && ./src/Dotty.App/bin/Debug/net8.0/Dotty.App'
+alias dotty-rebuild='cd /path/to/dotty && dotnet build && ./src/Dotty/bin/Debug/net10.0/dotty'
 ```
 
 Then simply run:
@@ -957,7 +957,7 @@ dotty-rebuild
 
 2. **Build only the app project** (skips tests):
    ```bash
-   dotnet build src/Dotty.App/Dotty.App.csproj
+   dotnet build src/Dotty/Dotty.csproj
    ```
 
 3. **Skip validation** (not recommended for production):

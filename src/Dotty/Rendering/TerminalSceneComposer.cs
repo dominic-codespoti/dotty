@@ -32,15 +32,33 @@ public sealed class TerminalSceneFrame
     public CellInstance[] Instances { get; }
     public int InstanceCount { get; }
     public HashSet<int> DirtyAtlasRows { get; }
+    public ChromeQuadInstance[] ChromeQuads { get; }
+    public int ChromeQuadCount { get; }
+    /// <summary>Original cell-instance index at which context-menu glyphs begin.</summary>
+    public int MenuInstanceStart { get; }
+    /// <summary>Chrome-quad index at which context-menu chrome begins.</summary>
+    public int MenuChromeStart { get; }
 
-    public TerminalSceneFrame(CellInstance[] instances, int instanceCount, HashSet<int> dirtyAtlasRows)
+    public TerminalSceneFrame(
+        CellInstance[] instances,
+        int instanceCount,
+        HashSet<int> dirtyAtlasRows,
+        ChromeQuadInstance[] chromeQuads,
+        int chromeQuadCount,
+        int menuInstanceStart = -1,
+        int menuChromeStart = -1)
     {
         Instances = instances;
         InstanceCount = instanceCount;
         DirtyAtlasRows = dirtyAtlasRows;
+        ChromeQuads = chromeQuads;
+        ChromeQuadCount = chromeQuadCount;
+        MenuInstanceStart = menuInstanceStart;
+        MenuChromeStart = menuChromeStart;
     }
 
     public ReadOnlySpan<CellInstance> AsSpan() => new(Instances, 0, InstanceCount);
+    public ReadOnlySpan<ChromeQuadInstance> AsChromeSpan() => new(ChromeQuads, 0, ChromeQuadCount);
 }
 
 /// <summary>
@@ -54,6 +72,7 @@ public sealed class TerminalSceneComposer
     private SKTypeface _typeface;
     private float _fontSize;
     private CellInstance[] _frameScratch = Array.Empty<CellInstance>();
+    private ChromeQuadInstance[] _chromeScratch = Array.Empty<ChromeQuadInstance>();
     private readonly HashSet<int> _dirtyAtlasRows = new();
 
     public TerminalSceneComposer(
@@ -94,7 +113,9 @@ public sealed class TerminalSceneComposer
         bool scrollbarHovered,
         bool scrollbarDragging,
         SearchOverlayRenderState searchOverlay,
-        ContextMenuModel? activeContextMenu)
+        ContextMenuModel? activeContextMenu,
+        int hoveredTabIndex = -1,
+        TabBarHitType hoveredTabHitType = TabBarHitType.None)
     {
         ArgumentNullException.ThrowIfNull(activeTab);
         ArgumentNullException.ThrowIfNull(tabManager);
@@ -106,17 +127,20 @@ public sealed class TerminalSceneComposer
         float padTop = (float)padding.Top * scale;
         float padX = (float)(padding.Left + padding.Right) * scale;
         float padY = (float)(padding.Top + padding.Bottom) * scale;
-        int barRows = showTabBar ? 1 : 0;
+        int barRows = showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, cellHeight) : 0;
         float topOffset = barRows * cellHeight * scale;
+        int maxInstances = checked(Math.Max(1024, rows * columns * 2 + 1024));
+        EnsureScratchCapacity(maxInstances);
+        int instanceCount = 0;
+        int chromeQuadCount = 0;
+        int menuInstanceStart = -1;
+        int menuChromeStart = -1;
+        _dirtyAtlasRows.Clear();
 
         float terminalWidth = Math.Max(10f, framebufferWidth - padX);
         float terminalHeight = Math.Max(10f, framebufferHeight - topOffset - padY);
         activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness: 2f);
 
-        int maxInstances = checked(Math.Max(1024, rows * columns * 2 + 1024));
-        EnsureScratchCapacity(maxInstances);
-        int instanceCount = 0;
-        _dirtyAtlasRows.Clear();
 
         foreach (var leaf in activeTab.PaneTree.Leaves)
         {
@@ -305,6 +329,7 @@ public sealed class TerminalSceneComposer
         if (showTabBar && tabManager.Count > 0)
         {
             EnsureScratchCapacity(instanceCount + 2048);
+            EnsureChromeScratchCapacity(chromeQuadCount + tabManager.Count * 4 + 8);
             int tabQuads = TabBarQuadBuilder.Build(
                 tabManager,
                 _atlas,
@@ -315,8 +340,13 @@ public sealed class TerminalSceneComposer
                 cellWidth * scale,
                 cellHeight * scale,
                 _frameScratch.AsSpan(instanceCount),
-                barRows * cellHeight * scale);
+                _chromeScratch.AsSpan(chromeQuadCount),
+                out int chromeQuadsWritten,
+                barRows * cellHeight * scale,
+                hoveredTabIndex,
+                hoveredTabHitType);
             instanceCount += tabQuads;
+            chromeQuadCount += chromeQuadsWritten;
         }
 
         if (searchOverlay.IsActive)
@@ -342,6 +372,8 @@ public sealed class TerminalSceneComposer
 
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
+            menuInstanceStart = instanceCount;
+            menuChromeStart = chromeQuadCount;
             var menuLayout = ContextMenuLayout.Calculate(
                 activeContextMenu,
                 framebufferWidth,
@@ -349,6 +381,7 @@ public sealed class TerminalSceneComposer
                 cellWidth * scale,
                 cellHeight * scale);
             EnsureScratchCapacity(instanceCount + 1024);
+            EnsureChromeScratchCapacity(chromeQuadCount + activeContextMenu.Items.Count * 2 + 8);
             int menuQuads = ContextMenuQuadBuilder.Build(
                 activeContextMenu,
                 menuLayout,
@@ -359,14 +392,33 @@ public sealed class TerminalSceneComposer
                 cellWidth * scale,
                 cellHeight * scale,
                 _frameScratch.AsSpan(instanceCount),
+                _chromeScratch.AsSpan(chromeQuadCount),
+                out int menuChromeWritten,
                 padLeft,
                 padTop);
             instanceCount += menuQuads;
+            chromeQuadCount += menuChromeWritten;
         }
 
         // The frame is consumed synchronously by the OpenGL host before the next
         // Compose call, so reuse the scratch buffers and avoid per-frame copies.
-        return new TerminalSceneFrame(_frameScratch, instanceCount, _dirtyAtlasRows);
+        return new TerminalSceneFrame(
+            _frameScratch,
+            instanceCount,
+            _dirtyAtlasRows,
+            _chromeScratch,
+            chromeQuadCount,
+            menuInstanceStart,
+            menuChromeStart);
+    }
+
+    private void EnsureChromeScratchCapacity(int required)
+    {
+        if (required <= _chromeScratch.Length)
+            return;
+
+        int capacity = Math.Max(required, _chromeScratch.Length == 0 ? 64 : _chromeScratch.Length * 2);
+        Array.Resize(ref _chromeScratch, capacity);
     }
 
     private void EnsureScratchCapacity(int required)

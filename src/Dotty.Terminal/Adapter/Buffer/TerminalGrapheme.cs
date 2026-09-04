@@ -48,7 +48,8 @@ public struct TerminalGrapheme : IEquatable<TerminalGrapheme>
         PoolIndex = -1;
     }
 
-    public override string ToString() { Span<char> span = stackalloc char[32]; int w = GraphemePool.GetSpan(this, span); return span.Slice(0, w).ToString(); } public override bool Equals(object? obj) => obj is TerminalGrapheme other && Equals(other); public override int GetHashCode() => HashCode.Combine(C0, C1, Length, PoolIndex); public static bool operator ==(TerminalGrapheme left, TerminalGrapheme right) => left.Equals(right); public static bool operator !=(TerminalGrapheme left, TerminalGrapheme right) => !(left == right); public bool Equals(TerminalGrapheme other)
+    public override string ToString() { Span<char> span = stackalloc char[32]; int w = GraphemePool.GetSpan(this, span); return span.Slice(0, w).ToString(); }
+    public override bool Equals(object? obj) => obj is TerminalGrapheme other && Equals(other); public override int GetHashCode() => HashCode.Combine(C0, C1, Length, PoolIndex); public static bool operator ==(TerminalGrapheme left, TerminalGrapheme right) => left.Equals(right); public static bool operator !=(TerminalGrapheme left, TerminalGrapheme right) => !(left == right); public bool Equals(TerminalGrapheme other)
     {
         return C0 == other.C0 && C1 == other.C1 && Length == other.Length && PoolIndex == other.PoolIndex;
     }

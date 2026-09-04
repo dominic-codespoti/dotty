@@ -13,7 +13,7 @@ public sealed class GruvboxLightTheme : ColorSchemeBase
     // Gruvbox Light color palette (light mode, medium contrast)
     // Background: #FBF1C7 -> 0xFFFBF1C7 (light0)
     // Foreground: #3C3836 -> 0xFF3C3836 (dark0)
-    
+
     // ANSI colors
     // Black: #3C3836, Red: #CC241D, Green: #98971A, Yellow: #D79921
     // Blue: #458588, Magenta: #B16286, Cyan: #689D6A, White: #7C6F64

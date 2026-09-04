@@ -365,14 +365,14 @@ namespace Dotty.Terminal.Parser
                 switch (final)
                 {
                     case 'J':
-                    {
-                        int mode = paramCount > 0 ? parsedParams[0] : 0;
-                        if (mode == 3)
-                            Handler?.OnClearScrollback();
-                        else if (mode == 0 || mode == 1 || mode == 2)
-                            Handler?.OnEraseDisplay(mode);
-                        break;
-                    }
+                        {
+                            int mode = paramCount > 0 ? parsedParams[0] : 0;
+                            if (mode == 3)
+                                Handler?.OnClearScrollback();
+                            else if (mode == 0 || mode == 1 || mode == 2)
+                                Handler?.OnEraseDisplay(mode);
+                            break;
+                        }
                     case 'K':
                         Handler?.OnEraseLine(paramCount > 0 ? parsedParams[0] : 0);
                         break;
@@ -413,14 +413,14 @@ namespace Dotty.Terminal.Parser
                         Handler?.OnRepeatCharacter(paramCount > 0 ? parsedParams[0] : 1);
                         break;
                     case 'g':
-                    {
-                        int mode = paramCount > 0 ? parsedParams[0] : 0;
-                        if (mode == 3)
-                            Handler?.OnClearAllTabStops();
-                        else if (mode == 0)
-                            Handler?.OnClearTabStop();
-                        break;
-                    }
+                        {
+                            int mode = paramCount > 0 ? parsedParams[0] : 0;
+                            if (mode == 3)
+                                Handler?.OnClearAllTabStops();
+                            else if (mode == 0)
+                                Handler?.OnClearTabStop();
+                            break;
+                        }
                     case 'L':
                         Handler?.OnInsertLines(paramCount > 0 ? parsedParams[0] : 1);
                         break;

@@ -12,7 +12,7 @@ public sealed class DarkPlusTheme : ColorSchemeBase
     // Colors from VS Code Dark+ theme
     // Background: #1E1E1E -> 0xFF1E1E1E
     // Foreground: #D4D4D4 -> 0xFFD4D4D4
-    
+
     // ANSI colors from VS Code terminal
     // Black: #000000, Red: #CD3131, Green: #0DBC79, Yellow: #E5E510
     // Blue: #2472C8, Magenta: #BC3FBC, Cyan: #11A8CD, White: #E5E5E5

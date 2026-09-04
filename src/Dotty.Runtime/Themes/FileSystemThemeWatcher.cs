@@ -143,10 +143,10 @@ public sealed class FileSystemThemeWatcher : IDisposable
 
         Debounce(() =>
         {
-            
+
             // Reload user themes (the deleted theme will be removed)
             _themeManager.LoadUserThemes();
-            
+
             ThemeFileChanged?.Invoke(this, new ThemeFileChangedEventArgs(e.FullPath, e.Name ?? Path.GetFileName(e.FullPath), WatcherChangeTypes.Deleted, null));
         });
     }
@@ -161,10 +161,10 @@ public sealed class FileSystemThemeWatcher : IDisposable
 
         Debounce(() =>
         {
-            
+
             // Reload user themes to pick up the rename
             _themeManager.LoadUserThemes();
-            
+
             ThemeFileChanged?.Invoke(this, new ThemeFileChangedEventArgs(e.FullPath, e.Name ?? Path.GetFileName(e.FullPath), WatcherChangeTypes.Renamed, null));
         });
     }
@@ -175,7 +175,7 @@ public sealed class FileSystemThemeWatcher : IDisposable
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
         Console.Error.WriteLine($"[FileSystemThemeWatcher] Watcher error: {e.GetException().Message}");
-        
+
         // Try to restart the watcher
         try
         {
@@ -216,7 +216,7 @@ public sealed class FileSystemThemeWatcher : IDisposable
     private void HandleFileChange(string fullPath, WatcherChangeTypes changeType)
     {
         var fileName = Path.GetFileName(fullPath);
-        
+
 
         // Wait a moment for the file to be fully written
         Thread.Sleep(50);

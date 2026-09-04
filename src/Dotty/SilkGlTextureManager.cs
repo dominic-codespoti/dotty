@@ -26,7 +26,7 @@ public sealed unsafe class SilkGlTextureManager : IDisposable
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
     }
- 
+
     public void SetAtlas(GlyphAtlas atlas)
     {
         ArgumentNullException.ThrowIfNull(atlas);
@@ -57,32 +57,32 @@ public sealed unsafe class SilkGlTextureManager : IDisposable
             return _textureId;
         }
 
-        SKBitmap bitmap = _atlas.AtlasBitmap;
-        if (bitmap == null || bitmap.IsNull)
-        {
-            return _textureId;
-        }
-
         if (_textureId == 0)
         {
             _textureId = _gl.GenTexture();
         }
 
         Bind();
-        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-        _gl.TexImage2D(
-            TextureTarget.Texture2D,
-            0,
-            InternalFormat.R8,
-            (uint)bitmap.Width,
-            (uint)bitmap.Height,
-            0,
-            PixelFormat.Red,
-            PixelType.UnsignedByte,
-            (void*)bitmap.GetPixels());
-        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        int uploadedVersion = _atlas.WithAtlasBitmap(bitmap =>
+        {
+            if (bitmap.IsNull)
+                return;
 
-        _lastUploadedVersion = currentVersion;
+            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+            _gl.TexImage2D(
+                TextureTarget.Texture2D,
+                0,
+                InternalFormat.R8,
+                (uint)bitmap.Width,
+                (uint)bitmap.Height,
+                0,
+                PixelFormat.Red,
+                PixelType.UnsignedByte,
+                (void*)bitmap.GetPixels());
+            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        });
+
+        _lastUploadedVersion = uploadedVersion;
         return _textureId;
     }
 

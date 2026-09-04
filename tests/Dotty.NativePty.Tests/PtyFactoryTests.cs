@@ -31,7 +31,7 @@ public class PtyFactoryTests
 
         // Assert
         pty.Should().NotBeNull("factory should return a PTY instance");
-        
+
         if (PtyPlatform.IsWindows)
         {
 #if WINDOWS
@@ -223,7 +223,7 @@ public class PtyFactoryTests
 
         // Assert - verify the PTY was created with default settings
         pty.IsRunning.Should().BeTrue();
-        
+
         // Cleanup
         pty.Kill(force: true);
     }
@@ -249,7 +249,7 @@ public class PtyFactoryTests
         // Assert
         pty.IsRunning.Should().BeTrue();
         pty.ProcessId.Should().BeGreaterThan(0);
-        
+
         // Cleanup
         pty.Kill(force: true);
     }
@@ -275,7 +275,7 @@ public class PtyFactoryTests
 
         // Assert
         pty.IsRunning.Should().BeTrue();
-        
+
         // Cleanup
         pty.Kill(force: true);
     }
@@ -300,7 +300,7 @@ public class PtyFactoryTests
 
         // Assert
         pty.IsRunning.Should().BeTrue();
-        
+
         // Cleanup
         pty.Kill(force: true);
     }
@@ -329,7 +329,7 @@ public class PtyFactoryTests
 
         // Assert
         pty.IsRunning.Should().BeTrue();
-        
+
         // Cleanup
         pty.Kill(force: true);
     }
@@ -351,7 +351,7 @@ public class PtyFactoryTests
         // Act & Assert
         if (PtyPlatform.IsWindows)
         {
-            isSupported.Should().Be(PtyPlatform.IsConPtySupported, 
+            isSupported.Should().Be(PtyPlatform.IsConPtySupported,
                 "Windows support depends on ConPTY availability");
         }
         else if (PtyPlatform.IsUnix)
@@ -380,7 +380,7 @@ public class PtyFactoryTests
         }
 
         // Assert
-        results.Should().AllBeEquivalentTo(results[0], 
+        results.Should().AllBeEquivalentTo(results[0],
             "IsSupported should be consistent across calls");
     }
 
@@ -534,7 +534,7 @@ public class PtyFactoryTests
         // Assert
         exception.Should().BeNull("starting a factory-created PTY should not throw");
         pty.IsRunning.Should().BeTrue();
-        
+
         // Cleanup
         pty.Kill(force: true);
     }

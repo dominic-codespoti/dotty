@@ -53,9 +53,11 @@ public static class SilkGlShaders
             vec2 clip = vec2(2.0 * p.x / uFramebufferPx.x - 1.0,
                              1.0 - 2.0 * p.y / uFramebufferPx.y);
             gl_Position = vec4(clip, 0.0, 1.0);
-            bool inverse = (aFlags & 4u) != 0u;
-            vFg = inverse ? aBg : aFg;
-            vBg = inverse ? aFg : aBg;
+            // QuadFrameBuilder resolves inverse colors before upload. Keep the
+            // shader pass focused on coverage and decoration, so inverse
+            // video is not applied a second time.
+            vFg = aFg;
+            vBg = aBg;
             vFlags = aFlags;
         }
         """;
@@ -94,6 +96,9 @@ public static class SilkGlShaders
                 { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
                 if ((vFlags & FLAG_STRIKE) != 0u &&
                     abs(vCornerY - uStrikeY) <= uLineHalf)
+                { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
+                if ((vFlags & FLAG_OVERLINE) != 0u &&
+                    abs(vCornerY) <= uLineHalf)
                 { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
                 discard;
             }

@@ -140,14 +140,28 @@ public static class QuadFrameBuilder
                     bool emptyHasBg = !emptyStyle.Background.IsEmpty || emptyStyle.Inverse;
                     if (emptyHasBg && written < destination.Length)
                     {
-                        var bg2 = emptyStyle.Inverse ? (emptyStyle.Background.IsEmpty ? defFg : emptyStyle.Background) : emptyStyle.Background;
+                        var emptyFg = !emptyStyle.Foreground.IsEmpty ? emptyStyle.Foreground : defFg;
+                        var emptyBg = !emptyStyle.Background.IsEmpty ? emptyStyle.Background : defBg;
+                        byte emptyFlags = 0;
+                        if (emptyStyle.Inverse)
+                        {
+                            (emptyFg, emptyBg) = (emptyBg, emptyFg);
+                            emptyFlags |= CellFlags.InverseVideo;
+                        }
+                        if (emptyStyle.Underline) emptyFlags |= CellFlags.Underline;
+                        if (emptyStyle.Strikethrough) emptyFlags |= CellFlags.Strikethrough;
+                        if (emptyStyle.Overline) emptyFlags |= CellFlags.Overline;
                         destination[written] = new CellInstance
                         {
                             Col = (ushort)c,
                             Row = (ushort)r,
-                            BgR = bg2.R,
-                            BgG = bg2.G,
-                            BgB = bg2.B,
+                            FgR = emptyFg.R,
+                            FgG = emptyFg.G,
+                            FgB = emptyFg.B,
+                            Flags = emptyFlags,
+                            BgR = emptyBg.R,
+                            BgG = emptyBg.G,
+                            BgB = emptyBg.B,
                             BgA = 255,
                         };
                         written++;
@@ -199,12 +213,16 @@ public static class QuadFrameBuilder
                     var key = new GlyphKey(grapheme, typeface, textSize, style.Bold);
                     int countBefore = atlas.EntryCount;
                     glyphOk = atlas.EnsureGlyph(key, out glyphInfo);
-                    if (atlas.EntryCount > countBefore)
+                    if (!glyphOk)
+                    {
+                        glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+                    }
+                    if (glyphOk && atlas.EntryCount > countBefore)
                     {
                         dirtyAtlasRows?.Add(r);
                     }
-                }
 
+                }
                 if (!glyphOk)
                 {
                     if (bgA != 0 && written < destination.Length)

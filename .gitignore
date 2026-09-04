@@ -2,6 +2,7 @@ bin
 obj
 BenchmarkDotNet.Artifacts/
 artifacts/
+.ci-publish/
 *.nupkg
 *.snupkg
 

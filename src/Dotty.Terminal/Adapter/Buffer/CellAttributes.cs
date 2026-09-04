@@ -39,7 +39,7 @@ public struct CellAttributes : IEquatable<CellAttributes>
     public bool DoubleUnderline => UnderlineStyle == UnderlineStyle.Double;
 
     public static readonly CellAttributes Default = new();
-    
+
     /// <summary>
     /// Returns true if no color is set (all colors are empty/transparent).
     /// </summary>

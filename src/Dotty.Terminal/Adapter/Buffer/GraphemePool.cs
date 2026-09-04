@@ -22,7 +22,7 @@ public static class GraphemePool
         if (chars.Length == 2) return new TerminalGrapheme(chars[0], chars[1]);
 
         ulong hash = ComputeHash(chars);
-        
+
         lock (_lock)
         {
             // O(1) lookup using hash index
@@ -40,7 +40,7 @@ public static class GraphemePool
             // Not found - add new entry
             int index = _items.Count;
             _items.Add(chars.ToArray());
-            
+
             // Add to hash index
             if (!_hashIndex.TryGetValue(hash, out candidates))
             {
@@ -48,7 +48,7 @@ public static class GraphemePool
                 _hashIndex[hash] = candidates;
             }
             candidates.Add(index);
-            
+
             return new TerminalGrapheme(index, (short)chars.Length);
         }
     }
@@ -58,7 +58,7 @@ public static class GraphemePool
         // FNV-1a 64-bit hash for fast computation
         const ulong FNV_OFFSET_BASIS = 14695981039346656037UL;
         const ulong FNV_PRIME = 1099511628211UL;
-        
+
         ulong hash = FNV_OFFSET_BASIS;
         for (int i = 0; i < chars.Length; i++)
         {

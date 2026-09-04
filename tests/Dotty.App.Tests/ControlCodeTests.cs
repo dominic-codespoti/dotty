@@ -14,69 +14,69 @@ public class ControlCodeTests
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("Hello\rWorld"));
-        
+
         Assert.Equal("HelloWorld", string.Concat(handler.PrintCalls));
         Assert.Equal(1, handler.CarriageReturnCalls);
     }
-    
+
     [Fact]
     public void LineFeedHandled()
     {
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("Line1\nLine2"));
-        
+
         Assert.Equal("Line1Line2", string.Concat(handler.PrintCalls));
         Assert.Equal(1, handler.LineFeedCalls);
     }
-    
+
     [Fact]
     public void TabHandled()
     {
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("Col1\tCol2"));
-        
+
         Assert.Equal("Col1Col2", string.Concat(handler.PrintCalls));
         Assert.Equal(1, handler.TabCalls);
     }
-    
+
     [Fact]
     public void CRLFSequenceHandled()
     {
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         parser.Feed(Encoding.UTF8.GetBytes("Line1\r\nLine2\r\nLine3"));
-        
+
         Assert.Equal("Line1Line2Line3", string.Concat(handler.PrintCalls));
         Assert.Equal(2, handler.CarriageReturnCalls);
         Assert.Equal(2, handler.LineFeedCalls);
     }
-    
+
     [Fact]
     public void MixedControlCodesHandled()
     {
         var parser = new BasicAnsiParser();
         var handler = new RecordingHandler();
         parser.Handler = handler;
-        
+
         // Mix of CR, LF, and HT
         parser.Feed(Encoding.UTF8.GetBytes("Start\t\tTab\r\nNewLine\tEnd"));
-        
+
         Assert.Equal("StartTabNewLineEnd", string.Concat(handler.PrintCalls));
         Assert.Equal(1, handler.CarriageReturnCalls);
         Assert.Equal(1, handler.LineFeedCalls);
         Assert.Equal(3, handler.TabCalls);
     }
-    
+
     private sealed class RecordingHandler : ITerminalHandler
     {
         public List<string> PrintCalls { get; } = new();
@@ -89,7 +89,7 @@ public class ControlCodeTests
         event System.Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event System.Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
         event System.Action<string>? ITerminalHandler.LinkOpened { add { } remove { } }
-        void ITerminalHandler.OnHyperlink(string uri) {}
+        void ITerminalHandler.OnHyperlink(string uri) { }
 
         void ITerminalHandler.RequestRenderExtern() { }
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }

@@ -55,13 +55,26 @@ public static class TabBarLayout
     public const float MaxTabWidth = 240f;
     public const float TabSpacing = 2f;
     public const float PaddingLeft = 6f;
-    public const float PaddingTop = 4f;
-    public const float PaddingBottom = 4f;
+    public const float PaddingTop = 2f;
+    public const float PaddingBottom = 2f;
     public const float NewTabButtonWidth = 28f;
     public const float CloseButtonWidth = 20f;
     public const float CloseButtonHeight = 20f;
     public const float CloseButtonPaddingRight = 4f;
     public const float TextPaddingLeft = 8f;
+
+    /// <summary>
+    /// The character-grid renderer only knows whole text rows, so the tab bar
+    /// occupies an integer number of rows. Given the user-configured bar
+    /// height (logical px) and the current cell height (logical px), returns
+    /// the row count whose total height is closest to the configured height,
+    /// so the bar doesn't balloon to a chunky multi-row block.
+    /// </summary>
+    public static int ComputeBarRows(double configuredHeight, float cellHeight)
+    {
+        if (cellHeight <= 0f) return 1;
+        return Math.Max(1, (int)Math.Round(configuredHeight / cellHeight, MidpointRounding.AwayFromZero));
+    }
 
     /// <summary>
     /// Computes the layout of all tabs and buttons in the tab bar.

@@ -25,15 +25,15 @@ public abstract class PerformanceTestBase
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
-        
+
         // Record baseline GC counts
         _gcCount0 = GC.CollectionCount(0);
         _gcCount1 = GC.CollectionCount(1);
         _gcCount2 = GC.CollectionCount(2);
         _allocatedBytes = GC.GetTotalAllocatedBytes();
-        
-        // Disable GC pressure during benchmarks for more consistent results
-        GC.TryStartNoGCRegion(100 * 1024 * 1024, true);
+
+        // Disable GC pressure during benchmarks for more consistent results (10MB to avoid earlyoom triggers)
+        GC.TryStartNoGCRegion(10 * 1024 * 1024, true);
     }
 
     /// <summary>
@@ -50,7 +50,7 @@ public abstract class PerformanceTestBase
         {
             // NoGCRegion wasn't started or was already ended
         }
-        
+
         // Force final cleanup
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
@@ -91,15 +91,15 @@ public abstract class PerformanceTestBase
     /// <summary>
     /// Get current GC collection counts
     /// </summary>
-    protected (long Gen0, long Gen1, long Gen2) GetGCCollectionCounts() => 
-        (GC.CollectionCount(0) - _gcCount0, 
-         GC.CollectionCount(1) - _gcCount1, 
+    protected (long Gen0, long Gen1, long Gen2) GetGCCollectionCounts() =>
+        (GC.CollectionCount(0) - _gcCount0,
+         GC.CollectionCount(1) - _gcCount1,
          GC.CollectionCount(2) - _gcCount2);
 
     /// <summary>
     /// Get bytes allocated since baseline
     /// </summary>
-    protected long GetAllocatedBytes() => 
+    protected long GetAllocatedBytes() =>
         GC.GetTotalAllocatedBytes() - _allocatedBytes;
 
     /// <summary>
@@ -116,13 +116,13 @@ public abstract class PerformanceTestBase
         string[] suffixes = { "B", "KB", "MB", "GB" };
         int suffixIndex = 0;
         double value = bytes;
-        
+
         while (value >= 1024 && suffixIndex < suffixes.Length - 1)
         {
             value /= 1024;
             suffixIndex++;
         }
-        
+
         return $"{value:F2} {suffixes[suffixIndex]}";
     }
 
@@ -159,7 +159,7 @@ public abstract class PerformanceTestBase
         {
             operation();
         }
-        
+
         // Force JIT compilation to complete
         GC.Collect(0, GCCollectionMode.Default, blocking: false);
     }
@@ -177,11 +177,11 @@ public abstract class PerformanceTestBase
         double mean = sum / sorted.Count;
         double variance = sorted.Sum(x => Math.Pow(x - mean, 2)) / sorted.Count;
         double stdDev = Math.Sqrt(variance);
-        
+
         double p50 = sorted[sorted.Count * 50 / 100];
         double p95 = sorted[sorted.Count * 95 / 100];
         double p99 = sorted.Count >= 100 ? sorted[sorted.Count * 99 / 100] : p95;
-        
+
         return new Statistics(mean, stdDev, p50, p95, p99);
     }
 
@@ -191,18 +191,18 @@ public abstract class PerformanceTestBase
     protected List<double> CollectMeasurements(Action operation, int iterations)
     {
         var measurements = new List<double>(iterations);
-        
+
         for (int i = 0; i < iterations; i++)
         {
             GC.Collect(0, GCCollectionMode.Default, blocking: false);
-            
+
             _stopwatch.Restart();
             operation();
             _stopwatch.Stop();
-            
+
             measurements.Add(_stopwatch.Elapsed.TotalMilliseconds);
         }
-        
+
         return measurements;
     }
 }

@@ -82,7 +82,7 @@ public class PtyPlatformTests
     public void PtyPlatform_IsLinux_DetectsLinuxCorrectly()
     {
         var isLinux = PtyPlatform.IsLinux;
-        
+
         // Assert - on Linux, IsLinux should be true; false otherwise
         if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
             System.Runtime.InteropServices.OSPlatform.Linux))
@@ -103,7 +103,7 @@ public class PtyPlatformTests
     public void PtyPlatform_IsMacOS_DetectsMacOSCorrectly()
     {
         var isMacOS = PtyPlatform.IsMacOS;
-        
+
         // Assert - on macOS, IsMacOS should be true; false otherwise
         if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
             System.Runtime.InteropServices.OSPlatform.OSX))
@@ -246,7 +246,7 @@ public class PtyPlatformTests
         shell.Should().NotBeNullOrEmpty();
         // Should be one of: powershell.exe or pwsh.exe (with optional path)
         var shellLower = shell.ToLowerInvariant();
-        (shellLower.Contains("powershell") || 
+        (shellLower.Contains("powershell") ||
          shellLower.Contains("pwsh")).Should().BeTrue(
              $"Windows shell should prefer PowerShell, but got: {shell}");
     }
@@ -295,7 +295,7 @@ public class PtyPlatformTests
                 var shell = PtyPlatform.GetDefaultShell();
 
                 // Assert
-                shell.Should().Be(originalShell, 
+                shell.Should().Be(originalShell,
                     "SHELL environment variable should be used when set and valid");
             }
         }
@@ -328,7 +328,7 @@ public class PtyPlatformTests
         // Assert - one of these common shells should exist
         var commonShells = new[] { "/bin/bash", "/bin/zsh", "/bin/sh", "/bin/dash" };
         var shellExists = System.IO.File.Exists(shell);
-        
+
         shellExists.Should().BeTrue($"Shell should exist: {shell}");
     }
 
@@ -348,7 +348,7 @@ public class PtyPlatformTests
         }
 
         // Assert
-        shells.Should().AllBeEquivalentTo(shells[0], 
+        shells.Should().AllBeEquivalentTo(shells[0],
             "GetDefaultShell should return consistent results");
     }
 
@@ -403,7 +403,7 @@ public class PtyPlatformTests
         }
 
         var originalShell = Environment.GetEnvironmentVariable("SHELL");
-        
+
         try
         {
             // Clear SHELL to force fallback behavior

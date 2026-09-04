@@ -13,7 +13,7 @@ public sealed class SolarizedLightTheme : ColorSchemeBase
     // Solarized Light color palette
     // Background: #FDF6E3 -> 0xFFFDF6E3 (base3)
     // Foreground: #657B83 -> 0xFF657B83 (base00)
-    
+
     // ANSI colors from Solarized palette
     // Black: #073642 (base02), Red: #DC322F, Green: #859900
     // Yellow: #B58900, Blue: #268BD2, Magenta: #D33682

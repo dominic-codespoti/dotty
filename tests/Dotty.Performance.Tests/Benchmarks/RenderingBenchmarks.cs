@@ -101,7 +101,7 @@ public class RenderingBenchmarks : PerformanceTestBase
     {
         _adapter = new TerminalAdapter(24, 80);
         _parser.Handler = _adapter;
-        
+
         for (int i = 0; i < Math.Min(10, _progressiveUpdates.Count); i++)
         {
             _parser.Feed(_progressiveUpdates[i]);
@@ -113,7 +113,7 @@ public class RenderingBenchmarks : PerformanceTestBase
     {
         _adapter = new TerminalAdapter(24, 80);
         _parser.Handler = _adapter;
-        
+
         for (int i = 0; i < Math.Min(50, _progressiveUpdates.Count); i++)
         {
             _parser.Feed(_progressiveUpdates[i]);
@@ -129,7 +129,7 @@ public class RenderingBenchmarks : PerformanceTestBase
     {
         var buffer = new TerminalBuffer(24, 80);
         var attrs = CellAttributes.Default;
-        
+
         for (int i = 0; i < 100; i++)
         {
             buffer.SetCursor(i % 24, i % 80);
@@ -142,7 +142,7 @@ public class RenderingBenchmarks : PerformanceTestBase
     {
         var random = new Random(42);
         var buffer = new TerminalBuffer(24, 80);
-        
+
         for (int i = 0; i < 100; i++)
         {
             buffer.SetCursor(random.Next(24), random.Next(80));
@@ -166,7 +166,7 @@ public class RenderingBenchmarks : PerformanceTestBase
         var grid = new CellGrid(24, 80);
         var styleSet = new StyleSet();
         ushort boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
-        
+
         for (int row = 0; row < 24; row++)
         {
             for (int col = 0; col < 80; col++)
@@ -186,7 +186,7 @@ public class RenderingBenchmarks : PerformanceTestBase
     public void Buffer_LineFeed100()
     {
         var buffer = new TerminalBuffer(24, 80);
-        
+
         for (int i = 0; i < 100; i++)
         {
             buffer.LineFeed();
@@ -198,7 +198,7 @@ public class RenderingBenchmarks : PerformanceTestBase
     {
         var buffer = new TerminalBuffer(24, 80);
         buffer.SetCursor(10, 0);
-        
+
         for (int i = 0; i < 10; i++)
         {
             buffer.InsertLines(1);
@@ -210,7 +210,7 @@ public class RenderingBenchmarks : PerformanceTestBase
     {
         var buffer = new TerminalBuffer(24, 80);
         buffer.SetCursor(10, 0);
-        
+
         for (int i = 0; i < 10; i++)
         {
             buffer.DeleteLines(1);

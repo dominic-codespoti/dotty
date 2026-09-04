@@ -80,7 +80,7 @@ public sealed class GlyphAtlasTests
         Assert.NotEqual(a, c);
         Assert.NotEqual(a, d);
         // The API surface has no foreground color — the atlas is coverage-only.
-        Assert.Equal(typeof(GlyphKey).GetFields().Length, 4);
+        Assert.Equal(4, typeof(GlyphKey).GetFields().Length);
     }
 
     [Fact]

@@ -99,6 +99,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
                 {
                     int logicalRow = r - scrollOffset;
                     int pRow = screen.GetPhysicalRow(logicalRow);
+                    snap.RowMap[r] = pRow;
                     snap.RowOffsets[r] = r * cols;
                     System.Buffer.MemoryCopy(
                         (void*)(screen.CellsPtr + (nint)pRow * cols * sizeof(CellHot)),
@@ -245,8 +246,11 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     /// </summary>
     public string GetVisibleRowText(int row)
     {
-        if (row < 0 || row >= Rows) return string.Empty;
-        return BuildRowText(RowMap[row], Columns - 1);
+        if (row < 0 || row >= Rows || Columns <= 0) return string.Empty;
+        // CaptureVisible compacts rows and records their offsets; the full
+        // capture keeps the physical ring map and uses arena row indices.
+        int rowIndex = RowOffsets.Length > 0 ? RowOffsets[row] / Columns : RowMap[row];
+        return BuildRowText(rowIndex, Columns - 1);
     }
 
     private string BuildRowText(int pRow, int maxCol)

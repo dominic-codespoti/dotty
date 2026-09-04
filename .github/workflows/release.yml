@@ -76,7 +76,18 @@ jobs:
         run: dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
 
       - name: Run Linux release validation tests
-        run: dotnet test --solution ${{ env.SOLUTION_PATH }} -c Release --no-build
+        shell: bash
+        run: |
+          set -euo pipefail
+          for project in \
+            tests/Dotty.App.Tests/Dotty.App.Tests.csproj \
+            tests/Dotty.Terminal.Tests/Dotty.Terminal.Tests.csproj \
+            tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj \
+            tests/Dotty.Config.SourceGenerator.Tests/Dotty.Config.SourceGenerator.Tests.csproj; do
+            dotnet test --project "$project" -c Release --no-build
+          done
+          dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj \
+            -c Release --no-build
 
   # Build for Linux x64
   build-linux:

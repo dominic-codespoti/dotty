@@ -196,7 +196,7 @@ public class SearchOverlayLogicTests
         var buffer = CreateTestBuffer();
         var search = new TerminalSearch(buffer);
         search.Search("line");
-        
+
         // Move to last match
         while (search.CurrentMatchIndex < search.MatchCount - 1)
         {
@@ -355,7 +355,7 @@ public class SearchOverlayLogicTests
         var buffer = CreateTestBuffer();
         var search = new TerminalSearch(buffer);
         search.Search("line");
-        
+
         bool eventRaised = false;
         SearchMatch navigatedMatch = SearchMatch.Empty;
 

@@ -13,7 +13,7 @@ public sealed class CatppuccinMochaTheme : ColorSchemeBase
     // Catppuccin Mocha color palette
     // Background: #1E1E2E -> 0xFF1E1E2E (base)
     // Foreground: #CDD6F4 -> 0xFFCDD6F4 (text)
-    
+
     // ANSI colors mapped from Catppuccin palette
     // Using Catppuccin surface0-overlay2 for ANSI palette
     // Black: #45475A (surface1), Red: #F38BA8, Green: #A6E3A1

@@ -14,7 +14,7 @@ public class ThemeTests
     public void BuiltInThemes_DarkPlus_HasCorrectColors()
     {
         var theme = BuiltInThemes.DarkPlus;
-        
+
         // Verify VS Code Dark+ colors
         Assert.Equal(0xFF1E1E1Eu, theme.Background);
         Assert.Equal(0xFFD4D4D4u, theme.Foreground);
@@ -32,7 +32,7 @@ public class ThemeTests
     public void BuiltInThemes_Dracula_HasCorrectColors()
     {
         var theme = BuiltInThemes.Dracula;
-        
+
         // Verify Dracula colors
         Assert.Equal(0xFF282A36u, theme.Background);
         Assert.Equal(0xFFF8F8F2u, theme.Foreground);
@@ -45,7 +45,7 @@ public class ThemeTests
     public void BuiltInThemes_LightPlus_HasCorrectColors()
     {
         var theme = BuiltInThemes.LightPlus;
-        
+
         // Verify Light+ colors
         Assert.Equal(0xFFFFFFFFu, theme.Background);
         Assert.Equal(0xFF000000u, theme.Foreground);
@@ -69,7 +69,7 @@ public class ThemeTests
         Assert.NotEmpty(BuiltInThemes.DarkThemes);
         Assert.NotEmpty(BuiltInThemes.LightThemes);
         Assert.NotEmpty(BuiltInThemes.AllThemes);
-        
+
         // Should have 6 dark themes and 5 light themes
         Assert.True(BuiltInThemes.DarkThemes.Length >= 5);
         Assert.True(BuiltInThemes.LightThemes.Length >= 4);
@@ -80,10 +80,10 @@ public class ThemeTests
     {
         // RRGGBB format (adds FF alpha)
         Assert.Equal(0xFFFF5733u, ColorSchemeBase.FromHex("#FF5733"));
-        
+
         // AARRGGBB format
         Assert.Equal(0x80FF5733u, ColorSchemeBase.FromHex("#80FF5733"));
-        
+
         // Without hash
         Assert.Equal(0xFFFF5733u, ColorSchemeBase.FromHex("FF5733"));
     }
@@ -123,7 +123,7 @@ public class ThemeTests
         {
             // Background and foreground should not be the same
             Assert.NotEqual(theme.Background, theme.Foreground);
-            
+
             // All ANSI colors should be defined (not zero)
             Assert.NotEqual(0u, theme.AnsiBlack);
             Assert.NotEqual(0u, theme.AnsiRed);
@@ -138,13 +138,13 @@ public class ThemeTests
         {
             // Extract RGB from ARGB
             uint rgb = theme.Background & 0x00FFFFFF;
-            
+
             // Simple heuristic: sum of RGB components < 0x80 * 3 = dark
             uint r = (rgb >> 16) & 0xFF;
             uint g = (rgb >> 8) & 0xFF;
             uint b = rgb & 0xFF;
             uint sum = r + g + b;
-            
+
             Assert.True(sum < 0x180, $"Theme should have dark background: {theme.Background:X8}");
         }
     }
@@ -156,13 +156,13 @@ public class ThemeTests
         {
             // Extract RGB from ARGB
             uint rgb = theme.Background & 0x00FFFFFF;
-            
+
             // Simple heuristic: sum of RGB components > 0xC0 * 3 = light
             uint r = (rgb >> 16) & 0xFF;
             uint g = (rgb >> 8) & 0xFF;
             uint b = rgb & 0xFF;
             uint sum = r + g + b;
-            
+
             Assert.True(sum > 0x240, $"Theme should have light background: {theme.Background:X8}");
         }
     }
@@ -171,7 +171,7 @@ public class ThemeTests
     public void ColorSchemeBase_GetAnsiColor_ReturnsCorrectColors()
     {
         var theme = new DarkPlusTheme();
-        
+
         Assert.Equal(theme.AnsiBlack, theme.GetAnsiColor(0));
         Assert.Equal(theme.AnsiRed, theme.GetAnsiColor(1));
         Assert.Equal(theme.AnsiGreen, theme.GetAnsiColor(2));
@@ -185,7 +185,7 @@ public class ThemeTests
     public void ColorSchemeBase_GetAnsiColor_InvalidIndex_Throws()
     {
         var theme = new DarkPlusTheme();
-        
+
         Assert.Throws<ArgumentOutOfRangeException>(() => theme.GetAnsiColor(-1));
         Assert.Throws<ArgumentOutOfRangeException>(() => theme.GetAnsiColor(16));
     }
@@ -196,7 +196,7 @@ public class ThemeTests
         // Black and white should have high contrast
         double bwContrast = ColorSchemeBase.CalculateContrastRatio(0xFF000000, 0xFFFFFFFF);
         Assert.True(bwContrast > 20); // Should be around 21:1
-        
+
         // Same colors should have 1:1 contrast
         double sameContrast = ColorSchemeBase.CalculateContrastRatio(0xFF000000, 0xFF000000);
         Assert.Equal(1.0, sameContrast, precision: 2);
@@ -225,7 +225,7 @@ public class ThemeTests
         // Opacity of 100 is valid (maximum)
         var theme100 = new CustomOpacityTheme(100);
         Assert.Equal(100, theme100.Opacity);
-        
+
         // Opacity of 0 is valid (minimum)
         var theme0 = new CustomOpacityTheme(0);
         Assert.Equal(0, theme0.Opacity);
@@ -237,23 +237,23 @@ public class ThemeTests
         // Night time test (8pm)
         var themeNight = new TimeBasedOpacityTestTheme(20);
         Assert.Equal(90, themeNight.Opacity); // Night = 90% opacity
-        
+
         // Day time test (12pm)
         var themeDay = new TimeBasedOpacityTestTheme(12);
         Assert.Equal(100, themeDay.Opacity); // Day = 100% opacity
-        
+
         // Early morning test (5am)
         var themeMorning = new TimeBasedOpacityTestTheme(5);
         Assert.Equal(90, themeMorning.Opacity); // Early morning = 90% opacity
-        
+
         // Late night test (11pm)
         var themeLate = new TimeBasedOpacityTestTheme(23);
         Assert.Equal(90, themeLate.Opacity); // Late night = 90% opacity
-        
+
         // Boundary test (6am)
         var themeBoundary = new TimeBasedOpacityTestTheme(6);
         Assert.Equal(100, themeBoundary.Opacity); // 6am = day = 100% opacity
-        
+
         // Boundary test (8pm exactly)
         var themeBoundary2 = new TimeBasedOpacityTestTheme(20);
         Assert.Equal(90, themeBoundary2.Opacity); // 8pm = night = 90% opacity
@@ -268,7 +268,7 @@ public class ThemeTests
 public class CustomOpacityTheme : ColorSchemeBase
 {
     private readonly byte _opacity;
-    
+
     public CustomOpacityTheme(byte opacity) : base(
         background: 0xFF1E1E1E,
         foreground: 0xFFD4D4D4,
@@ -291,7 +291,7 @@ public class CustomOpacityTheme : ColorSchemeBase
     {
         _opacity = opacity;
     }
-    
+
     public override byte Opacity => _opacity;
 }
 
@@ -301,7 +301,7 @@ public class CustomOpacityTheme : ColorSchemeBase
 public class TimeBasedOpacityTestTheme : ColorSchemeBase
 {
     private readonly int _hour;
-    
+
     public TimeBasedOpacityTestTheme(int hour) : base(
         background: 0xFF1E1E1E,
         foreground: 0xFFD4D4D4,
@@ -324,6 +324,6 @@ public class TimeBasedOpacityTestTheme : ColorSchemeBase
     {
         _hour = hour;
     }
-    
+
     public override byte Opacity => (byte)(_hour is >= 20 or < 6 ? 90 : 100);
 }

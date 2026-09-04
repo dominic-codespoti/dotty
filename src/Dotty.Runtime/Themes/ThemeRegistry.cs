@@ -40,7 +40,7 @@ public sealed class ThemeRegistry
 
         // Initialize with built-in themes
         RegisterBuiltInThemes();
-        
+
         // Load user themes (may override built-ins)
         RegisterUserThemes();
     }
@@ -205,7 +205,7 @@ public sealed class ThemeRegistry
                     var theme = new JsonBackedColorScheme(definition);
 
                     _userThemes[canonicalName] = theme;
-                    
+
                     // User themes override built-ins
                     _allThemes[canonicalName] = theme;
 

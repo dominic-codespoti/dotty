@@ -11,7 +11,7 @@ public sealed class LightPlusTheme : ColorSchemeBase
     // VS Code Light+ color palette
     // Background: #FFFFFF -> 0xFFFFFFFF
     // Foreground: #000000 -> 0xFF000000
-    
+
     // ANSI colors from VS Code light terminal
     // Black: #000000, Red: #CD3131, Green: #00BC00, Yellow: #949800
     // Blue: #0451A5, Magenta: #BC05BC, Cyan: #0598BC, White: #555555

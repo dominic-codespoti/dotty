@@ -145,9 +145,12 @@ public sealed class PaneTree : IDisposable
             {
                 var cols = Math.Max(1, (int)Math.Floor(bounds.Width / cellWidth));
                 var rows = Math.Max(1, (int)Math.Floor(bounds.Height / cellHeight));
-                leaf.Columns = cols;
-                leaf.Rows = rows;
-                leaf.Session.Resize(cols, rows);
+                if (cols != leaf.Columns || rows != leaf.Rows)
+                {
+                    leaf.Columns = cols;
+                    leaf.Rows = rows;
+                    leaf.Session.Resize(cols, rows);
+                }
             }
         }
         else if (node is SplitPaneNode split)

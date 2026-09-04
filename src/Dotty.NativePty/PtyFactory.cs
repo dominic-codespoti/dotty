@@ -40,7 +40,7 @@ public static class PtyFactory
         {
             return new Unix.UnixPty();
         }
-        
+
         throw new PlatformNotSupportedException(
             $"Platform '{System.Runtime.InteropServices.RuntimeInformation.OSDescription}' is not supported. " +
             "Dotty supports Windows 10+ (with ConPTY), Linux, and macOS.");
@@ -57,8 +57,8 @@ public static class PtyFactory
     /// <param name="environmentVariables">Optional additional environment variables.</param>
     /// <returns>A started IPty instance.</returns>
     public static IPty CreateAndStart(
-        string? shell = null, 
-        int columns = 80, 
+        string? shell = null,
+        int columns = 80,
         int rows = 24,
         string? workingDirectory = null,
         System.Collections.Generic.IDictionary<string, string>? environmentVariables = null)
@@ -169,4 +169,4 @@ public static class PtyFactory
             $"Platform '{System.Runtime.InteropServices.RuntimeInformation.OSDescription}' is not supported.");
     }
 }
- 
+

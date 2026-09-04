@@ -11,7 +11,7 @@ public sealed class OneLightTheme : ColorSchemeBase
     // One Light color palette
     // Background: #FAFAFA -> 0xFFFAFAFA
     // Foreground: #383A42 -> 0xFF383A42
-    
+
     // ANSI colors (adapted from One Light syntax colors)
     // Black: #383A42, Red: #E45649, Green: #50A14F, Yellow: #C18401
     // Blue: #4078F2, Magenta: #A626A4, Cyan: #0184BC, White: #A0A1A7

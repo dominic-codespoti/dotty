@@ -13,7 +13,7 @@ public sealed class DraculaTheme : ColorSchemeBase
     // Dracula color palette
     // Background: #282A36 -> 0xFF282A36
     // Foreground: #F8F8F2 -> 0xFFF8F8F2
-    
+
     // ANSI colors
     // Black: #21222C, Red: #FF5555, Green: #50FA7B, Yellow: #F1FA8C
     // Blue: #BD93F9, Magenta: #FF79C6, Cyan: #8BE9FD, White: #F8F8F2

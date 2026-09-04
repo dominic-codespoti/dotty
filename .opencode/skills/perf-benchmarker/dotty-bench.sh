@@ -109,10 +109,10 @@ case "${1:-help}" in
 
     publish)
         cd "$PROJECT_ROOT"
-        dotnet publish src/Dotty.App/Dotty.App.csproj \
+        dotnet publish src/Dotty/Dotty.csproj \
             -c Release -r linux-x64 --self-contained true \
             -p:PublishReadyToRun=true
-        echo "Published to: src/Dotty.App/bin/Release/net10.0/linux-x64/publish/Dotty.App"
+        echo "Published to: src/Dotty/bin/Release/net10.0/linux-x64/publish/dotty"
         ;;
 
     list)

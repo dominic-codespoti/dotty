@@ -34,6 +34,31 @@ public class ContextMenuTests
     }
 
     [Fact]
+    public void ContextMenuLayout_AlignsShortcutsAndReservesSharedGap()
+    {
+        var items = new List<ContextMenuItem>
+        {
+            new("long", "A longer label", "Ctrl+Shift+E", null, icon: "◫"),
+            new("short", "Short", "X", null, icon: "◫")
+        };
+
+        var model = new ContextMenuModel(x: 100f, y: 50f, items: items);
+        var layout = ContextMenuLayout.Calculate(
+            model: model,
+            viewportWidth: 1000f,
+            viewportHeight: 600f);
+
+        var longestShortcut = layout.Items[0];
+        var shorterShortcut = layout.Items[1];
+
+        Assert.Equal(longestShortcut.ShortcutBounds.Right, shorterShortcut.ShortcutBounds.Right);
+        Assert.Equal(
+            longestShortcut.ShortcutBounds.Left - ContextMenuLayout.DefaultShortcutGap,
+            longestShortcut.LabelBounds.Right);
+        Assert.True(shorterShortcut.LabelBounds.Right < shorterShortcut.ShortcutBounds.Left);
+    }
+
+    [Fact]
     public void ContextMenuHitTester_ClickingItem_ReturnsItemIndex()
     {
         bool itemClicked = false;

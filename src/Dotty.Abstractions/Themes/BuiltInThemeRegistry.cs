@@ -60,7 +60,7 @@ public static class BuiltInThemeRegistry
                 // Fallback: try to find any resource containing "themes"
                 var resourceNames = assembly.GetManifestResourceNames();
                 resourceName = resourceNames.FirstOrDefault(r => r.IndexOf("themes", StringComparison.OrdinalIgnoreCase) >= 0)!;
-                
+
                 if (resourceName == null)
                 {
                     throw new InvalidOperationException("Could not find themes.json embedded resource.");
@@ -97,7 +97,7 @@ public static class BuiltInThemeRegistry
 
         // Use source-generated deserializer for AOT compatibility
         var root = JsonSerializer.Deserialize(json, ThemeJsonContext.Default.ThemeRoot);
-        
+
         if (root?.Themes == null || root.Themes.Length == 0)
         {
             throw new InvalidOperationException("Failed to deserialize themes.json or no themes found.");

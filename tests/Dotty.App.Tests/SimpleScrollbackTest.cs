@@ -12,7 +12,7 @@ public class SimpleScrollbackTest
         // Create a small terminal buffer
         var buffer = new TerminalBuffer(5, 20); // 5 rows, 20 cols
         buffer.MaxScrollback = 10;
-        
+
         // Fill visible screen
         Console.WriteLine("Filling visible screen...");
         for (int row = 0; row < 5; row++)
@@ -20,16 +20,16 @@ public class SimpleScrollbackTest
             buffer.WriteText($"Row{row}".AsSpan(), (string?)null);
             if (row < 4) buffer.LineFeed();
         }
-        
+
         // Check what's in row 0
         var row0Line = buffer.GetRowText(0);
         Console.WriteLine($"After setup - Row 0 content: '{row0Line}'");
-        
+
         // Write one more line (should push row 0 to scrollback)
         Console.WriteLine("\nWriting one more line...");
         buffer.WriteText("NewLine".AsSpan(), (string?)null);
         buffer.LineFeed();
-        
+
         // Check scrollback
         Console.WriteLine($"Scrollback count: {buffer.ScrollbackCount}");
         if (buffer.ScrollbackCount > 0)
@@ -37,7 +37,7 @@ public class SimpleScrollbackTest
             var sbLine = buffer.GetScrollbackLine(0);
             Console.WriteLine($"Scrollback[0]: Length={sbLine.Length}, Content='{sbLine}'");
         }
-        
+
         // Verify
         Assert.True(buffer.ScrollbackCount > 0, "Should have scrollback");
         var firstSb = buffer.GetScrollbackLine(0);

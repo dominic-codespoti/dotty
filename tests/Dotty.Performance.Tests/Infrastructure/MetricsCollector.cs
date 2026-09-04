@@ -32,7 +32,7 @@ public class MetricsCollector : IDisposable
         _process.Refresh();
         _stopwatch.Restart();
         _startTime = _stopwatch.ElapsedMilliseconds;
-        
+
         _baselineAllocatedBytes = GC.GetTotalAllocatedBytes();
         _baselineGcCount0 = GC.CollectionCount(0);
         _baselineGcCount1 = GC.CollectionCount(1);
@@ -45,7 +45,7 @@ public class MetricsCollector : IDisposable
     public MetricSnapshot Snapshot(string label = "")
     {
         _process.Refresh();
-        
+
         var snapshot = new MetricSnapshot
         {
             Timestamp = _stopwatch.ElapsedMilliseconds - _startTime,
@@ -77,7 +77,7 @@ public class MetricsCollector : IDisposable
     {
         _stopwatch.Stop();
         var finalSnapshot = Snapshot("Final");
-        
+
         return new MetricsSummary
         {
             DurationMs = _stopwatch.ElapsedMilliseconds,
@@ -142,13 +142,13 @@ public struct MetricSnapshot
         string[] suffixes = { "B", "KB", "MB", "GB" };
         int suffixIndex = 0;
         double value = bytes;
-        
+
         while (value >= 1024 && suffixIndex < suffixes.Length - 1)
         {
             value /= 1024;
             suffixIndex++;
         }
-        
+
         return $"{value:F2}{suffixes[suffixIndex]}";
     }
 }
@@ -183,13 +183,13 @@ public class MetricsSummary
         string[] suffixes = { "B", "KB", "MB", "GB" };
         int suffixIndex = 0;
         double value = bytes;
-        
+
         while (value >= 1024 && suffixIndex < suffixes.Length - 1)
         {
             value /= 1024;
             suffixIndex++;
         }
-        
+
         return $"{value:F2}{suffixes[suffixIndex]}";
     }
 }

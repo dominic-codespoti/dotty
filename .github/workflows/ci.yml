@@ -92,6 +92,7 @@ jobs:
           case "$RID" in
             linux-*)
               test -x ".ci-publish/$RID/dotty"
+              test -f ".ci-publish/$RID/libglfw.so.3"
               test -f ".ci-publish/$RID/libSkiaSharp.so"
               test -f ".ci-publish/$RID/liblua54.so"
               test -x ".ci-publish/$RID/pty-helper"
@@ -99,11 +100,13 @@ jobs:
             osx-*)
               test -x ".ci-publish/$RID/dotty"
               test -f ".ci-publish/$RID/libSkiaSharp.dylib"
+              test -f ".ci-publish/$RID/libglfw.3.dylib"
               test -f ".ci-publish/$RID/liblua54.dylib"
               test -x ".ci-publish/$RID/pty-helper"
               ;;
             win-*)
               test -f ".ci-publish/$RID/dotty.exe"
+              test -f ".ci-publish/$RID/glfw3.dll"
               test -f ".ci-publish/$RID/libSkiaSharp.dll"
               ;;
             *)

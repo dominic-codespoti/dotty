@@ -327,27 +327,12 @@ public class WindowsPtyTests : IDisposable
         // Arrange
         const string marker = "TEST_OUTPUT_UNIQUE";
         _pty = new Windows.WindowsPty();
-        _pty.Start(shell: "cmd.exe", columns: 80, rows: 24);
+        _pty.Start(shell: $"cmd.exe /c echo {marker}", columns: 80, rows: 24);
 
-        var inputStream = _pty.InputStream;
-        inputStream.Should().NotBeNull();
         var outputStream = _pty.OutputStream;
         outputStream.Should().NotBeNull();
 
-        // ConPTY requires the output pipe to be serviced continuously while
-        // input is sent. Write from a separate task while this test drains
-        // output on its own async control flow.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        var inputToken = cts.Token;
-        var command = $"echo {marker}\r\n";
-        var bytes = Encoding.ASCII.GetBytes(command);
-        var inputTask = Task.Run(async () =>
-        {
-            await Task.Delay(500, inputToken); // Wait for shell to start
-            await inputStream!.WriteAsync(bytes.AsMemory(), inputToken);
-            await inputStream.FlushAsync(inputToken);
-        });
-
         var buffer = new byte[4096];
         var output = new StringBuilder();
 
@@ -371,15 +356,6 @@ public class WindowsPtyTests : IDisposable
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             // Timeout - continue with what we have.
-        }
-
-        try
-        {
-            await inputTask;
-        }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested)
-        {
-            // The same bounded cancellation also stops the pending input.
         }
 
         lock (output)

@@ -270,11 +270,6 @@ public sealed class WindowsPty : IPty
             throw new Win32Exception(result, "Failed to create pseudo console");
         }
 
-        // Once the pseudoconsole is created, it owns these ends of the pipes.
-        _inputReadHandle?.Dispose();
-        _inputReadHandle = null;
-        _outputWriteHandle?.Dispose();
-        _outputWriteHandle = null;
     }
 
     private void CreatePipe(
@@ -393,6 +388,12 @@ public sealed class WindowsPty : IPty
                 {
                     throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to create process: {resolvedShell}");
                 }
+                // The pseudoconsole keeps its own references after CreateProcess
+                // captures the communication handles; release the host copies now.
+                _inputReadHandle?.Dispose();
+                _inputReadHandle = null;
+                _outputWriteHandle?.Dispose();
+                _outputWriteHandle = null;
             }
             finally
             {

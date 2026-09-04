@@ -688,9 +688,13 @@ public class WindowsPtyTests : IDisposable
     {
         Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         
-        // Arrange
+        string windowsDirectory = Environment.GetEnvironmentVariable("windir") ?? "C:\\Windows";
+        string powerShellPath = Path.Combine(
+            windowsDirectory, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        Assert.SkipUnless(File.Exists(powerShellPath), "Windows PowerShell not available");
+
         _pty = new Windows.WindowsPty();
-        _pty.Start(shell: "cmd.exe /c ping -n 11 127.0.0.1 > nul");
+        _pty.Start(shell: $"\"{powerShellPath}\" -NoLogo -NoProfile -Command Start-Sleep -Seconds 10");
         var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
         // Act & Assert

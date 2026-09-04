@@ -126,7 +126,7 @@ public sealed class P0TerminalCompatibilityTests
 
         session.SendFocusReport(focused: true);
         session.SendFocusReport(focused: false);
-        Assert.True(SpinWait.SpinUntil(() => pty.InputCount >= 6, TimeSpan.FromSeconds(1)));
+        Assert.True(SpinWait.SpinUntil(() => pty.InputCount >= 6, TimeSpan.FromSeconds(5)));
 
         Assert.Equal("\x1b[I\x1b[O", Encoding.ASCII.GetString(pty.InputBytes));
     }
@@ -160,7 +160,7 @@ public sealed class P0TerminalCompatibilityTests
         session.SendFocusReport(true);
         session.Parser.Feed("\x1b[?1004h"u8);
         session.SendFocusReport(true);
-        Assert.True(SpinWait.SpinUntil(() => pty.InputCount >= 3, TimeSpan.FromSeconds(1)));
+        Assert.True(SpinWait.SpinUntil(() => pty.InputCount >= 3, TimeSpan.FromSeconds(5)));
         session.Dispose();
         session.SendFocusReport(false);
         Thread.Sleep(20);

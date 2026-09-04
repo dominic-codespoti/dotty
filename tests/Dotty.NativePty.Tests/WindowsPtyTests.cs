@@ -325,92 +325,43 @@ public class WindowsPtyTests : IDisposable
         Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
 
         // Arrange
+        const string marker = "TEST_OUTPUT_UNIQUE";
         _pty = new Windows.WindowsPty();
-        _pty.Start(shell: "cmd.exe", columns: 80, rows: 24);
+        _pty.Start(shell: $"cmd.exe /c echo {marker}", columns: 80, rows: 24);
 
         var outputStream = _pty.OutputStream;
         outputStream.Should().NotBeNull();
 
-        // ConPTY requires the output pipe to be serviced continuously while
-        // input is sent. A blocking reader on its own thread matches the
-        // documented pipe-handling model and keeps startup output from
-        // interfering with the command response.
-        const string marker = "TEST_OUTPUT_UNIQUE";
+        // The command emits a finite response immediately, so the test can
+        // exercise the synchronous ConPTY output channel without a second
+        // blocking reader that cannot be cancelled portably on Windows.
+        var buffer = new byte[4096];
         var output = new StringBuilder();
-        var markerObserved = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var reader = Task.Run(() =>
-        {
-            var buffer = new byte[4096];
-
-            try
-            {
-                while (true)
-                {
-                    var read = outputStream!.Read(buffer, 0, buffer.Length);
-                    if (read == 0)
-                    {
-                        break;
-                    }
-
-                    lock (output)
-                    {
-                        output.Append(Encoding.UTF8.GetString(buffer, 0, read));
-                        if (output.ToString().Contains(marker, StringComparison.Ordinal))
-                        {
-                            markerObserved.TrySetResult();
-                            break;
-                        }
-                    }
-                }
-            }
-            catch (IOException)
-            {
-                // The test cleanup closes the synchronous pipe if the
-                // bounded wait expires.
-            }
-            catch (ObjectDisposedException)
-            {
-                // The test cleanup may close the stream while the blocking
-                // reader is being released.
-            }
-        });
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         try
         {
-            await Task.Delay(500); // Wait for shell to start
-
-            var inputStream = _pty.InputStream!;
-            var command = $"echo {marker}\r\n";
-            var bytes = Encoding.ASCII.GetBytes(command);
-            inputStream.Write(bytes, 0, bytes.Length);
-            inputStream.Flush();
-
-            await markerObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        }
-        finally
-        {
-            if (!reader.IsCompleted)
+            while (!cts.Token.IsCancellationRequested)
             {
-                if (_pty.IsRunning)
+                var read = await outputStream!.ReadAsync(buffer, 0, buffer.Length, cts.Token);
+                if (read == 0)
                 {
-                    _pty.Kill(force: true);
+                    break;
                 }
 
-                _pty.Dispose();
+                output.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                if (output.ToString().Contains(marker, StringComparison.Ordinal))
+                {
+                    break;
+                }
             }
-
-            await reader;
         }
-
-        lock (output)
+        catch (OperationCanceledException)
         {
-            var capturedOutput = output.ToString();
-            capturedOutput.Should().Contain(
-                marker,
-                "The captured ConPTY output was: {0}",
-                capturedOutput);
+            // Timeout - continue with what we have.
         }
+
+        output.ToString().Should().Contain(marker);
     }
 
     /// <summary>

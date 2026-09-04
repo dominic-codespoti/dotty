@@ -210,9 +210,9 @@ internal struct StartupInfoEx
 internal struct StartupInfo
 {
     public int cb;
-    public string lpReserved;
-    public string lpDesktop;
-    public string lpTitle;
+    public IntPtr lpReserved;
+    public IntPtr lpDesktop;
+    public IntPtr lpTitle;
     public int dwX;
     public int dwY;
     public int dwXSize;

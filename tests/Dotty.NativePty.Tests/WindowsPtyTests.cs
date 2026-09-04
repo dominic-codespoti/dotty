@@ -337,19 +337,19 @@ public class WindowsPtyTests : IDisposable
         // ConPTY requires the output pipe to be serviced continuously while
         // input is sent. Write from a separate task while this test drains
         // output on its own async control flow.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var inputToken = cts.Token;
+        var command = $"echo {marker}\r\n";
+        var bytes = Encoding.ASCII.GetBytes(command);
         var inputTask = Task.Run(async () =>
         {
-            await Task.Delay(500); // Wait for shell to start
-
-            var command = $"echo {marker}\r\n";
-            var bytes = Encoding.ASCII.GetBytes(command);
-            inputStream!.Write(bytes, 0, bytes.Length);
-            inputStream.Flush();
+            await Task.Delay(500, inputToken); // Wait for shell to start
+            await inputStream!.WriteAsync(bytes.AsMemory(), inputToken);
+            await inputStream.FlushAsync(inputToken);
         });
 
         var buffer = new byte[4096];
         var output = new StringBuilder();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         try
         {
@@ -368,43 +368,18 @@ public class WindowsPtyTests : IDisposable
                 }
             }
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             // Timeout - continue with what we have.
         }
 
         try
         {
-            await inputTask.WaitAsync(TimeSpan.FromSeconds(2));
+            await inputTask;
         }
-        catch (TimeoutException)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            // Keep a blocked input write from extending test teardown
-            // indefinitely.
-            if (_pty.IsRunning)
-            {
-                _pty.Kill(force: true);
-            }
-
-            _pty.Dispose();
-            try
-            {
-                await inputTask.WaitAsync(TimeSpan.FromSeconds(1));
-            }
-            catch (TimeoutException)
-            {
-                // A blocked native write could outlive the test cleanup.
-            }
-            catch (IOException)
-            {
-                // Cleanup can close the pipe while the write is released.
-            }
-            catch (ObjectDisposedException)
-            {
-                // Cleanup can dispose the stream while the write is released.
-            }
-
-            throw;
+            // The same bounded cancellation also stops the pending input.
         }
 
         lock (output)

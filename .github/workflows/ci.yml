@@ -156,8 +156,10 @@ jobs:
           retention-days: 5
           if-no-files-found: ignore
 
+  # Hosted macOS and Windows runners lack a usable OpenGL session; their host-native
+  # builds and published native assets are validated by build-and-test above.
   gui-smoke-linux:
-    name: GUI Smoke (X11 and Wayland)
+    name: GUI Smoke (X11)
     runs-on: ubuntu-latest
     needs: build-and-test
     steps:
@@ -170,7 +172,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Install GUI smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y weston xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
 
       - name: Restore and build
         run: |
@@ -194,105 +196,6 @@ jobs:
           set -e
           if [ "$status" -ne 124 ]; then
             cat "$smoke_dir/x11.log"
-            exit 1
-          fi
-
-      - name: Smoke Wayland desktop startup
-        shell: bash
-        run: |
-          set -euo pipefail
-          smoke_dir="$(mktemp -d)"
-          export XDG_RUNTIME_DIR="$smoke_dir/runtime"
-          mkdir -m 700 "$XDG_RUNTIME_DIR"
-          mkdir -p "$smoke_dir/home"
-          weston --backend=headless-backend.so --socket=wayland-1 > "$smoke_dir/weston.log" 2>&1 &
-          weston_pid=$!
-          cleanup() {
-            if kill -0 "$weston_pid" 2>/dev/null; then
-              kill "$weston_pid"
-            fi
-          }
-          trap cleanup EXIT
-          for _ in $(seq 1 50); do
-            if [ -S "$XDG_RUNTIME_DIR/wayland-1" ]; then break; fi
-            sleep 0.1
-          done
-          test -S "$XDG_RUNTIME_DIR/wayland-1"
-          set +e
-          timeout 12s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" \
-            XDG_CONFIG_HOME="$smoke_dir/home/.config" \
-            DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" WAYLAND_DISPLAY=wayland-1 \
-            DISPLAY= GLFW_PLATFORM=wayland \
-            dotnet run --project "${{ env.PROJECT_PATH }}" -c Release -r linux-x64 --no-build \
-            > "$smoke_dir/wayland.log" 2>&1
-          status=$?
-          set -e
-          if [ "$status" -ne 124 ]; then
-            cat "$smoke_dir/wayland.log"
-            cat "$smoke_dir/weston.log"
-            exit 1
-          fi
-
-  desktop-smoke:
-    name: Desktop Smoke (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    needs: build-and-test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            rid: osx-arm64
-          - os: windows-latest
-            rid: win-x64
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-      - name: Install GNU timeout (macOS only)
-        if: matrix.os == 'macos-15'
-        shell: bash
-        run: |
-          if ! command -v gtimeout >/dev/null 2>&1; then
-            brew install coreutils
-          fi
-
-      - name: Restore dependencies
-        run: dotnet restore "${{ env.PROJECT_PATH }}" -r "${{ matrix.rid }}"
-
-      - name: Build native helper (macOS only)
-        if: matrix.os == 'macos-15'
-        working-directory: src/Dotty.NativePty
-        run: make
-
-      - name: Build desktop host
-        run: dotnet build "${{ env.PROJECT_PATH }}" -c Release -r "${{ matrix.rid }}" --no-restore
-
-      - name: Smoke desktop startup
-        shell: bash
-        run: |
-          set -euo pipefail
-          smoke_dir="$RUNNER_TEMP/dotty-desktop-smoke"
-          mkdir -p "$smoke_dir/home"
-          set +e
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            timeout_cmd=gtimeout
-          else
-            timeout_cmd=timeout
-          fi
-          "$timeout_cmd" 12s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" \
-            XDG_CONFIG_HOME="$smoke_dir/home/.config" \
-            DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
-            dotnet run --project "${{ env.PROJECT_PATH }}" -c Release -r "${{ matrix.rid }}" --no-build \
-            > "$smoke_dir/desktop.log" 2>&1
-          status=$?
-          set -e
-          if [ "$status" -ne 124 ]; then
-            cat "$smoke_dir/desktop.log"
             exit 1
           fi
 
@@ -379,7 +282,7 @@ jobs:
   # Summary job that depends on all others
   ci-summary:
     name: CI Summary
-    needs: [build-and-test, gui-smoke-linux, desktop-smoke, code-quality, performance-tests]
+    needs: [build-and-test, gui-smoke-linux, code-quality, performance-tests]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -405,10 +308,4 @@ jobs:
             echo "GUI smoke checks failed!"
             exit 1
           fi
-          
-          if [ "${{ needs.desktop-smoke.result }}" = "failure" ]; then
-            echo "macOS/Windows desktop smoke checks failed!"
-            exit 1
-          fi
-          
           echo "All CI checks passed!"

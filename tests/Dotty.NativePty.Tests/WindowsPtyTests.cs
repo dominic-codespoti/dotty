@@ -323,58 +323,85 @@ public class WindowsPtyTests : IDisposable
     public async Task WindowsPty_Read_ReturnsProcessOutput()
     {
         Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
-        
+
         // Arrange
         _pty = new Windows.WindowsPty();
         _pty.Start(shell: "cmd.exe", columns: 80, rows: 24);
 
-        await Task.Delay(500); // Wait for shell to start
-
         var outputStream = _pty.OutputStream;
         outputStream.Should().NotBeNull();
 
-        await PtyTestHelpers.WaitForPtyReadyAsync(outputStream!, TimeSpan.FromSeconds(5));
-
-        // Send a command using synchronous I/O required by ConPTY pipes.
-        var inputStream = _pty.InputStream!;
-        var command = "echo TEST_OUTPUT_UNIQUE\r\n";
-        var bytes = Encoding.ASCII.GetBytes(command);
-        inputStream.Write(bytes, 0, bytes.Length);
-        inputStream.Flush();
-
-        // Act
-        await Task.Delay(500); // Wait for output
-
-        var buffer = new byte[4096];
+        // ConPTY requires the output pipe to be serviced continuously while
+        // input is sent. A blocking reader on its own thread matches the
+        // documented pipe-handling model and keeps startup output from
+        // interfering with the command response.
+        const string marker = "TEST_OUTPUT_UNIQUE";
         var output = new StringBuilder();
-        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-        try
+        var markerObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var reader = Task.Run(() =>
         {
-            while (!cts.Token.IsCancellationRequested)
+            var buffer = new byte[4096];
+
+            try
             {
-                var read = await outputStream!.ReadAsync(buffer, 0, buffer.Length, cts.Token);
-                if (read > 0)
+                while (true)
                 {
-                    output.Append(Encoding.UTF8.GetString(buffer, 0, read));
-                    if (output.ToString().Contains("TEST_OUTPUT_UNIQUE"))
+                    var read = outputStream!.Read(buffer, 0, buffer.Length);
+                    if (read == 0)
                     {
                         break;
                     }
-                }
-                else
-                {
-                    await Task.Delay(100, cts.Token);
+
+                    lock (output)
+                    {
+                        output.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                        if (output.ToString().Contains(marker, StringComparison.Ordinal))
+                        {
+                            markerObserved.TrySetResult();
+                            break;
+                        }
+                    }
                 }
             }
-        }
-        catch (OperationCanceledException)
+            catch (IOException)
+            {
+                // The test cleanup closes the synchronous pipe if the
+                // bounded wait expires.
+            }
+        });
+
+        try
         {
-            // Timeout - continue with what we have
+            await Task.Delay(500); // Wait for shell to start
+
+            var inputStream = _pty.InputStream!;
+            var command = $"echo {marker}\r\n";
+            var bytes = Encoding.ASCII.GetBytes(command);
+            inputStream.Write(bytes, 0, bytes.Length);
+            inputStream.Flush();
+
+            await markerObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            if (!reader.IsCompleted)
+            {
+                if (_pty.IsRunning)
+                {
+                    _pty.Kill(force: true);
+                }
+
+                _pty.Dispose();
+            }
+
+            await reader;
         }
 
-        // Assert
-        output.ToString().Should().Contain("TEST_OUTPUT_UNIQUE");
+        lock (output)
+        {
+            output.ToString().Should().Contain(marker);
+        }
     }
 
     /// <summary>

@@ -183,8 +183,10 @@ jobs:
         run: |
           set -euo pipefail
           smoke_dir="$(mktemp -d)"
+          mkdir -p "$smoke_dir/home"
           set +e
-          timeout 12s env HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
+          timeout 12s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" \
+            XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
             xvfb-run -a dotnet run --project "${{ env.PROJECT_PATH }}" -c Release --no-build \
             > "$smoke_dir/x11.log" 2>&1
@@ -202,6 +204,7 @@ jobs:
           smoke_dir="$(mktemp -d)"
           export XDG_RUNTIME_DIR="$smoke_dir/runtime"
           mkdir -m 700 "$XDG_RUNTIME_DIR"
+          mkdir -p "$smoke_dir/home"
           weston --backend=headless-backend.so --socket=wayland-1 > "$smoke_dir/weston.log" 2>&1 &
           weston_pid=$!
           cleanup() {
@@ -216,7 +219,8 @@ jobs:
           done
           test -S "$XDG_RUNTIME_DIR/wayland-1"
           set +e
-          timeout 12s env HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
+          timeout 12s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" \
+            XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" WAYLAND_DISPLAY=wayland-1 \
             DISPLAY= GLFW_PLATFORM=wayland \
             dotnet run --project "${{ env.PROJECT_PATH }}" -c Release --no-build \
@@ -278,7 +282,8 @@ jobs:
           else
             timeout_cmd=timeout
           fi
-          "$timeout_cmd" 12s env HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
+          "$timeout_cmd" 12s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" \
+            XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
             dotnet run --project "${{ env.PROJECT_PATH }}" -c Release --no-build \
             > "$smoke_dir/desktop.log" 2>&1

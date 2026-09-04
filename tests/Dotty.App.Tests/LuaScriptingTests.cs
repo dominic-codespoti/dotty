@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.Scripting;
 using Dotty.Runtime.Tabs;
@@ -70,12 +71,14 @@ public class LuaScriptingTests : IDisposable
     {
         _tabManager.CreateTab(cols: 80, rows: 24);
 
-        bool executed = _host.ExecuteString(@"
+        string luaDirectory = Path.GetFullPath(Path.GetTempPath()).Replace('\\', '/');
+
+        bool executed = _host.ExecuteString($@"
             local dotty = require('dotty')
             assert(dotty.tabs.count >= 1)
             assert(dotty.tabs.active_index == 1)
 
-            local new_tab = dotty.tabs.new({ cwd = '/tmp' })
+            local new_tab = dotty.tabs.new({{ cwd = '{luaDirectory}' }})
             assert(new_tab ~= nil)
             assert(dotty.tabs.count == 2)
             assert(dotty.tabs.active_index == 2)

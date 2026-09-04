@@ -382,7 +382,7 @@ public class UnixPtyTests : IDisposable
     /// <summary>
     /// Verifies that startup dimensions are preserved after control socket connects.
     /// </summary>
-    [ConditionalFacts.UnixOnlyFact]
+    [ConditionalFacts.LinuxOnlyFact]
     public void UnixPty_StartupSize_IsPreservedAfterControlSocketConnects()
     {
         // Arrange
@@ -391,7 +391,7 @@ public class UnixPtyTests : IDisposable
         const int expectedRows = 41;
 
         // Act
-        _pty.Start(columns: expectedCols, rows: expectedRows, shell: "/usr/bin/nvim");
+        _pty.Start(columns: expectedCols, rows: expectedRows, shell: "/bin/bash");
         Thread.Sleep(800);
 
         // Assert
@@ -407,14 +407,14 @@ public class UnixPtyTests : IDisposable
             .ToArray();
         childIds.Should().NotBeEmpty();
 
-        var nvimId = childIds.FirstOrDefault(id =>
+        var shellId = childIds.FirstOrDefault(id =>
         {
             var processNamePath = $"/proc/{id}/comm";
-            return File.Exists(processNamePath) && File.ReadAllText(processNamePath).Trim() == "nvim";
+            return File.Exists(processNamePath) && File.ReadAllText(processNamePath).Trim() == "bash";
         });
-        nvimId.Should().BeGreaterThan(0, "nvim child should be running under pty-helper");
+        shellId.Should().BeGreaterThan(0, "bash child should be running under pty-helper");
 
-        var fdPath = $"/proc/{nvimId}/fd/0";
+        var fdPath = $"/proc/{shellId}/fd/0";
         File.Exists(fdPath).Should().BeTrue();
         using var tty = File.OpenRead(fdPath);
 

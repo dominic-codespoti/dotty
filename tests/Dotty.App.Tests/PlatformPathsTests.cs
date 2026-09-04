@@ -17,12 +17,14 @@ public sealed class PlatformPathsTests
         string? original = Environment.GetEnvironmentVariable("DOTTY_CONFIG_HOME");
         try
         {
-            Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", "/tmp/dotty-platform-test");
+            string expectedRoot = Path.GetFullPath(
+                Path.Combine(Path.GetTempPath(), "dotty-platform-test"));
+            Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", expectedRoot);
 
-            Assert.Equal("/tmp/dotty-platform-test", PlatformPaths.ConfigRoot);
-            Assert.Equal("/tmp/dotty-platform-test/config.json", UserConfigService.GetConfigPath());
-            Assert.Equal("/tmp/dotty-platform-test/config.lua", LuaScriptHost.GetConfigLuaPath());
-            Assert.Equal("/tmp/dotty-platform-test/themes", UserThemeLoader.DefaultThemesDirectory);
+            Assert.Equal(expectedRoot, PlatformPaths.ConfigRoot);
+            Assert.Equal(Path.Combine(expectedRoot, "config.json"), UserConfigService.GetConfigPath());
+            Assert.Equal(Path.Combine(expectedRoot, "config.lua"), LuaScriptHost.GetConfigLuaPath());
+            Assert.Equal(Path.Combine(expectedRoot, "themes"), UserThemeLoader.DefaultThemesDirectory);
         }
         finally
         {

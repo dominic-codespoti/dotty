@@ -329,94 +329,82 @@ public class WindowsPtyTests : IDisposable
         _pty = new Windows.WindowsPty();
         _pty.Start(shell: "cmd.exe", columns: 80, rows: 24);
 
+        var inputStream = _pty.InputStream;
+        inputStream.Should().NotBeNull();
         var outputStream = _pty.OutputStream;
         outputStream.Should().NotBeNull();
 
         // ConPTY requires the output pipe to be serviced continuously while
-        // input is sent. Keep the asynchronous reader active before writing
-        // the command so startup and command output share one drain.
-        var output = new StringBuilder();
-        var markerObserved = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        using var readerCts = new CancellationTokenSource();
-        var readerToken = readerCts.Token;
-        var reader = Task.Run(async () =>
-        {
-            var buffer = new byte[4096];
-
-            try
-            {
-                while (!readerToken.IsCancellationRequested)
-                {
-                    var read = await outputStream!.ReadAsync(buffer.AsMemory(), readerToken);
-                    if (read == 0)
-                    {
-                        break;
-                    }
-
-                    lock (output)
-                    {
-                        output.Append(Encoding.UTF8.GetString(buffer, 0, read));
-                        if (output.ToString().Contains(marker, StringComparison.Ordinal))
-                        {
-                            markerObserved.TrySetResult();
-                            break;
-                        }
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (readerToken.IsCancellationRequested)
-            {
-                // The bounded test wait cancels the pending synchronous read.
-            }
-            catch (ObjectDisposedException) when (readerToken.IsCancellationRequested)
-            {
-                // Cleanup may close the stream while releasing a pending read.
-            }
-            catch (IOException) when (readerToken.IsCancellationRequested)
-            {
-                // Cleanup may close the pipe while releasing a pending read.
-            }
-        });
-
-        try
+        // input is sent. Write from a separate task while this test drains
+        // output on its own async control flow.
+        var inputTask = Task.Run(async () =>
         {
             await Task.Delay(500); // Wait for shell to start
 
-            var inputStream = _pty.InputStream!;
             var command = $"echo {marker}\r\n";
             var bytes = Encoding.ASCII.GetBytes(command);
-            inputStream.Write(bytes, 0, bytes.Length);
+            inputStream!.Write(bytes, 0, bytes.Length);
             inputStream.Flush();
+        });
 
-            try
-            {
-                await markerObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            catch (TimeoutException)
-            {
-                // Preserve the captured output for the assertion below.
-            }
-        }
-        finally
+        var buffer = new byte[4096];
+        var output = new StringBuilder();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        try
         {
-            readerCts.Cancel();
-
-            try
+            while (!cts.Token.IsCancellationRequested)
             {
-                await reader.WaitAsync(TimeSpan.FromSeconds(2));
-            }
-            catch (TimeoutException)
-            {
-                // A synchronous pipe read must not make test teardown
-                // unbounded if cancellation is unavailable on this runner.
-                if (_pty.IsRunning)
+                var read = await outputStream!.ReadAsync(buffer.AsMemory(), cts.Token);
+                if (read == 0)
                 {
-                    _pty.Kill(force: true);
+                    break;
                 }
 
-                _pty.Dispose();
+                output.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                if (output.ToString().Contains(marker, StringComparison.Ordinal))
+                {
+                    break;
+                }
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Timeout - continue with what we have.
+        }
+
+        try
+        {
+            await inputTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException)
+        {
+            // Keep a blocked input write from extending test teardown
+            // indefinitely.
+            if (_pty.IsRunning)
+            {
+                _pty.Kill(force: true);
+            }
+
+            _pty.Dispose();
+            try
+            {
+                await inputTask.WaitAsync(TimeSpan.FromSeconds(1));
+            }
+            catch (TimeoutException)
+            {
+                // A blocked native write could outlive the test cleanup.
+            }
+            catch (IOException)
+            {
+                // Cleanup can close the pipe while the write is released.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Cleanup can dispose the stream while the write is released.
+            }
+
+            throw;
         }
 
         lock (output)

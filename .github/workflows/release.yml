@@ -134,6 +134,9 @@ jobs:
       - name: Verify Linux artifact
         run: |
           test -x ./publish/linux-x64/dotty
+          test -f ./publish/linux-x64/libglfw.so.3
+          test -f ./publish/linux-x64/libSkiaSharp.so
+          test -f ./publish/linux-x64/liblua54.so
           test -x ./publish/linux-x64/pty-helper
 
       - name: Create tarball
@@ -211,6 +214,9 @@ jobs:
       - name: Verify macOS artifact
         run: |
           test -x ./publish/${{ matrix.rid }}/dotty
+          test -f ./publish/${{ matrix.rid }}/libglfw.3.dylib
+          test -f ./publish/${{ matrix.rid }}/libSkiaSharp.dylib
+          test -f ./publish/${{ matrix.rid }}/liblua54.dylib
           test -x ./publish/${{ matrix.rid }}/pty-helper
 
       - name: Create tarball
@@ -277,6 +283,9 @@ jobs:
           if (!(Test-Path "publish\win-x64\libSkiaSharp.dll")) {
             throw "Windows SkiaSharp native asset is missing."
           }
+          if (!(Test-Path "publish\win-x64\glfw3.dll")) {
+            throw "Windows GLFW native asset is missing."
+          }
 
       - name: Create zip archive
         run: |
@@ -312,12 +321,16 @@ jobs:
             [ -f "$archive" ] || continue
             listing="$(tar -tzf "$archive")"
             printf '%s\n' "$listing" | grep -Eq '/dotty$'
+            printf '%s\n' "$listing" | grep -Eq '/libglfw(\.so\.3|\.3\.dylib)$'
+            printf '%s\n' "$listing" | grep -Eq '/libSkiaSharp\.(so|dylib)$'
             printf '%s\n' "$listing" | grep -Eq '/pty-helper$'
           done
           for archive in ./artifacts/*/*.zip; do
             [ -f "$archive" ] || continue
             listing="$(unzip -Z1 "$archive")"
             printf '%s\n' "$listing" | grep -Eq '(^|/)dotty\.exe$'
+            printf '%s\n' "$listing" | grep -Eq '(^|/)glfw3\.dll$'
+            printf '%s\n' "$listing" | grep -Eq '(^|/)libSkiaSharp\.dll$'
           done
   # Create GitHub Release
   create-release:
@@ -350,13 +363,14 @@ jobs:
           archive="$(find ./release-assets -name 'dotty-*-linux-x64.tar.gz' -print -quit)"
           test -n "$archive"
           smoke_dir="$(mktemp -d)"
+          mkdir -p "$smoke_dir/home"
           tar -xzf "$archive" -C "$smoke_dir"
           package_dir="$(find "$smoke_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)"
           test -n "$package_dir"
           test -x "$package_dir/dotty"
           test -x "$package_dir/pty-helper"
           set +e
-          timeout 10s env HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
+          timeout 10s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
             DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
             xvfb-run -a "$package_dir/dotty" > "$smoke_dir/smoke.log" 2>&1
           status=$?

@@ -437,7 +437,7 @@ jobs:
           cp CHECKSUMS.txt ./release-assets/SHA256SUMS
           cat CHECKSUMS.txt >> RELEASE_NOTES.md
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.validate-release.outputs.tag_name }}
           name: Dotty v${{ steps.release_notes.outputs.version }}

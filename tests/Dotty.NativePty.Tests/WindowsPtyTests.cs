@@ -369,6 +369,11 @@ public class WindowsPtyTests : IDisposable
                 // The test cleanup closes the synchronous pipe if the
                 // bounded wait expires.
             }
+            catch (ObjectDisposedException)
+            {
+                // The test cleanup may close the stream while the blocking
+                // reader is being released.
+            }
         });
 
         try
@@ -400,7 +405,11 @@ public class WindowsPtyTests : IDisposable
 
         lock (output)
         {
-            output.ToString().Should().Contain(marker);
+            var capturedOutput = output.ToString();
+            capturedOutput.Should().Contain(
+                marker,
+                "The captured ConPTY output was: {0}",
+                capturedOutput);
         }
     }
 

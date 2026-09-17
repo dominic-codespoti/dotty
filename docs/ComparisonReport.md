@@ -43,11 +43,11 @@ contract; the helper must not depend on repository-relative paths.
 
 ## 4. Advanced Features & Multiplexing
 
-**What Dotty is Missing:**
+**Comparison notes:**
 *   **Multiplexing (tmux-like behavior):** Wezterm has a built-in client/server architecture allowing users to detach and reattach to terminal sessions locally or over SSH. Dotty provides local terminal sessions, tabs, and panes but no client/server multiplexer.
-*   **Scriptability:** Wezterm's Lua engine allows endless user customization of keybinds, appearance, and event hooks dynamically.
-*   **Split Panes and Native Tabs:** Dotty now provides tabs and split panes in its runtime. Ghostty and Wezterm also provide built-in window management, while Dotty does not provide a client/server multiplexer.
-*   **Image Protocol Support:** Wezterm supports the Kitty image protocol and iTerm2 image protocols to display inline graphics.
+*   **Scriptability:** Dotty provides Lua startup/configuration hooks and keybinding hooks. Wezterm's Lua engine exposes a broader client/server and event-hook surface.
+*   **Split Panes and Native Tabs:** Dotty provides tabs and split panes in its runtime. Ghostty and Wezterm also provide built-in window management.
+*   **Image Protocol Support:** Wezterm supports the Kitty image protocol and iTerm2 image protocols to display inline graphics; Dotty does not currently document those protocols as supported.
 
 ## 5. Strategic Recommendations for Dotty
 

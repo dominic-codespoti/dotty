@@ -259,9 +259,10 @@ project writes `regressions.txt`. CI does not run the detailed benchmark mode.
 
 ### Cold-Start Optimization
 
-1. **StartupTimer**: Built-in phase profiler that logs elapsed time per initialization step
-2. **Lazy glyph atlas population**: Only renders glyphs when first seen, not at startup
-3. **Deferred session creation**: Background tabs don't create sessions until activated
+1. **Startup benchmarks**: `StartupBenchmarks` records host initialization
+   phases for comparison across runs.
+2. **Lazy glyph atlas population**: Glyphs are added to the shared atlas as
+   they are first encountered.
 
 ### Common Optimizations
 

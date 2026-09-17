@@ -88,7 +88,6 @@ public class ControlCodeTests
         event System.Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
         event System.Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event System.Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
-        event System.Action<string>? ITerminalHandler.LinkOpened { add { } remove { } }
         void ITerminalHandler.OnHyperlink(string uri) { }
 
         void ITerminalHandler.RequestRenderExtern() { }

@@ -99,12 +99,13 @@ public class ThemeRegistryTests : IDisposable
     }
 
     [Fact]
-    public void ThemeRegistry_IsThreadSafe()
+    public async Task ThemeRegistry_IsThreadSafe()
     {
         // Arrange
         var registry = new ThemeRegistry(new UserThemeLoader("/nonexistent"));
         var themes = new List<IColorScheme>();
         var tasks = new List<Task>();
+        var cancellationToken = TestContext.Current.CancellationToken;
 
         // Act - spawn multiple threads accessing themes
         for (int i = 0; i < 50; i++)
@@ -116,10 +117,10 @@ public class ThemeRegistryTests : IDisposable
                 {
                     themes.Add(theme!);
                 }
-            }));
+            }, cancellationToken));
         }
 
-        Task.WaitAll(tasks.ToArray());
+        await Task.WhenAll(tasks);
 
         // Assert - all threads should get valid theme
         Assert.Equal(50, themes.Count);

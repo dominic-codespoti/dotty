@@ -1,45 +1,37 @@
 # State Coordination Hardening — Plan
 
-Status: **Implemented 2026-08-12.** Decisions taken: R1 = library validator, tests + fuzz loops
-only (no DEBUG hook); R2 = coalesced snapshot-fed extent apply; R3 = Option B (renderer half
-deleted, epoch contract kept); R4 = regression test added. R1 additionally surfaced and fixed
-three latent copy-path bugs (region-scroll/IL/DL cold-flag transfer, IL/DL maxCol transfer,
-resize-narrowing dangling wide bases). Verification: full suites green; live 500k-line scrollbar
-smoke passes. Each remediation item below records the options considered and their tradeoffs so
-the decision is traceable.
+Status: **Implemented 2026-08-12; retained as the terminal-core coordination contract** · Last updated: 2026-09-17
+
+The terminal core coordinates three boundaries:
+
+1. `TerminalBuffer.SyncRoot` protects parser mutations and coherent snapshot
+   capture.
+2. Buffer invariants cover hot cells, cold metadata, continuation width,
+   scrollback, and row generations.
+3. `RenderSnapshot` copies the visible state under a bounded lock and is
+   rasterized after the lock is released by the Silk.NET/OpenGL host.
+
+The hardening work centralizes invariant validation, keeps a single source of
+truth for row invalidation, and makes alternate-screen and resize transitions
+full invalidations. UI-framework-specific scrolling and presentation behavior
+is outside this document.
 
 ## TL;DR
 
-Two recent bugs — the `ret❤️rn` ghost on ASCII overwrite and the randomly-positioned scrollbar
-during `yes` output — were not random failures of the buffer model. They are two instances of the
-same two structural patterns, plus one instance of a third:
+The observed terminal bugs were instances of two coordination failures:
 
-1. **Invariants enforced by convention, not by the library.** The emoji bug was a write path
-   (`WriteGrapheme`) mutating `ColdCell.GraphemeIndex` without setting `Screen.RowColdFlags`; a
-   different write path (`WriteAsciiRunBulk`) trusts that flag to decide whether to clean cold
-   metadata. The invariant "cold metadata present ⇒ row flag set" was held by discipline, and the
-   discipline is evidenced by the checker being copy-pasted into **9 test files**
-   (`AssertBufferClean` / `AssertNoOrphanedBases`) instead of living in one place.
-2. **Scroll offset has no single owner.** `_offset` is written by the `Offset` setter (user drag
-   via `ScrollViewer`), `UpdateScrollState` (system follow), `ScrollToRow` (prompt jump) — and
-   previously `TerminalGrid.SetBuffer`'s `ScrollViewer.ScrollToEnd()`. Worse,
-   `UpdateScrollState` runs **twice per frame** with different captured state (sync from
-   `HandleBufferGeometryChange`, posted from `RenderToBitmap` with a captured `sbCount`). Two
-   writers with no happens-before ⇒ nondeterministic result — the "sometimes it goes all the way
-   down, sometimes not" fingerprint. The `explicitScrollbackCount` parameter exists purely to
-   paper over the re-read race.
-3. **The incremental renderer was reverted but left in place as a dead twin.** The live path is
-   full render (`canvas.Clear` + re-render everything, ~11.7 ms at 73×136). All of the incremental
-   machinery — `ComputeExposedRows`, `ApplyScrollToMirror`, `MemmoveRegionRows`,
-   `MemmoveWholeFrame`, `ComputeDirtyRows`, `RenderDirty`, the `PendingScroll` queue (enqueued by
-   4 buffer operations and **drained-and-discarded** every frame in `RenderToBitmap`), the
-   `_rowScrollEpochs` motion-epoch array, and an **empty 0-byte `RenderSnapshot.cs`** — remains.
-   Two render paths coexist; future "optimizations" can target the wrong one (that is exactly how
-   the band bug and the offset-starvation bug happened the first time).
+1. **Invariants enforced by convention.** Cold metadata and `RowColdFlags` must
+   agree across every write, clear, scroll, and copy path. The library validator
+   now owns this contract so tests and fuzz loops do not duplicate it.
+2. **State transitions must invalidate derived render data.** Resizes, resets,
+   alternate-screen changes, and scrollback-origin changes bump the affected
+   row generations. A snapshot and its GPU scene must never outlive the state
+   they describe.
 
-This document plans four remediations (R1–R4) with options, pros/cons, recommendations, and
-acceptance criteria. Nothing here changes the buffer model itself, which is sound: every bug this
-session was 1–2 lines once root-caused, and the pixel-diff harness caught every render regression.
+The current renderer's bounded lock attempt, reader-priority handoff, and
+immutable snapshot provide the presentation boundary. Incremental row reuse is
+tracked separately in `IncrementalScrollRendering.md`; it is not a live
+coordination path.
 
 ---
 
@@ -94,10 +86,10 @@ cell mutation through a single `Screen` API that maintains flags.
 
 ### Recommendation
 
-**A**, with a debug-guarded implementation and the cold-flag check added. This is the cheapest
-fix that catches the observed bug class at its source, and it de-duplicates 9 copies of the
-checker. **C** is the right long-term direction only if the hot path can afford it — revisit
-after R3 decides the incremental renderer's fate (epoch/flag maintenance cost differs by path).
+**Implemented as A.** `TerminalBuffer.ValidateInvariants()` delegates to the
+active `Screen` validator and remains test/debug-only. Structural enforcement
+is deliberately deferred because `RowColdFlags` avoids cold-cell scans on the
+hot write paths.
 
 ### Acceptance criteria
 
@@ -108,209 +100,54 @@ after R3 decides the incremental renderer's fate (epoch/flag maintenance cost di
 
 ---
 
-## 2. R2 — Single-owner scroll state
 
-### Current state
-
-- `_offset` writers: `Offset` setter (ScrollViewer user drags call it via `ILogicalScrollable`),
-  `UpdateScrollState` (system follow/clamp), `ScrollToRow` (prompt navigation). Until today,
-  `TerminalGrid.SetBuffer` also called `ScrollViewer.ScrollToEnd()` — removed, but the pattern of
-  multiple writers remains.
-- `UpdateScrollState` runs twice per frame:
-  1. Synchronously from `HandleBufferGeometryChange` (reads live `ScrollbackCount`).
-  2. Posted at `DispatcherPriority.Render` from `RenderToBitmap` with a captured `sbCount`
-     (`explicitScrollbackCount`) — the parameter exists only because re-reading the live value
-     at post time yields a newer extent than the one the follow decision was made against.
-- Trace evidence of the race (pre-fix): `FOLLOW newOff=1874` → `OFFSET old=1874 new=2794`
-  (the ScrollToEnd write, computed against a stale extent) → all subsequent updates report
-  `atBottom=False` and output never scrolls into view.
-- The Avalonia constraint is real: `UpdateScrollState` → `ScrollInvalidated` →
-  `ScrollContentPresenter.InvalidateMeasure` throws if invoked inside a render pass, so the
-  update must be deferred (posted) — the fix must keep the defer, not make it synchronous.
-
-### Options
-
-**A. One coalesced, snapshot-fed update per frame.**
-Capture `(rows, cols, sbCount)` under `SyncRoot` at render start. A single posted
-`ApplyExtent(snapshot)` per frame (guard flag, latest-snapshot-wins) replaces both call sites;
-delete the `explicitScrollbackCount` parameter. Contract:
-- *New extent* comes from the snapshot (one consistent value per frame).
-- *User intent* comes from live `_offset`/`_lastExtent` at apply time (a wheel-up that lands
-  before the post breaks `wasAtBottom` and correctly cancels the follow).
-
-- Pros: one writer per frame; no re-read race by construction; smallest change to the live hot
-  path; keeps the mandatory defer; the follow logic itself (already correct once the competing
-  writer is gone) stays as-is.
-- Cons: still two code paths in the sense of "sync capture + async apply" — but they are
-  strictly ordered (capture before post, one per frame), which is the property that matters.
-
-**B. Event-driven: `TerminalBuffer` raises a `ScrollbackChanged`/`Updated` event; canvas
-subscribes.**
-- Pros: no polling; the buffer announces growth; decouples the view from frame timing.
-- Cons: new coupling direction (buffer → view events; buffer currently has none — the adapter
-  owns `RenderRequested`); event storms under `yes` output need coalescing anyway (same guard
-  flag); more surface for the same result as A.
-
-**C. Drop `ScrollViewer`; draw a custom scrollbar.**
-- Pros: one owner of offset (the canvas) with no framework interference; full styling control.
-- Cons: re-implements drag, wheel, page-up/down, hit-testing — a large UI change for a race that
-  A already eliminates; the ScrollViewer also provides the `ILogicalScrollable` contract the
-  code already implements.
-
-**D. Keep as-is** (post-fix state: only canvas writes offset, but still twice per frame with
-different captured state).
-- Pros: zero risk.
-- Cons: the double-update remains a latent trap: any future path that reads live state in the
-  posted callback re-introduces the race; the `explicitScrollbackCount` parameter is a standing
-  code smell inviting "fixes".
-
-### Recommendation
-
-**A.** It is the minimal change that makes offset updates a pure function of
-(snapshot, current offset) with a single writer per frame, and it deletes the
-`explicitScrollbackCount` workaround. **B** is a viable alternative if the team prefers
-event-driven; **C** is out of scope for this plan.
-
-### Acceptance criteria
-
-- `TerminalCanvas_FollowsBottomAsScrollbackGrows` passes (added).
-- Live 500k-line `yes | head` smoke test: scrollbar reaches bottom at completion; `atBottom`
-  remains true throughout streaming (trace-enabled check during development, no trace left in).
-- User wheel-up mid-stream cancels follow and does not get yanked to bottom by a stale post.
-- No `UpdateScrollState` invocation carries a value that could differ from the frame's snapshot.
-
----
-
-## 3. R3 — Resolve the dormant incremental render machinery
-
-### Current state
-
-Live path: full render every frame (`canvas.Clear(bgColor)` + `RenderToBitmap`, ~11.7 ms at
-73×136 — bench-verified acceptable). Everything below is **not executed** by the live path:
-
-| Symbol | Location | Live-path contact |
-|---|---|---|
-| `PendingScroll` queue + enqueue sites | `TerminalBuffer` (4 ops) | Enqueued on every scroll; **drained-and-discarded** each frame in `RenderToBitmap` |
-| `PendingScrollCount`, `TryDequeuePendingScroll` | `TerminalBuffer` | Tests only |
-| `_rowScrollEpochs` + `RowScrollEpochs`/`GetRowEpoch` + `ScrollEpochMath` | `TerminalBuffer` | Bumped on every mutation (`MarkRowDirty` et al.); consumed by tests only |
-| `ComputeExposedRows`, `ApplyScrollToMirror`, `MemmoveRegionRows`, `MemmoveWholeFrame`, `ComputeDirtyRows` | `TerminalCanvas` | Tests only |
-| `RenderDirty` | `TerminalFrameComposer` | Tests only |
-| `RenderSnapshot.cs` | `Dotty.Terminal/Adapter/Buffer/` | **0-byte empty file** |
-| `IncrementalRenderTests`, `ScrollExposedRowsTests`, `ScrollEpochTests` | tests | Exercise the above |
-
-The `IncrementalScrollRendering.md` doc plans a future re-attempt (Phases 0/0.5/A/B/C) that
-would re-enable most of this.
-
-### Options
-
-**A. Delete everything dormant (queue, epochs, canvas/composer primitives, empty stub, their
-tests).**
-- Pros: one render path; no dead code; removes the per-frame queue enqueue/discard overhead and
-  the per-mutation epoch bumps; no future maintainer can re-enable an unverified path by
-  accident; git history retains all of it.
-- Cons: the re-attempt (if it happens) re-writes the primitives and re-derives the band math the
-  pixel-diff tests verify — the exact math that took a full session to get right;
-  `ScrollExposedRowsTests`/`IncrementalRenderTests` are the verification harness for that math.
-
-**B. Delete the dead *renderer* half, keep the buffer-side contract.**
-Delete the `PendingScroll` queue (and its discard loop), `RenderSnapshot.cs`, and the canvas /
-composer primitives. Keep `_rowScrollEpochs` + `ScrollEpochMath` + `ScrollEpochTests`.
-- Pros: removes all live-path overhead and the dead renderer twin; keeps the cheap, tested
-  buffer-side epoch contract that the design doc's Phase A explicitly depends on (rotation +
-  exposed-row bump); smaller diff than A.
-- Cons: `ScrollExposedRowsTests`/`IncrementalRenderTests` still go (they test the deleted canvas
-  primitives); the epoch machinery remains unused-by-live-path (though cheap and tested).
-
-**C. Keep everything; mark dormancy explicitly** (namespace/comment banner + doc cross-ref).
-- Pros: zero diff risk; preserves the harness for the planned re-attempt.
-- Cons: the exact state that produced the first two regressions (band math bug, starvation bug)
-  — dormant code that looked live; the empty stub stays as a trap; per-frame queue overhead stays.
-
-### Recommendation
-
-**B**, contingent on the decision recorded in `IncrementalScrollRendering.md`:
-- If Phases 0/0.5 (instrumentation + cheap wins) are the committed next step and A/B/C remain
-  "maybe", deleting the renderer half now is safe — it is the half that burned us, and the doc
-  already specifies how to rebuild it with the pixel-diff harness.
-- Keep epochs: they are the documented buffer-side interface for the re-attempt, cheap, and
-  independently tested. If the cheap wins land and A/B/C is dropped for good, a follow-up
-  deletion of epochs (Option A) becomes attractive.
-
-### Acceptance criteria
-
-- Zero references to deleted symbols anywhere in `src/` or `tests/` (build + grep clean).
-- No `_pendingScrolls` enqueue/discard in the live path.
-- `ScrollExposedRowsTests` / `IncrementalRenderTests` removed or migrated; `ScrollEpochTests`
-  retained.
-- Full suites green; live smoke (typing, scrolling, `yes`) unchanged.
-
----
-
-## 4. R4 — Alt-screen invalidation: verify and codify
+## 2. R2 — Alternate-screen invalidation
 
 ### Current state (verified against source)
 
-The design review flagged `_rowGenerations` sharing across main/alt screens as a latent bug.
-Current code **already mitigates it**: `SetAlternateScreen` ends with `MarkAllRowsDirty()`, which
-bumps both generations and motion epochs for every row and clears the `PendingScroll` queue; the
-canvas additionally resets composer caches on alt change (`_lastBufferWasAlternate`). In the
-full-render world this is complete.
+`TerminalBuffer.SetAlternateScreen` switches the active screen and ends with
+`MarkAllRowsDirty()`. Every row generation therefore changes across both
+directions of a toggle, so a scene builder cannot reuse instances from the
+other screen. Resize, reset, clear, and reflow use the same full-invalidation
+rule.
 
-The risk re-appears only if the incremental renderer returns and someone *optimizes* the toggle
-to preserve main-screen rows across it — which would be correct only with per-screen arrays.
-
-### Options
-
-**A. Add a regression test** asserting that toggling alt screen bumps every row generation/epoch
-and clears pending scrolls.
-- Pros: codifies the invariant; near-zero cost; fails loudly if the toggle is ever "optimized".
-- Cons: none material.
-
-**B. Split generation/epoch arrays per screen now.**
-- Pros: removes the shared-state hazard structurally before any future incremental work.
-- Cons: touches `ScreenManager` + all row-indexed logic; no live-path benefit today (toggle
-  already invalidates everything); churn for a latent risk.
-
-**C. Do nothing; rely on the doc note.**
-- Pros: zero diff.
-- Cons: the hazard is unguarded; the first "optimization" silently reintroduces it.
+The current OpenGL host has no renderer-side screen mirror to preserve across
+the toggle. This full invalidation is nevertheless a required contract for any
+future incremental row cache.
 
 ### Recommendation
 
-**A**, plus a one-line note in `IncrementalScrollRendering.md`'s blocking-preconditions section
-(already present; keep it). **B** only if Phase A of the incremental work starts.
+Keep the single generation arrays and invalidate every row on a screen toggle.
+Splitting generations per screen is unnecessary until an incremental renderer
+needs to preserve rows across the transition.
 
 ### Acceptance criteria
 
-- New test: `SetAlternateScreen(true)` then `(false)` bumps all generations/epochs; pending
-  scrolls cleared; passes with current code.
-
+- `SetAlternateScreen(true)` and then `(false)` bump every row generation.
+- A future row cache clears its entries before consuming the next snapshot.
+- Resize, reset, clear, and reflow likewise force a complete scene.
 ---
 
-## 5. Sequencing, dependencies, and acceptance
+## 3. Sequencing, dependencies, and acceptance
 
-1. **R1** (library validator + test de-dup) — independent; cheapest; do first.
-2. **R2** (single-owner scroll state) — independent; view-layer; needs live verification with
-   the `terminal-tester` harness (wheel-up mid-stream + 500k-line smoke).
-3. **R3** (dormant machinery) — depends on the R3 option decision (recommended B); do after R1
-   so the shared validator is in place before test files are touched/removed.
-4. **R4** (alt-screen test) — trivial; anytime; note in incremental doc.
+1. Keep library-owned invariant validation in the terminal test and fuzz
+   coverage.
+2. Keep bounded snapshot capture and reader-priority handoff around the
+   current scene composition path.
+3. Treat alternate-screen, resize, reset, clear, and reflow as full
+   invalidations before adding any renderer-side row reuse.
+4. Validate future incremental work against the complete OpenGL scene; the
+   design and test requirements live in `IncrementalScrollRendering.md`.
 
-Global acceptance: `Dotty.App.Tests` + `Dotty.Terminal.Tests` full suites green; live smoke
-(typing, wheel scroll, nvim session, 500k-line `yes`) behaves; no perf regression on the
-73×136 full-render benchmark (~11.7 ms).
+The shipped host must continue to preserve terminal content while typing,
+scrolling, switching screens, resizing, and capturing a snapshot. The
+validator is not called on the live rendering path.
 
-## 6. Risks and open questions
+## 4. Risks and open questions
 
-- **R2 must keep the posted defer** — making the update synchronous to "simplify" would throw
-  from inside the render pass (Avalonia). The guard flag is load-bearing; test the wheel-up
-  mid-stream case explicitly.
-- **R3 deletion is one-way-ish**: recoverable from git, but the exposed-band math took a full
-  session to verify. If the team expects Phase A/B within weeks, prefer C and re-evaluate.
-- **Open question**: should `ValidateInvariants` also run in `#if DEBUG` builds at the end of
-  public mutators (fail-fast in dev) or only from tests? Recommendation: tests + fuzz loops only
-  for now; a DEBUG hook is a cheap follow-up if fuzzing still misses something.
-- **Open question**: R2 snapshot — extend it to a small `RenderState` struct reused by
-  `HandleBufferGeometryChange` and the composer (future-proofing for Phase 0 instrumentation),
-  or keep it local to the extent update? Recommendation: local for now; promote when Phase 0
-  actually starts.
+- Should `ValidateInvariants` also run from `#if DEBUG` public mutators, or
+  remain test/fuzz-only? Keep it test/fuzz-only until a measured need appears.
+- A future row cache must not reuse data across an alternate-screen toggle,
+  resize, reset, clear, or reflow.
+- Snapshot capture and OpenGL scene composition must remain outside the parser's
+  mutation lock after the bounded copy completes.

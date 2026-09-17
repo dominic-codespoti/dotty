@@ -24,13 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Get nightly version
         id: version
+        shell: bash
         run: |
+          set -euo pipefail
           DATE=$(date +%Y%m%d)
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "version=0.0.0-nightly-${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
@@ -38,12 +40,12 @@ jobs:
           echo "Nightly version: 0.0.0-nightly-${DATE}-${SHORT_SHA}"
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-linux-nightly-${{ hashFiles('**/*.csproj') }}
@@ -59,7 +61,9 @@ jobs:
         run: make
 
       - name: Publish self-contained
+        shell: bash
         run: |
+          set -euo pipefail
           dotnet publish ${{ env.PROJECT_PATH }} \
             -c Release \
             -r linux-x64 \
@@ -70,12 +74,16 @@ jobs:
             -o ./publish/linux-x64
 
       - name: Verify Linux artifact
+        shell: bash
         run: |
+          set -euo pipefail
           test -x ./publish/linux-x64/dotty
           test -x ./publish/linux-x64/pty-helper
 
       - name: Create tarball
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION=${{ steps.version.outputs.version }}
           cd ./publish/linux-x64
           PACKAGE_DIR="dotty-${VERSION}-linux-x64"
@@ -87,7 +95,7 @@ jobs:
           ls -la *.tar.gz
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotty-nightly-linux-x64
           path: dotty-*.tar.gz
@@ -109,13 +117,15 @@ jobs:
             runner: macos-15
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Get nightly version
         id: version
+        shell: bash
         run: |
+          set -euo pipefail
           DATE=$(date +%Y%m%d)
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "version=0.0.0-nightly-${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
@@ -123,12 +133,12 @@ jobs:
           echo "Nightly version: 0.0.0-nightly-${DATE}-${SHORT_SHA}"
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-macos-nightly-${{ matrix.arch }}-${{ hashFiles('**/*.csproj') }}
@@ -144,7 +154,9 @@ jobs:
         run: make
 
       - name: Publish self-contained
+        shell: bash
         run: |
+          set -euo pipefail
           dotnet publish ${{ env.PROJECT_PATH }} \
             -c Release \
             -r ${{ matrix.rid }} \
@@ -155,12 +167,16 @@ jobs:
             -o ./publish/${{ matrix.rid }}
 
       - name: Verify macOS artifact
+        shell: bash
         run: |
+          set -euo pipefail
           test -x ./publish/${{ matrix.rid }}/dotty
           test -x ./publish/${{ matrix.rid }}/pty-helper
 
       - name: Create tarball
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION=${{ steps.version.outputs.version }}
           cd ./publish/${{ matrix.rid }}
           PACKAGE_DIR="dotty-${VERSION}-${{ matrix.rid }}"
@@ -172,7 +188,7 @@ jobs:
           ls -la *.tar.gz
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotty-nightly-${{ matrix.rid }}
           path: dotty-*.tar.gz
@@ -184,7 +200,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -199,12 +215,12 @@ jobs:
           "Nightly version: $version"
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-windows-nightly-${{ hashFiles('**/*.csproj') }}
@@ -233,7 +249,7 @@ jobs:
           Get-ChildItem *.zip
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotty-nightly-win-x64
           path: dotty-*.zip
@@ -245,10 +261,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -277,10 +293,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -288,7 +304,9 @@ jobs:
         run: dotnet restore ${{ env.PROJECT_PATH }} -r linux-arm64
 
       - name: Publish Linux ARM64 build
+        shell: bash
         run: |
+          set -euo pipefail
           dotnet publish ${{ env.PROJECT_PATH }} \
             -c Release \
             -r linux-arm64 \
@@ -300,7 +318,7 @@ jobs:
       - name: Verify Linux ARM64 executable
         run: test -x ./publish/linux-arm64/dotty
 
-  # Create or update nightly release
+  # Create nightly release
   create-nightly-release:
     needs: [build-linux-nightly, build-linux-arm64-nightly, build-macos-nightly, build-windows-nightly, build-windows-arm64-nightly]
     runs-on: ubuntu-latest
@@ -309,32 +327,38 @@ jobs:
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Get nightly version
         id: version
+        shell: bash
         run: |
+          set -euo pipefail
           DATE=$(date +%Y%m%d)
           SHORT_SHA=$(git rev-parse --short HEAD)
           echo "version=0.0.0-nightly-${DATE}-${SHORT_SHA}" >> $GITHUB_OUTPUT
           echo "date=${DATE}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ./artifacts
           pattern: dotty-nightly-*
 
       - name: Collect artifacts
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p ./release-assets
           find ./artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} ./release-assets/ \;
           ls -la ./release-assets/
 
       - name: Generate release notes
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION=${{ steps.version.outputs.version }}
           DATE=${{ steps.version.outputs.date }}
           cat > NIGHTLY_NOTES.md << EOF
@@ -392,8 +416,23 @@ jobs:
           cp CHECKSUMS.txt ./release-assets/SHA256SUMS
           cat CHECKSUMS.txt >> NIGHTLY_NOTES.md
 
-      - name: Create or update nightly release
-        uses: softprops/action-gh-release@v2
+      - name: Reset nightly release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view nightly >/dev/null 2>&1; then
+            gh release delete nightly --cleanup-tag --yes
+          else
+            echo "No existing nightly release found."
+          fi
+          if git ls-remote --exit-code --refs origin refs/tags/nightly >/dev/null 2>&1; then
+            git push origin --delete nightly
+          fi
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
           name: Nightly Build (${{ steps.version.outputs.date }})
@@ -401,5 +440,6 @@ jobs:
           files: ./release-assets/*
           draft: false
           prerelease: true
+          target_commitish: ${{ github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

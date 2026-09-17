@@ -105,8 +105,7 @@ Dotty.slnx
 │   ├── Dotty.Rendering.Gpu/         # Shared atlas and GPU frame data
 │   ├── Dotty.Terminal/              # Terminal core engine
 │   ├── Dotty.NativePty/             # POSIX PTY helper (C + C# wrapper)
-│   ├── Dotty.Abstractions/          # Shared interfaces
-│   └── Dotty.Config.SourceGenerator/# Compile-time config generator
+│   └── Dotty.Abstractions/          # Shared interfaces
 └── tests/
     └── Dotty.App.Tests/             # Host, input, and runtime tests
 ```
@@ -189,20 +188,11 @@ dotnet test --solution Dotty.slnx --filter "FullyQualifiedName~Parser"
 
 | Test Type | Description | Location |
 |-----------|-------------|----------|
-| Buffer Tests | Terminal buffer correctness | `BasicAnsiParserTests.cs`, `SgrColorTests.cs` |
-| Rendering Tests | Visual state assertions | `AsciiArtRenderTests.cs`, `PermutationScrollRenderTests.cs` |
-| Ligature Tests | HarfBuzz shaping verification | `LigatureRenderTests.cs` |
-| Underline Tests | Undercurl, dotted, dashed rendering | `UnderlineRenderTests.cs` |
-| Rounded Corner Tests | Clip region correctness | `RoundedCornerRenderTests.cs` |
-| Scroll Region Tests | DECSTBM/DECOM behavior | `ScrollRegionTests.cs` |
-| PromptMark Tests | Shell integration markers | `PromptMarkTests.cs` |
-| Ligature Tests | HarfBuzz shaping verification | `LigatureRenderTests.cs` |
-| Underline Tests | Undercurl, dotted, dashed rendering | `UnderlineRenderTests.cs` |
-| Rounded Corner Tests | Clip region correctness | `RoundedCornerRenderTests.cs` |
-| Scroll Region Tests | DECSTBM/DECOM behavior | `ScrollRegionTests.cs` |
-| PromptMark Tests | Shell integration markers | `PromptMarkTests.cs` |
-| Fuzz/Stress Tests | Boundary and safety testing | `StressFuzzReproTests.cs`, `NeovimReplayTests.cs` |
-| Integration Tests | End-to-end scenarios | `EndToEndTests.cs` |
+| Buffer tests | Terminal buffer correctness | `BasicAnsiParserTests.cs`, `SgrColorTests.cs`, `BufferWriterTests.cs` |
+| Rendering tests | Scene and pixel-state assertions | `AsciiArtRenderTests.cs`, `PermutationScrollRenderTests.cs`, `TerminalSceneComposerTests.cs` |
+| Scroll-region tests | DECSTBM and origin-mode behavior | `ScrollRegionTests.cs`, `ContinuationClearTests.cs` |
+| Fuzz/stress tests | Boundary and safety testing | `StressFuzzReproTests.cs`, `NeovimReplayTests.cs` |
+| Integration tests | End-to-end host scenarios | `EndToEndTests.cs` |
 
 ### Running Tests in CI Mode
 
@@ -283,14 +273,6 @@ Dotty uses unsafe code (`AllowUnsafeBlocks=true`) for native interop and perform
 3. **Validate inputs** before entering unsafe code
 4. **Use `fixed` statements** properly with pinned references
 
-### Source Generator Guidelines
-
-When working with `Dotty.Config.SourceGenerator`:
-
-1. Follow the existing emitter patterns in `Emission/` folder
-2. Use `StringBuilder` efficiently for code generation
-3. Add diagnostic messages for configuration errors (see `Diagnostics/`)
-4. Update `AnalyzerReleases.Shipped.md` for new analyzer versions
 
 ## Project Structure
 
@@ -326,10 +308,9 @@ When working with `Dotty.Config.SourceGenerator`:
 | `src/Dotty.Terminal/` | Terminal buffer, ANSI parser, rendering contracts |
 | `src/Dotty.NativePty/` | C pty-helper and C# bindings |
 | `src/Dotty.Abstractions/` | Interfaces, config contracts, theme definitions |
-| `src/Dotty.Config.SourceGenerator/` | Roslyn source generator for config |
 | `tests/Dotty.App.Tests/` | xUnit host, input, rendering, and integration tests |
 | `docs/` | Architecture documentation and guides |
-| `artifacts/perf/` | Benchmark harnesses |
+| `scripts/perf/` | Benchmark harnesses |
 
 ## Pull Request Process
 

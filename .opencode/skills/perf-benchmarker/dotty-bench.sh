@@ -70,7 +70,7 @@ case "${1:-help}" in
             shift
         done
         cd "$PROJECT_ROOT"
-        python3 artifacts/perf/terminal_output_bench.py $ARGS
+        python3 scripts/perf/terminal_output_bench.py $ARGS
         ;;
 
     gui)
@@ -85,7 +85,7 @@ case "${1:-help}" in
             shift
         done
         cd "$PROJECT_ROOT"
-        python3 artifacts/perf/gui_harness_bench.py $ARGS
+        python3 scripts/perf/gui_harness_bench.py $ARGS
         ;;
 
     startup)
@@ -101,7 +101,7 @@ case "${1:-help}" in
         LOG="/tmp/dotty-startup-$$.log"
         export DOTTY_BENCH_STARTUP_LOG="$LOG"
         cd "$PROJECT_ROOT"
-        python3 artifacts/perf/terminal_output_bench.py --runs 1 --lines 1000 --include dotty $APP > /dev/null 2>&1
+        python3 scripts/perf/terminal_output_bench.py --runs 1 --lines 1000 --include dotty $APP > /dev/null 2>&1
         echo "=== Startup Stages ==="
         cat "$LOG"
         rm -f "$LOG"

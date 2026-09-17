@@ -14,5 +14,5 @@ Future configuration changes must preserve these invariants:
 6. watcher and callback disposal during shutdown.
 
 Use [Platform Support](PlatformSupport.md) for the current support matrix and
-promotion gates. Historical C# source-generator proposals are not a release
-requirement for the current host.
+promotion gates. The current host accepts JSON configuration only; future
+changes must preserve the invariants above.

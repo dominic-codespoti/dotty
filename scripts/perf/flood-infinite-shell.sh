@@ -1,0 +1,2 @@
+#!/bin/sh
+yes "The quick brown fox jumps over the lazy dog 0123456789"

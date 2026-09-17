@@ -36,7 +36,6 @@ public class ParserEdgeCaseTests
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
-        event Action<string>? ITerminalHandler.LinkOpened { add { } remove { } }
         void ITerminalHandler.OnHyperlink(string uri) { }
         void ITerminalHandler.RequestRenderExtern() { }
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }

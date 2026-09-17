@@ -57,7 +57,7 @@ focus reports, paste wrappers, and reflow remain in deterministic tests.
 
 ## Linux smoke
 
-Linux GUI smoke requires an X11 display server. Xvfb is the minimum CI setup:
+Linux GUI smoke requires an X11 display server. Xvfb is the CI setup:
 
 ```bash
 make -C src/Dotty.NativePty
@@ -69,14 +69,15 @@ HOME=/tmp/dotty-empty-home timeout 5s \
 
 Exit status `124` is expected because the host remains running. Any earlier
 exit, native loader error, PTY startup error, or unhandled exception fails the
-smoke test.
+smoke test. CI runs this X11 smoke in `gui-smoke-linux`; Wayland/Weston,
+macOS desktop, and Windows desktop smoke are not run in CI. X11/Xvfb startup
+does not prove Wayland, macOS, or Windows GUI behavior.
 
-Wayland smoke should use a real compositor such as Weston; Xvfb does not prove
-Wayland behavior.
+## macOS smoke (manual/local)
 
-## macOS smoke
-
-Run on native macOS runners for both Intel and Apple Silicon:
+Run this workflow on a local native macOS session for Intel or Apple Silicon;
+hosted CI runners build and test the native code but do not provide a usable
+desktop OpenGL session:
 
 ```bash
 make -C src/Dotty.NativePty
@@ -88,9 +89,10 @@ DOTTY_TEST_PORT=19000 dotnet run --project src/Dotty/Dotty.csproj
 Exercise shell startup, UTF-8 text, resize, clipboard, focus changes, and clean
 window shutdown. Retina scale changes must be included in GUI runs.
 
-## Windows smoke
+## Windows smoke (manual/local)
 
-Run on Windows 10 build 17763+ and Windows 11:
+Run this workflow on Windows 10 build 17763+ or Windows 11. Hosted CI runs the
+ConPTY tests and validates published assets, but does not run desktop GUI smoke:
 
 ```powershell
 dotnet build Dotty.slnx -c Release --nologo
@@ -105,10 +107,12 @@ output, resize, focus, clipboard, process exit, and shutdown.
 
 ## Artifact smoke
 
-Every published artifact must be extracted into a clean directory and tested
-from there, not from the repository. Unix artifacts must contain an executable
-`pty-helper` beside the host binary. Windows artifacts must contain the host
-binary and require no Unix helper.
+Release verification inspects every published archive and automatically
+extracts and starts the Linux archive under Xvfb. Other platform archives are
+run from clean directories on their native systems during manual/local
+verification. Unix artifacts must contain an executable `pty-helper` beside the
+host binary; Windows artifacts must contain the host binary and require no Unix
+helper.
 
 Minimum artifact checks:
 

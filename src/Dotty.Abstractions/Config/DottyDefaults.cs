@@ -44,7 +44,7 @@ public static class DottyDefaults
     public static readonly string WindowTitle = "Dotty";
 
     // Cursor Settings
-    public const CursorShape CursorShape = Config.CursorShape.Block;
+    public const TerminalCursorShape CursorShape = TerminalCursorShape.Block;
     public const bool CursorBlink = true;
     public const int CursorBlinkIntervalMs = 500;
     public const uint CursorColor = 0xFFD4D4D4;  // Default to foreground color (light gray)
@@ -76,56 +76,4 @@ public static class DottyDefaults
 
         return FontSize;
     }
-
-    /// <summary>
-    /// Gets the default window dimensions.
-    /// </summary>
-    public static IWindowDimensions GetDefaultWindowDimensions()
-    {
-        return new DefaultWindowDimensions(
-            InitialColumns,
-            InitialRows,
-            null,
-            null,
-            StartFullscreen,
-            WindowTitle
-        );
-    }
-
-    /// <summary>
-    /// Gets the default cursor settings.
-    /// </summary>
-    public static ICursorSettings GetDefaultCursorSettings()
-    {
-        return new DefaultCursorSettings(
-            CursorShape,
-            CursorBlink,
-            CursorBlinkIntervalMs,
-            null,  // Use foreground color
-            CursorShowUnfocused
-        );
-    }
 }
-
-/// <summary>
-/// Default window dimensions implementation.
-/// </summary>
-public record DefaultWindowDimensions(
-    int Columns,
-    int Rows,
-    int? WidthPixels,
-    int? HeightPixels,
-    bool StartFullscreen,
-    string? Title
-) : IWindowDimensions;
-
-/// <summary>
-/// Default cursor settings implementation.
-/// </summary>
-public record DefaultCursorSettings(
-    CursorShape Shape,
-    bool Blink,
-    int BlinkIntervalMs,
-    uint? Color,
-    bool ShowUnfocused
-) : ICursorSettings;

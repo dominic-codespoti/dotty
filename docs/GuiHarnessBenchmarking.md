@@ -49,12 +49,11 @@ project. Do not use a GUI process to infer parser or PTY throughput. GUI runs
 measure startup, control round-trip latency, frame cadence, resize behavior,
 and shutdown/orphan-process behavior only.
 
-For display coverage, use:
-
-- X11: `xvfb-run` on Linux;
-- Wayland: a real compositor such as Weston;
-- macOS: a native Cocoa runner;
-- Windows: a native desktop runner with ConPTY.
+For display coverage, CI runs only Linux X11 under `xvfb-run`. Wayland/Weston,
+macOS desktop, and Windows desktop runs require a local native session; they
+are not part of CI because the hosted environments do not provide usable GUI
+OpenGL contexts. X11/Xvfb startup does not prove Wayland, macOS, or Windows GUI
+behavior.
 
 A timeout while the host remains alive is expected. A crash, early exit, failed
 control response, missing native asset, or process that survives `close` is a

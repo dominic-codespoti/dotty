@@ -1,8 +1,7 @@
 # Testing
 
 Dotty separates deterministic terminal-core tests from native PTY and desktop
-smoke tests. The desktop executable is `src/Dotty/Dotty.csproj`; there is no
-separate `Dotty.App` host.
+smoke tests. The desktop executable is `src/Dotty/Dotty.csproj`.
 
 ## Test projects
 
@@ -12,7 +11,6 @@ separate `Dotty.App` host.
 | `tests/Dotty.Terminal.Tests` | terminal buffer, parser, hyperlinks, and reflow |
 | `tests/Dotty.NativePty.Tests` | `IPty` contracts, platform capabilities, Unix helper, and Windows ConPTY |
 | `tests/Dotty.App.SkiaTests` | Skia/OpenGL-adjacent rendering behavior |
-| `tests/Dotty.Config.SourceGenerator.Tests` | platform-neutral source-generator compatibility |
 
 Test projects intentionally do not set a fixed `RuntimeIdentifier`. Native
 assets and conditional PTY tests must resolve for the runner that executes the
@@ -67,8 +65,9 @@ HOME=/tmp/dotty-test-home DOTTY_CONFIG_HOME=/tmp/dotty-test-home/config \
 
 Exit status `124` is expected because the host remains open. Any earlier exit,
 loader failure, OpenGL initialization error, or unhandled exception fails the
-smoke. Linux Wayland coverage uses a real compositor such as Weston; Xvfb only
-proves X11 startup.
+smoke. CI runs this X11 smoke under `xvfb-run`; Wayland, macOS desktop, and
+Windows desktop paths are verified manually or on local native sessions, not
+in CI. X11/Xvfb startup does not prove Wayland, macOS, or Windows GUI behavior.
 
 The optional control transport is loopback-only and enabled with
 `DOTTY_TEST_PORT`. The cross-platform harness is
@@ -80,16 +79,20 @@ processes. See [GUI harness benchmarking](GuiHarnessBenchmarking.md).
 
 The authoritative workflow is `.github/workflows/ci.yml`:
 
-| Runner | RID | Native work | Desktop work |
-|---|---|---|---|
-| Ubuntu | `linux-x64` | POSIX helper and native PTY smoke | X11/Xvfb and Weston smoke |
-| macOS Intel | `osx-x64` | POSIX helper and native PTY smoke | native desktop smoke |
-| macOS arm64 | `osx-arm64` | POSIX helper and native PTY smoke | native desktop smoke |
-| Windows | `win-x64` | ConPTY native PTY smoke | native desktop smoke |
+| Job | Runner/RID | Coverage |
+|---|---|---|
+| `build-and-test` | Ubuntu `linux-x64` | POSIX helper, host-native tests, and native PTY smoke |
+| `build-and-test` | macOS Intel `osx-x64` | POSIX helper and host-native tests |
+| `build-and-test` | macOS arm64 `osx-arm64` | POSIX helper and host-native tests |
+| `build-and-test` | Windows `win-x64` | Host-native tests and ConPTY smoke |
+| `gui-smoke-linux` | Ubuntu `linux-x64` | X11 desktop startup under Xvfb |
+| `code-quality` | Ubuntu | `dotnet format whitespace` verification |
+| `performance-tests` | Ubuntu | Quick BenchmarkDotNet run on pull requests and `main` |
 
-Each matrix entry restores and publishes the host RID, verifies executable and
-native asset names, builds/tests the host backend, and uploads TRX results.
-Nightly additionally validates Linux arm64 and Windows arm64 publish outputs.
+The hosted macOS and Windows runners build and test native code but do not run
+desktop GUI smoke: they lack a usable OpenGL/GUI session. CI has no
+Wayland/Weston smoke. Nightly additionally validates Linux arm64 and Windows
+arm64 publish outputs.
 
 ## Release verification
 

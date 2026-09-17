@@ -112,8 +112,10 @@ installed and run the Windows native PTY tests without excluding
 
 Dotty requests an OpenGL 3.3 core context. Update the graphics driver, confirm
 the process has access to the desktop display, and retry under the platform's
-native session. Linux CI uses Xvfb for X11 smoke and Weston for a headless
-Wayland smoke; Xvfb does not validate a Wayland path.
+native session. CI runs only the Linux X11 smoke under Xvfb; Wayland/Weston,
+macOS desktop, and Windows desktop paths are verified manually or on local
+native sessions. X11/Xvfb startup does not prove Wayland, macOS, or Windows GUI
+behavior.
 
 ### The configured font is not found
 
@@ -148,18 +150,22 @@ DOTTY_TEST_STATE_DIR=/tmp/dotty-smoke \
 
 The harness uses Python sockets instead of assuming `nc`, propagates build and
 host failures, scopes its PID/state files, and only terminates the PID it
-started. X11 smoke runs under `xvfb-run`; Wayland smoke uses Weston.
+started. CI uses `xvfb-run` for Linux X11 smoke only. Wayland, macOS, and
+Windows desktop runs are manual/local.
 
 ## Promotion gates
 
 Support promotion is staged:
 
 1. **Release tier:** Linux x64, macOS x64/arm64, and Windows x64 pass native
-   PTY tests, host desktop smoke, extracted artifact smoke, and checksum/
-   manifest generation.
-2. **Architecture candidate tier:** Linux arm64 and Windows arm64 pass native
+   PTY tests, publish native-asset validation, extracted artifact checks, and
+   checksum/manifest generation. Release CI also starts the extracted Linux
+   archive under Xvfb; macOS and Windows desktop startup is verified
+   manually/local.
+2. **Architecture candidate tier:** Linux arm64 and Windows arm64 pass nightly
    publish validation first. Promotion additionally requires native arm64 PTY,
-   desktop, and extracted artifact smoke on two consecutive nightly runs.
+   desktop, and extracted artifact smoke on native hosts; these GUI checks are
+   manual/local rather than CI coverage.
 3. **Regression hold:** Any failed native matrix, missing native asset, OpenGL
    startup failure, orphan process, or checksum mismatch blocks promotion until
    the failing scenario is reproduced and rerun successfully.
@@ -170,8 +176,8 @@ Support promotion is staged:
 - [ ] Build and package `pty-helper` for Unix artifacts.
 - [ ] Run native PTY tests without filtering the host backend.
 - [ ] Verify `dotty`/`dotty.exe`, native Skia/Lua assets, and helper placement.
-- [ ] Smoke X11 and Wayland Linux startup.
-- [ ] Smoke macOS and Windows desktop startup on native runners.
+- [ ] Smoke Linux X11 startup under Xvfb (the automated GUI coverage).
+- [ ] Manually verify Wayland, macOS, and Windows desktop startup on native sessions.
 - [ ] Extract every archive into a clean directory and run the host.
 - [ ] Generate `MANIFEST.txt` and `SHA256SUMS`; verify checksums.
 - [ ] Record unsupported architecture candidates separately from release assets.

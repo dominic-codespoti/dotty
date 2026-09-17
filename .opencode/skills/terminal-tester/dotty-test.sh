@@ -55,7 +55,7 @@ list_tests() {
         # Extract test class names from source files
         if [ "$verbose" = "true" ]; then
             find "$dir" -name "*.cs" ! -path "*/obj/*" ! -path "*/bin/*" | sort | while read -r src; do
-                if grep -n "class.*:.*E2ETestBase\|class.*:.*IAsyncLifetime\|\[Fact\]\|\[Theory\]\|\[AvaloniaFact\]" "$src" 2>/dev/null; then
+                if grep -n "class.*:.*E2ETestBase\|class.*:.*IAsyncLifetime\|\[Fact\]\|\[Theory\]" "$src" 2>/dev/null; then
                     :
                 fi
             done | sed 's/^/    /'

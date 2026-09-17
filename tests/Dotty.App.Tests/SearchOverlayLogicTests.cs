@@ -7,7 +7,7 @@ namespace Dotty.App.Tests;
 
 /// <summary>
 /// Unit tests for SearchOverlay behavior logic.
-/// Tests the core search overlay functionality without requiring Avalonia UI initialization.
+/// Tests the core search overlay functionality without starting the desktop host.
 /// </summary>
 public class SearchOverlayLogicTests
 {

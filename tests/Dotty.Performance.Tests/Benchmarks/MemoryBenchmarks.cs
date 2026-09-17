@@ -13,16 +13,8 @@ namespace Dotty.Performance.Tests.Benchmarks;
 [BenchmarkCategory("Memory")]
 public class MemoryBenchmarks : PerformanceTestBase
 {
-    private TerminalAdapter _adapter = null!;
-    private BasicAnsiParser _parser = null!;
-
-    // GlobalSetup inherited from PerformanceTestBase
-    public override void GlobalSetup()
-    {
-        base.GlobalSetup();
-    }
-
     #region Grid Allocations
+
 
     [Benchmark(Description = "Allocate CellGrid 80x24")]
     public CellGrid Grid_Allocate_80x24() => new(24, 80);

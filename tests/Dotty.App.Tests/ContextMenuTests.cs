@@ -10,10 +10,9 @@ public class ContextMenuTests
     [Fact]
     public void ContextMenuLayout_ComputesCorrectMenuDimensions()
     {
-        bool itemClicked = false;
         var items = new List<ContextMenuItem>
         {
-            new("split-v", "Split Right", "Ctrl+Shift+D", () => itemClicked = true),
+            new("split-v", "Split Right", "Ctrl+Shift+D", null),
             new("split-h", "Split Down", "Ctrl+Shift+S", null),
             ContextMenuItem.Separator(),
             new("close", "Close", "Ctrl+Shift+W", null)
@@ -61,10 +60,9 @@ public class ContextMenuTests
     [Fact]
     public void ContextMenuHitTester_ClickingItem_ReturnsItemIndex()
     {
-        bool itemClicked = false;
         var items = new List<ContextMenuItem>
         {
-            new("copy", "Copy", "Ctrl+Shift+C", () => itemClicked = true),
+            new("copy", "Copy", "Ctrl+Shift+C", null),
             new("paste", "Paste", "Ctrl+Shift+V", null)
         };
 
@@ -84,13 +82,13 @@ public class ContextMenuTests
     [Fact]
     public void DefaultContextMenus_BuildTabMenu_HasExpectedActions()
     {
-        bool splitRight = false, close = false;
+        var splitRight = false;
         var menu = DefaultContextMenus.BuildTabMenu(
             tabIndex: 0,
             onSplitRight: () => splitRight = true,
             onSplitDown: () => { },
             onRename: () => { },
-            onClose: () => close = true);
+            onClose: () => { });
 
         Assert.NotNull(menu);
         Assert.True(menu.Count >= 4);

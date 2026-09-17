@@ -42,9 +42,11 @@ shader compilation, or frame submission fails, the host reports a diagnostic and
 closes through the normal lifecycle path rather than leaving PTY processes
 running. There is no silent software-renderer fallback.
 
-Linux CI exercises X11 with Xvfb and native Wayland setup with Weston. macOS
-and Windows desktop smoke runs use native runners. A successful headless test
-without a display does not prove graphics compatibility.
+CI exercises only Linux X11 startup under Xvfb; it does not run Wayland/Weston,
+macOS desktop, or Windows desktop smoke because those hosted GUI sessions do
+not provide a usable OpenGL context. Those paths are verified manually or on
+local native sessions. X11/Xvfb startup does not prove Wayland, macOS, or
+Windows GUI behavior.
 
 ## Tests
 

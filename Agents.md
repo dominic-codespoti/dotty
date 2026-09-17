@@ -1,56 +1,70 @@
 # AI Agents Instructions for Dotty
 
-This `Agents.md` provides best practices and guidelines for AI agents interacting with the `dotnet-term` codebase.
+This `Agents.md` provides best practices and guidelines for AI agents working in
+this repository.
 
-## 🎯 General Objective
+## General objective
 
-Dotty is a terminal emulator in .NET. AI agents should prioritize performance, memory safety (avoiding allocations in hot paths like rendering and parsing), and cross-platform compatibility.
+Dotty is a terminal emulator in .NET. The desktop host is built on Silk.NET,
+GLFW, OpenGL 3.3, and SkiaSharp. Prioritize correctness, allocation-free hot
+paths (parsing, buffer mutation, rendering), and cross-platform behavior on
+Linux, macOS, and Windows.
 
-## 🏗️ Architecture Best Practices
+## Project layout
 
-For detailed architectural information, we use progressive disclosure. Please refer to the specific documentation files based on the component you are modifying:
+| Path | Responsibility |
+|---|---|
+| `src/Dotty/` | Silk.NET/OpenGL desktop host: window lifecycle, input, rendering, scene composition |
+| `src/Dotty.Rendering.Gpu/` | GPU resources, shaders, glyph atlas, quad batching |
+| `src/Dotty.Runtime/` | Sessions, tabs, panes, themes, configuration, scripting |
+| `src/Dotty.Terminal/` | Terminal core: ANSI parser, cell buffer, scrollback, snapshots |
+| `src/Dotty.Abstractions/` | Platform-neutral contracts, defaults, built-in themes |
+| `src/Dotty.NativePty/` | POSIX `pty-helper` and Windows ConPTY backends |
+| `tests/` | Unit, terminal, native PTY, Skia, and performance test projects |
+| `scripts/perf/` | Benchmark harnesses used by the performance skill |
 
-- **System Architecture:** High-level project structure and dependencies.
-  ➡️ See [Architecture Docs](./docs/Architecture.md) for details on project layering and responsibilities.
-- **Rendering:** `src/Dotty.App/Controls/Canvas/`
-  ➡️ See [Rendering Docs](./docs/Rendering.md) for details on GlyphAtlas, BackgroundSynth, etc.
-- **Avalonia optimization roadmap:** `src/Dotty.App/` rendering, scheduling, DPI, and native UI integration
-  ➡️ See [Avalonia Optimization Plan](./docs/architecture/AvaloniaOptimizationPlan.md) before changing the production render path.
-- **Terminal Parsing:** `src/Dotty.Abstractions/` and `src/Dotty.Terminal/`
-  ➡️ See [Parsing Docs](./docs/Parsing.md) for control code handling and escaping sequences.
-- **Native PTY Integration:** `src/Dotty.NativePty/`
-  ➡️ See [Native PTY Docs](./docs/NativePty.md) for POSIX APIs and UNIX process isolation.
-- **Competitor Analysis:**
-  ➡️ See [Comparison Report](./docs/ComparisonReport.md) for a technical breakdown of how Dotty compares against tools like Ghostty and Wezterm.
-- **Testing:** `tests/`
-  ➡️ See [Testing Docs](./docs/Testing.md) for fuzzing, repro tests, and terminal emulation benchmarks.
+## Architecture references
 
-## 🔍 Progressive Disclosure Guide
+Read the relevant document before changing a subsystem:
 
-To respect token limits and optimize context processing:
+- [Architecture](./docs/Architecture.md) — project layering and dependencies.
+- [Rendering](./docs/Rendering.md) — glyph atlas, quad batching, frame flow.
+- [Parsing](./docs/Parsing.md) — control codes, escape sequence handling.
+- [Native PTY](./docs/NativePty.md) — helper protocol and process isolation.
+- [Windows ConPTY](./docs/WindowsConPty.md) — ConPTY startup and handle rules.
+- [Platform Support](./docs/PlatformSupport.md) — support matrix, diagnostics,
+  promotion gates.
+- [Testing](./docs/Testing.md) and [E2E Testing](./docs/E2ETesting.md) — test
+  layout, smoke contracts, control interface.
+- [Configuration](./docs/Configuration.md) — JSON schema and hot reload.
 
-1. Identify the domain of the task (e.g., UI, Parsing, Native PTY).
-2. Follow the specific deep-dive link above to read the necessary context.
-3. Keep context scoped: Only read files within the relevant subfolder unless cross-cutting concerns are explicitly triggered.
+## Working rules
 
-## 💡 Code Conventions
+1. Identify the subsystem first, then read only the documents and directories
+   that subsystem touches.
+2. Prefer `Span<T>`/`ref struct` for buffer work; avoid boxing and LINQ in
+   parsing and rendering paths.
+3. Terminal behavior changes need a regression test in `tests/Dotty.Terminal.Tests/`
+   or `tests/Dotty.App.Tests/`; a test must fail before the fix and pass after.
+4. GUI changes cannot be proven by unit tests alone. Verify startup with the
+   X11 smoke described in [E2E Testing](./docs/E2ETesting.md), or with the
+   loopback control interface (`DOTTY_TEST_PORT`).
+5. Keep public contracts in `src/Dotty.Abstractions/` free of host-specific
+   types; that project is published as a NuGet package.
 
-- Prefer `ref struct` and `Span<T>` for buffer manipulation.
-- Avoid boxing and LINQ in rendering/parsing paths.
-- Add regression tests in `tests/Dotty.App.Tests/` if addressing a structural bug.
+## Documentation maintenance
 
-## 📝 Documentation Maintenance
+- Update the affected `docs/*.md` file in the same change as the code.
+- Add newly created documentation categories to the reference list above.
+- Never describe CI coverage that does not exist: CI builds and tests every
+  supported platform, verifies published native assets, and smokes GUI startup
+  on Ubuntu under Xvfb only. Wayland, macOS, and Windows GUI startup are
+  verified manually.
 
-As Dotty evolves, it is your responsibility to keep the system knowledge base current. If you implement a new architectural pattern, add a new service, change deployment steps, or discover a new pattern/bug:
+## Project guardrails
 
-- You **MUST** update the relevant file in the `docs/` folder.
-- If you add a completely new category of documentation, you **MUST** update this `Agents.md` file to add the new doc to the **Architecture Best Practices** list above.
-- If you establish a new universal rule to prevent a category of bugs, you **MUST** add it to the **Strict Project Guardrails** section below.
-
-## 🚧 Strict Project Guardrails
-
-*This section is reserved for critical rules that prevent common bugs or enforce architectural constraints. When you discover a recurring bug pattern, add a rule here.*
-
----
-
-*Note: Ensure you read referenced `docs/*.md` files when assigned a specific feature area before touching the codebase.*
+- `src/Dotty.Abstractions` is published; removing or renaming a public type
+  there is a breaking change and needs an explicit decision.
+- Unix PTY startup requires the `pty-helper` binary beside the host; Windows
+  uses ConPTY and requires build 17763 or newer.
+- Do not reintroduce Avalonia: the desktop host is Silk.NET/OpenGL only.

@@ -141,7 +141,7 @@ public class PerformanceReport
             Benchmarks = summary.Reports.Select(r => new BenchmarkReportData
             {
                 Name = r.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo,
-                Namespace = r.BenchmarkCase.Descriptor.Type.Namespace,
+                Namespace = r.BenchmarkCase.Descriptor.Type.Namespace ?? "",
                 Type = r.BenchmarkCase.Descriptor.Type.Name,
                 Method = r.BenchmarkCase.Descriptor.WorkloadMethod.Name,
                 Parameters = r.BenchmarkCase.Parameters?.PrintInfo ?? "",

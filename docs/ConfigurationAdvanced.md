@@ -25,5 +25,5 @@ atomically renaming it over `config.json`. The watcher debounces the resulting
 `Changed`, `Created`, and `Renamed` events. Invalid JSON leaves the last valid
 configuration active and exposes the error through `UserConfigService.LastError`.
 
-The old C# source-generator examples in this file belonged to a retired host
-and are intentionally not presented as supported configuration syntax.
+This guide intentionally presents only JSON configuration; no other
+configuration syntax is supported.

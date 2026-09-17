@@ -460,7 +460,7 @@ public class IPtyContractTests
             .ReturnsAsync(0);
 
         // Act
-        var exitCode = await mockPty.Object.WaitForExitAsync();
+        var exitCode = await mockPty.Object.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         exitCode.Should().Be(0);
@@ -482,7 +482,7 @@ public class IPtyContractTests
             .ReturnsAsync(exitCodeValue);
 
         // Act
-        var exitCode = await mockPty.Object.WaitForExitAsync();
+        var exitCode = await mockPty.Object.WaitForExitAsync(TestContext.Current.CancellationToken);
 
         // Assert
         exitCode.Should().Be(exitCodeValue);
@@ -502,7 +502,7 @@ public class IPtyContractTests
 
         // Act & Assert
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            mockPty.Object.WaitForExitAsync());
+            mockPty.Object.WaitForExitAsync(TestContext.Current.CancellationToken));
     }
 
     /// <summary>
@@ -538,8 +538,7 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        var eventFired = false;
-        EventHandler<int>? handler = (sender, exitCode) => { eventFired = true; };
+        EventHandler<int>? handler = (_, _) => { };
 
         // Act
         mockPty.Object.ProcessExited += handler;

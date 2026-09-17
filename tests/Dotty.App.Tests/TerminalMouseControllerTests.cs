@@ -24,12 +24,36 @@ public sealed class TerminalMouseControllerTests
         public int DoubleClickTime { get; set; }
         public int DoubleClickRange { get; set; }
 
-        public event Action<IMouse, MouseButton>? MouseDown;
-        public event Action<IMouse, MouseButton>? MouseUp;
-        public event Action<IMouse, Vector2>? MouseMove;
-        public event Action<IMouse, ScrollWheel>? Scroll;
-        public event Action<IMouse, MouseButton, Vector2>? Click;
-        public event Action<IMouse, MouseButton, Vector2>? DoubleClick;
+        public event Action<IMouse, MouseButton>? MouseDown
+        {
+            add { }
+            remove { }
+        }
+        public event Action<IMouse, MouseButton>? MouseUp
+        {
+            add { }
+            remove { }
+        }
+        public event Action<IMouse, Vector2>? MouseMove
+        {
+            add { }
+            remove { }
+        }
+        public event Action<IMouse, ScrollWheel>? Scroll
+        {
+            add { }
+            remove { }
+        }
+        public event Action<IMouse, MouseButton, Vector2>? Click
+        {
+            add { }
+            remove { }
+        }
+        public event Action<IMouse, MouseButton, Vector2>? DoubleClick
+        {
+            add { }
+            remove { }
+        }
 
         public bool IsButtonPressed(MouseButton btn) => false;
     }

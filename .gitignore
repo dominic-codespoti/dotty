@@ -6,11 +6,13 @@ artifacts/
 *.nupkg
 *.snupkg
 
-# Python linter cache
+# Python caches
 .ruff_cache/
+__pycache__/
 
 # IDE files
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 .idea/
 *.user
 *.suo

@@ -55,10 +55,8 @@ public class TerminalAdapter : ITerminalHandler
     public event Action<string>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
     public event Action? Bell;
-    public event Action<string>? LinkOpened;
-#pragma warning restore CS0067
 
-    public void OnHyperlink(string uri) { _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri); }
+    public void OnHyperlink(string uri) => _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri);
 
     public event Action<string>? ReplyRequested;
     public TerminalBuffer Buffer => _buffer;

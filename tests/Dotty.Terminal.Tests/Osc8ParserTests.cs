@@ -510,7 +510,6 @@ public class Osc8ParserTests
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
-        event Action<string>? ITerminalHandler.LinkOpened { add { } remove { } }
 
         void ITerminalHandler.OnHyperlink(string uri) => Osc8Calls.Add(uri);
         void ITerminalHandler.RequestRenderExtern() { }

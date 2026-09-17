@@ -24,8 +24,8 @@ This skill lets you benchmark the Dotty terminal emulator using three complement
 Benchmark Types                         What It Measures
 ─────────────────────────────────────   ────────────────────────────
 dotnet run --mode quick --filter bulk   Parser + buffer write throughput
-artifacts/perf/terminal_output_bench.py End-to-end output, startup time, RSS
-artifacts/perf/gui_harness_bench.py     Tab creation, switching, GUI memory
+scripts/perf/terminal_output_bench.py End-to-end output, startup time, RSS
+scripts/perf/gui_harness_bench.py     Tab creation, switching, GUI memory
 ```
 
 ## 1. Microbenchmarks (BenchmarkDotNet)
@@ -78,13 +78,13 @@ Launches Dotty, Kitty, Ghostty, and WezTerm (if found) with the same high-output
 
 ```bash
 # Default: all available terminals
-python3 artifacts/perf/terminal_output_bench.py --runs 3 --lines 500000
+python3 scripts/perf/terminal_output_bench.py --runs 3 --lines 500000
 
 # Specific terminals
-python3 artifacts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include dotty,kitty
+python3 scripts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include dotty,kitty
 
 # Custom Dotty binary (e.g. ReadyToRun publish)
-python3 artifacts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include dotty --app /path/to/dotty
+python3 scripts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include dotty --app /path/to/dotty
 ```
 
 ### How It Works
@@ -124,10 +124,10 @@ Launches Dotty as a real GUI app, communicates over TCP, and measures tab creati
 dotnet build src/Dotty/Dotty.csproj -c Release
 
 # Eager tabs (default): each tab is activated immediately
-python3 artifacts/perf/gui_harness_bench.py --runs 2 --new-tabs 20 --switches 200
+python3 scripts/perf/gui_harness_bench.py --runs 2 --new-tabs 20 --switches 200
 
 # Lazy background tabs: tabs created in background, then activated
-python3 artifacts/perf/gui_harness_bench.py --runs 2 --new-tabs 20 --background-new-tabs --switches 200
+python3 scripts/perf/gui_harness_bench.py --runs 2 --new-tabs 20 --background-new-tabs --switches 200
 ```
 
 ### TCP Commands
@@ -174,31 +174,11 @@ Microbenchmarks always run under the JIT. The cross-terminal harness can test ei
 ```bash
 # JIT build
 dotnet build src/Dotty/Dotty.csproj -c Release
-python3 artifacts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/dotty
+python3 scripts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/dotty
 
 # R2R publish
 dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained true -p:PublishReadyToRun=true
-python3 artifacts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/linux-x64/publish/dotty
+python3 scripts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/linux-x64/publish/dotty
 ```
 
 The harness auto-detects the R2R binary if present.
-
-## 5. Stage-Level Startup Profiling
-
-Set `DOTTY_BENCH_STARTUP_LOG` to a file path to capture nanosecond-precision stage timestamps:
-
-```bash
-DOTTY_BENCH_STARTUP_LOG=/tmp/startup.log DOTTY_SKIP_CONFIG_COMPILE=1 \
-  python3 artifacts/perf/terminal_output_bench.py --runs 1 --lines 5000 --include dotty
-cat /tmp/startup.log
-```
-
-Stages recorded:
-- `main_entry` — process start
-- `config_check_done` — fast file-existence check done
-- `avalon_framework_init` — Avalonia `OnFrameworkInitializationCompleted` begins
-- `theme_manager_done` — ThemeManager loaded
-- `config_watcher_done` — CSharpConfigWatcher started (or skipped)
-- `defaults_applied` — `ApplyDefaultsToResources()` completed
-- `avalon_window_created` — `MainWindow` constructed
-- `session_start` — `TerminalSession.Start()` called

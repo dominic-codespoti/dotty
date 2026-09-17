@@ -26,12 +26,12 @@ jobs:
       prerelease: ${{ steps.validate.outputs.prerelease }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
@@ -39,6 +39,7 @@ jobs:
         id: validate
         shell: bash
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG_NAME="${{ github.event.inputs.version }}"
 
@@ -82,8 +83,7 @@ jobs:
           for project in \
             tests/Dotty.App.Tests/Dotty.App.Tests.csproj \
             tests/Dotty.Terminal.Tests/Dotty.Terminal.Tests.csproj \
-            tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj \
-            tests/Dotty.Config.SourceGenerator.Tests/Dotty.Config.SourceGenerator.Tests.csproj; do
+            tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj; do
             dotnet test --project "$project" -c Release --no-build
           done
           dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj \
@@ -96,17 +96,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-linux-${{ hashFiles('**/*.csproj') }}
@@ -122,7 +122,9 @@ jobs:
         run: make
 
       - name: Publish self-contained
+        shell: bash
         run: |
+          set -euo pipefail
           dotnet publish ${{ env.PROJECT_PATH }} \
             -c Release \
             -r linux-x64 \
@@ -132,7 +134,9 @@ jobs:
             -o ./publish/linux-x64
 
       - name: Verify Linux artifact
+        shell: bash
         run: |
+          set -euo pipefail
           test -x ./publish/linux-x64/dotty
           test -f ./publish/linux-x64/libglfw.so.3
           test -f ./publish/linux-x64/libSkiaSharp.so
@@ -140,7 +144,9 @@ jobs:
           test -x ./publish/linux-x64/pty-helper
 
       - name: Create tarball
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION=${{ needs.validate-release.outputs.version }}
           cd ./publish/linux-x64
           PACKAGE_DIR="dotty-${VERSION}-linux-x64"
@@ -152,7 +158,7 @@ jobs:
           ls -la *.tar.gz
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotty-linux-x64
           path: dotty-*.tar.gz
@@ -175,17 +181,17 @@ jobs:
             runner: macos-15
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-macos-${{ matrix.arch }}-${{ hashFiles('**/*.csproj') }}
@@ -202,7 +208,9 @@ jobs:
         run: make
 
       - name: Publish self-contained
+        shell: bash
         run: |
+          set -euo pipefail
           dotnet publish ${{ env.PROJECT_PATH }} \
             -c Release \
             -r ${{ matrix.rid }} \
@@ -212,7 +220,9 @@ jobs:
             -o ./publish/${{ matrix.rid }}
 
       - name: Verify macOS artifact
+        shell: bash
         run: |
+          set -euo pipefail
           test -x ./publish/${{ matrix.rid }}/dotty
           test -f ./publish/${{ matrix.rid }}/libglfw.3.dylib
           test -f ./publish/${{ matrix.rid }}/libSkiaSharp.dylib
@@ -220,7 +230,9 @@ jobs:
           test -x ./publish/${{ matrix.rid }}/pty-helper
 
       - name: Create tarball
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION=${{ needs.validate-release.outputs.version }}
           cd ./publish/${{ matrix.rid }}
           PACKAGE_DIR="dotty-${VERSION}-${{ matrix.rid }}"
@@ -232,7 +244,7 @@ jobs:
           ls -la *.tar.gz
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotty-${{ matrix.rid }}
           path: dotty-*.tar.gz
@@ -245,17 +257,17 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-windows-${{ hashFiles('**/*.csproj') }}
@@ -294,7 +306,7 @@ jobs:
           Get-ChildItem *.zip
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dotty-win-x64
           path: dotty-*.zip
@@ -306,7 +318,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ./artifacts
           pattern: dotty-*
@@ -341,18 +353,20 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ./artifacts
           pattern: dotty-*
 
       - name: Collect artifacts
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p ./release-assets
           find ./artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} ./release-assets/ \;
           ls -la ./release-assets/
@@ -382,7 +396,9 @@ jobs:
 
       - name: Generate release notes
         id: release_notes
+        shell: bash
         run: |
+          set -euo pipefail
           VERSION=${{ needs.validate-release.outputs.version }}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           
@@ -437,7 +453,7 @@ jobs:
           cp CHECKSUMS.txt ./release-assets/SHA256SUMS
           cat CHECKSUMS.txt >> RELEASE_NOTES.md
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.validate-release.outputs.tag_name }}
           name: Dotty v${{ steps.release_notes.outputs.version }}
@@ -450,7 +466,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload checksums as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: checksums
           path: CHECKSUMS.txt

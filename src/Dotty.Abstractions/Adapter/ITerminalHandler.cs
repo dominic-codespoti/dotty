@@ -15,7 +15,6 @@ namespace Dotty.Abstractions.Adapter
         event Action<string>? RenderRequested;
         event Action<string>? ClipboardWriteRequested;
         event Action<string>? TitleChanged;
-        event Action<string>? LinkOpened;
         void OnHyperlink(string uri);
         void RequestRenderExtern();
         void ResizeBuffer(int rows, int cols);

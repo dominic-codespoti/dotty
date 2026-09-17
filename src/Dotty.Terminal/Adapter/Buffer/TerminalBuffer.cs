@@ -536,8 +536,8 @@ public partial class TerminalBuffer : IRenderSource
     /// <summary>
     /// Captures the render state under the caller's SyncRoot hold: one bounded
     /// memcpy of the cell arenas plus style/generation/scrollback metadata.
-    /// The returned snapshot is immutable and can be rasterized without the
-    /// lock (see B-lite; docs/architecture/AvaloniaOptimizationPlan.md §10.7).
+    /// The returned snapshot is immutable and can be rasterized without holding
+    /// the buffer lock.
     /// The visible scrollback range [<paramref name="sbStart"/>, <paramref name="sbEnd"/>]
     /// (negative row indices, -1 = newest) is materialized as text.
     /// </summary>

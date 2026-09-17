@@ -1,6 +1,6 @@
 # Lock-Free Snapshot Capture — Design Analysis
 
-Branch: `feat/gpu-rendering` · Status: **ANALYSIS** · Last updated: 2026-08-26
+Host: **Silk.NET/OpenGL** · Status: **Analysis; current renderer uses bounded snapshot capture** · Last updated: 2026-09-17
 
 ## 1. Problem statement
 
@@ -14,7 +14,7 @@ removes the stall.
 
 | Measurement | Value | Method |
 |---|---|---|
-| Capture TryEnter wait (UI thread) | **0.1–0.6 µs avg** | timestamp split around `Monitor.TryEnter(SyncRoot, 4ms)`, 212–753 captures |
+| Capture TryEnter wait (host render thread) | **0.1–0.6 µs avg** | timestamp split around `Monitor.TryEnter(SyncRoot, 4ms)`, 212–753 captures |
 | Capture hold incl. wait (earlier, polluted) | 633 µs avg | timestamp before TryEnter — includes wait |
 | ScrollbackText materialization skip | ~35 ms drain delta | env-gated skip, median of 3 (≈ noise) |
 | Yield handshake disable | no effect | env-gated, median of 3 |
@@ -31,21 +31,22 @@ kernel transitions, unfair handoff, 4 ms timeouts — is *not* where the
 
 With contention ruled out, the render-path drain penalty decomposes into:
 
-1. **CPU scheduling competition.** Under flood+render, active CPU consumers:
-   `yes`, `head`, app reader thread, parser consumer, UI thread, render
-   thread (quad build + submit), Avalonia render loop, Hyprland compositor
-   (120 Hz). The parser thread gets preempted; lock-freedom does not fix
-   preemption.
-2. **Per-frame dead work** (both render paths): `ScrollbackText`
-   materialization — ~50 strings × 136 cells rebuilt from cells *per capture*
-   with **zero consumers** (verified by grep; same pattern as the deleted
-   motion epochs). Plus `CaptureStyles()` allocating a fresh array per frame.
-3. **Render-thread CPU**: quad building rebuilds every visible row every
-   frame even though flood rows are content-identical, position-shifted.
+1. **CPU scheduling competition.** Under flood+render, active consumers include
+   `yes`, `head`, the PTY reader, parser consumer, host render thread, scene
+   composition, OpenGL submission, and the desktop compositor. The parser thread
+   can be preempted; lock-freedom does not fix preemption.
+2. **Per-frame work.** The visible capture used by the host copies row cell
+   slices, generations, styles, and cursor state; the full capture API also
+   materializes scrollback text for diagnostics. The OpenGL scene builder then
+   resolves every visible row into cell instances.
+3. **Render-thread CPU.** `QuadFrameBuilder` rebuilds visible row instances on
+   each presented frame even when flood output leaves many rows
+   content-identical. A row-instance cache addresses this cost more directly
+   than changing the capture lock.
 
-Evidence both render paths cost the same (~1120 vs ~1116 ms) despite wildly
-different raster work (GPU quads vs CPU `DrawText`) — the penalty lives in
-the shared per-frame machinery, not the raster.
+The current host has one OpenGL render path. Its dominant shared work is
+snapshot capture and scene composition, not a choice between two raster
+backends.
 
 ## 4. Lock-free design options (as asked)
 
@@ -93,19 +94,19 @@ reference swap; renderer never blocks, never retries.
 
 ### Option D — Hybrid (recommended): Tier 0 + seqlock capture
 
-**Tier 0 — delete dead per-frame work (no locking change needed):**
-- Remove `ScrollbackText` from the per-frame capture (zero consumers). If a
-  future consumer needs it, materialize at scroll time on the parser thread
-  (row content hot in cache) and cache on `ScrollbackLine`.
-- `CaptureStyles()`: cache the array, invalidate via a style-generation
-  counter (bumped by `GetOrCreateId` on insert / palette remap). Removes a
-  per-frame allocation + lock acquire.
+**Tier 0 — remove dead per-frame work (partly present):**
+- `CaptureRenderSnapshotVisible` already copies only visible cell slices and
+  does not materialize scrollback text. The full capture API retains text for
+  diagnostics; do not add it to the visible host capture.
+- `CaptureStyles()` still allocates a fresh array per capture. Cache it behind
+  a style-generation counter only after measuring the lifetime and ownership
+  rules.
 
 **Tier 1 — seqlock the capture** (Option A + existing handshake):
 - Parser fast path: replace `Monitor.Enter/Exit` per sub-chunk with
   `seq++/seq++` (Volatile.Write release semantics). Check `SyncRoot`-held
-  flag for structural ops; check `ReaderWaiting` at boundaries → volunteer
-  a ~50 µs gap (enough for the ~20 µs pure-memcpy capture once Tier 0 lands).
+  flag for structural ops; check `ReaderWaiting` at boundaries and volunteer a
+  ~50 µs gap (enough for the ~20 µs visible-row memcpy once Tier 0 lands).
 - Capture: seq-read → copy → seq-validate, bounded retries (8), fallback to
   the existing SyncRoot path (correctness safety net).
 - Structural writers keep SyncRoot; fast writer yields while it's held.
@@ -114,13 +115,11 @@ reference swap; renderer never blocks, never retries.
   data stores are ordered by the release fence. AVX2 stores are plain stores,
   covered by the release.
 
-**What lock-freedom buys here (honestly):** removal of the remaining Monitor
-handoff latency and the 4 ms timeout pathology; a capture that cannot
-block the UI thread. Given measured 0.6 µs waits, the direct win is small.
-The *structural* win: once the capture is seqlock-based, the parser never
-observes renderer activity at all except the volunteered gaps (~0.6 % duty),
-and the bitmap path can raster from the same snapshot — unifying both render
-paths on one capture mechanism.
+**What lock-freedom buys here (honestly):** removal of Monitor handoff latency
+and the 4 ms timeout pathology; a capture that cannot block the host render
+thread. Given measured 0.6 µs waits, the direct win is small. The structural
+win is that the parser can avoid observing renderer activity except at the
+existing reader-priority handoff.
 
 **What it does not buy:** the scheduling-level preemption loss. That needs
 render-side work reduction (per-row quad caching keyed on the row

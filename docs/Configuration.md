@@ -62,7 +62,7 @@ active and records the parse error in `UserConfigService.LastError`.
 ```
 
 Unknown JSON properties are ignored. Property names are case-insensitive and
-trailing commas/comments are accepted by the source-generated JSON context.
+trailing commas/comments are accepted by the JSON parser.
 
 ## Options
 

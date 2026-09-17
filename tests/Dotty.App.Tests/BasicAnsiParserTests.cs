@@ -148,11 +148,6 @@ public class BasicAnsiParserTests
             add { }
             remove { }
         }
-        event Action<string>? ITerminalHandler.LinkOpened
-        {
-            add { }
-            remove { }
-        }
         void ITerminalHandler.OnHyperlink(string uri) { }
         // add { } remove { } }
 

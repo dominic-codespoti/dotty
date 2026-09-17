@@ -24,8 +24,41 @@ Dotty is a modern terminal emulator composed of:
 - Ligature support via HarfBuzz font shaping
 - Undercurl, dotted, and dashed underline rendering
 - Rounded rectangle clip regions for modern terminal aesthetics
-- Runtime C# configuration hot-reload via CSharpConfigWatcher
+- Runtime JSON configuration hot-reload with platform-specific paths
 - PromptMark (OSC 1337) shell integration for prompt tracking
+
+## Install
+
+Prebuilt self-contained archives are available from the
+[nightly prerelease](https://github.com/dominic-codespoti/dotty/releases/tag/nightly).
+Nightly builds are unsigned prereleases, so Windows SmartScreen may warn on
+first launch. There is no stable release or installer yet.
+
+Linux x64:
+
+```bash
+tar -xzf dotty-<version>-linux-x64.tar.gz
+./dotty
+```
+
+macOS x64:
+
+```bash
+tar -xzf dotty-<version>-osx-x64.tar.gz
+./dotty
+```
+
+macOS arm64:
+
+```bash
+tar -xzf dotty-<version>-osx-arm64.tar.gz
+./dotty
+```
+
+Windows x64: extract `dotty-<version>-win-x64.zip` and run `dotty.exe`,
+keeping it beside the DLLs included in the archive. The archives are
+self-contained; no .NET installation is needed. Windows requires build 17763+
+(or Windows 11) and an OpenGL 3.3 driver.
 
 ## Quick Start
 
@@ -114,11 +147,21 @@ or `init.lua`) belong in the platform configuration directory. See
 
 ## Documentation
 
+- [Architecture Overview](docs/Architecture.md)
+- [Rendering System](docs/Rendering.md)
+- [Parser Implementation](docs/Parsing.md)
 - [Platform support and setup](docs/PlatformSupport.md)
 - [Configuration Guide](docs/Configuration.md)
-- [Native PTY architecture](docs/NativePty.md)
+- [Advanced Configuration](docs/ConfigurationAdvanced.md)
+- [Custom Themes](docs/CustomThemeArchitecture.md)
+- [Themes](docs/Themes.md)
+- [Native PTY](docs/NativePty.md)
 - [Windows ConPTY guide](docs/WindowsConPty.md)
+- [Testing](docs/Testing.md)
 - [End-to-end smoke testing](docs/E2ETesting.md)
+- [GUI Harness Benchmarking](docs/GuiHarnessBenchmarking.md)
+- [Performance Guide](docs/Performance.md)
+- [Comparison Report](docs/ComparisonReport.md)
 
 ## Repository Structure
 
@@ -132,16 +175,6 @@ src/
 tests/               — Unit, native PTY, and rendering tests
 docs/                — Architecture and platform guides
 ```
-
-## Documentation
-
-- [Architecture Overview](docs/Architecture.md)
-- [Rendering System](docs/Rendering.md)
-- [Parser Implementation](docs/Parsing.md)
-- [Native PTY](docs/NativePty.md)
-- [Testing](docs/Testing.md)
-- [GUI Harness Benchmarking](docs/GuiHarnessBenchmarking.md)
-- [Performance Analysis](docs/ComparisonReport.md)
 
 ## License
 

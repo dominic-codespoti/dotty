@@ -64,17 +64,12 @@ Tests allocation patterns and GC impact:
 
 ### Startup Performance
 
-Tests initialization times. Dotty includes a `StartupTimer` utility that profiles cold-start phases:
-
-| Phase | Description | Target |
-|-------|-------------|--------|
-| App constructor | App initialization | <50ms |
-| Native PTY init | PTY creation and shell start | <100ms |
-| First frame render | Initial terminal parse + display | <50ms |
-| Config load | Source generator config resolution | <10ms |
+The performance project includes startup benchmarks for host initialization and
+first-frame work. Configuration loading uses the runtime JSON model and watcher;
+the current host does not compile a user configuration project.
 
 | Benchmark | Description | Target |
-|-----------|-------------|--------|
+|---|---|---|
 | Cold Start | First initialization | <500ms |
 | Warm Start | Subsequent starts | <100ms |
 | First Frame | Parse initial content | <50ms |
@@ -113,7 +108,7 @@ Tests sustained throughput:
 
 ### Target Performance Goals
 
-- **FPS**: 60+ FPS for rendering (>16ms frame budget)
+- **FPS**: 60+ FPS for rendering (<16ms frame budget)
 - **Parser**: >100 MB/s for plain text, >50 MB/s for ANSI
 - **Latency**: <1ms for individual operations
 - **Memory**: <1 allocation per input byte
@@ -144,7 +139,8 @@ dotnet run --project tests/Dotty.Performance.Tests -c Release -- --filter parser
 
 ### Environment Variables
 
-- `DOTTY_BENCH_MODE` - Set default mode (detailed/quick/memory/parser/rendering)
+- `DOTTY_BENCH_MODE` - Set default mode (`detailed`, `quick`, `ci`, `memory`,
+  `parser`, or `rendering`)
 - `CI=true` - Automatically enables quick mode with regression checking
 
 ## Interpreting Results
@@ -222,62 +218,18 @@ After intentional performance improvements:
 
 ## Continuous Integration
 
-### GitHub Actions Workflow
+The `performance-tests` job in `.github/workflows/ci.yml` runs on Ubuntu for
+pull requests and pushes to `main`. It builds the solution, then runs:
 
-```yaml
-performance-tests:
-  name: Performance Tests
-  runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '10.0.x'
-    
-    - name: Run Performance Tests
-      run: dotnet run --project tests/Dotty.Performance.Tests -c Release
-      env:
-        CI: true
-        DOTTY_BENCH_MODE: quick
-    
-    - name: Upload Results
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: performance-results
-        path: |
-          BenchmarkDotNet.Artifacts/performance/*.html
-          BenchmarkDotNet.Artifacts/performance/*.json
+```bash
+cd tests/Dotty.Performance.Tests
+dotnet run -c Release -- --mode quick
 ```
 
-### Artifact Storage
-
-Store baseline files and historical results:
-
-```yaml
-- name: Store Baselines
-  uses: actions/upload-artifact@v4
-  with:
-    name: performance-baselines
-    path: tests/Dotty.Performance.Tests/Baselines/
-    retention-days: 90
-```
-
-### Regression Notifications
-
-Configure Slack/email notifications for regressions:
-
-```yaml
-- name: Check for Regressions
-  run: |
-    if [ -f "regressions.txt" ]; then
-      echo "Performance regressions detected!"
-      cat regressions.txt
-      exit 1
-    fi
-```
+The job sets `CI=true` and `DOTTY_BENCH_MODE=quick`, uploads
+`tests/Dotty.Performance.Tests/BenchmarkDotNet.Artifacts/` and
+`tests/Dotty.Performance.Tests/baselines.json`, and fails when the benchmark
+project writes `regressions.txt`. CI does not run the detailed benchmark mode.
 
 ## Optimizing Performance
 
@@ -292,8 +244,10 @@ Configure Slack/email notifications for regressions:
 
 1. **Dirty tracking**: Only redraw changed cells
 2. **Double buffering**: Avoid tearing during updates
-3. **GPU acceleration**: Use SkiaSharp for rasterization
-4. **Incremental updates**: Don't redraw unchanged regions
+3. **GPU acceleration**: SkiaSharp prepares glyph coverage; Silk.NET submits
+   instanced quads to the OpenGL 3.3 renderer
+4. **Incremental updates**: Avoid rebuilding unchanged scene data where the
+   current caches permit it
 
 ### Memory Optimization
 
@@ -389,18 +343,18 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 ## Additional Resources
 
 - [BenchmarkDotNet Documentation](https://benchmarkdotnet.org/)
-- [Dotty Architecture](../Architecture.md)
+- [Dotty Architecture](Architecture.md)
 ## Changelog
 
 | Date | Change |
 |------|--------|
-| 2026-06-17 | Added BufferTextWriter optimization, StartupTimer cold-start phase profiling, lazy glyph atlas population |
-| 2026-06-15 | Added cold-start optimization section with StartupTimer phases |
+| 2026-06-17 | Added BufferTextWriter optimization, cold-start benchmark guidance, and lazy glyph atlas population |
+| 2026-06-15 | Added cold-start benchmark guidance |
 
 ---
 
-- [Dotty Rendering Performance](../Rendering.md)
-- [Dotty Parsing Performance](../Parsing.md)
+- [Dotty Rendering Performance](Rendering.md)
+- [Dotty Parsing Performance](Parsing.md)
 - [.NET Performance Best Practices](https://docs.microsoft.com/en-us/dotnet/framework/performance/)
 
 *Last updated: 2026-06-17*

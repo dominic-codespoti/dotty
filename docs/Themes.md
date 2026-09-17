@@ -1,105 +1,48 @@
 # Dotty Themes
 
+Dotty's built-in and user themes are selected by the JSON configuration file.
+The desktop host renders them through the current Silk.NET/OpenGL and
+SkiaSharp pipeline; themes do not define host UI classes.
 Dotty comes with a curated set of popular terminal themes. This guide documents all built-in themes with their color values and characteristics.
 
 ## Quick Reference
 
-```csharp
-using Dotty.Abstractions.Themes;
+Set a built-in theme in `config.json`:
 
-// Dark themes
-public IColorScheme? Colors => BuiltInThemes.DarkPlus;       // VS Code Dark+ (default)
-public IColorScheme? Colors => BuiltInThemes.Dracula;        // Vibrant dark
-public IColorScheme? Colors => BuiltInThemes.OneDark;        // Atom-inspired
-public IColorScheme? Colors => BuiltInThemes.GruvboxDark;    // Warm dark
-public IColorScheme? Colors => BuiltInThemes.CatppuccinMocha; // Pastel dark
-public IColorScheme? Colors => BuiltInThemes.TokyoNight;      // Deep blues
-
-// Light themes
-public IColorScheme? Colors => BuiltInThemes.LightPlus;      // VS Code Light+
-public IColorScheme? Colors => BuiltInThemes.OneLight;       // Balanced light
-public IColorScheme? Colors => BuiltInThemes.GruvboxLight;   // Warm light
-public IColorScheme? Colors => BuiltInThemes.CatppuccinLatte; // Pastel light
-    public IColorScheme? Colors => BuiltInThemes.SolarizedLight; // Low contrast
+```json
+{ "theme": "DarkPlus" }
 ```
+
+Available built-in names:
+
+- Dark: `DarkPlus`, `Dracula`, `OneDark`, `GruvboxDark`, `CatppuccinMocha`,
+  `TokyoNight`
+- Light: `LightPlus`, `OneLight`, `GruvboxLight`, `CatppuccinLatte`,
+  `SolarizedLight`
 
 ---
 
 ## Transparency
 
-Dotty supports window transparency/opacity control through the theming system. This allows you to create translucent terminal windows that blend with the desktop background.
+Window opacity is configured with `window.opacity` in `config.json`:
 
-### Opacity Range
-
-- **100** = Fully opaque (default)
-- **0** = Fully transparent
-- **Recommended values**: 85-95 for subtle effect
-
-### Creating a Translucent Theme
-
-```csharp
-using Dotty.Abstractions.Themes;
-
-/// <summary>
-/// Translucent dark theme with 85% opacity (15% transparent)
-/// </summary>
-public class TranslucentDarkTheme : DarkPlusTheme
+```json
 {
-    public override byte Opacity => 85;
-}
-
-// Use it in your config
-public partial class MyConfig : IDottyConfig
-{
-    public IColorScheme? Colors => new TranslucentDarkTheme();
+  "theme": "DarkPlus",
+  "window": { "opacity": 0.9 }
 }
 ```
 
-### Time-Based Opacity
+Opacity affects the whole window. The current host does not expose
+platform-specific transparency or blur APIs; actual compositor behavior can vary
+by platform.
 
-You can make the terminal automatically adjust opacity based on time of day:
+---
 
-```csharp
-public class AdaptiveOpacityTheme : DarkPlusTheme
-{
-    // More transparent at night (90%), fully opaque during day
-    public override byte Opacity => DateTime.Now.Hour is >= 20 or < 6 ? 90 : 100;
-}
-```
-
-### Platform Support Notes
-
-The transparency feature uses Avalonia's `Window.Opacity` property, which affects the **entire window uniformly**. For true "see-through" effects with blurred background:
-
-| Platform | Support | Notes |
-|----------|---------|-------|
-| Windows | Partial | DWM blur requires platform-specific APIs |
-| macOS | Partial | NSVisualEffectView for blur effects |
-| Linux | Varies | Depends on compositor (KDE, GNOME, etc.) |
-
-### Accessibility Considerations
-
-- **Recommended range**: 85-95 opacity (5-15% transparent)
-- Lower values may hurt readability, especially with busy backgrounds
-- Consider using darker backgrounds with transparency for better contrast
-- Test your configuration with your typical desktop background
-
-### Built-in Themes with Transparency
-
-All built-in themes default to `Opacity = 100` (fully opaque). To use transparency, create a custom theme that overrides the `Opacity` property.
-
-```csharp
-// Example: Make any built-in theme translucent
-public class TranslucentDracula : DraculaTheme
-{
-    public override byte Opacity => 90; // 10% transparent
-}
-
-public class TranslucentLight : LightPlusTheme
-{
-    public override byte Opacity => 95; // 5% transparent
-}
-```
+Use values between `0` and `1`; `1` is fully opaque. Lower opacity can reduce
+readability, so test it with the desktop background and font colors you use.
+User-defined color themes are JSON files in `<config-directory>/themes`; see
+[Custom Themes](CustomThemeArchitecture.md) for the schema and loader behavior.
 
 ---
 
@@ -109,8 +52,8 @@ public class TranslucentLight : LightPlusTheme
 
 **VS Code Dark+** - The default theme for Dotty, matching VS Code's default dark theme. Provides excellent readability and familiarity for VS Code users.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.DarkPlus;
+```json
+{ "theme": "DarkPlus" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -147,8 +90,8 @@ public IColorScheme? Colors => BuiltInThemes.DarkPlus;
 
 **Dracula** - One of the most popular dark themes in the developer community. Features a dark purple background with bright, saturated colors.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.Dracula;
+```json
+{ "theme": "Dracula" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -185,8 +128,8 @@ public IColorScheme? Colors => BuiltInThemes.Dracula;
 
 **One Dark** - Inspired by the Atom editor. A subtle dark theme with muted, professional colors.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.OneDark;
+```json
+{ "theme": "OneDark" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -223,8 +166,8 @@ public IColorScheme? Colors => BuiltInThemes.OneDark;
 
 **Gruvbox Dark** - Warm dark theme with earthy tones. Designed to be easy on the eyes for long coding sessions.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.GruvboxDark;
+```json
+{ "theme": "GruvboxDark" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -261,8 +204,8 @@ public IColorScheme? Colors => BuiltInThemes.GruvboxDark;
 
 **Catppuccin Mocha** - Soothing dark theme with pastel colors. The dark variant of the Catppuccin pastel theme.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.CatppuccinMocha;
+```json
+{ "theme": "CatppuccinMocha" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -299,8 +242,8 @@ public IColorScheme? Colors => BuiltInThemes.CatppuccinMocha;
 
 **Tokyo Night** - Modern dark theme with deep blues and purples. Celebrates the lights of Downtown Tokyo at night.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.TokyoNight;
+```json
+{ "theme": "TokyoNight" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -339,8 +282,8 @@ public IColorScheme? Colors => BuiltInThemes.TokyoNight;
 
 **VS Code Light+** - A clean, bright theme suitable for well-lit environments. The light counterpart to DarkPlus.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.LightPlus;
+```json
+{ "theme": "LightPlus" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -377,8 +320,8 @@ public IColorScheme? Colors => BuiltInThemes.LightPlus;
 
 **One Light** - The light counterpart to One Dark. A balanced light theme with professional, muted colors.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.OneLight;
+```json
+{ "theme": "OneLight" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -414,8 +357,8 @@ public IColorScheme? Colors => BuiltInThemes.OneLight;
 
 **Gruvbox Light** - Warm light theme. The light variant of the popular Gruvbox theme.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.GruvboxLight;
+```json
+{ "theme": "GruvboxLight" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -452,8 +395,8 @@ public IColorScheme? Colors => BuiltInThemes.GruvboxLight;
 
 **Catppuccin Latte** - Light counterpart to Catppuccin Mocha. Features soft, warm colors with excellent readability.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.CatppuccinLatte;
+```json
+{ "theme": "CatppuccinLatte" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -490,8 +433,8 @@ public IColorScheme? Colors => BuiltInThemes.CatppuccinLatte;
 
 **Solarized Light** - Carefully selected low-contrast colors designed to reduce eye strain.
 
-```csharp
-public IColorScheme? Colors => BuiltInThemes.SolarizedLight;
+```json
+{ "theme": "SolarizedLight" }
 ```
 
 | Role | Color | Hex | ARGB |
@@ -526,79 +469,15 @@ public IColorScheme? Colors => BuiltInThemes.SolarizedLight;
 
 ## Creating Custom Themes
 
-### Basic Custom Theme
+Create user themes as JSON files under `<config-directory>/themes`. The
+supported schema, aliases, validation behavior, and an example are documented
+in [Custom Theme Architecture](CustomThemeArchitecture.md).
 
-```csharp
-using Dotty.Abstractions.Themes;
-
-public class MyCustomTheme : ColorSchemeBase
-{
-    public MyCustomTheme() : base(
-        background: 0xFF1A1B26,
-        foreground: 0xFFA9B1D6,
-        // ... all 16 ANSI colors
-    )
-    {
-    }
-}
-
-// Use it in your config
-public partial class MyConfig : IDottyConfig
-{
-    public IColorScheme? Colors => new MyCustomTheme();
-}
-```
-
-### Converting from Hex
-
-```csharp
-using static Dotty.Abstractions.Themes.ColorSchemeBase;
-
-public class MyHexTheme : ColorSchemeBase
-{
-    public MyHexTheme() : base(
-        background: FromHex("#1A1B26"),
-        foreground: FromHex("#A9B1D6"),
-        // ... etc
-    )
-    {
-    }
-}
-```
-
-### Accessibility Considerations
-
-When creating custom themes, ensure adequate contrast ratios:
-
-```csharp
-using static Dotty.Abstractions.Themes.ColorSchemeBase;
-
-// WCAG AA requires at least 4.5:1 for normal text
-double contrast = CalculateContrastRatio(foreground, background);
-if (contrast < 4.5)
-{
-    // Warning: Low contrast
-}
-```
-
-**Recommended minimum contrast ratios:**
-- Normal text: 4.5:1 (WCAG AA)
-- Large text: 3:1
-- Enhanced (AAA): 7:1
-
-### Contributing New Themes
-
-If you'd like to contribute a new built-in theme:
-
-1. Create a new class in `/src/Dotty.Abstractions/Themes/`
-2. Inherit from `ColorSchemeBase`
-3. Add the theme to `BuiltInThemes.cs`
-4. Document it in this file
-5. Ensure colors are from official theme sources
-
+For accessibility, keep foreground/background contrast high enough for your
+font size and desktop background. WCAG recommends at least 4.5:1 contrast for
+normal text and 3:1 for large text.
 ---
 
 ## See Also
 
 - [Configuration Guide](Configuration.md) - Full configuration documentation
-- [Sample Config](../samples/Config.cs) - Complete examples

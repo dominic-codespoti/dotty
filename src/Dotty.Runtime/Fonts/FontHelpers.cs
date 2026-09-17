@@ -4,7 +4,7 @@ namespace Dotty.Runtime.Fonts;
 
 /// <summary>
 /// Small helper functions around font/glyph heuristics that are safe to unit-test.
-/// Kept minimal to avoid heavy Avalonia/UI dependencies in tests.
+/// Kept free of host and rendering dependencies so it can be unit-tested directly.
 /// </summary>
 public static class FontHelpers
 {

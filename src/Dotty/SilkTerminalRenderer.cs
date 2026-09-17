@@ -107,6 +107,10 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
 
     private void SetupInstanceAttribs(uint baseInstance = 0)
     {
+        // VertexAttribPointer captures the currently bound ARRAY_BUFFER, so the
+        // instance buffer must be bound here: chrome draws leave their own VBO
+        // bound and would otherwise re-point the glyph attributes at chrome data.
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instanceVbo);
         uint stride = FloatsPerInstance * sizeof(float);
         uint baseOffset = baseInstance * stride;
 
@@ -170,6 +174,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
 
     private void SetupChromeInstanceAttribs()
     {
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _chromeInstanceVbo);
         uint stride = ChromeFloatsPerInstance * sizeof(float);
 
         void Attrib(uint loc, int size, uint offsetFloats)

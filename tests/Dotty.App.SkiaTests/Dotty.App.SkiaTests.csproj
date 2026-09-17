@@ -17,6 +17,7 @@
     <ProjectReference Include="..\..\src\Dotty.Terminal\Dotty.Terminal.csproj" />
     <ProjectReference Include="..\..\src\Dotty.Rendering.Gpu\Dotty.Rendering.Gpu.csproj" />
     <ProjectReference Include="..\..\src\Dotty.Runtime\Dotty.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Dotty\Dotty.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -296,12 +296,13 @@ public class WindowsPtyTests : IDisposable
     public async Task WindowsPty_Write_SendsInputToProcess()
     {
         Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
-        
+        var ct = TestContext.Current.CancellationToken;
+
         // Arrange
         _pty = new Windows.WindowsPty();
         _pty.Start(shell: "cmd.exe", columns: 80, rows: 24);
 
-        await Task.Delay(500); // Wait for shell to start
+        await Task.Delay(500, ct); // Wait for shell to start
 
         // Act
         var inputStream = _pty.InputStream;
@@ -309,8 +310,8 @@ public class WindowsPtyTests : IDisposable
 
         var testData = "echo TEST_OUTPUT\r\n";
         var bytes = Encoding.ASCII.GetBytes(testData);
-        await inputStream!.WriteAsync(bytes, 0, bytes.Length);
-        await inputStream.FlushAsync();
+        await inputStream!.WriteAsync(bytes.AsMemory(), ct);
+        await inputStream.FlushAsync(ct);
 
         // Assert - just verify write completed without error
         Assert.True(true);
@@ -346,7 +347,7 @@ public class WindowsPtyTests : IDisposable
             await Task.Delay(500, inputToken); // Wait for shell to start
             await inputStream!.WriteAsync(bytes.AsMemory(), inputToken);
             await inputStream.FlushAsync(inputToken);
-        });
+        }, inputToken);
 
         var buffer = new byte[4096];
         var output = new StringBuilder();
@@ -608,11 +609,11 @@ public class WindowsPtyTests : IDisposable
         var inputStream = _pty.InputStream!;
         var exitCommand = "exit\r\n";
         var bytes = Encoding.ASCII.GetBytes(exitCommand);
-        await inputStream.WriteAsync(bytes, 0, bytes.Length);
-        await inputStream.FlushAsync();
+        await inputStream.WriteAsync(bytes.AsMemory(), TestContext.Current.CancellationToken);
+        await inputStream.FlushAsync(TestContext.Current.CancellationToken);
 
         // Wait for process to exit
-        await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
 
         // Assert
         eventFired.Should().BeTrue("ProcessExited event should fire");
@@ -641,7 +642,7 @@ public class WindowsPtyTests : IDisposable
         _pty.Start(shell: "cmd.exe /c exit 42");
 
         // Act - wait for exit
-        await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
 
         // Assert
         exitCodeReceived.Should().Be(42, "Exit code should be 42");
@@ -730,11 +731,12 @@ public class WindowsPtyTests : IDisposable
     public async Task WindowsPty_Read_LargeOutput()
     {
         Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
-        
+        var ct = TestContext.Current.CancellationToken;
+
         // Arrange
         _pty = new Windows.WindowsPty();
         _pty.Start(shell: "cmd.exe");
-        await Task.Delay(500);
+        await Task.Delay(500, ct);
 
         // Generate large output command
         var inputStream = _pty.InputStream!;
@@ -743,11 +745,11 @@ public class WindowsPtyTests : IDisposable
         // Use a command that produces significant output
         var command = "for /L %i in (1,1,500) do @echo WINDOWS_PTY_TEST_LINE_%i\r\n";
         var bytes = Encoding.ASCII.GetBytes(command);
-        await inputStream.WriteAsync(bytes, 0, bytes.Length);
-        await inputStream.FlushAsync();
+        await inputStream.WriteAsync(bytes.AsMemory(), ct);
+        await inputStream.FlushAsync(ct);
 
         // Act
-        await Task.Delay(1000);
+        await Task.Delay(1000, ct);
 
         var buffer = new byte[8192];
         var totalRead = 0;

@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <!-- Multi-target for use in applications (net10.0) and build tools (netstandard2.0) -->
-    <TargetFrameworks>net10.0;netstandard2.0</TargetFrameworks>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
@@ -17,17 +16,10 @@
     <PackageProjectUrl>https://github.com/dominic-codespoti/dotty</PackageProjectUrl>
     <PackageTags>terminal;console;cli;config;themes;dotty</PackageTags>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- No separate symbol package: DebugType=embedded (Directory.Build.props)
+         already ships debug info inside the DLL, so no standalone .pdb exists
+         for a .snupkg to contain. -->
   </PropertyGroup>
-  
-  <!-- Polyfills for netstandard2.0 compatibility -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
-    <PackageReference Include="System.Memory" />
-    <PackageReference Include="System.Text.Json" />
-    <PackageReference Include="IsExternalInit" PrivateAssets="all" />
-  </ItemGroup>
-  
   <!-- Embedded resources -->
   <ItemGroup>
     <EmbeddedResource Include="Themes\themes.json">

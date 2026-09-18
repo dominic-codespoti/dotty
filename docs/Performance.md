@@ -143,6 +143,45 @@ dotnet run --project tests/Dotty.Performance.Tests -c Release -- --filter parser
   `parser`, or `rendering`)
 - `CI=true` - Automatically enables quick mode with regression checking
 
+### Consolidated end-to-end evaluation
+
+For a reproducible comparison of the built app and available reference
+terminals, run the evaluation suite from the repository root:
+
+```bash
+python3 scripts/perf/eval_suite.py all --runs 3 --lines 500000 \
+  --include dotty,ghostty,kitty --profile-lines 500000 \
+  --captures cpu,counters,alloc,gcdump
+```
+
+The suite exposes three subcommands: `compare` runs the unprofiled reference
+comparison, `profile` collects diagnostics for the Dotty process, and `all`
+does both. Replace `all` in the command above with `compare` or `profile` when
+you need only one phase; keep `--captures` with `profile` to select capture
+types.
+
+The app default is the lowercase `Release` apphost. If a requested competitor
+is not installed, it is reported as **skipped** rather than treated as a zero
+or failed run.
+Required .NET diagnostics tools are `dotnet-trace`, `dotnet-counters`, and
+`dotnet-gcdump`.
+
+Each invocation writes a unique UTC directory below `artifacts/perf/eval/`.
+The directory contains `summary.json`, `report.md`, per-run child logs and
+JSON, and (when requested and supported) raw nettrace, speedscope, and
+gcdump/report artifacts. In reports, **passed** means the command completed
+with usable measurements, **partial** means some requested capture or metric
+was unavailable while other output was retained, **skipped** means a requested
+program or optional dependency was absent, and **failed** means the operation
+could not produce its expected result. Inspect the raw child artifact before
+discarding a partial result.
+
+This command is intentionally separate from the BenchmarkDotNet commands
+above: it exercises sustained terminal output and external-process diagnostics,
+so its throughput and memory numbers should not be merged with BenchmarkDotNet
+means.
+
+
 ## Interpreting Results
 
 ### BenchmarkDotNet Output
@@ -172,6 +211,34 @@ dotnet run --project tests/Dotty.Performance.Tests -c Release -- --filter parser
 - **Gen2 Collections**: Indicates excessive memory pressure
 - **Increasing Allocations**: Memory leak or inefficient algorithm
 - **Bimodal Distribution**: Two code paths with different performance
+
+### Consolidated evaluation findings (2026-09-18)
+
+The following reference run used three runs of 500,000 lines (27.5 MB per
+run). Dotty throughput was 20.93 MiB/s mean, 20.89 median, and 21.61 p95;
+output time was 1,254.30 ms mean and 1,294.29 ms p95; tree RSS was 300.26
+MiB. Ghostty measured 33.27/32.50/34.79 MiB/s (mean/median/p95), 789.44 ms
+mean and 812.46 ms p95, and 217.58 MiB RSS. Kitty measured
+50.79/50.85/54.69 MiB/s, 518.86 ms mean and 560.05 ms p95, and 216.22 MiB
+RSS. Relative to these runs, Dotty throughput was 37.10% below Ghostty and
+58.80% below Kitty. Three runs are descriptive; their p95 values are not a
+stable population estimate.
+
+Profiling sampled thread time found `OnRenderCore` at 6.72% inclusive and the
+`StartPtyPipeline` subtree at 6.46–6.48% of active Dotty samples. Wait,
+thread-pool, and file-watcher samples dominate the trace but are blocked or
+background time, not demonstrated useful-work bottlenecks. A gcdump retained
+7,141,208 bytes across 9,506 objects; visible `System.Byte[]`,
+`System.Single[]`, and `CellInstance[]` retained at least 4,801,520,
+635,080, and 630,744 bytes respectively. Profile tree RSS was about
+269–279 MiB while managed heap was about 6.81 MiB; native, GPU, and runtime
+ownership of that gap is an inference, not a measurement. CPU, allocation, and
+gcdump captures succeeded. On this host, `dotnet-counters` runs 9 and 10
+produced malformed empty `Events` JSON; the suite marks this **partial** and
+retains the raw artifact. Profilers perturb throughput, and each capture uses
+a separate process, so profiled runs must not be combined with comparison
+means.
+
 
 ## Performance Regression Testing
 
@@ -263,6 +330,27 @@ project writes `regressions.txt`. CI does not run the detailed benchmark mode.
    phases for comparison across runs.
 2. **Lazy glyph atlas population**: Glyphs are added to the shared atlas as
    they are first encountered.
+### Measured priorities and next experiments (2026-09-18)
+
+Treat the comparison deficit as an outcome, not proof of one cause. Run the
+next experiments in this order:
+
+1. **Filter to active work only** in CPU traces, separating useful render and
+   parser samples from waits, thread-pool activity, and file watchers.
+2. **Ablate the render path** (composition versus upload/present) to determine
+   whether the observed render samples explain throughput.
+3. **Use an input matrix** covering ASCII, ANSI, and scrolling workloads to
+   separate parser costs from rendering and terminal-state costs.
+4. **Aggregate allocations by type and call path** to turn the visible
+   `Byte[]`, `Single[]`, and `CellInstance[]` retained sizes into actionable
+   ownership data.
+5. **Account for native and GPU memory** so the RSS-to-managed-heap gap is
+   measured rather than attributed by inference.
+
+These experiments should use separate unprofiled comparison runs for
+throughput and explicitly label any diagnostic capture as perturbing the
+workload.
+
 
 ### Common Optimizations
 
@@ -350,6 +438,7 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 | Date | Change |
 |------|--------|
 | 2026-06-17 | Added BufferTextWriter optimization, cold-start benchmark guidance, and lazy glyph atlas population |
+| 2026-09-18 | Added consolidated evaluation commands, artifact/status semantics, and measured findings |
 | 2026-06-15 | Added cold-start benchmark guidance |
 
 ---
@@ -358,4 +447,4 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 - [Dotty Parsing Performance](Parsing.md)
 - [.NET Performance Best Practices](https://docs.microsoft.com/en-us/dotnet/framework/performance/)
 
-*Last updated: 2026-06-17*
+*Last updated: 2026-09-18*

@@ -59,6 +59,81 @@ separately from BenchmarkDotNet.
 dotnet run -c Release -- --mode detailed
 ```
 
+## BenchmarkDotNet vs. consolidated evaluation
+
+This project contains **BenchmarkDotNet microbenchmarks**. Use them to isolate
+parser, rendering, allocation, startup, and other in-process operations:
+
+```bash
+dotnet run --project tests/Dotty.Performance.Tests -c Release
+dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode quick
+```
+
+The repository-level comparison harness is separate; it is **not** a
+BenchmarkDotNet test. For an end-to-end throughput, memory, and profiling
+comparison of the Release apphost with other terminals, run from the
+repository root:
+
+```bash
+python3 scripts/perf/eval_suite.py all \
+  --runs 3 --lines 500000 \
+  --include dotty,ghostty,kitty \
+  --profile-lines 500000 \
+  --captures cpu,counters,alloc,gcdump
+```
+
+The CLI also exposes `compare`, `profile`, and `all` subcommands. It requires
+the .NET tools `dotnet-trace`, `dotnet-counters`, and `dotnet-gcdump`. The
+default app selection uses the lowercase `Release` apphost; unavailable
+competitors are reported as skipped rather than treated as failures.
+
+Each invocation writes a unique UTC directory under
+`artifacts/perf/eval/`:
+
+```text
+<utc-run>/
+├── summary.json
+├── report.md
+├── child logs and JSON
+├── raw nettrace and speedscope files
+└── gcdump and report
+```
+
+Use BenchmarkDotNet for a repeatable, focused code change or allocation
+question. Use `eval_suite.py` when the question is terminal-level throughput,
+RSS, cross-terminal comparison, or profiler evidence. Do not combine profiled
+throughput with unprofiled comparison means: profiling perturbs results and
+captures run in separate processes.
+
+### Compact reference results
+
+The following descriptive reference compares three 500,000-line runs
+(27.5 MB per run); three runs are not a stable-population estimate, so p95
+should not be read as a statistically robust tail:
+
+| App | Throughput mean / median / p95 (MiB/s) | Output mean / p95 (ms) | Tree RSS (MiB) | Dotty throughput deficit |
+|-----|---------------------------------------|------------------------|----------------|--------------------------|
+| Dotty | 20.93 / 20.89 / 21.61 | 1254.30 / 1294.29 | 300.26 | — |
+| Ghostty | 33.27 / 32.50 / 34.79 | 789.44 / 812.46 | 217.58 | 37.10% |
+| Kitty | 50.79 / 50.85 / 54.69 | 518.86 / 560.05 | 216.22 | 58.80% |
+
+In sampled-thread-time profiling of Dotty, `OnRenderCore` accounted for
+6.72% inclusive active samples and the `StartPtyPipeline` subtree for
+6.46–6.48%. Wait/thread-pool/file-watcher samples dominated the remainder but
+are blocked or background activity, not useful work. The gcdump retained
+7,141,208 bytes across 9,506 objects; visible `System.Byte[]`,
+`System.Single[]`, and `CellInstance[]` retained at least 4,801,520,
+635,080, and 630,744 bytes respectively. Profile runs showed roughly
+269–279 MiB tree RSS versus 6.81 MiB managed heap; native/GPU/runtime
+ownership of that gap is an inference, not a measurement. CPU, allocation, and
+gcdump captures succeeded. On this host, counters runs 9 and 10 emitted
+malformed empty `Events` JSON; the suite marks these partial and retains the
+raw artifact.
+
+Prioritize follow-up experiments as: active-work-only CPU filtering; render
+path ablation (composition versus upload/present); ASCII/ANSI/scroll parser
+matrix; typed allocation aggregation; and native/GPU memory accounting.
+
 ## Benchmark Modes
 
 | Mode | Use Case | Iterations | Output |

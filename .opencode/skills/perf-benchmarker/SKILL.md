@@ -12,6 +12,11 @@ This skill lets you benchmark the Dotty terminal emulator using three complement
 - .NET 10 SDK installed
 - Python 3 (for harness scripts)
 - `make`, `gcc`/`clang` (for native PTY helper)
+- .NET diagnostics tools installed and on `PATH`: `dotnet-trace`, `dotnet-counters`, and `dotnet-gcdump`
+- If a tool is missing, install it as a global .NET tool (one command per tool):
+  `dotnet tool install --global dotnet-trace`,
+  `dotnet tool install --global dotnet-counters`, and
+  `dotnet tool install --global dotnet-gcdump`
 - For fastest results: ReadyToRun publish first
 - Competitor terminals (optional, for cross-terminal comparison):
   - `/usr/bin/kitty`
@@ -20,15 +25,78 @@ This skill lets you benchmark the Dotty terminal emulator using three complement
 
 ## Quick Overview
 
+Use `eval_suite.py` as the normal entry point. It runs the comparison and .NET
+inspection phases in one uniquely named UTC output directory, preserving each
+child's JSON, logs, and raw diagnostics artifacts. The older direct scripts
+remain useful for focused troubleshooting.
+
 ```
-Benchmark Types                         What It Measures
-─────────────────────────────────────   ────────────────────────────
-dotnet run --mode quick --filter bulk   Parser + buffer write throughput
-scripts/perf/terminal_output_bench.py End-to-end output, startup time, RSS
-scripts/perf/gui_harness_bench.py     Tab creation, switching, GUI memory
+Benchmark Type                         Recommended Entry Point
+─────────────────────────────────────  ────────────────────────────
+Consolidated compare + profile         scripts/perf/eval_suite.py all
+Cross-terminal output only             scripts/perf/eval_suite.py compare
+.NET CPU/counters/alloc/heap only      scripts/perf/eval_suite.py profile
+Parser/buffer microbenchmarks          dotnet run --mode quick --filter bulk
+GUI tab/memory harness                 scripts/perf/gui_harness_bench.py
 ```
 
-## 1. Microbenchmarks (BenchmarkDotNet)
+## 1. Consolidated Evaluation Suite (Recommended)
+
+Run one consolidated evaluation before drawing conclusions from separate
+experiments:
+
+```bash
+python3 scripts/perf/eval_suite.py all --runs 3 --lines 500000 --include dotty,ghostty,kitty --profile-lines 500000 --captures cpu,counters,alloc,gcdump
+```
+
+The suite defaults to the lowercase Release apphost (published lowercase
+`dotty` when available, then the Release `dotty` apphost). Override it with
+`--app /path/to/dotty` when needed. `compare`, `profile`, and `all` are
+available:
+
+```bash
+python3 scripts/perf/eval_suite.py compare --runs 3 --lines 500000 --include dotty,ghostty,kitty
+python3 scripts/perf/eval_suite.py profile --profile-lines 500000 --captures cpu,counters,alloc,gcdump
+python3 scripts/perf/eval_suite.py all --runs 3 --lines 500000 --include dotty,ghostty,kitty \
+  --profile-lines 500000 --captures cpu,counters,alloc,gcdump
+```
+
+Each invocation creates a unique UTC directory under
+`artifacts/perf/eval/` (for example, `20260918T120000Z-a1b2c3`) containing
+`summary.json`, `report.md`, component JSON and stdout/stderr logs, plus the
+requested raw artifacts. CPU and allocation captures retain nettrace and
+speedscope files; heap capture retains the gcdump and heap report; counters
+retains its raw JSON. Start with `summary.json` for machine-readable status and
+configuration, then read `report.md` and follow its links to raw files and
+logs. These local artifact paths are run outputs, not durable repository links.
+
+Status is evidence, not a claim that every requested measurement succeeded:
+`ok` means the component completed; `partial` means usable output exists but a
+capture or derived artifact is incomplete; `skipped` means an optional
+competitor was unavailable; and `failed` means setup/orchestration or a
+required child failed. A missing competitor is normally recorded as skipped,
+not as a Dotty comparison failure. The overall suite is `partial` when any
+component is partial or skipped, and `failed` only when a component fails.
+
+The comparison report prefers process-tree RSS, which includes the app's child
+processes, and falls back to root-process RSS only when tree data is absent.
+Do not treat a root-only or legacy `peak_rss` value as equivalent to total
+application memory.
+
+The profiler starts separate Dotty processes for each capture. Profiling
+changes scheduling and startup behavior, so never merge profiled throughput
+with the unprofiled comparison means. Treat three-run means/medians/p95s as
+descriptive observations, not estimates of a stable population p95.
+
+If a host emits malformed or empty `Events` JSON from `dotnet-counters`, the
+capture is marked `partial` while its raw counters artifact and logs are
+retained. Inspect the error in `summary.json`/`report.md`; do not silently
+interpret the file as valid counters data.
+
+The suite's direct child scripts are still useful when isolating a failure;
+see sections 2–4 for focused commands:
+
+## 2. Microbenchmarks (BenchmarkDotNet)
 
 Isolated parser, buffer, and rendering benchmarks. Run the JIT-compiled project directly:
 
@@ -70,11 +138,11 @@ dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode quick --
 
 ### Running With ReadyToRun
 
-The microbenchmarks always run under the JIT. For R2R speed, use the cross-terminal harness (section 2).
+The microbenchmarks always run under the JIT. For R2R speed, use the consolidated suite or direct cross-terminal harness (section 3).
 
-## 2. Cross-Terminal Output Benchmark
+## 3. Direct Cross-Terminal Output Troubleshooting
 
-Launches Dotty, Kitty, Ghostty, and WezTerm (if found) with the same high-output child workload and measures wall-clock time, RSS, and throughput.
+Launches Dotty, Kitty, Ghostty, and WezTerm (if found) with the same high-output child workload and measures wall-clock time, RSS, and throughput. Prefer `eval_suite.py compare` for recorded evaluation runs; use this direct script to isolate child-workload or terminal-launch issues.
 
 ```bash
 # Default: all available terminals
@@ -91,7 +159,7 @@ python3 scripts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include 
 
 1. Creates a temporary `workload.sh` that outputs `500,000` lines of text via a Python one-liner
 2. Sets `DOTTY_SHELL` to the workload for Dotty; passes `-e`/`start` args for others
-3. Monitors `/proc/<pid>/status` every 50ms to sample RSS
+3. Samples RSS every 50ms, preferring the process tree (root plus descendants) for the consolidated report
 4. The workload writes `start`/`end` timestamps to a log file with nanosecond precision
 5. Reads the log to compute `launch_to_child_start_ms` and `output_ms`
 6. Reports throughput in MiB/s (total bytes / output_ms)
@@ -103,7 +171,9 @@ python3 scripts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include 
 | `launch_to_child_start_ms` | Total startup time — app launch to first byte of output |
 | `output_ms` | Time for the child to produce all 500k lines through the PTY |
 | `throughput_mb_s` | Throughput = total bytes / output_ms |
-| `peak_rss_mb` | Maximum RSS during the run |
+| process-tree RSS | Preferred memory comparison: sampled peak RSS for the app and descendants |
+| root/legacy `peak_rss_mb` | Fallback only when tree RSS is unavailable; not total application memory |
+
 
 ### Environment Variables
 
@@ -115,7 +185,34 @@ python3 scripts/perf/terminal_output_bench.py --runs 2 --lines 500000 --include 
 | `KITTY_BIN` | Override Kitty path |
 | `GHOSTTY_BIN` | Override Ghostty path |
 
-## 3. GUI Harness Benchmark
+## 4. Direct .NET Profiling Troubleshooting
+
+Use the child profiler directly when a capture fails and you need to isolate a
+diagnostics-tool problem. The consolidated suite remains the preferred way to
+record a comparison plus profile with matching configuration.
+
+```bash
+python3 scripts/perf/dotnet_profile.py \
+  --app /path/to/dotty \
+  --output-dir /tmp/dotty-profile \
+  --lines 500000 \
+  --captures cpu,counters,alloc,gcdump
+```
+
+The profiler writes `profile.json` plus per-capture raw files and collector
+logs. CPU capture produces a nettrace, top-methods report, and speedscope
+conversion; allocation capture retains nettrace/speedscope (typed allocation
+totals are not promised); counters produces JSON; gcdump produces a heap dump
+and heap-stat report. A malformed or empty counters `Events` list makes that
+capture `partial`, but the raw JSON is retained for diagnosis.
+
+CPU profiles contain blocked/background samples as well as active work. Wait,
+thread-pool, and file-watcher samples can dominate totals without representing
+rendering or parsing work; do not call them hot application work without
+filtering by active workload/thread.
+
+## 5. GUI Harness Benchmark
+
 
 Launches Dotty as a real GUI app, communicates over TCP, and measures tab creation, switching, and memory.
 
@@ -157,7 +254,7 @@ The app listens on `DOTTY_TEST_PORT` for these commands:
 | `scrollbackCount` | Lines in scrollback buffer |
 | `rss_before_mb` / `rss_after_mb` | RSS sampled from `/proc/pid/status` |
 
-## 4. Interpreting Performance Regressions
+## 6. Interpreting Performance Regressions
 
 ### Run-to-Run Variance
 
@@ -166,6 +263,50 @@ Expect ~5-10% variance in wall-clock benchmarks due to:
 - Compositor load / GPU contention
 - Disk and memory bus contention
 - ASLR / code alignment effects
+
+
+### Current Reference Evidence
+
+The following is a measured reference comparison from three 500k-line runs
+(27.5 MB per run). Values are descriptive for this run set; in particular,
+do not treat a three-run p95 as a stable population percentile.
+
+| Terminal | Throughput mean / median / p95 (MiB/s) | Output mean / p95 (ms) | Process-tree RSS (MiB) | Dotty throughput deficit |
+|---|---:|---:|---:|---:|
+| Dotty | 20.93 / 20.89 / 21.61 | 1254.30 / 1294.29 | 300.26 | — |
+| Ghostty | 33.27 / 32.50 / 34.79 | 789.44 / 812.46 | 217.58 | 37.10% |
+| Kitty | 50.79 / 50.85 / 54.69 | 518.86 / 560.05 | 216.22 | 58.80% |
+
+The profiling reference also measured sampled-thread-time aggregates for active
+Dotty work: `OnRenderCore` was 6.72% inclusive, and the
+`StartPtyPipeline` PTY/parser subtree was 6.46–6.48%. Wait, thread-pool, and
+file-watcher samples dominated other totals but are blocked/background time,
+not automatically useful work.
+
+CPU, allocation, and gcdump captures succeeded in that reference run. The
+gcdump retained heap was 7,141,208 bytes across 9,506 objects, including at
+least 4,801,520 bytes of `System.Byte[]`, 635,080 bytes of `System.Single[]`,
+and 630,744 bytes of `CellInstance[]`. Profile process-tree RSS was about
+269–279 MiB while managed heap was about 6.81 MiB. Native, GPU, and runtime
+ownership of that gap is an inference from the difference, not a measured
+breakdown; managed heap must not be reported as total RSS.
+
+On this host, `dotnet-counters` runs 9 and 10 emitted malformed empty `Events`
+JSON. The suite therefore marks counters partial and keeps the raw artifact;
+inspect it and its logs before relying on counters conclusions.
+
+### Next Investigation Order
+
+Prioritize experiments in this order:
+
+1. Active-work-only CPU filtering.
+2. Render-path ablation (composition versus upload/present).
+3. ASCII/ANSI/scroll parser matrix.
+4. Typed allocation aggregation.
+5. Native/GPU memory accounting.
+
+These are follow-up hypotheses and measurements, not explanations established
+by the reference table alone.
 
 ### Comparing JIT vs ReadyToRun
 

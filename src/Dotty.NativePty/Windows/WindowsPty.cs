@@ -204,21 +204,30 @@ public sealed class WindowsPty : IPty
         var processHandle = new IntPtr(_processInfo.hProcess);
         using var registration = cancellationToken.Register(() => Kill(force: true));
 
-        while (true)
+        try
         {
-            if (NativeMethods.WaitForSingleObject(processHandle, 100) == 0)
+            while (true)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (NativeMethods.GetExitCodeProcess(processHandle, out uint exitCode))
+                if (NativeMethods.WaitForSingleObject(processHandle, 100) == 0)
                 {
-                    IsRunning = false;
-                    return (int)exitCode;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (NativeMethods.GetExitCodeProcess(processHandle, out uint exitCode))
+                    {
+                        IsRunning = false;
+                        return (int)exitCode;
+                    }
+                    return -1;
                 }
-                return -1;
-            }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                await Task.Delay(10, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // Convert TaskCanceledException to OperationCanceledException for consistent API behavior
+            // (matches Unix.UnixPty.WaitForExitAsync).
+            throw new OperationCanceledException(cancellationToken);
         }
     }
 

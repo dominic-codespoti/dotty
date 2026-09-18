@@ -22,6 +22,7 @@ jobs:
   build-and-test:
     name: Build & Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -29,15 +30,25 @@ jobs:
           - os: ubuntu-latest
             rid: linux-x64
             build-native: true
+            skip-gpu-tests: false
           - os: windows-latest
             rid: win-x64
             build-native: false
+            skip-gpu-tests: false
           - os: macos-15-intel
             rid: osx-x64
             build-native: true
+            # GLFW window/GL-context creation hangs indefinitely on macOS CI
+            # runners (no active WindowServer session / main-thread run loop)
+            # instead of throwing the catchable PlatformNotSupportedException/
+            # GlfwException that Linux and Windows raise, which previously
+            # burned the full 6h job timeout. Skip until a macOS-specific
+            # headless GL fallback exists.
+            skip-gpu-tests: true
           - os: macos-15
             rid: osx-arm64
             build-native: true
+            skip-gpu-tests: true
 
     steps:
       - name: Checkout code
@@ -119,14 +130,20 @@ jobs:
 
       - name: Run host-native tests
         shell: bash
+        timeout-minutes: 15
         env:
           RID: ${{ matrix.rid }}
+          SKIP_GPU_TESTS: ${{ matrix.skip-gpu-tests }}
         run: |
           set -euo pipefail
-          for project in \
-            tests/Dotty.App.Tests/Dotty.App.Tests.csproj \
-            tests/Dotty.Terminal.Tests/Dotty.Terminal.Tests.csproj \
-            tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj; do
+          projects=(
+            tests/Dotty.App.Tests/Dotty.App.Tests.csproj
+            tests/Dotty.Terminal.Tests/Dotty.Terminal.Tests.csproj
+          )
+          if [ "$SKIP_GPU_TESTS" != "true" ]; then
+            projects+=(tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj)
+          fi
+          for project in "${projects[@]}"; do
             project_name="$(basename "$project" .csproj)"
             dotnet test --project "$project" \
               -c Release \

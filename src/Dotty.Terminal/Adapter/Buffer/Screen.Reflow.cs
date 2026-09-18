@@ -6,175 +6,34 @@ namespace Dotty.Terminal.Adapter;
 
 public unsafe partial class Screen
 {
-    private sealed class LogicalLine
+    internal sealed class LogicalLine
     {
-        public LogicalLine(int identity) => Identity = identity;
-        public int Identity { get; }
-        public List<ReflowCell> Cells { get; } = new();
+        internal LogicalLine(int identity) => Identity = identity;
+        internal int Identity { get; }
+        internal List<ReflowCell> Cells { get; } = new();
     }
 
-    private sealed class SourceRow
+    internal sealed class SourceRow
     {
-        public int LogicalLine = -1;
-        public int UnitStart;
-        public List<SourceUnit> Units { get; } = new();
+        internal int LogicalLine = -1;
+        internal int UnitStart;
+        internal List<SourceUnit> Units { get; } = new();
     }
 
-    private readonly record struct SourceUnit(int Column, int Width, int Offset);
+    internal readonly record struct SourceUnit(int Column, int Width, int Offset);
 
-    private sealed class SourceLayout
+    internal sealed class SourceLayout
     {
-        public List<LogicalLine> Lines { get; } = new();
-        public List<SourceRow> Rows { get; } = new();
+        internal List<LogicalLine> Lines { get; } = new();
+        internal List<SourceRow> Rows { get; } = new();
     }
 
-    private sealed class EmittedRow
+
+    internal SourceLayout BuildSourceLayout(int scrollbackRows) =>
+        BuildSourceLayoutCore(NormalizeScrollbackRows(scrollbackRows));
+
+    private SourceLayout BuildSourceLayoutCore(int retainedScrollbackRows)
     {
-        public EmittedRow(bool continuesPrevious) => ContinuesPrevious = continuesPrevious;
-        public bool ContinuesPrevious { get; }
-        public List<ReflowCell> Cells { get; } = new();
-    }
-
-    internal ReflowCursorAnchor GetReflowAnchor(
-        int logicalRow,
-        int column,
-        bool wrapPending,
-        int scrollbackRows = -1)
-    {
-        var layout = BuildSourceLayout(scrollbackRows);
-        int sb = NormalizeScrollbackRows(scrollbackRows);
-        int rowIndex = sb + Math.Clamp(logicalRow, -sb, Rows - 1);
-        if (rowIndex < 0 || rowIndex >= layout.Rows.Count)
-            return new ReflowCursorAnchor(0, 0, wrapPending);
-
-        var row = layout.Rows[rowIndex];
-        if (row.LogicalLine < 0)
-            return new ReflowCursorAnchor(0, 0, wrapPending);
-
-        int col = Math.Clamp(column, 0, Columns - 1);
-        if (row.Units.Count == 0)
-            return new ReflowCursorAnchor(row.LogicalLine, col, wrapPending);
-
-        int offset = row.UnitStart;
-        foreach (var unit in row.Units)
-        {
-            if (col <= unit.Column)
-                break;
-            if (col < unit.Column + unit.Width)
-            {
-                offset = unit.Offset;
-                break;
-            }
-            offset = unit.Offset + 1;
-        }
-
-        return new ReflowCursorAnchor(row.LogicalLine, offset, wrapPending);
-    }
-
-    internal Screen Reflow(
-        int rows,
-        int columns,
-        ReflowCursorAnchor anchor,
-        out ReflowMapping mapping)
-    {
-        return ReflowWithOptions(
-            rows,
-            columns,
-            anchor,
-            out mapping,
-            scrollbackRows: -1,
-            includeScrollback: true);
-    }
-
-    internal Screen ReflowWithOptions(
-        int rows,
-        int columns,
-        ReflowCursorAnchor anchor,
-        out ReflowMapping mapping,
-        int scrollbackRows,
-        bool includeScrollback)
-    {
-        rows = Math.Max(1, rows);
-        columns = Math.Max(1, columns);
-        int retainedScrollbackRows = NormalizeScrollbackRows(scrollbackRows);
-        var layout = BuildSourceLayout(retainedScrollbackRows);
-        var emitted = new List<EmittedRow>(layout.Lines.Count);
-        mapping = new ReflowMapping
-        {
-            NewRows = rows,
-            NewColumns = columns,
-        };
-
-        foreach (var line in layout.Lines)
-        {
-            int mappingLength = line.Cells.Count == 0 ? Columns : line.Cells.Count;
-            mapping.SetLineLength(line.Identity, mappingLength);
-            EmitLogicalLine(line, columns, Columns, emitted, mapping);
-        }
-
-        // Blank rows at the end of a viewport are padding, not scrollback.
-        // Remove them before selecting the retained chronological stream so a
-        // row-only resize cannot manufacture history from unused viewport rows.
-        if (retainedScrollbackRows == 0)
-        {
-            while (emitted.Count > 1 && emitted[^1].Cells.Count == 0)
-                emitted.RemoveAt(emitted.Count - 1);
-        }
-
-        while (emitted.Count < rows)
-            emitted.Add(new EmittedRow(continuesPrevious: false));
-
-        bool hasData = false;
-        foreach (var emittedRow in emitted)
-        {
-            if (emittedRow.Cells.Count > 0)
-            {
-                hasData = true;
-                break;
-            }
-        }
-
-        int targetTotal = (includeScrollback ? _scrollbackCapacity : 0) + rows;
-        if (!hasData && retainedScrollbackRows == 0)
-            targetTotal = rows;
-        int retainedStart = Math.Max(0, emitted.Count - targetTotal);
-        int retainedCount = emitted.Count - retainedStart;
-        int newScrollbackRows = includeScrollback
-            ? Math.Min(_scrollbackCapacity, Math.Max(0, retainedCount - rows))
-            : 0;
-        mapping.RetainedStart = retainedStart;
-        mapping.NewScrollbackRows = newScrollbackRows;
-
-        var resized = new Screen(rows, columns, _scrollbackCapacity);
-        for (int index = 0; index < retainedCount; index++)
-        {
-            int destinationPhysicalRow = index < newScrollbackRows
-                ? resized.TotalRows - newScrollbackRows + index
-                : index - newScrollbackRows;
-            CopyEmittedRow(
-                resized,
-                destinationPhysicalRow,
-                emitted[retainedStart + index],
-                startsLogicalLine: index == 0);
-        }
-
-        if (mapping.TryMap(anchor, out var anchorPosition))
-        {
-            mapping.Row = anchorPosition.Row;
-            mapping.Column = anchorPosition.Column;
-            mapping.WrapPending = anchorPosition.WrapPending;
-            mapping.InScrollback = anchorPosition.InScrollback;
-            mapping.IsMapped = true;
-        }
-        return resized;
-    }
-
-    private int NormalizeScrollbackRows(int scrollbackRows) =>
-        Math.Clamp(scrollbackRows < 0 ? _scrollbackCapacity : scrollbackRows, 0, _scrollbackCapacity);
-
-    private SourceLayout BuildSourceLayout(int scrollbackRows)
-    {
-        int retainedScrollbackRows = NormalizeScrollbackRows(scrollbackRows);
         var layout = new SourceLayout();
         LogicalLine? currentLine = null;
         SourceRow? previousSourceRow = null;
@@ -251,6 +110,179 @@ public unsafe partial class Screen
 
         return layout;
     }
+
+    private sealed class EmittedRow
+    {
+        public EmittedRow(bool continuesPrevious) => ContinuesPrevious = continuesPrevious;
+        public bool ContinuesPrevious { get; }
+        public List<ReflowCell> Cells { get; } = new();
+    }
+
+    internal ReflowCursorAnchor GetReflowAnchor(
+        int logicalRow,
+        int column,
+        bool wrapPending,
+        int scrollbackRows = -1)
+    {
+        var layout = BuildSourceLayout(scrollbackRows);
+        return GetReflowAnchor(logicalRow, column, wrapPending, scrollbackRows, layout);
+    }
+
+    internal ReflowCursorAnchor GetReflowAnchor(
+        int logicalRow,
+        int column,
+        bool wrapPending,
+        int scrollbackRows,
+        SourceLayout layout)
+    {
+        int sb = NormalizeScrollbackRows(scrollbackRows);
+        int rowIndex = sb + Math.Clamp(logicalRow, -sb, Rows - 1);
+        if (rowIndex < 0 || rowIndex >= layout.Rows.Count)
+            return new ReflowCursorAnchor(0, 0, wrapPending);
+
+        var row = layout.Rows[rowIndex];
+        if (row.LogicalLine < 0)
+            return new ReflowCursorAnchor(0, 0, wrapPending);
+
+        int col = Math.Clamp(column, 0, Columns - 1);
+        if (row.Units.Count == 0)
+            return new ReflowCursorAnchor(row.LogicalLine, col, wrapPending);
+
+        int offset = row.UnitStart;
+        foreach (var unit in row.Units)
+        {
+            if (col <= unit.Column)
+                break;
+            if (col < unit.Column + unit.Width)
+            {
+                offset = unit.Offset;
+                break;
+            }
+            offset = unit.Offset + 1;
+        }
+
+        return new ReflowCursorAnchor(row.LogicalLine, offset, wrapPending);
+    }
+
+    internal Screen Reflow(
+        int rows,
+        int columns,
+        ReflowCursorAnchor anchor,
+        out ReflowMapping mapping)
+    {
+        return ReflowWithOptions(
+            rows,
+            columns,
+            anchor,
+            out mapping,
+            scrollbackRows: -1,
+            includeScrollback: true);
+    }
+
+    internal Screen ReflowWithOptions(
+        int rows,
+        int columns,
+        ReflowCursorAnchor anchor,
+        out ReflowMapping mapping,
+        int scrollbackRows,
+        bool includeScrollback)
+    {
+        return ReflowWithOptions(
+            rows,
+            columns,
+            anchor,
+            out mapping,
+            BuildSourceLayout(scrollbackRows),
+            scrollbackRows,
+            includeScrollback);
+    }
+
+    internal Screen ReflowWithOptions(
+        int rows,
+        int columns,
+        ReflowCursorAnchor anchor,
+        out ReflowMapping mapping,
+        SourceLayout layout,
+        int scrollbackRows,
+        bool includeScrollback)
+    {
+        rows = Math.Max(1, rows);
+        columns = Math.Max(1, columns);
+        int retainedScrollbackRows = NormalizeScrollbackRows(scrollbackRows);
+        var emitted = new List<EmittedRow>(layout.Lines.Count);
+        mapping = new ReflowMapping
+        {
+            NewRows = rows,
+            NewColumns = columns,
+        };
+
+        foreach (var line in layout.Lines)
+        {
+            int mappingLength = line.Cells.Count == 0 ? Columns : line.Cells.Count;
+            mapping.SetLineLength(line.Identity, mappingLength);
+            EmitLogicalLine(line, columns, Columns, emitted, mapping);
+        }
+
+        // Blank rows at the end of a viewport are padding, not scrollback.
+        // Remove them before selecting the retained chronological stream so a
+        // row-only resize cannot manufacture history from unused viewport rows.
+        if (retainedScrollbackRows == 0)
+        {
+            while (emitted.Count > 1 && emitted[^1].Cells.Count == 0)
+                emitted.RemoveAt(emitted.Count - 1);
+        }
+
+        while (emitted.Count < rows)
+            emitted.Add(new EmittedRow(continuesPrevious: false));
+
+        bool hasData = false;
+        foreach (var emittedRow in emitted)
+        {
+            if (emittedRow.Cells.Count > 0)
+            {
+                hasData = true;
+                break;
+            }
+        }
+
+        int targetTotal = (includeScrollback ? _scrollbackCapacity : 0) + rows;
+        if (!hasData && retainedScrollbackRows == 0)
+            targetTotal = rows;
+        int retainedStart = Math.Max(0, emitted.Count - targetTotal);
+        int retainedCount = emitted.Count - retainedStart;
+        int newScrollbackRows = includeScrollback
+            ? Math.Min(_scrollbackCapacity, Math.Max(0, retainedCount - rows))
+            : 0;
+        mapping.RetainedStart = retainedStart;
+        mapping.NewScrollbackRows = newScrollbackRows;
+
+        var resized = new Screen(rows, columns, _scrollbackCapacity);
+        for (int index = 0; index < retainedCount; index++)
+        {
+            int destinationPhysicalRow = index < newScrollbackRows
+                ? resized.TotalRows - newScrollbackRows + index
+                : index - newScrollbackRows;
+            CopyEmittedRow(
+                resized,
+                destinationPhysicalRow,
+                emitted[retainedStart + index],
+                startsLogicalLine: index == 0);
+        }
+
+        if (mapping.TryMap(anchor, out var anchorPosition))
+        {
+            mapping.Row = anchorPosition.Row;
+            mapping.Column = anchorPosition.Column;
+            mapping.WrapPending = anchorPosition.WrapPending;
+            mapping.InScrollback = anchorPosition.InScrollback;
+            mapping.IsMapped = true;
+        }
+        return resized;
+    }
+
+    private int NormalizeScrollbackRows(int scrollbackRows) =>
+        Math.Clamp(scrollbackRows < 0 ? _scrollbackCapacity : scrollbackRows, 0, _scrollbackCapacity);
+
 
     private int FindFallbackRowEnd(int physicalRow)
     {

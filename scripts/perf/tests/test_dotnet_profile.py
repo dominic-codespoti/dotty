@@ -89,6 +89,17 @@ class DotnetProfileTests(unittest.TestCase):
             self.assertEqual(PROFILE.read_rss_bytes(1, proc), 3 * 1024)
             self.assertEqual(PROFILE.sample_rss(1, proc)["tree_bytes"], 12 * 1024)
 
+    def test_sample_rss_uses_monotonic_timestamp_and_identifies_clock_domain(self):
+        with tempfile.TemporaryDirectory() as td:
+            proc = Path(td)
+            self.proc(proc, {1: (0, ["/build/Dotty"], "libcoreclr.so", 3)})
+            with mock.patch.object(PROFILE.time, "monotonic_ns", return_value=123), mock.patch.object(
+                PROFILE.time, "time_ns", return_value=456
+            ):
+                sample = PROFILE.sample_rss(1, proc)
+        self.assertEqual(sample["timestamp_ns"], 123)
+        self.assertEqual(sample["timestamp_clock_domain"], "monotonic_ns")
+
     def test_all_command_argv(self):
         expected = {
             "cpu": "dotnet-sampled-thread-time",
@@ -174,7 +185,11 @@ class DotnetProfileTests(unittest.TestCase):
             result = PROFILE.run_capture("gcdump", args, Path(td), {"dotnet-gcdump": tool})
  
         self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["lifecycle_clock_domain"], "monotonic_ns")
         self.assertEqual(derived_commands, [["/fake/dotnet-gcdump", "report", str(Path(td) / "gcdump" / "heap.gcdump"), "-t", "HeapStat"]])
+        windows = result["lifecycle_windows_ns"]
+        self.assertIsNone(windows["collector_start_to_gate"])
+        self.assertGreaterEqual(windows["end_to_collector_start"], 0)
 
     def test_counter_duration_formatting_and_command(self):
         self.assertEqual(PROFILE.format_duration(0), "00:00:00:00")
@@ -256,6 +271,9 @@ class DotnetProfileTests(unittest.TestCase):
             result = PROFILE.run_capture("counters", args, Path(td), {"dotnet-counters": tool})
 
         self.assertEqual(result["status"], "ok")
+        windows = result["lifecycle_windows_ns"]
+        self.assertGreaterEqual(windows["collector_start_to_gate"], 0)
+        self.assertIsNone(windows["end_to_collector_start"])
         self.assertEqual(result["artifacts"]["raw"], "counters/counters.json")
         command = popen.call_args_list[1].args[0]
         self.assertEqual(command[command.index("--duration") + 1], "00:00:00:04")
@@ -431,20 +449,70 @@ class DotnetProfileTests(unittest.TestCase):
         self.assertFalse(collector.terminated)
         self.assertTrue(app.terminated)
         self.assertFalse(marker_paths[0].exists())
-    def test_workload_uses_explicit_gate_path(self):
+    def test_workload_waits_for_explicit_gate_and_reports_markers(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             script = root / "workload.py"
             marker = root / "markers.log"
             gate = root / "capture.gate"
             PROFILE.write_workload(script, marker, gate, lines=1, hold_seconds=0)
+            proc = subprocess.Popen([str(script)], stdout=subprocess.PIPE)
+            try:
+                self.assertTrue(PROFILE._wait_until(marker.exists, timeout=2))
+                self.assertIsNone(proc.poll())
+                gate.touch()
+                output, _ = proc.communicate(timeout=2)
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual(output, PROFILE.workload_payload())
+            self.assertEqual(set(PROFILE.parse_marker_file(marker)), {"ready", "start", "end"})
+
+    def test_workload_payload_contract(self):
+        self.assertEqual(PROFILE.workload_payload("printable-ascii"), b"A" * 79 + b"\n")
+        self.assertEqual(len(PROFILE.workload_payload("printable-ascii")), 80)
+        ansi = (
+            b"\x1b[38;5;196m" + b"R" * 8 + b"\x1b[0m"
+            b"\x1b[38;5;46m" + b"G" * 8 + b"\x1b[0m"
+            b"\x1b[38;5;21m" + b"B" * 8 + b"\x1b[0m"
+            b"\x1b[38;5;226m" + b"Y" * 8 + b"\x1b[0m\n"
+        )
+        self.assertEqual(PROFILE.workload_payload("ansi-heavy"), ansi)
+        self.assertEqual(len(ansi), 91)
+        self.assertEqual(PROFILE.workload_payload("scrolling-heavy"), b"S" * 75 + b"\n\x1b[1S")
+    def test_workload_metadata_and_chunked_script(self):
+        metadata = PROFILE.workload_metadata("ansi-heavy", 513)
+        self.assertEqual(metadata["bytes_per_iteration"], 91)
+        self.assertEqual(metadata["chunk_iterations"], 256)
+        self.assertEqual(metadata["total_output_bytes"], 513 * 91)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            script = root / "workload.py"
+            PROFILE.write_workload(script, root / "markers", root / "gate", lines=513, hold_seconds=0, workload="scrolling-heavy")
             generated = script.read_text()
-            self.assertIn(f"gate = pathlib.Path({str(gate)!r})", generated)
-            self.assertNotIn("marker.with_suffix('.gate')", generated)
-            self.assertIn("marker.write_text('READY\\n', encoding='utf-8')", generated)
-            self.assertLess(generated.index("marker.write_text('READY"), generated.index("while not gate.exists()"))
-            self.assertLess(generated.index("while not gate.exists()"), generated.index("write(f'START"))
+            self.assertIn("chunk = payload * 256", generated)
+            self.assertIn("full, rem = divmod(lines, 256)", generated)
+            self.assertIn("if rem: out.write(payload * rem)", generated)
             self.assertLess(generated.index("out.flush()"), generated.index("write(f'END"))
+
+    def test_workload_cli_default_and_validation(self):
+        args = PROFILE.parse_args(["--app", "Dotty", "--output-dir", "/tmp/out"])
+        self.assertEqual(args.workload, "printable-ascii")
+        self.assertEqual(
+            PROFILE.parse_args(["--app", "Dotty", "--output-dir", "/tmp/out", "--lines", "0"]).lines,
+            0,
+        )
+        with self.assertRaises(SystemExit):
+            PROFILE.parse_args(["--app", "Dotty", "--output-dir", "/tmp/out", "--workload", "nope"])
+
+    def test_negative_lines_rejected_before_output_dir_creation(self):
+        with tempfile.TemporaryDirectory() as td:
+            output_dir = Path(td) / "profile"
+            with self.assertRaises(SystemExit):
+                PROFILE.main(["--app", "Dotty", "--output-dir", str(output_dir), "--lines", "-1"])
+            self.assertFalse(output_dir.exists())
 
 if __name__ == "__main__":
     unittest.main()

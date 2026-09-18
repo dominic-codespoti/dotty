@@ -122,6 +122,7 @@ public sealed class TerminalSceneComposer
         ArgumentNullException.ThrowIfNull(theme);
         ArgumentNullException.ThrowIfNull(padding);
 
+        var activePane = activeTab.ActivePane;
         scale = Math.Max(0.1f, scale);
         float padLeft = (float)padding.Left * scale;
         float padTop = (float)padding.Top * scale;
@@ -153,7 +154,7 @@ public sealed class TerminalSceneComposer
             RenderSnapshot? leafSnapshot = null;
             bool lockTaken = false;
             var leafBuffer = leaf.Session.Adapter.Buffer;
-            int scrollOffset = ReferenceEquals(leaf, activeTab.ActivePane) ? activeTab.ScrollOffset : 0;
+            int scrollOffset = ReferenceEquals(leaf, activePane) ? activeTab.ScrollOffset : 0;
 
             try
             {
@@ -202,7 +203,7 @@ public sealed class TerminalSceneComposer
                 }
                 instanceCount += written;
 
-                if (ReferenceEquals(leaf, activeTab.ActivePane) && _selectionService.HasSelection)
+                if (ReferenceEquals(leaf, activePane) && _selectionService.HasSelection)
                 {
                     byte selectionAlpha = (byte)((selectionColor.A != 0 && selectionColor.A != 255) ? selectionColor.A : 128);
 
@@ -264,14 +265,14 @@ public sealed class TerminalSceneComposer
                     }
                 }
 
-                if (cursorVisible && ReferenceEquals(leaf, activeTab.ActivePane)
+                if (cursorVisible && ReferenceEquals(leaf, activePane)
                     && leafSnapshot.CursorRow >= 0 && leafSnapshot.CursorRow < paneRows
                     && leafSnapshot.CursorCol >= 0 && leafSnapshot.CursorCol < paneColumns)
                 {
                     int cursorRow = leafSnapshot.CursorRow + startRowOffset;
                     int cursorColumn = leafSnapshot.CursorCol + startColumnOffset;
                     bool found = false;
-                    for (int i = 0; i < instanceCount; i++)
+                    for (int i = startInstanceIndex; i < instanceCount; i++)
                     {
                         ref var instance = ref _frameScratch[i];
                         if (instance.Row != cursorRow || instance.Col != cursorColumn)
@@ -309,7 +310,7 @@ public sealed class TerminalSceneComposer
 
                 if (leafBuffer.ScrollbackCount > 0)
                 {
-                    bool emphasizedScrollbar = ReferenceEquals(leaf, activeTab.ActivePane) && (scrollbarDragging || scrollbarHovered);
+                    bool emphasizedScrollbar = ReferenceEquals(leaf, activePane) && (scrollbarDragging || scrollbarHovered);
                     EnsureScratchCapacity(instanceCount + paneRows + 1);
                     int scrollbarQuads = ScrollbarQuadBuilder.Build(
                         startColumnOffset,

@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Threading;
 using Dotty.Abstractions.Config;
 namespace Dotty.Terminal.Adapter;
 
@@ -9,9 +10,9 @@ namespace Dotty.Terminal.Adapter;
 /// outside the lock, so the UI thread never blocks the PTY writer for the
 /// whole raster and the raster never races a partial parse. Large arrays are
 /// rented from the shared pool and returned via <see cref="Dispose"/>.
-/// </summary>
 public sealed class RenderSnapshot : IRenderSource, IDisposable
 {
+    private int _disposed;
     public CellHot[] Cells = Array.Empty<CellHot>();
     public ColdCell[] Cold = Array.Empty<ColdCell>();
     public int[] RowMap = Array.Empty<int>();        // physical row per visible logical row
@@ -22,7 +23,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
 
     /// <summary>Per-visible-row identity generations (bump-only).</summary>
     public ReadOnlySpan<ulong> RowGenerations => RowGenerationsArray;
-    public CellAttributes[] Styles = Array.Empty<CellAttributes>();
+    private CellAttributes[] _styles = Array.Empty<CellAttributes>();
     public int ScrollbackCount { get; set; }
     public int Rows { get; set; }
     public int Columns { get; set; }
@@ -50,7 +51,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     /// ~41 rows x columns; a full-arena memcpy (12 MB at 5k scrollback) is
     /// pure overhead per content frame.
     /// </summary>
-    public static RenderSnapshot CaptureVisible(
+    internal static RenderSnapshot CaptureVisible(
         Screen screen,
         ulong[] rowGenerations,
         CellAttributes[] styles,
@@ -75,7 +76,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
             CursorCol = cursorCol,
             CursorShape = cursorShape,
             CursorBlinking = cursorBlinking,
-            Styles = styles,
+            _styles = styles,
         };
         int rows = screen.Rows;
         int cols = screen.Columns;
@@ -119,7 +120,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         return snap;
     }
 
-    public static RenderSnapshot Capture(
+    internal static RenderSnapshot Capture(
         Screen screen,
         ulong[] rowGenerations,
         CellAttributes[] styles,
@@ -142,7 +143,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
             CursorCol = cursorCol,
             CursorShape = cursorShape,
             CursorBlinking = cursorBlinking,
-            Styles = styles,
+            _styles = styles,
         };
 
         int cellCount = screen.TotalRows * screen.Columns;
@@ -173,12 +174,15 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
 
     public void Dispose()
     {
-        if (Cells.Length > 0) ArrayPool<CellHot>.Shared.Return(Cells);
-        if (Cold.Length > 0) ArrayPool<ColdCell>.Shared.Return(Cold);
-        if (RowMaxCol.Length > 0) ArrayPool<int>.Shared.Return(RowMaxCol);
-        if (RowMap.Length > 0) ArrayPool<int>.Shared.Return(RowMap);
-        if (RowGenerationsArray.Length > 0) ArrayPool<ulong>.Shared.Return(RowGenerationsArray);
-        if (RowOffsets.Length > 0) ArrayPool<int>.Shared.Return(RowOffsets);
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
+        var cells = Cells;
+        var cold = Cold;
+        var rowMaxCol = RowMaxCol;
+        var rowMap = RowMap;
+        var rowGenerations = RowGenerationsArray;
+        var rowOffsets = RowOffsets;
         Cells = Array.Empty<CellHot>();
         Cold = Array.Empty<ColdCell>();
         RowMap = Array.Empty<int>();
@@ -186,6 +190,13 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         RowGenerationsArray = Array.Empty<ulong>();
         RowOffsets = Array.Empty<int>();
         ScrollbackText = Array.Empty<string>();
+
+        if (cells.Length > 0) ArrayPool<CellHot>.Shared.Return(cells);
+        if (cold.Length > 0) ArrayPool<ColdCell>.Shared.Return(cold);
+        if (rowMaxCol.Length > 0) ArrayPool<int>.Shared.Return(rowMaxCol);
+        if (rowMap.Length > 0) ArrayPool<int>.Shared.Return(rowMap);
+        if (rowGenerations.Length > 0) ArrayPool<ulong>.Shared.Return(rowGenerations);
+        if (rowOffsets.Length > 0) ArrayPool<int>.Shared.Return(rowOffsets);
     }
 
     public ReadOnlySpan<CellHot> GetRowCells(int row)
@@ -214,9 +225,9 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
 
     public ref readonly CellAttributes GetStyle(ushort styleId)
     {
-        if (styleId >= Styles.Length)
+        if (styleId >= _styles.Length)
             return ref CellAttributes.Default;
-        return ref Styles[styleId];
+        return ref _styles[styleId];
     }
 
     public string GetScrollbackLineText(int index)

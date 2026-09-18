@@ -1,58 +1,82 @@
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Dotty.Terminal.Adapter.Buffer;
 
 public class StyleSet
 {
-    private readonly ConcurrentDictionary<CellAttributes, ushort> _styleToId = new();
-    private CellAttributes[] _idToStyle = new[] { CellAttributes.Default };
+    private sealed class PublishedState
+    {
+        public PublishedState(Dictionary<CellAttributes, ushort> styleToId, CellAttributes[] idToStyle)
+        {
+            StyleToId = styleToId;
+            IdToStyle = idToStyle;
+        }
+
+        public Dictionary<CellAttributes, ushort> StyleToId { get; }
+
+        public CellAttributes[] IdToStyle { get; }
+    }
+
+    private readonly object _syncRoot = new();
+    private PublishedState _state = new(
+        new Dictionary<CellAttributes, ushort> { [CellAttributes.Default] = 0 },
+        new[] { CellAttributes.Default });
 
     public ushort GetOrCreateId(in CellAttributes attrs)
     {
-        if (attrs.IsDefaultColors && !attrs.Bold && !attrs.Italic && attrs.UnderlineStyle == UnderlineStyle.None
-            && !attrs.Faint && !attrs.Inverse
-            && !attrs.Strikethrough && !attrs.Overline && !attrs.Invisible
-            && !attrs.SlowBlink && attrs.HyperlinkId == 0)
-            return 0;
-
-        if (_styleToId.TryGetValue(attrs, out var id))
+        var state = Volatile.Read(ref _state);
+        if (state.StyleToId.TryGetValue(attrs, out var id))
             return id;
 
-        lock (_idToStyle)
+        lock (_syncRoot)
         {
-            if (_styleToId.TryGetValue(attrs, out id))
+            state = Volatile.Read(ref _state);
+            if (state.StyleToId.TryGetValue(attrs, out id))
                 return id;
-            id = (ushort)_idToStyle.Length;
-            Array.Resize(ref _idToStyle, id + 1);
-            _idToStyle[id] = attrs;
-            _styleToId.TryAdd(attrs, id);
+
+            id = (ushort)state.IdToStyle.Length;
+            var updatedStyles = new CellAttributes[state.IdToStyle.Length + 1];
+            Array.Copy(state.IdToStyle, updatedStyles, state.IdToStyle.Length);
+            updatedStyles[id] = attrs;
+
+            var updatedStyleToId = new Dictionary<CellAttributes, ushort>(state.StyleToId)
+            {
+                [attrs] = id
+            };
+            Volatile.Write(ref _state, new PublishedState(updatedStyleToId, updatedStyles));
             return id;
         }
     }
 
     public ref readonly CellAttributes GetStyle(ushort id)
     {
-        if (id >= _idToStyle.Length)
+        var state = Volatile.Read(ref _state);
+        var styles = state.IdToStyle;
+        if (id >= styles.Length)
             return ref CellAttributes.Default;
-        ref var arr = ref MemoryMarshal.GetArrayDataReference(_idToStyle);
+        ref var arr = ref MemoryMarshal.GetArrayDataReference(styles);
         return ref Unsafe.Add(ref arr, (nint)id);
     }
 
     /// <summary>
-    /// Copies the style table under its lock. The renderer's snapshot path
-    /// reads from the copy so rasterization never observes entries being
-    /// remapped in place by <see cref="RemapAnsiPalette"/>.
+    /// Returns a defensive copy of the currently published immutable style table.
     /// </summary>
     public CellAttributes[] CaptureStyles()
     {
-        lock (_idToStyle)
-        {
-            var copy = new CellAttributes[_idToStyle.Length];
-            Array.Copy(_idToStyle, copy, _idToStyle.Length);
-            return copy;
-        }
+        var state = Volatile.Read(ref _state);
+        return (CellAttributes[])state.IdToStyle.Clone();
+    }
+
+    /// <summary>
+    /// Returns the published immutable style table for an internal render snapshot.
+    /// The returned array must not be exposed for mutation.
+    /// </summary>
+    internal CellAttributes[] CaptureStylesShared()
+    {
+        var state = Volatile.Read(ref _state);
+        return state.IdToStyle;
     }
 
     public bool RemapAnsiPalette(uint[] previousPalette, uint[] currentPalette)
@@ -63,18 +87,23 @@ public class StyleSet
         }
 
         bool changed = false;
-
-        lock (_idToStyle)
+        lock (_syncRoot)
         {
-            for (int i = 1; i < _idToStyle.Length; i++)
+            var state = Volatile.Read(ref _state);
+            var current = state.IdToStyle;
+            CellAttributes[]? remappedStyles = null;
+            for (int i = 1; i < current.Length; i++)
             {
-                var style = _idToStyle[i];
+                var style = current[i];
                 var remapped = RemapAnsiPalette(style, previousPalette, currentPalette);
-                if (!remapped.Equals(style))
-                {
-                    _idToStyle[i] = remapped;
-                    changed = true;
-                }
+                if (remapped.Equals(style))
+                    continue;
+
+                remappedStyles ??= new CellAttributes[current.Length];
+                if (!changed)
+                    Array.Copy(current, remappedStyles, current.Length);
+                remappedStyles[i] = remapped;
+                changed = true;
             }
 
             if (!changed)
@@ -82,16 +111,17 @@ public class StyleSet
                 return false;
             }
 
-            _styleToId.Clear();
-            for (ushort id = 1; id < _idToStyle.Length; id++)
+            var finalStyles = remappedStyles!;
+            var finalStyleToId = new Dictionary<CellAttributes, ushort>(finalStyles.Length);
+            for (ushort id = 0; id < finalStyles.Length; id++)
             {
-                _styleToId[_idToStyle[id]] = id;
+                finalStyleToId[finalStyles[id]] = id;
             }
+            Volatile.Write(ref _state, new PublishedState(finalStyleToId, finalStyles));
         }
 
         return true;
     }
-
     private static CellAttributes RemapAnsiPalette(in CellAttributes style, uint[] previousPalette, uint[] currentPalette)
     {
         var remapped = style;

@@ -211,6 +211,61 @@ thread-pool, and file-watcher samples can dominate totals without representing
 rendering or parsing work; do not call them hot application work without
 filtering by active workload/thread.
 
+### Focused CPU follow-up
+
+Use the direct profiler for a cheap, CPU-only workload matrix when the
+consolidated run points at active-work questions. These three commands use the
+same fixed-iteration contract; start with `500000` and calibrate `--lines` per
+host until the workload's `START`→`END` interval is 2–5 seconds:
+
+```bash
+python3 scripts/perf/dotnet_profile.py --app /path/to/dotty \
+  --output-dir /tmp/dotty-focused-printable-ascii \
+  --workload printable-ascii --lines 500000 --captures cpu --hold-seconds 1
+
+python3 scripts/perf/dotnet_profile.py --app /path/to/dotty \
+  --output-dir /tmp/dotty-focused-ansi-heavy \
+  --workload ansi-heavy --lines 500000 --captures cpu --hold-seconds 1
+
+python3 scripts/perf/dotnet_profile.py --app /path/to/dotty \
+  --output-dir /tmp/dotty-focused-scrolling-heavy \
+  --workload scrolling-heavy --lines 500000 --captures cpu --hold-seconds 1
+```
+
+`--lines` is the exact number of workload iterations. `printable-ascii`
+emits a printable 79-character payload plus a newline; `ansi-heavy` emits
+colored segments with SGR sequences plus a newline; and `scrolling-heavy`
+emits printable text plus a CSI scroll-up sequence, making it the stress case
+for scroll/reflow handling. `--hold-seconds` only keeps the workload process
+alive after `END` so the collector can finish; it does not lengthen the
+CPU-capture interval. Compare `output_duration_seconds` (the `START`→`END`
+window), not the hold.
+
+`profile.json` records lifecycle timestamps for app launch, managed PID,
+collector start, gate, `START`, `END`, SIGINT, and collector exit, plus windows
+such as `app_launch_to_managed_pid`, `collector_start_to_gate`,
+`gate_to_start`, `end_to_sigint`, and `sigint_to_collector_exit`. Use these
+fields to separate startup/collector delay from workload time. Startup resize
+or reflow and wait/event-loop frames can contaminate a capture, so interpret
+them separately from active parser/render work.
+
+CPU capture writes `cpu/top-methods.txt` and
+`cpu/dotnet-trace.speedscope.json`. Open the `.speedscope.json` file in
+[Speedscope](https://www.speedscope.app/) for an interactive trace. To produce
+a deterministic, background-aware summary:
+
+```bash
+python3 scripts/perf/speedscope_summary.py \
+  /tmp/dotty-focused-printable-ascii/cpu/dotnet-trace.speedscope.json \
+  --json-out /tmp/dotty-focused-printable-ascii/cpu/summary.json --top 20
+```
+
+`top-methods.txt` contains sampled CPU percentages. The summary contains
+evented represented-time weights (with accounting for eligible Dotty time,
+excluded background time, non-Dotty time, and unaccounted time); those weights
+are not CPU percentages or CPU utilization.
+
+
 ## 5. GUI Harness Benchmark
 
 

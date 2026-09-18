@@ -7,6 +7,7 @@ lifecycle code so they can be tested without launching Dotty or a profiler.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -20,8 +21,48 @@ from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA_VERSION = 1
 CAPTURES = ("cpu", "counters", "alloc", "gcdump")
-LINE = "The quick brown fox jumps over the lazy dog 0123456789\n"
-LINE_BYTES = len(LINE.encode("utf-8"))
+WORKLOADS = ("printable-ascii", "ansi-heavy", "scrolling-heavy")
+DEFAULT_WORKLOAD = WORKLOADS[0]
+MONOTONIC_CLOCK_DOMAIN = "monotonic_ns"
+PRINTABLE_PAYLOAD = (b"A" * 79) + b"\n"
+ANSI_PAYLOAD = (
+    b"\x1b[38;5;196mRRRRRRRR\x1b[0m"
+    b"\x1b[38;5;46mGGGGGGGG\x1b[0m"
+    b"\x1b[38;5;21mBBBBBBBB\x1b[0m"
+    b"\x1b[38;5;226mYYYYYYYY\x1b[0m\n"
+)
+SCROLLING_PAYLOAD = (b"S" * 75) + b"\n" + b"\x1b[1S"
+WORKLOAD_PAYLOADS = {
+    "printable-ascii": PRINTABLE_PAYLOAD,
+    "ansi-heavy": ANSI_PAYLOAD,
+    "scrolling-heavy": SCROLLING_PAYLOAD,
+}
+# Retain these names for callers that imported the original printable line.
+LINE = PRINTABLE_PAYLOAD.decode("ascii")
+LINE_BYTES = len(PRINTABLE_PAYLOAD)
+
+
+def workload_payload(name: str = DEFAULT_WORKLOAD) -> bytes:
+    """Return the immutable payload for a named complete workload iteration."""
+    try:
+        return WORKLOAD_PAYLOADS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown workload: {name}") from exc
+
+
+def workload_metadata(name: str = DEFAULT_WORKLOAD, iterations: int = 0) -> dict[str, Any]:
+    iterations = int(iterations)
+    if iterations < 0:
+        raise ValueError("iterations must be non-negative")
+    payload = workload_payload(name)
+    return {
+        "workload": name,
+        "bytes_per_iteration": len(payload),
+        "iterations": int(iterations),
+        "chunk_iterations": 256,
+        "total_output_bytes": int(iterations) * len(payload),
+        "payload_sha256": hashlib.sha256(payload).hexdigest(),
+    }
 
 # Keep a small cushion beyond the bounded setup/workload phases.  The
 # collector's duration starts before the gate opens, so this covers startup,
@@ -252,7 +293,8 @@ def sample_rss(root_pid: int, proc_root: Path | str = "/proc") -> dict[str, Any]
     values = [read_rss_bytes(pid, proc_root) for pid in pids]
     tree = sum(values) if values and all(value is not None for value in values) else None
     return {
-        "timestamp_ns": time.time_ns(),
+        "timestamp_ns": time.monotonic_ns(),
+        "timestamp_clock_domain": MONOTONIC_CLOCK_DOMAIN,
         "root_bytes": read_rss_bytes(root_pid, proc_root),
         "tree_bytes": tree,
         "pids": pids,
@@ -425,7 +467,9 @@ def write_workload(
     gate_path: Path,
     lines: int = 500_000,
     hold_seconds: float = 1.0,
+    workload: str = DEFAULT_WORKLOAD,
 ) -> None:
+    payload = workload_payload(workload)
     script_path.write_text(
         "#!/usr/bin/env python3\n"
         "import os, pathlib, time\n"
@@ -433,15 +477,15 @@ def write_workload(
         f"gate = pathlib.Path({str(gate_path)!r})\n"
         f"lines = {int(lines)}\n"
         f"hold = {float(hold_seconds)!r}\n"
+        f"payload = {payload!r}\n"
         "marker.write_text('READY\\n', encoding='utf-8')\n"
         "while not gate.exists(): time.sleep(0.01)\n"
-        "line = b'The quick brown fox jumps over the lazy dog 0123456789\\n'\n"
-        "start = time.time_ns(); marker.open('a', encoding='utf-8').write(f'START {start}\\n')\n"
-        "out = os.fdopen(os.dup(1), 'wb', closefd=True); chunk = line * 1000\n"
-        "full, rem = divmod(lines, 1000)\n"
+        "start = time.monotonic_ns(); marker.open('a', encoding='utf-8').write(f'START {start}\\n')\n"
+        "out = os.fdopen(os.dup(1), 'wb'); chunk = payload * 256\n"
+        "full, rem = divmod(lines, 256)\n"
         "for _ in range(full): out.write(chunk)\n"
-        "if rem: out.write(line * rem)\n"
-        "out.flush(); end = time.time_ns(); marker.open('a', encoding='utf-8').write(f'END {end}\\n')\n"
+        "if rem: out.write(payload * rem)\n"
+        "out.flush(); end = time.monotonic_ns(); marker.open('a', encoding='utf-8').write(f'END {end}\\n')\n"
         "time.sleep(hold)\n",
         encoding="utf-8",
     )
@@ -490,7 +534,37 @@ parse_counter_artifact = validate_counter_artifact
 def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_info: Mapping[str, dict[str, Any]], proc_root: Path | str = "/proc") -> dict[str, Any]:
     required = "dotnet-gcdump" if capture == "gcdump" else "dotnet-trace" if capture in {"cpu", "alloc"} else "dotnet-counters"
     info = tool_info.get(required, {})
-    result: dict[str, Any] = {"capture": capture, "status": "failed", "artifacts": {}, "errors": [], "commands": [], "logs": {}, "tool": info}
+    workload_name = getattr(args, "workload", DEFAULT_WORKLOAD)
+    workload_info = workload_metadata(workload_name, getattr(args, "lines", 0))
+    result: dict[str, Any] = {
+        "capture": capture,
+        "status": "failed",
+        "artifacts": {},
+        "errors": [],
+        "commands": [],
+        "logs": {},
+        "tool": info,
+        **workload_info,
+        "lifecycle_clock_domain": MONOTONIC_CLOCK_DOMAIN,
+        "lifecycle_timestamps_ns": {
+            "app_launch": None,
+            "managed_pid": None,
+            "collector_start": None,
+            "gate": None,
+            "start": None,
+            "end": None,
+            "sigint": None,
+            "collector_exit": None,
+        },
+        "lifecycle_windows_ns": {
+            "app_launch_to_managed_pid": None,
+            "collector_start_to_gate": None,
+            "end_to_collector_start": None,
+            "gate_to_start": None,
+            "end_to_sigint": None,
+            "sigint_to_collector_exit": None,
+        },
+    }
     if not info.get("available"):
         result["status"] = "unsupported"
         result["errors"].append(f"missing requested tool: {required}")
@@ -519,11 +593,15 @@ def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_i
         temp = Path(temp_dir.name)
         marker, gate = temp / "markers.log", temp / "gate"
         workload = temp / "workload.py"
-        write_workload(workload, marker, gate_path=gate, lines=args.lines, hold_seconds=workload_hold_seconds)
+        if workload_name == DEFAULT_WORKLOAD:
+            write_workload(workload, marker, gate, args.lines, workload_hold_seconds)
+        else:
+            write_workload(workload, marker, gate, args.lines, workload_hold_seconds, workload_name)
         env = os.environ.copy()
         env.update({"DOTTY_SHELL": str(workload), "DOTTY_SKIP_CONFIG_COMPILE": "1"})
         app_cmd = [app] if not app.lower().endswith(".dll") else [tool_info.get("dotnet", {}).get("path") or "dotnet", app]
         result["app_command"] = app_cmd
+        result["lifecycle_timestamps_ns"]["app_launch"] = time.monotonic_ns()
         app_proc = subprocess.Popen(app_cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         root_pid = app_proc.pid
 
@@ -534,6 +612,7 @@ def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_i
             raise RuntimeError("timed out resolving managed Dotty PID")
         managed_pid = choose()
         result["managed_pid"] = managed_pid
+        result["lifecycle_timestamps_ns"]["managed_pid"] = time.monotonic_ns()
         result["process_tree"] = process_tree(root_pid, proc_root)
         counter_duration = format_duration(counter_seconds) if counter_seconds is not None else None
         if counter_duration is not None:
@@ -548,6 +627,7 @@ def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_i
             # Trace and counter sessions must already be listening before
             # the gate opens.  A gcdump is deliberately taken after END.
             if capture != "gcdump":
+                result["lifecycle_timestamps_ns"]["collector_start"] = time.monotonic_ns()
                 collector = subprocess.Popen(
                     command,
                     stdout=stdout,
@@ -555,6 +635,7 @@ def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_i
                 )
                 if args.collector_start_delay > 0:
                     time.sleep(args.collector_start_delay)
+            result["lifecycle_timestamps_ns"]["gate"] = time.monotonic_ns()
             gate.touch()
             deadline = time.monotonic() + args.startup_timeout + max(args.hold_seconds, 0)
             while time.monotonic() < deadline:
@@ -570,7 +651,9 @@ def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_i
             if "end" not in events:
                 raise TimeoutError("timed out waiting for workload end marker")
             result["markers"] = events
-            result["output_bytes"] = args.lines * LINE_BYTES
+            result["lifecycle_timestamps_ns"]["start"] = events.get("start")
+            result["lifecycle_timestamps_ns"]["end"] = events.get("end")
+            result["output_bytes"] = workload_info["total_output_bytes"]
             start_marker, end_marker = events.get("start"), events.get("end")
             result["output_duration_ns"] = end_marker - start_marker if start_marker is not None and end_marker is not None else None
             result["output_duration_seconds"] = result["output_duration_ns"] / 1_000_000_000 if result["output_duration_ns"] is not None else None
@@ -586,13 +669,17 @@ def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_i
                 except subprocess.TimeoutExpired:
                     stop_process(collector, timeout=args.startup_timeout, interrupt=False)
             elif capture != "gcdump":
+                result["lifecycle_timestamps_ns"]["sigint"] = time.monotonic_ns()
                 stop_process(collector, timeout=args.startup_timeout, interrupt=True)
             else:
+                result["lifecycle_timestamps_ns"]["collector_start"] = time.monotonic_ns()
                 collector = subprocess.Popen(command, stdout=stdout, stderr=stderr)
                 try:
                     collector.wait(timeout=max(args.startup_timeout, args.hold_seconds + 2))
                 except subprocess.TimeoutExpired:
                     stop_process(collector, timeout=2, interrupt=False)
+            if collector is not None:
+                result["lifecycle_timestamps_ns"]["collector_exit"] = time.monotonic_ns()
         if collector is None or collector.returncode != 0:
             raise RuntimeError(f"collector exited with code {collector.returncode if collector is not None else None}")
         result["collector_exit_code"] = collector.returncode
@@ -658,6 +745,34 @@ def run_capture(capture: str, args: argparse.Namespace, output_dir: Path, tool_i
         stop_process(app_proc, timeout=2, interrupt=False)
         if temp_dir is not None:
             temp_dir.cleanup()
+    stamps = result["lifecycle_timestamps_ns"]
+    collector_start_to_gate = (
+        stamps["gate"] - stamps["collector_start"]
+        if stamps["collector_start"] is not None
+        and stamps["gate"] is not None
+        and stamps["collector_start"] <= stamps["gate"]
+        else None
+    )
+    end_to_collector_start = (
+        stamps["collector_start"] - stamps["end"]
+        if capture == "gcdump"
+        and stamps["collector_start"] is not None
+        and stamps["end"] is not None
+        and stamps["end"] <= stamps["collector_start"]
+        else None
+    )
+    result["lifecycle_windows_ns"] = {
+        "app_launch_to_managed_pid": stamps["managed_pid"] - stamps["app_launch"]
+        if stamps["app_launch"] is not None and stamps["managed_pid"] is not None else None,
+        "collector_start_to_gate": collector_start_to_gate,
+        "end_to_collector_start": end_to_collector_start,
+        "gate_to_start": stamps["start"] - stamps["gate"]
+        if stamps["start"] is not None and stamps["gate"] is not None else None,
+        "end_to_sigint": stamps["sigint"] - stamps["end"]
+        if stamps["sigint"] is not None and stamps["end"] is not None else None,
+        "sigint_to_collector_exit": stamps["collector_exit"] - stamps["sigint"]
+        if stamps["collector_exit"] is not None and stamps["sigint"] is not None else None,
+    }
     return result
 
 
@@ -668,11 +783,21 @@ def _try_select(function: Any) -> int | None:
         return None
 
 
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be non-negative")
+    return parsed
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Capture Dotty .NET performance profiles")
     parser.add_argument("--app", required=True)
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--lines", type=int, default=500_000)
+    parser.add_argument("--lines", type=non_negative_int, default=500_000)
+    parser.add_argument("--workload", choices=WORKLOADS, default=DEFAULT_WORKLOAD)
     parser.add_argument("--captures", default=",".join(CAPTURES))
     parser.add_argument("--startup-timeout", type=float, default=20.0)
     parser.add_argument("--collector-start-delay", type=float, default=0.25)
@@ -692,6 +817,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tool_info = {name: resolve_tool(name) for name in sorted(tool_names)}
     records = [run_capture(capture, args, output_dir, tool_info) for capture in captures]
     status = aggregate_status([item["status"] for item in records])
+    workload_info = workload_metadata(args.workload, args.lines)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "kind": "dotnet_profile",
@@ -699,7 +825,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "metadata": {
             "app": str(Path(args.app).resolve()),
             "lines": args.lines,
-            "line_bytes": LINE_BYTES,
+            "line_bytes": workload_info["bytes_per_iteration"],
+            **workload_info,
             "captures_requested": captures,
             "runtime_and_tool_versions": tool_info,
             "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

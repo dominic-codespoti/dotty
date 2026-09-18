@@ -524,6 +524,30 @@ namespace Dotty.Terminal.Parser
                 return;
             }
 
+            // Scroll commands consume only their first parameter. Keep the
+            // complete validation/default handling in TryParseParams, but
+            // reserve a single stack slot instead of eight for this hot path.
+            if (final == 'S' || final == 'T')
+            {
+                Span<int> scrollParams = stackalloc int[1];
+                if (!TryParseParams(
+                    paramBytes,
+                    scrollParams,
+                    out int scrollParamCount,
+                    out _,
+                    out _))
+                {
+                    return;
+                }
+
+                int scrollLines = scrollParamCount > 0 ? scrollParams[0] : 1;
+                if (final == 'S')
+                    Handler?.OnScrollUp(scrollLines);
+                else
+                    Handler?.OnScrollDown(scrollLines);
+                return;
+            }
+
             Span<int> parsedParams = stackalloc int[8];
             bool parsed = TryParseParams(
                 paramBytes,

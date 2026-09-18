@@ -22,21 +22,32 @@ public partial class TerminalBuffer
         var oldMainScreen = _screens.Main;
         var cursorState = _cursor.CaptureState();
         int oldActiveScrollback = _isAlternate ? 0 : ScrollbackCount;
+        int oldMainScrollback = _isAlternate
+            ? Math.Min(_savedTotalScrolled, oldMainScreen.ScrollbackCapacity)
+            : oldActiveScrollback;
+        var activeLayout = oldActiveScreen.BuildSourceLayout(oldActiveScrollback);
+        var mainLayout = ReferenceEquals(oldMainScreen, oldActiveScreen)
+            ? activeLayout
+            : oldMainScreen.BuildSourceLayout(oldMainScrollback);
+        var alternateScreen = _screens.Alternate;
+        var alternateLayout = _isAlternate
+            ? activeLayout
+            : alternateScreen?.BuildSourceLayout(0);
+
         var activeAnchor = oldActiveScreen.GetReflowAnchor(
             cursorState.Row,
             cursorState.Column,
             cursorState.WrapPending,
-            oldActiveScrollback);
+            oldActiveScrollback,
+            activeLayout);
 
-        int oldMainScrollback = _isAlternate
-            ? Math.Min(_savedTotalScrolled, oldMainScreen.ScrollbackCapacity)
-            : oldActiveScrollback;
         var mainAnchor = _isAlternate
             ? oldMainScreen.GetReflowAnchor(
                 _alternateSavedCursorState.Row,
                 _alternateSavedCursorState.Column,
                 _alternateSavedCursorState.WrapPending,
-                oldMainScrollback)
+                oldMainScrollback,
+                mainLayout)
             : activeAnchor;
 
         var alternateAnchor = _isAlternate
@@ -49,11 +60,13 @@ public partial class TerminalBuffer
                 _savedCursorState.Row,
                 _savedCursorState.Column,
                 _savedCursorState.WrapPending,
-                oldActiveScrollback);
+                oldActiveScrollback,
+                activeLayout);
         }
 
         var promptAnchors = CapturePromptAnchors(
             oldActiveScreen,
+            activeLayout,
             oldActiveScrollback,
             oldRows,
             oldTotalScrolled);
@@ -70,6 +83,7 @@ public partial class TerminalBuffer
                     columns,
                     alternateAnchor,
                     out alternateMapping,
+                    alternateLayout!,
                     scrollbackRows: 0,
                     includeScrollback: false);
                 return resized;
@@ -80,6 +94,7 @@ public partial class TerminalBuffer
                 columns,
                 mainAnchor,
                 out mainMapping,
+                mainLayout,
                 scrollbackRows: oldMainScrollback,
                 includeScrollback: true);
             return resizedMain;
@@ -181,6 +196,7 @@ public partial class TerminalBuffer
 
     private List<PromptAnchor> CapturePromptAnchors(
         Screen screen,
+        Screen.SourceLayout layout,
         int scrollbackRows,
         int rows,
         int totalScrolled)
@@ -197,7 +213,8 @@ public partial class TerminalBuffer
                 sourceRow,
                 0,
                 wrapPending: false,
-                scrollbackRows);
+                scrollbackRows,
+                layout);
             anchors.Add(new PromptAnchor(mark, anchor));
         }
         return anchors;

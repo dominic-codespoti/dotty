@@ -519,12 +519,12 @@ public unsafe partial class Screen : IDisposable
         RowContinuesPrevious[pRow] = false;
     }
 
-    public void ScrollUpRegion(int top, int bottom, int lines)
+    public int ScrollUpRegion(int top, int bottom, int lines)
     {
-        if (lines <= 0) return;
+        if (lines <= 0) return 0;
         if (top < 0) top = 0;
         if (bottom >= Rows) bottom = Rows - 1;
-        if (top >= bottom) return;
+        if (top >= bottom) return 0;
 
         int regionHeight = bottom - top + 1;
         int total = _scrollbackCapacity + Rows;
@@ -539,14 +539,14 @@ public unsafe partial class Screen : IDisposable
                 int phys = (_head + Rows - 1 - i + total) % total;
                 ClearPhysicalRow(phys);
             }
-            return;
+            return clampedLines;
         }
 
         if (lines >= regionHeight)
         {
             for (int r = top; r <= bottom; r++)
                 ClearPhysicalRow(GetPhysicalRow(r));
-            return;
+            return regionHeight;
         }
 
         // Non-full-screen single-line: memory copy
@@ -569,7 +569,7 @@ public unsafe partial class Screen : IDisposable
                 CopyRowMetadata(dstPhys, srcPhys);
             }
             ClearPhysicalRow(GetPhysicalRow(bottom));
-            return;
+            return 1;
         }
 
 
@@ -592,6 +592,7 @@ public unsafe partial class Screen : IDisposable
 
         for (int l = 0; l < lines; l++)
             ClearPhysicalRow(GetPhysicalRow(bottom - lines + 1 + l));
+        return lines;
     }
 
     public void ScrollDownRegion(int top, int bottom, int lines)

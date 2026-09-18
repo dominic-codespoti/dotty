@@ -313,13 +313,16 @@ public class TerminalSession : IDisposable
         // never presents an intermediate state between related operations (e.g. scroll+write).
         _ = Task.Run(async () =>
         {
-            // Writer lock-hold bound: feed the chunk in sub-chunks, releasing
+            // Writer lock-hold bound: feed the chunk in 8 KiB slices, releasing
             // SyncRoot between them so the renderer's bounded TryEnter can win
             // the lock during a sustained burst. The parser tolerates partial
-            // sequences (it accumulates leftovers), so splits are safe. When
-            // the renderer has signaled ReaderWaiting, yield between sub-chunks
-            // to hand it a scheduling window instead of re-acquiring instantly.
-            const int SubChunkSize = 8192;
+            // sequences (it accumulates leftovers), so splits are safe. Each
+            // slice gets its own acquisition/release regardless of whether the
+            // renderer is currently waiting — coalescing multiple slices under
+            // one hold let a delayed renderer signal go unobserved for the
+            // whole remaining chunk, reintroducing the starvation this bound
+            // exists to prevent.
+            const int FeedChunkSize = 8192;
             try
             {
                 await foreach (var entry in channel.Reader.ReadAllAsync(cancellationToken))
@@ -334,7 +337,7 @@ public class TerminalSession : IDisposable
                         int offset = 0;
                         while (offset < length)
                         {
-                            int subLen = Math.Min(SubChunkSize, length - offset);
+                            int subLen = Math.Min(FeedChunkSize, length - offset);
                             bool taken = false;
                             try
                             {
@@ -346,6 +349,7 @@ public class TerminalSession : IDisposable
                                 if (taken) Monitor.Exit(buffer.SyncRoot);
                             }
                             offset += subLen;
+
                             if (offset < length && buffer.ReaderWaiting)
                             {
                                 // Reader-priority handoff. A single Yield lets

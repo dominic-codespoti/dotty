@@ -25,4 +25,23 @@ public sealed class WindowPresentationGateTests
         parser.Feed("\x1b[?2026l"u8);
         Assert.True(WindowPresentationGate.ShouldPresent(adapter));
     }
+
+    [Fact]
+    public void InvalidateCoalescesReasonsAndConsumeClearsPendingReasons()
+    {
+        WindowFrameReason previous = WindowPresentationGate.Consume();
+        try
+        {
+            WindowPresentationGate.Invalidate(WindowFrameReason.Content | WindowFrameReason.Input);
+
+            WindowFrameReason pending = WindowPresentationGate.PendingReasons;
+            Assert.Equal(WindowFrameReason.Content | WindowFrameReason.Input, pending);
+            Assert.Equal(pending, WindowPresentationGate.Consume());
+            Assert.Equal(WindowFrameReason.None, WindowPresentationGate.PendingReasons);
+        }
+        finally
+        {
+            WindowPresentationGate.Requeue(previous);
+        }
+    }
 }

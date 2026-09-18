@@ -61,4 +61,43 @@ public class StyleSetThemeRemapTests
         Assert.Equal(attributes.Foreground.Argb, remapped.Foreground.Argb);
         Assert.Equal(attributes.Background.Argb, remapped.Background.Argb);
     }
+    [Fact]
+    public void CaptureStyles_ReturnsDefensiveCopy()
+    {
+        var styleSet = new StyleSet();
+        var attributes = new CellAttributes { Bold = true };
+        ushort styleId = styleSet.GetOrCreateId(attributes);
+
+        var captured = styleSet.CaptureStyles();
+        captured[styleId] = CellAttributes.Default;
+
+        ref readonly var live = ref styleSet.GetStyle(styleId);
+        Assert.True(live.Bold);
+        Assert.NotSame(captured, styleSet.CaptureStyles());
+    }
+
+    [Fact]
+    public void RemapAnsiPalette_PreservesPublishedIdTableConsistency()
+    {
+        var styleSet = new StyleSet();
+        var attributes = new CellAttributes
+        {
+            Foreground = new SgrColorArgb(0xFF010101),
+            Bold = true,
+        };
+        ushort styleId = styleSet.GetOrCreateId(attributes);
+
+        var previousPalette = new uint[16];
+        var currentPalette = new uint[16];
+        previousPalette[0] = 0xFF010101;
+        currentPalette[0] = 0xFF111111;
+
+        Assert.True(styleSet.RemapAnsiPalette(previousPalette, currentPalette));
+
+        var published = styleSet.CaptureStyles();
+        var remapped = styleSet.GetStyle(styleId);
+        Assert.Equal(published[styleId], remapped);
+        Assert.Equal(styleId, styleSet.GetOrCreateId(published[styleId]));
+    }
 }
+

@@ -66,7 +66,8 @@ internal static class DottyWindowHost
     private static readonly Dictionary<TerminalSession, Action> _renderSubscriptions = new();
     private static LeafPane[] _visibleLeaves = Array.Empty<LeafPane>();
     private static readonly Dictionary<LeafPane, ulong> _committedGenerations = new();
-    private static readonly Dictionary<LeafPane, ulong> _frameGenerations = new();
+    private static ulong[] _frameGenerations = Array.Empty<ulong>();
+    private static bool[] _frameGenerationValid = Array.Empty<bool>();
     private static int _committedFramebufferWidth = -1;
     private static int _committedFramebufferHeight = -1;
     private static int _committedAtlasVersion = int.MinValue;
@@ -269,6 +270,12 @@ internal static class DottyWindowHost
         }
         foreach (var leaf in staleLeaves)
             _committedGenerations.Remove(leaf);
+        if (_frameGenerations.Length < nextLeaves.Length)
+        {
+            Array.Resize(ref _frameGenerations, nextLeaves.Length);
+            Array.Resize(ref _frameGenerationValid, nextLeaves.Length);
+        }
+
         _visibleLeaves = nextLeaves;
     }
 
@@ -599,23 +606,38 @@ internal static class DottyWindowHost
         if ((pendingReasons & WindowFrameReason.TabOrPane) != 0)
             RefreshVisibleSessionSubscriptions();
 
-        _frameGenerations.Clear();
         bool generationDirty = false;
+        bool compareCommittedGenerations =
+            pendingReasons == WindowFrameReason.None &&
+            framebufferWidth == _committedFramebufferWidth &&
+            framebufferHeight == _committedFramebufferHeight &&
+            _atlas.ContentVersion == _committedAtlasVersion;
+        LeafPane[] visibleLeaves = _visibleLeaves;
         if (activeTab != null)
         {
-            foreach (var leaf in _visibleLeaves)
+            for (int i = 0; i < visibleLeaves.Length; i++)
             {
-                if (!TryReadGeneration(leaf.Session.Adapter.Buffer, out ulong generation))
+                if (!TryReadGeneration(visibleLeaves[i].Session.Adapter.Buffer, out ulong generation))
                 {
+                    _frameGenerationValid[i] = false;
                     generationDirty = true;
                     continue;
                 }
 
-                _frameGenerations[leaf] = generation;
-                if (!_committedGenerations.TryGetValue(leaf, out ulong committed) || committed != generation)
+                _frameGenerations[i] = generation;
+                _frameGenerationValid[i] = true;
+                if (compareCommittedGenerations &&
+                    (!_committedGenerations.TryGetValue(visibleLeaves[i], out ulong committed) || committed != generation))
+                {
                     generationDirty = true;
+                }
             }
         }
+        else
+        {
+            Array.Clear(_frameGenerationValid, 0, visibleLeaves.Length);
+        }
+
 
         bool dirty = pendingReasons != WindowFrameReason.None ||
             generationDirty ||
@@ -652,7 +674,7 @@ internal static class DottyWindowHost
                     _themeBackground,
                     false);
                 _window.SwapBuffers();
-                CommitFrameStamps(framebufferWidth, framebufferHeight);
+                CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
                 return;
             }
 
@@ -709,7 +731,7 @@ internal static class DottyWindowHost
                 frame.MenuInstanceStart,
                 frame.MenuChromeStart);
             _window.SwapBuffers();
-            CommitFrameStamps(framebufferWidth, framebufferHeight);
+            CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
         }
         catch
         {
@@ -763,17 +785,23 @@ internal static class DottyWindowHost
                 System.Threading.Monitor.Exit(buffer.SyncRoot);
         }
     }
-
-    private static void CommitFrameStamps(int framebufferWidth, int framebufferHeight)
+    private static void CommitFrameStamps(LeafPane[] visibleLeaves, int framebufferWidth, int framebufferHeight)
     {
-        foreach (var leaf in _visibleLeaves)
+        if (ReferenceEquals(visibleLeaves, _visibleLeaves))
         {
-            if (_frameGenerations.TryGetValue(leaf, out ulong before) &&
-                TryReadGeneration(leaf.Session.Adapter.Buffer, out ulong after) &&
-                before == after)
+            for (int i = 0; i < visibleLeaves.Length; i++)
             {
-                _committedGenerations[leaf] = after;
+                if (_frameGenerationValid[i] &&
+                    TryReadGeneration(visibleLeaves[i].Session.Adapter.Buffer, out ulong after) &&
+                    _frameGenerations[i] == after)
+                {
+                    _committedGenerations[visibleLeaves[i]] = after;
+                }
             }
+        }
+        else
+        {
+            WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
         }
 
         _committedFramebufferWidth = framebufferWidth;
@@ -892,7 +920,8 @@ internal static class DottyWindowHost
         _renderSubscriptions.Clear();
         _visibleLeaves = Array.Empty<LeafPane>();
         _committedGenerations.Clear();
-        _frameGenerations.Clear();
+        _frameGenerations = Array.Empty<ulong>();
+        _frameGenerationValid = Array.Empty<bool>();
         UserConfigService.Shutdown();
         _luaHost.Dispose();
 

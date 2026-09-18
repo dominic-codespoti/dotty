@@ -400,9 +400,9 @@ public partial class TerminalBuffer : IRenderSource
     private void ScrollRegionUp(int top, int bottom, int n)
     {
         if (n <= 0) return;
-        ActiveBuffer.ScrollUpRegion(top, bottom, n);
         int height = bottom - top + 1;
-        int delta = Math.Min(n, height);
+        int delta = ActiveBuffer.ScrollUpRegion(top, bottom, n);
+        if (delta <= 0) return;
         if (top == 0)
             unchecked { _totalScrolled += delta; }
 
@@ -543,7 +543,7 @@ public partial class TerminalBuffer : IRenderSource
     /// </summary>
     public RenderSnapshot CaptureRenderSnapshot(int sbStart, int sbEnd)
     {
-        var styles = StyleSet.CaptureStyles();
+        var styles = StyleSet.CaptureStylesShared();
         var snapshot = RenderSnapshot.Capture(
             ActiveBuffer,
             _rowGenerations,
@@ -580,7 +580,7 @@ public partial class TerminalBuffer : IRenderSource
     /// </summary>
     public RenderSnapshot CaptureRenderSnapshotVisible(int sbStart = 0, int sbEnd = -1, int scrollOffset = 0)
     {
-        var styles = StyleSet.CaptureStyles();
+        var styles = StyleSet.CaptureStylesShared();
         var snapshot = RenderSnapshot.CaptureVisible(
             ActiveBuffer,
             _rowGenerations,

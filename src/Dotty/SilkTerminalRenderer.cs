@@ -49,6 +49,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private uint _chromeMenuVao;
     private int _uChromeFramebufferPx;
     private float[] _chromeStaging = Array.Empty<float>();
+    private ChromeQuadInstance[] _lastChromeQuads = Array.Empty<ChromeQuadInstance>();
+    private int _lastChromeCount = -1;
+    private int _stagedChromeMenuStart = -1;
     private float _lastFramebufferWidth;
     private float _lastFramebufferHeight;
     private int _chromeBufferCapacityBytes;
@@ -476,7 +479,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             ? Math.Clamp(menuChromeStart, 0, chromeQuads.Length)
             : chromeQuads.Length;
 
-        UploadChrome(chromeQuads);
+        UploadChrome(chromeQuads, menuChromeStart);
 
         DrawCellRange(0, baseInstanceCount, pass: 0, menuVao: false);
         if (baseChromeCount > 0)
@@ -513,12 +516,41 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             (uint)instanceCount);
     }
 
-    private void UploadChrome(ReadOnlySpan<ChromeQuadInstance> chromeQuads)
+    private void UploadChrome(ReadOnlySpan<ChromeQuadInstance> chromeQuads, int menuChromeStart)
     {
-        if (chromeQuads.IsEmpty)
-            return;
+        if (menuChromeStart != _stagedChromeMenuStart)
+        {
+            // The menu VAO points at the first menu quad. Its attribute
+            // pointers must be reconsidered even when the retained geometry
+            // itself is unchanged.
+            _chromeMenuAttribStart = -1;
+            _stagedChromeMenuStart = menuChromeStart;
+        }
 
         int count = chromeQuads.Length;
+        bool changed = count != _lastChromeCount
+            || !ChromeQuadsEqual(chromeQuads);
+        if (!changed)
+            return;
+
+        _lastChromeCount = count;
+        if (_lastChromeQuads.Length < count)
+        {
+            _lastChromeQuads = new ChromeQuadInstance[count];
+        }
+
+        if (count > 0)
+        {
+            chromeQuads.CopyTo(_lastChromeQuads);
+        }
+        else
+        {
+            // An empty frame intentionally leaves the old allocation in
+            // place. No draw is issued, and a later non-empty frame will
+            // detect the count transition and replace its retained data.
+            return;
+        }
+
         int floats = checked(count * ChromeFloatsPerInstance);
         if (_chromeStaging.Length < floats)
         {
@@ -564,6 +596,40 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 fp);
         }
     }
+
+    private bool ChromeQuadsEqual(ReadOnlySpan<ChromeQuadInstance> chromeQuads)
+    {
+        if (_lastChromeCount != chromeQuads.Length)
+            return false;
+
+        for (int i = 0; i < chromeQuads.Length; i++)
+        {
+            ref readonly var current = ref chromeQuads[i];
+            ref readonly var previous = ref _lastChromeQuads[i];
+            if (!ChromeFloatEquals(current.X, previous.X)
+                || !ChromeFloatEquals(current.Y, previous.Y)
+                || !ChromeFloatEquals(current.W, previous.W)
+                || !ChromeFloatEquals(current.H, previous.H)
+                || !ChromeFloatEquals(current.Radius, previous.Radius)
+                || !ChromeFloatEquals(current.Blur, previous.Blur)
+                || !ChromeFloatEquals(current.TopR, previous.TopR)
+                || !ChromeFloatEquals(current.TopG, previous.TopG)
+                || !ChromeFloatEquals(current.TopB, previous.TopB)
+                || !ChromeFloatEquals(current.TopA, previous.TopA)
+                || !ChromeFloatEquals(current.BottomR, previous.BottomR)
+                || !ChromeFloatEquals(current.BottomG, previous.BottomG)
+                || !ChromeFloatEquals(current.BottomB, previous.BottomB)
+                || !ChromeFloatEquals(current.BottomA, previous.BottomA))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ChromeFloatEquals(float left, float right)
+        => BitConverter.SingleToInt32Bits(left) == BitConverter.SingleToInt32Bits(right);
 
     private void DrawChromeRange(int firstInstance, int instanceCount, bool menuVao)
     {

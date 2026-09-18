@@ -264,16 +264,17 @@ public static class ContextMenuQuadBuilder
         if (string.IsNullOrEmpty(text)) return;
         ExtractRgb(fgColor, out byte fgR, out byte fgG, out byte fgB);
 
+        ReadOnlySpan<char> span = text.AsSpan();
         float curX = startPxX;
-        for (int i = 0; i < text.Length;)
+        for (int i = 0; i < span.Length;)
         {
             if (written >= destination.Length) break;
 
-            int len = char.IsSurrogatePair(text, i) ? 2 : 1;
-            string grapheme = text.Substring(i, len);
+            int len = i + 1 < span.Length && char.IsSurrogatePair(span[i], span[i + 1]) ? 2 : 1;
+            string grapheme = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(span, i, len);
             i += len;
 
-            if (char.IsWhiteSpace(grapheme[0]))
+            if (char.IsWhiteSpace(span[i - len]))
             {
                 curX += cellWidth;
                 continue;

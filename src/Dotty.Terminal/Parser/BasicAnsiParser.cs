@@ -10,15 +10,76 @@ namespace Dotty.Terminal.Parser
     public sealed class BasicAnsiParser : ITerminalParser
     {
         private const byte ESC = 0x1b;
+
+        // Sequence payloads are kept in the reusable buffer only while a
+        // sequence is split across Feed calls.  CSI parameters are deliberately
+        // small; OSC strings need room for long hyperlinks and titles.
+        private const int MaxCsiParameterBytes = 256;
+        private const int MaxOscPayloadBytes = 64 * 1024;
+
+        private enum SequenceState : byte
+        {
+            None,
+            Escape,
+            Charset,
+            Csi,
+            Osc,
+            OscEscape,
+            DiscardCsi,
+            DiscardOsc,
+        }
+
         private byte[] _leftover = new byte[32];
         private char[] _charScratch = new char[512];
-        private int _leftoverLen = 0;
+        private readonly byte[] _utf8Leftover = new byte[4];
+        private int _leftoverLen;
+        private int _utf8LeftoverLen;
+        private SequenceState _sequenceState;
         private Charset _charset = Charset.Ascii;
 
-        private static readonly SearchValues<byte> s_controlChars = SearchValues.Create(
-            new byte[] { ESC, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x7F });
+        // This set lets the ASCII fast path find both controls and non-ASCII
+        // bytes in one pass.  A high-byte run is dispatched with its known
+        // classification, so DispatchPrintableRun never scans it a second time.
+        private static readonly SearchValues<byte> s_controlRunBreaks = CreateControlRunBreaks();
+
+        private static SearchValues<byte> CreateControlRunBreaks()
+        {
+            Span<byte> values = stackalloc byte[9];
+            values[0] = ESC;
+            values[1] = 0x07;
+            values[2] = 0x08;
+            values[3] = 0x09;
+            values[4] = 0x0A;
+            values[5] = 0x0B;
+            values[6] = 0x0C;
+            values[7] = 0x0D;
+            values[8] = 0x7F;
+            return SearchValues.Create(values);
+        }
+
+        private static readonly SearchValues<byte> s_printableRunBreaks = CreatePrintableRunBreaks();
 
         public ITerminalHandler? Handler { get; set; }
+
+        private static SearchValues<byte> CreatePrintableRunBreaks()
+        {
+            Span<byte> values = stackalloc byte[9 + 128];
+            values[0] = ESC;
+            values[1] = 0x07;
+            values[2] = 0x08;
+            values[3] = 0x09;
+            values[4] = 0x0A;
+            values[5] = 0x0B;
+            values[6] = 0x0C;
+            values[7] = 0x0D;
+            values[8] = 0x7F;
+            for (int i = 0; i < 128; i++)
+            {
+                values[9 + i] = (byte)(0x80 + i);
+            }
+
+            return SearchValues.Create(values);
+        }
 
         private enum Charset
         {
@@ -64,224 +125,318 @@ namespace Dotty.Terminal.Parser
 
         public void Feed(ReadOnlySpan<byte> bytes)
         {
-            byte[]? concat = null;
-            ReadOnlySpan<byte> inputSpan;
-            if (_leftoverLen > 0)
+            int i = 0;
+            while (i < bytes.Length)
             {
-                concat = new byte[_leftoverLen + bytes.Length];
-                Buffer.BlockCopy(_leftover, 0, concat, 0, _leftoverLen);
-                bytes.CopyTo(concat.AsSpan(_leftoverLen));
-                inputSpan = concat;
-            }
-            else
-            {
-                inputSpan = bytes;
-            }
-
-            try
-            {
-                int i = 0;
-                while (i < inputSpan.Length)
+                if (_sequenceState != SequenceState.None)
                 {
-                    int nextCtrl = inputSpan.Slice(i).IndexOfAny(s_controlChars);
-
-                    int runEnd = nextCtrl >= 0 ? i + nextCtrl : inputSpan.Length;
-
-                    if (runEnd > i)
-                    {
-                        var run = inputSpan.Slice(i, runEnd - i);
-                        DispatchPrintableRun(run);
-                        i = runEnd;
-                        if (i >= inputSpan.Length) break;
-                    }
-
-                    byte b = inputSpan[i];
-                    if (b == ESC)
-                    {
-                        int seqStart = i;
-                        i++;
-                        if (i >= inputSpan.Length)
-                        {
-                            SaveLeftover(inputSpan.Slice(seqStart));
-                            return;
-                        }
-
-                        byte next = inputSpan[i];
-                        if (next == (byte)'[')
-                        {
-                            i++;
-                            int paramsStart = i;
-                            bool csiFinalFound = false;
-                            while (i < inputSpan.Length)
-                            {
-                                byte cb = inputSpan[i];
-                                if (cb >= 0x40 && cb <= 0x7e)
-                                {
-                                    csiFinalFound = true;
-                                    var final = (char)cb;
-                                    var paramSpan = inputSpan.Slice(paramsStart, i - paramsStart);
-
-                                    // CSI M with no parameters is Delete Line (DL, ECMA-48
-                                    // default count 1) - always, unconditionally. Mouse
-                                    // reports (X10/X11: ESC[M Cb Cx Cy) never appear here:
-                                    // they flow terminal -> application as PTY *input*
-                                    // (generated from real mouse clicks), never through the
-                                    // application's *output* stream that this parser reads.
-                                    // An app enabling mouse tracking (e.g. Neovim's default
-                                    // `mouse=a`) doesn't change that - Neovim's terminfo-driven
-                                    // "dl1" capability for TERM=xterm-256color is unconditionally
-                                    // ESC[M, used whenever it scrolls a DECSTBM region regardless
-                                    // of its own mouse state.
-                                    HandleCsi(final, paramSpan);
-                                    i++;
-                                    break;
-                                }
-                                i++;
-                            }
-
-                            if (!csiFinalFound)
-                            {
-                                SaveLeftover(inputSpan.Slice(seqStart));
-                                return;
-                            }
-                        }
-                        else if (next == (byte)']')
-                        {
-                            i++;
-                            int payloadStart = i;
-                            bool finished = false;
-                            while (i < inputSpan.Length)
-                            {
-                                byte cb = inputSpan[i];
-                                if (cb == 0x07)
-                                {
-                                    HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
-                                    i++;
-                                    finished = true;
-                                    break;
-                                }
-                                if (cb == ESC && i + 1 < inputSpan.Length && inputSpan[i + 1] == (byte)'\\')
-                                {
-                                    HandleOscPayload(inputSpan.Slice(payloadStart, i - payloadStart));
-                                    i += 2;
-                                    finished = true;
-                                    break;
-                                }
-                                i++;
-                            }
-
-                            if (!finished)
-                            {
-                                SaveLeftover(inputSpan.Slice(seqStart));
-                                return;
-                            }
-                        }
-                        else if (next == (byte)'c')
-                        {
-                            Handler?.OnFullReset();
-                            i++;
-                        }
-                        else if (next == (byte)'7')
-                        {
-                            Handler?.OnSaveCursor();
-                            i++;
-                        }
-                        else if (next == (byte)'8')
-                        {
-                            Handler?.OnRestoreCursor();
-                            i++;
-                        }
-                        else if (next == (byte)'(' || next == (byte)')')
-                        {
-                            i++;
-                            if (i >= inputSpan.Length)
-                            {
-                                SaveLeftover(inputSpan.Slice(seqStart));
-                                return;
-                            }
-
-                            var selection = (char)inputSpan[i];
-                            ApplyCharsetSelection(selection);
-                            i++;
-                        }
-                        else if (next == (byte)'M')
-                        {
-                            Handler?.OnReverseIndex();
-                            i++;
-                        }
-                        else if (next == (byte)'H')
-                        {
-                            Handler?.OnSetTabStop();
-                            i++;
-                        }
-                        else if (next == (byte)'=')
-                        {
-                            Handler?.OnSetKeypadApplicationMode(true);
-                            i++;
-                        }
-                        else if (next == (byte)'>')
-                        {
-                            Handler?.OnSetKeypadApplicationMode(false);
-                            i++;
-                        }
-                        else
-                        {
-                            i++;
-                        }
-                    }
-                    else if (b == 0x07)
-                    {
-                        Handler?.OnBell();
-                        i++;
-                    }
-                    else if (b == 0x08)
-                    {
-                        Handler?.OnCursorBack(1);
-                        i++;
-                    }
-                    else if (b == 0x09)
-                    {
-                        Handler?.OnTab();
-                        i++;
-                    }
-                    else if (b == 0x0A || b == 0x0B || b == 0x0C)
-                    {
-                        Handler?.OnLineFeed();
-                        i++;
-                    }
-                    else if (b == 0x0D)
-                    {
-                        Handler?.OnCarriageReturn();
-                        i++;
-                    }
-                    else
-                    {
-                        i++;
-                    }
+                    if (_utf8LeftoverLen > 0)
+                        FlushUtf8Leftover();
+                    ProcessSequenceByte(bytes[i++]);
+                    continue;
                 }
 
-                _leftoverLen = 0;
-            }
-            finally
-            {
+                int breakOffset = bytes.Slice(i).IndexOfAny(s_printableRunBreaks);
+                int runEnd = breakOffset >= 0 ? i + breakOffset : bytes.Length;
+                if (runEnd > i)
+                {
+                    DispatchPrintableRun(bytes.Slice(i, runEnd - i), hasNonAscii: false);
+                    i = runEnd;
+                    if (i >= bytes.Length)
+                        break;
+                }
+
+                byte b = bytes[i];
+                if (b >= 0x80)
+                {
+                    // The first classification pass stopped at this high byte.
+                    // Find the end once, then dispatch without another
+                    // hasNonAscii scan.
+                    int highRunOffset = bytes.Slice(i + 1).IndexOfAny(s_controlRunBreaks);
+                    int highRunEnd = highRunOffset >= 0
+                        ? i + 1 + highRunOffset
+                        : bytes.Length;
+                    DispatchPrintableRun(bytes.Slice(i, highRunEnd - i), hasNonAscii: true);
+                    i = highRunEnd;
+                    continue;
+                }
+
+                if (_utf8LeftoverLen > 0)
+                    FlushUtf8Leftover();
+
+                if (b == ESC)
+                {
+                    _sequenceState = SequenceState.Escape;
+                    i++;
+                }
+                else if (b == 0x07)
+                {
+                    Handler?.OnBell();
+                    i++;
+                }
+                else if (b == 0x08)
+                {
+                    Handler?.OnCursorBack(1);
+                    i++;
+                }
+                else if (b == 0x09)
+                {
+                    Handler?.OnTab();
+                    i++;
+                }
+                else if (b == 0x0A || b == 0x0B || b == 0x0C)
+                {
+                    Handler?.OnLineFeed();
+                    i++;
+                }
+                else if (b == 0x0D)
+                {
+                    Handler?.OnCarriageReturn();
+                    i++;
+                }
+                else
+                {
+                    i++;
+                }
             }
         }
 
-        private void DispatchPrintableRun(ReadOnlySpan<byte> run)
+        private void ProcessSequenceByte(byte b)
+        {
+            switch (_sequenceState)
+            {
+                case SequenceState.Escape:
+                    ProcessEscapeByte(b);
+                    break;
+                case SequenceState.Charset:
+                    if (b == ESC)
+                    {
+                        _sequenceState = SequenceState.Escape;
+                    }
+                    else if (b == 0x18 || b == 0x1A)
+                    {
+                        ResetSequence();
+                    }
+                    else
+                    {
+                        ApplyCharsetSelection((char)b);
+                        ResetSequence();
+                    }
+                    break;
+                case SequenceState.Csi:
+                    ProcessCsiByte(b);
+                    break;
+                case SequenceState.Osc:
+                    ProcessOscByte(b);
+                    break;
+                case SequenceState.OscEscape:
+                    ProcessOscEscapeByte(b);
+                    break;
+                case SequenceState.DiscardCsi:
+                    if (b >= 0x40 && b <= 0x7E)
+                    {
+                        // The final is consumed but never dispatched.
+                        ResetSequence();
+                    }
+                    else if (b == ESC)
+                    {
+                        ResetSequence();
+                        _sequenceState = SequenceState.Escape;
+                    }
+                    else if (b == 0x18 || b == 0x1A)
+                    {
+                        ResetSequence();
+                    }
+                    break;
+                case SequenceState.DiscardOsc:
+                    if (b == 0x07 || b == 0x18 || b == 0x1A)
+                    {
+                        // BEL is OSC's terminator; CAN/SUB cancel it.
+                        ResetSequence();
+                    }
+                    else if (b == ESC)
+                    {
+                        // Treat ESC as the beginning of a fresh sequence.  A
+                        // following '\' therefore consumes an abandoned ST,
+                        // while '[' and ']' start valid new sequences.
+                        ResetSequence();
+                        _sequenceState = SequenceState.Escape;
+                    }
+                    break;
+            }
+        }
+
+        private void ProcessEscapeByte(byte b)
+        {
+            switch (b)
+            {
+                case (byte)'[':
+                    _leftoverLen = 0;
+                    _sequenceState = SequenceState.Csi;
+                    break;
+                case (byte)']':
+                    _leftoverLen = 0;
+                    _sequenceState = SequenceState.Osc;
+                    break;
+                case (byte)'c':
+                    Handler?.OnFullReset();
+                    ResetSequence();
+                    break;
+                case (byte)'7':
+                    Handler?.OnSaveCursor();
+                    ResetSequence();
+                    break;
+                case (byte)'8':
+                    Handler?.OnRestoreCursor();
+                    ResetSequence();
+                    break;
+                case (byte)'(':
+                case (byte)')':
+                    _sequenceState = SequenceState.Charset;
+                    break;
+                case (byte)'M':
+                    Handler?.OnReverseIndex();
+                    ResetSequence();
+                    break;
+                case (byte)'H':
+                    Handler?.OnSetTabStop();
+                    ResetSequence();
+                    break;
+                case (byte)'=':
+                    Handler?.OnSetKeypadApplicationMode(true);
+                    ResetSequence();
+                    break;
+                case (byte)'>':
+                    Handler?.OnSetKeypadApplicationMode(false);
+                    ResetSequence();
+                    break;
+                case ESC:
+                    // A second ESC supersedes the incomplete one.
+                    _sequenceState = SequenceState.Escape;
+                    break;
+                default:
+                    ResetSequence();
+                    break;
+            }
+        }
+
+        private void ProcessCsiByte(byte b)
+        {
+            if (b >= 0x40 && b <= 0x7E)
+            {
+                HandleCsi((char)b, _leftover.AsSpan(0, _leftoverLen));
+                ResetSequence();
+            }
+            else if (b == ESC)
+            {
+                ResetSequence();
+                _sequenceState = SequenceState.Escape;
+            }
+            else if (b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (!AppendSequenceByte(b, MaxCsiParameterBytes))
+            {
+                // Once the cap is crossed, discard the accumulated
+                // parameters and consume bytes until a CSI final, ESC, CAN,
+                // or SUB.
+                BeginDiscard(SequenceState.DiscardCsi);
+            }
+        }
+
+        private void ProcessOscByte(byte b)
+        {
+            if (b == 0x07)
+            {
+                HandleOscPayload(_leftover.AsSpan(0, _leftoverLen));
+                ResetSequence();
+            }
+            else if (b == ESC)
+            {
+                _sequenceState = SequenceState.OscEscape;
+            }
+            else if (b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (!AppendSequenceByte(b, MaxOscPayloadBytes))
+            {
+                BeginDiscard(SequenceState.DiscardOsc);
+            }
+        }
+
+        private void ProcessOscEscapeByte(byte b)
+        {
+            if (b == (byte)'\\')
+            {
+                HandleOscPayload(_leftover.AsSpan(0, _leftoverLen));
+                ResetSequence();
+            }
+            else if (b == ESC)
+            {
+                // The first ESC was payload; the second may begin ST.
+                if (!AppendSequenceByte(ESC, MaxOscPayloadBytes))
+                {
+                    BeginDiscard(SequenceState.DiscardOsc);
+                }
+                else
+                {
+                    _sequenceState = SequenceState.OscEscape;
+                }
+            }
+            else if (b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (!AppendSequenceByte(ESC, MaxOscPayloadBytes))
+            {
+                BeginDiscard(SequenceState.DiscardOsc);
+                ProcessSequenceByte(b);
+            }
+            else
+            {
+                _sequenceState = SequenceState.Osc;
+                ProcessOscByte(b);
+            }
+        }
+
+        private bool AppendSequenceByte(byte b, int cap)
+        {
+            if (_leftoverLen >= cap)
+                return false;
+
+            EnsureSequenceCapacity(_leftoverLen + 1, cap);
+            _leftover[_leftoverLen++] = b;
+            return true;
+        }
+
+        private void EnsureSequenceCapacity(int needed, int cap)
+        {
+            if (needed <= _leftover.Length)
+                return;
+
+            int newSize = Math.Min(cap, Math.Max(needed, _leftover.Length * 2));
+            Array.Resize(ref _leftover, newSize);
+        }
+
+        private void ResetSequence()
+        {
+            _sequenceState = SequenceState.None;
+            _leftoverLen = 0;
+        }
+
+        private void BeginDiscard(SequenceState discardState)
+        {
+            _leftoverLen = 0;
+            _sequenceState = discardState;
+        }
+
+        private void DispatchPrintableRun(ReadOnlySpan<byte> run, bool hasNonAscii)
         {
             if (run.IsEmpty) return;
 
-            bool hasNonAscii = false;
-            for (int j = 0; j < run.Length; j++)
-            {
-                if (run[j] >= 0x80)
-                {
-                    hasNonAscii = true;
-                    break;
-                }
-            }
-
-            if (!hasNonAscii && _charset != Charset.DecSpecialGraphics)
+            if (!hasNonAscii && _utf8LeftoverLen == 0 && _charset != Charset.DecSpecialGraphics)
             {
                 // Fast path: avoid byte→char conversion for pure ASCII runs.
                 // TerminalAdapter provides an internal byte-based path; fall back to
@@ -343,179 +498,203 @@ namespace Dotty.Terminal.Parser
 
         private void HandleCsi(char final, ReadOnlySpan<byte> paramBytes)
         {
+            if (paramBytes.Length > MaxCsiParameterBytes)
+            {
+                // Defensive guard for callers inside this class; Feed already
+                // discards an over-cap CSI before it reaches dispatch.
+                return;
+            }
+
             if (final == 'm' && (paramBytes.IsEmpty || paramBytes[0] != '<'))
             {
+                // CSI SGR is a byte-preserving parameter string (it may use
+                // ':' subparameters), not a numeric CSI form.  The cap keeps
+                // this on the parser-owned scratch buffer and allocation-free.
                 int maxChars = Encoding.UTF8.GetMaxCharCount(paramBytes.Length);
-                char[] pooled = ArrayPool<char>.Shared.Rent(maxChars);
+                Span<char> sgr = GetScratch(maxChars, out char[]? rented);
                 try
                 {
-                    int charsDecoded = Encoding.UTF8.GetChars(paramBytes, pooled.AsSpan());
-                    Handler?.OnSetGraphicsRendition(pooled.AsSpan(0, charsDecoded));
+                    int charsDecoded = Encoding.UTF8.GetChars(paramBytes, sgr);
+                    Handler?.OnSetGraphicsRendition(sgr.Slice(0, charsDecoded));
                 }
                 finally
                 {
-                    ArrayPool<char>.Shared.Return(pooled);
+                    ReturnScratch(rented);
                 }
                 return;
             }
 
             Span<int> parsedParams = stackalloc int[8];
-            if (TryParseParams(paramBytes, parsedParams, out int paramCount, out bool isPrivate))
+            bool parsed = TryParseParams(
+                paramBytes,
+                parsedParams,
+                out int paramCount,
+                out bool isPrivate,
+                out bool isMouse);
+            if (!parsed)
             {
-                switch (final)
+                // A malformed field still terminates at the CSI final byte.
+                // Preserve valid private modes before that field, matching
+                // terminal fallback behaviour without allocating strings.
+                if ((final == 'h' || final == 'l') && isPrivate && paramCount > 0)
                 {
-                    case 'J':
-                        {
-                            int mode = paramCount > 0 ? parsedParams[0] : 0;
-                            if (mode == 3)
-                                Handler?.OnClearScrollback();
-                            else if (mode == 0 || mode == 1 || mode == 2)
-                                Handler?.OnEraseDisplay(mode);
-                            break;
-                        }
-                    case 'K':
-                        Handler?.OnEraseLine(paramCount > 0 ? parsedParams[0] : 0);
-                        break;
-                    case 'H':
-                    case 'f':
-                        Handler?.OnMoveCursor(
-                            paramCount > 0 ? parsedParams[0] : 1,
-                            paramCount > 1 ? parsedParams[1] : 1);
-                        break;
-                    case 'A':
-                        Handler?.OnCursorUp(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'B':
-                        Handler?.OnCursorDown(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'C':
-                        Handler?.OnCursorForward(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'D':
-                        Handler?.OnCursorBack(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'E':
-                        Handler?.OnCursorNextLine(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'F':
-                        Handler?.OnCursorPreviousLine(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'G':
-                        Handler?.OnCursorHorizontalAbsolute(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'd':
-                        Handler?.OnCursorVerticalAbsolute(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'Z':
-                        Handler?.OnBackTab(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'b':
-                        Handler?.OnRepeatCharacter(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'g':
-                        {
-                            int mode = paramCount > 0 ? parsedParams[0] : 0;
-                            if (mode == 3)
-                                Handler?.OnClearAllTabStops();
-                            else if (mode == 0)
-                                Handler?.OnClearTabStop();
-                            break;
-                        }
-                    case 'L':
-                        Handler?.OnInsertLines(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case '@':
-                        Handler?.OnInsertChars(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'X':
-                        Handler?.OnEraseCharacters(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'P':
-                        Handler?.OnDeleteChars(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'S':
-                        Handler?.OnScrollUp(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'T':
-                        Handler?.OnScrollDown(paramCount > 0 ? parsedParams[0] : 1);
-                        break;
-                    case 'n':
-                        if (paramCount > 0 && parsedParams[0] == 6)
-                        {
-                            if (isPrivate)
-                                Handler?.OnCursorPositionReport();
-                            else
-                                Handler?.OnDeviceStatusReport(6);
-                        }
-                        else
-                        {
-                            Handler?.OnDeviceStatusReport(paramCount > 0 ? parsedParams[0] : 0);
-                        }
-                        break;
-                    case 'c':
-                        Handler?.OnSendDeviceAttributes(isPrivate ? 2 : 0);
-                        break;
-                    case 'r':
-                        Handler?.OnSetScrollRegion(
-                            paramCount > 0 ? parsedParams[0] : 1,
-                            paramCount > 1 ? parsedParams[1] : 0);
-                        break;
-                    case 'q':
-                        Handler?.OnSetCursorShape(paramCount > 0 ? parsedParams[0] : 0);
-                        break;
-                    case 's':
-                        Handler?.OnSaveCursor();
-                        break;
-                    case 't':
-                        // Window manipulation: CSI Ps t
-                        Handler?.OnWindowReport(paramCount > 0 ? parsedParams[0] : 0);
-                        break;
-                    case 'u':
-                        if (isPrivate && paramCount > 0)
-                        {
-                            int mode = parsedParams[0];
-                            Handler?.OnSetKittyKeyboardMode(mode);
-                        }
-                        else if (isPrivate && paramCount == 0)
-                        {
-                            Handler?.OnQueryKittyKeyboard();
-                        }
-                        else
-                        {
-                            Handler?.OnRestoreCursor();
-                        }
-                        break;
-                    case 'h':
-                    case 'l':
-                        if (isPrivate && paramCount > 0)
-                        {
-                            bool enable = final == 'h';
-                            for (int pIdx = 0; pIdx < paramCount; pIdx++)
-                                HandlePrivateMode(parsedParams[pIdx], enable);
-                        }
-                        break;
-                    case 'M':
-                    case 'm':
-                        if (paramCount >= 3)
-                        {
-                            int cb = parsedParams[0];
-                            int cx = parsedParams[1];
-                            int cy = parsedParams[2];
-                            bool isPress = (cb & 0x03) != 0x03;
-                            Handler?.OnMouseEvent(cb, cx, cy, isPress);
-                        }
-                        else if (final == 'M')
-                        {
-                            Handler?.OnDeleteLines(paramCount > 0 ? parsedParams[0] : 1);
-                        }
-                        break;
-                    default:
-                        break;
+                    bool enable = final == 'h';
+                    for (int pIdx = 0; pIdx < paramCount; pIdx++)
+                        HandlePrivateMode(parsedParams[pIdx], enable);
                 }
+                return;
             }
-            else
+            switch (final)
             {
-                HandleCsiFallback(final, paramBytes);
+                case 'J':
+                    {
+                        int mode = paramCount > 0 ? parsedParams[0] : 0;
+                        if (mode == 3)
+                            Handler?.OnClearScrollback();
+                        else if (mode == 0 || mode == 1 || mode == 2)
+                            Handler?.OnEraseDisplay(mode);
+                        break;
+                    }
+                case 'K':
+                    Handler?.OnEraseLine(paramCount > 0 ? parsedParams[0] : 0);
+                    break;
+                case 'H':
+                case 'f':
+                    Handler?.OnMoveCursor(
+                        paramCount > 0 ? parsedParams[0] : 1,
+                        paramCount > 1 ? parsedParams[1] : 1);
+                    break;
+                case 'A':
+                    Handler?.OnCursorUp(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'B':
+                    Handler?.OnCursorDown(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'C':
+                    Handler?.OnCursorForward(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'D':
+                    Handler?.OnCursorBack(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'E':
+                    Handler?.OnCursorNextLine(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'F':
+                    Handler?.OnCursorPreviousLine(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'G':
+                    Handler?.OnCursorHorizontalAbsolute(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'd':
+                    Handler?.OnCursorVerticalAbsolute(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'Z':
+                    Handler?.OnBackTab(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'b':
+                    Handler?.OnRepeatCharacter(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'g':
+                    {
+                        int mode = paramCount > 0 ? parsedParams[0] : 0;
+                        if (mode == 3)
+                            Handler?.OnClearAllTabStops();
+                        else if (mode == 0)
+                            Handler?.OnClearTabStop();
+                        break;
+                    }
+                case 'L':
+                    Handler?.OnInsertLines(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case '@':
+                    Handler?.OnInsertChars(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'X':
+                    Handler?.OnEraseCharacters(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'P':
+                    Handler?.OnDeleteChars(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'S':
+                    Handler?.OnScrollUp(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'T':
+                    Handler?.OnScrollDown(paramCount > 0 ? parsedParams[0] : 1);
+                    break;
+                case 'n':
+                    if (paramCount > 0 && parsedParams[0] == 6)
+                    {
+                        if (isPrivate)
+                            Handler?.OnCursorPositionReport();
+                        else
+                            Handler?.OnDeviceStatusReport(6);
+                    }
+                    else
+                    {
+                        Handler?.OnDeviceStatusReport(paramCount > 0 ? parsedParams[0] : 0);
+                    }
+                    break;
+                case 'c':
+                    Handler?.OnSendDeviceAttributes(isPrivate ? 2 : 0);
+                    break;
+                case 'r':
+                    Handler?.OnSetScrollRegion(
+                        paramCount > 0 ? parsedParams[0] : 1,
+                        paramCount > 1 ? parsedParams[1] : 0);
+                    break;
+                case 'q':
+                    Handler?.OnSetCursorShape(paramCount > 0 ? parsedParams[0] : 0);
+                    break;
+                case 's':
+                    Handler?.OnSaveCursor();
+                    break;
+                case 't':
+                    // Window manipulation: CSI Ps t
+                    Handler?.OnWindowReport(paramCount > 0 ? parsedParams[0] : 0);
+                    break;
+                case 'u':
+                    if (isPrivate && paramCount > 0)
+                    {
+                        int mode = parsedParams[0];
+                        Handler?.OnSetKittyKeyboardMode(mode);
+                    }
+                    else if (isPrivate && paramCount == 0)
+                    {
+                        Handler?.OnQueryKittyKeyboard();
+                    }
+                    else
+                    {
+                        Handler?.OnRestoreCursor();
+                    }
+                    break;
+                case 'h':
+                case 'l':
+                    if (isPrivate && paramCount > 0)
+                    {
+                        bool enable = final == 'h';
+                        for (int pIdx = 0; pIdx < paramCount; pIdx++)
+                            HandlePrivateMode(parsedParams[pIdx], enable);
+                    }
+                    break;
+                case 'M':
+                case 'm':
+                    if (paramCount >= 3 && (isMouse || !isPrivate))
+                    {
+                        int cb = parsedParams[0];
+                        int cx = parsedParams[1];
+                        int cy = parsedParams[2];
+                        bool isPress = isMouse
+                            ? final == 'M'
+                            : (cb & 0x03) != 0x03;
+                        Handler?.OnMouseEvent(cb, cx, cy, isPress);
+                    }
+                    else if (!isMouse && !isPrivate && final == 'M')
+                    {
+                        Handler?.OnDeleteLines(paramCount > 0 ? parsedParams[0] : 1);
+                    }
+                    break;
+                default:
+                    break;
             }
         }
 
@@ -558,249 +737,86 @@ namespace Dotty.Terminal.Parser
             }
         }
 
-        private void HandleCsiFallback(char final, ReadOnlySpan<byte> paramBytes)
-        {
-            string @params = Encoding.UTF8.GetString(paramBytes);
-            string[] parts = @params.Split(';', StringSplitOptions.RemoveEmptyEntries);
-            int GetParam(int idx, int def)
-            {
-                if (idx < parts.Length && int.TryParse(parts[idx], out var v)) return v;
-                return def;
-            }
 
-            switch (final)
-            {
-                case 'J':
-                    int mode = GetParam(0, 0);
-                    if (mode == 3)
-                        Handler?.OnClearScrollback();
-                    else if (mode == 0 || mode == 1 || mode == 2)
-                        Handler?.OnEraseDisplay(mode);
-                    break;
-                case 'K':
-                    Handler?.OnEraseLine(GetParam(0, 0));
-                    break;
-                case 'H':
-                case 'f':
-                    Handler?.OnMoveCursor(GetParam(0, 1), GetParam(1, 1));
-                    break;
-                case 'A':
-                    Handler?.OnCursorUp(GetParam(0, 1));
-                    break;
-                case 'B':
-                    Handler?.OnCursorDown(GetParam(0, 1));
-                    break;
-                case 'C':
-                    Handler?.OnCursorForward(GetParam(0, 1));
-                    break;
-                case 'D':
-                    Handler?.OnCursorBack(GetParam(0, 1));
-                    break;
-                case 'E':
-                    Handler?.OnCursorNextLine(GetParam(0, 1));
-                    break;
-                case 'F':
-                    Handler?.OnCursorPreviousLine(GetParam(0, 1));
-                    break;
-                case 'G':
-                    Handler?.OnCursorHorizontalAbsolute(GetParam(0, 1));
-                    break;
-                case 'd':
-                    Handler?.OnCursorVerticalAbsolute(GetParam(0, 1));
-                    break;
-                case 'Z':
-                    Handler?.OnBackTab(GetParam(0, 1));
-                    break;
-                case 'b':
-                    Handler?.OnRepeatCharacter(GetParam(0, 1));
-                    break;
-                case 'g':
-                    {
-                        int tabClearMode = GetParam(0, 0);
-                        if (tabClearMode == 3)
-                            Handler?.OnClearAllTabStops();
-                        else if (tabClearMode == 0)
-                            Handler?.OnClearTabStop();
-                    }
-                    break;
-                case 'L':
-                    Handler?.OnInsertLines(GetParam(0, 1));
-                    break;
-                case '@':
-                    Handler?.OnInsertChars(GetParam(0, 1));
-                    break;
-                case 'X':
-                    Handler?.OnEraseCharacters(GetParam(0, 1));
-                    break;
-                case 'P':
-                    Handler?.OnDeleteChars(GetParam(0, 1));
-                    break;
-                case 'S':
-                    Handler?.OnScrollUp(GetParam(0, 1));
-                    break;
-                case 'T':
-                    Handler?.OnScrollDown(GetParam(0, 1));
-                    break;
-                case 'n':
-                    {
-                        bool isPrivate = @params.StartsWith("?");
-                        int code = isPrivate && @params.Length > 1
-                            ? int.TryParse(@params.Substring(1), out var privateCode) ? privateCode : 0
-                            : GetParam(0, 0);
-
-                        if (code == 6)
-                        {
-                            if (isPrivate)
-                                Handler?.OnCursorPositionReport();
-                            else
-                                Handler?.OnDeviceStatusReport(6);
-                        }
-                        else
-                        {
-                            Handler?.OnDeviceStatusReport(code);
-                        }
-                    }
-                    break;
-                case 'c':
-                    Handler?.OnSendDeviceAttributes(@params.StartsWith(">") ? 2 : 0);
-                    break;
-                case 'r':
-                    Handler?.OnSetScrollRegion(GetParam(0, 1), GetParam(1, 0));
-                    break;
-                case 'q':
-                    Handler?.OnSetCursorShape(GetParam(0, 0));
-                    break;
-                case 's':
-                    Handler?.OnSaveCursor();
-                    break;
-                case 'u':
-                    if (@params.StartsWith("?", StringComparison.Ordinal))
-                    {
-                        var kittyParams = @params.Substring(1);
-                        if (kittyParams.Length == 0)
-                        {
-                            Handler?.OnQueryKittyKeyboard();
-                        }
-                        else
-                        {
-                            int separator = kittyParams.IndexOf(';');
-                            var modeText = separator >= 0
-                                ? kittyParams.Substring(0, separator)
-                                : kittyParams;
-                            if (int.TryParse(modeText, out int kittyMode))
-                                Handler?.OnSetKittyKeyboardMode(kittyMode);
-                        }
-                    }
-                    else
-                    {
-                        Handler?.OnRestoreCursor();
-                    }
-                    break;
-                case 'h':
-                case 'l':
-                    var privateParams = @params;
-                    bool privateMode = false;
-                    if (privateParams.StartsWith("?", StringComparison.Ordinal)
-                        || privateParams.StartsWith(">", StringComparison.Ordinal))
-                    {
-                        privateMode = true;
-                        privateParams = privateParams.Substring(1);
-                    }
-
-                    if (privateMode)
-                    {
-                        bool enable = final == 'h';
-                        string[] modeParts = privateParams.Split(';', StringSplitOptions.RemoveEmptyEntries);
-                        foreach (var modePart in modeParts)
-                        {
-                            if (int.TryParse(modePart, out int code))
-                                HandlePrivateMode(code, enable);
-                        }
-                    }
-                    break;
-                case 'M':
-                case 'm':
-                    bool isSgrMouse = @params.StartsWith("<");
-                    if (isSgrMouse)
-                    {
-                        var partsArray = @params.Substring(1).Split(';', StringSplitOptions.RemoveEmptyEntries);
-                        if (partsArray.Length >= 3)
-                        {
-                            int.TryParse(partsArray[0], out int cb);
-                            int.TryParse(partsArray[1], out int cx);
-                            int.TryParse(partsArray[2], out int cy);
-                            Handler?.OnMouseEvent(cb, cx, cy, final == 'M');
-                        }
-                    }
-                    else if (final == 'M')
-                    {
-                        Handler?.OnDeleteLines(GetParam(0, 1));
-                    }
-                    break;
-                default:
-                    break;
-            }
-        }
-
-        private static bool TryParseParams(ReadOnlySpan<byte> paramBytes, Span<int> outParams, out int count, out bool isPrivate)
+        private static bool TryParseParams(
+            ReadOnlySpan<byte> paramBytes,
+            Span<int> outParams,
+            out int count,
+            out bool isPrivate,
+            out bool isMouse)
         {
             count = 0;
             isPrivate = false;
-
-            if (paramBytes.IsEmpty)
-                return true;
+            isMouse = false;
 
             int start = 0;
-            if (paramBytes[0] == '?')
+            bool fieldStart = true;
+            if (!paramBytes.IsEmpty)
             {
-                isPrivate = true;
-                start = 1;
-            }
-            else if (paramBytes[0] == '>')
-            {
-                isPrivate = true;
-                start = 1;
-            }
-            else if (paramBytes[0] == '<')
-            {
-                return false;
+                if (paramBytes[0] == '?' || paramBytes[0] == '>')
+                {
+                    isPrivate = true;
+                    start = 1;
+                    fieldStart = false;
+                }
+                else if (paramBytes[0] == '<')
+                {
+                    isMouse = true;
+                    start = 1;
+                    fieldStart = false;
+                }
             }
 
             int current = 0;
             bool hasDigit = false;
-
             for (int i = start; i < paramBytes.Length; i++)
             {
                 byte b = paramBytes[i];
-                if (b >= '0' && b <= '9')
+                if ((b == '?' || b == '>') && fieldStart && isPrivate)
                 {
-                    current = current * 10 + (b - '0');
+                    fieldStart = false;
+                }
+                else if (b >= '0' && b <= '9')
+                {
+                    int digit = b - '0';
+                    current = current > (int.MaxValue - digit) / 10
+                        ? int.MaxValue
+                        : (current * 10) + digit;
                     hasDigit = true;
+                    fieldStart = false;
                 }
                 else if (b == ';')
                 {
-                    if (count >= outParams.Length) return false;
-                    outParams[count++] = hasDigit ? current : 0;
+                    StoreParameter(hasDigit ? current : 0, outParams, ref count);
                     current = 0;
                     hasDigit = false;
+                    fieldStart = true;
                 }
-                else if (b == ' ')
+                else if (b != ' ')
                 {
-                    continue;
-                }
-                else
-                {
+                    // Unsupported intermediates are rejected without a
+                    // string-parsing fallback (which used to allocate).
                     return false;
                 }
             }
 
             if (hasDigit || start < paramBytes.Length)
-            {
-                if (count >= outParams.Length) return false;
-                outParams[count++] = current;
-            }
+                StoreParameter(current, outParams, ref count);
 
             return true;
+        }
+
+
+        private static void StoreParameter(int value, Span<int> output, ref int count)
+        {
+            // Explicit excess-parameter policy: retain only the first eight
+            // numeric fields used by the handler and ignore the rest, matching
+            // terminal behaviour for forms with more parameters.
+            if (count < output.Length)
+            {
+                output[count] = value;
+                count++;
+            }
         }
 
         private static bool TryParseAsciiInt(ReadOnlySpan<byte> bytes, out int value)
@@ -817,19 +833,6 @@ namespace Dotty.Terminal.Parser
             return true;
         }
 
-        private void SaveLeftover(ReadOnlySpan<byte> bytes)
-        {
-            // Grow rather than silently truncate: dropping bytes here corrupts
-            // every subsequent sequence in the stream (wrong CSI params, text
-            // written at the wrong cursor position, etc). Escape sequences are
-            // normally short, but nothing in the VT spec bounds them (long OSC
-            // 8 hyperlink URIs, Kitty graphics APC payloads), and a chunk
-            // boundary can fall anywhere inside one.
-            if (bytes.Length > _leftover.Length)
-                _leftover = new byte[bytes.Length];
-            bytes.CopyTo(_leftover.AsSpan());
-            _leftoverLen = bytes.Length;
-        }
 
         private void ApplyCharsetSelection(char selector)
         {
@@ -850,9 +853,68 @@ namespace Dotty.Terminal.Parser
         private void DecodePrintableRun(ReadOnlySpan<byte> run)
         {
             if (run.IsEmpty)
+                return;
+
+            if (_utf8LeftoverLen > 0)
             {
+                int expected = GetUtf8ExpectedLength(_utf8Leftover[0]);
+                int needed = expected - _utf8LeftoverLen;
+                int available = Math.Min(Math.Max(needed, 0), run.Length);
+                bool continuation = expected > 0;
+                for (int i = 0; i < available; i++)
+                    continuation &= IsUtf8Continuation(run[i]);
+
+                if (!continuation)
+                {
+                    FlushUtf8Leftover();
+                }
+                else if (available < needed)
+                {
+                    run.Slice(0, available).CopyTo(_utf8Leftover.AsSpan(_utf8LeftoverLen));
+                    _utf8LeftoverLen += available;
+                    return;
+                }
+                else
+                {
+                    Span<byte> completed = stackalloc byte[4];
+                    _utf8Leftover.AsSpan(0, _utf8LeftoverLen).CopyTo(completed);
+                    run.Slice(0, needed).CopyTo(completed.Slice(_utf8LeftoverLen));
+                    _utf8LeftoverLen = 0;
+                    DecodeUtf8Chunk(completed.Slice(0, expected));
+                    run = run.Slice(needed);
+                    if (run.IsEmpty)
+                        return;
+                }
+            }
+
+            int trailing = GetUtf8IncompleteTailLength(run);
+            if (trailing > 0)
+            {
+                ReadOnlySpan<byte> complete = run.Slice(0, run.Length - trailing);
+                if (!complete.IsEmpty)
+                    DecodeUtf8Chunk(complete);
+                run.Slice(run.Length - trailing).CopyTo(_utf8Leftover);
+                _utf8LeftoverLen = trailing;
                 return;
             }
+
+            DecodeUtf8Chunk(run);
+        }
+
+        private void FlushUtf8Leftover()
+        {
+            if (_utf8LeftoverLen == 0)
+                return;
+
+            int length = _utf8LeftoverLen;
+            _utf8LeftoverLen = 0;
+            DecodeUtf8Chunk(_utf8Leftover.AsSpan(0, length));
+        }
+
+        private void DecodeUtf8Chunk(ReadOnlySpan<byte> run)
+        {
+            if (run.IsEmpty)
+                return;
 
             int maxChars = Encoding.UTF8.GetMaxCharCount(run.Length);
             Span<char> buffer = GetScratch(maxChars, out char[]? rented);
@@ -866,9 +928,7 @@ namespace Dotty.Terminal.Parser
                     for (int i = 0; i < charSpan.Length; i++)
                     {
                         if (s_decSpecialGraphicsMap.TryGetValue(charSpan[i], out var mapped))
-                        {
                             charSpan[i] = mapped;
-                        }
                     }
                 }
 
@@ -878,6 +938,37 @@ namespace Dotty.Terminal.Parser
             {
                 ReturnScratch(rented);
             }
+        }
+
+        private static int GetUtf8ExpectedLength(byte first)
+        {
+            if (first < 0x80)
+                return 1;
+            if (first >= 0xC2 && first <= 0xDF)
+                return 2;
+            if (first >= 0xE0 && first <= 0xEF)
+                return 3;
+            if (first >= 0xF0 && first <= 0xF4)
+                return 4;
+            return 0;
+        }
+
+        private static bool IsUtf8Continuation(byte value) => (value & 0xC0) == 0x80;
+
+        private static int GetUtf8IncompleteTailLength(ReadOnlySpan<byte> run)
+        {
+            if (run.IsEmpty || run[^1] < 0x80)
+                return 0;
+
+            int lead = run.Length - 1;
+            while (lead >= 0 && IsUtf8Continuation(run[lead]))
+                lead--;
+            if (lead < 0)
+                return 0;
+
+            int expected = GetUtf8ExpectedLength(run[lead]);
+            int actual = run.Length - lead;
+            return expected > actual && actual <= 4 ? actual : 0;
         }
 
         private Span<char> GetScratch(int neededLength, out char[]? rented)

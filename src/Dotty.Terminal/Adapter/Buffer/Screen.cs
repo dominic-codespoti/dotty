@@ -619,62 +619,28 @@ public unsafe partial class Screen : IDisposable
             return;
         }
 
-        int[] savedMaxCols = new int[regionHeight];
-        bool[] savedColdFlags = new bool[regionHeight];
-        bool[] savedContinuations = new bool[regionHeight];
-        int[] savedEndCols = new int[regionHeight];
-        var savedCells = new CellHot[regionHeight * Columns];
-        var savedCold = new ColdCell[regionHeight * Columns];
         int rowSizeBytes = Columns * Unsafe.SizeOf<CellHot>();
         int coldRowSizeBytes = Columns * Unsafe.SizeOf<ColdCell>();
-        for (int r = top; r <= bottom; r++)
-        {
-            int srcPhys = GetPhysicalRow(r);
-            int savedIndex = r - top;
-            savedMaxCols[savedIndex] = _rowMaxCol[srcPhys];
-            savedColdFlags[savedIndex] = _rowColdFlags[srcPhys];
-            savedContinuations[savedIndex] = RowContinuesPrevious[srcPhys];
-            savedEndCols[savedIndex] = RowEndCol[srcPhys];
-            fixed (CellHot* pDst = &savedCells[(r - top) * Columns])
-            {
-                System.Buffer.MemoryCopy(
-                    (void*)(_cellsPtr + srcPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                    pDst,
-                    rowSizeBytes, rowSizeBytes);
-            }
-            fixed (ColdCell* pDst = &savedCold[(r - top) * Columns])
-            {
-                System.Buffer.MemoryCopy(
-                    (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                    pDst,
-                    coldRowSizeBytes, coldRowSizeBytes);
-            }
-        }
 
+        // Move rows in descending logical order so each source remains unread
+        // until after it has been copied. GetPhysicalRow is injective across
+        // the visible region (the ring has at least Rows slots), therefore
+        // source and destination rows are disjoint even when the ring wraps.
         for (int r = bottom; r >= top + lines; r--)
         {
-            int srcIndex = r - lines - top;
+            int srcPhys = GetPhysicalRow(r - lines);
             int dstPhys = GetPhysicalRow(r);
-            fixed (CellHot* pSrc = &savedCells[srcIndex * Columns])
-            {
-                System.Buffer.MemoryCopy(
-                    pSrc,
-                    (void*)(_cellsPtr + dstPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                    rowSizeBytes,
-                    rowSizeBytes);
-            }
-            fixed (ColdCell* pSrc = &savedCold[srcIndex * Columns])
-            {
-                System.Buffer.MemoryCopy(
-                    pSrc,
-                    (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                    coldRowSizeBytes,
-                    coldRowSizeBytes);
-            }
-            _rowMaxCol[dstPhys] = savedMaxCols[srcIndex];
-            _rowColdFlags[dstPhys] = savedColdFlags[srcIndex];
-            RowContinuesPrevious[dstPhys] = savedContinuations[srcIndex];
-            RowEndCol[dstPhys] = savedEndCols[srcIndex];
+            System.Buffer.MemoryCopy(
+                (void*)(_cellsPtr + srcPhys * Columns * Unsafe.SizeOf<CellHot>()),
+                (void*)(_cellsPtr + dstPhys * Columns * Unsafe.SizeOf<CellHot>()),
+                rowSizeBytes,
+                rowSizeBytes);
+            System.Buffer.MemoryCopy(
+                (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
+                (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
+                coldRowSizeBytes,
+                coldRowSizeBytes);
+            CopyRowMetadata(dstPhys, srcPhys);
         }
 
         for (int r = top; r < top + lines; r++)

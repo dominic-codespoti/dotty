@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Text;
 using Dotty.Rendering.Gpu;
@@ -9,6 +11,8 @@ using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Clipboard;
 using Dotty.Runtime.Input;
+using Dotty.Runtime.Panes;
+using Dotty.Runtime.Sessions;
 using Dotty.Runtime.Tabs;
 using Dotty.Runtime.Scripting;
 using Dotty.Runtime.Selection;
@@ -59,6 +63,14 @@ internal static class DottyWindowHost
     private static readonly ConcurrentQueue<ControlRequest> _pendingControlCommands = new();
     private static WindowLifecycleCoordinator _lifecycle = new();
     private static DesktopControlServer? _controlServer;
+    private static readonly Dictionary<TerminalSession, Action> _renderSubscriptions = new();
+    private static LeafPane[] _visibleLeaves = Array.Empty<LeafPane>();
+    private static readonly Dictionary<LeafPane, ulong> _committedGenerations = new();
+    private static readonly Dictionary<LeafPane, ulong> _frameGenerations = new();
+    private static int _committedFramebufferWidth = -1;
+    private static int _committedFramebufferHeight = -1;
+    private static int _committedAtlasVersion = int.MinValue;
+    private static long _lastKeepalivePresentTimestampMs;
 
     private static bool _showTabBar = true;
     private static ContextMenuModel? _activeContextMenu;
@@ -108,6 +120,8 @@ internal static class DottyWindowHost
 
     private static void OnLoadCore()
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Initial);
+        _lastCursorBlinkTimestampMs = GetClockMilliseconds();
         UserConfigService.CallbackDispatcher = action => _lifecycle.TryEnqueue(action);
         UserConfigService.ConfigChanged += OnConfigChanged;
         UserConfigService.Load();
@@ -126,10 +140,13 @@ internal static class DottyWindowHost
 
         _tabManager = new TerminalTabManager();
         _tabManager.ActiveTabChanged += OnActiveTabChanged;
+        _tabManager.TabAdded += OnTabAdded;
+        _tabManager.TabClosed += OnTabClosed;
         _tabManager.TabTitleChanged += (tab, title) =>
         {
             if (tab == _tabManager.ActiveTab)
             {
+                WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
                 _pendingTitles.Enqueue(title);
             }
         };
@@ -179,6 +196,8 @@ internal static class DottyWindowHost
 
     private static void OnActiveTabChanged(TerminalTab? tab)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
+        RefreshVisibleSessionSubscriptions();
         if (tab == null)
         {
             if (!_closed) _window.Close();
@@ -187,6 +206,70 @@ internal static class DottyWindowHost
 
         _pendingTitles.Enqueue(tab.Title);
         tab.Session.ClipboardWriteRequested += text => _pendingClipboards.Enqueue(text);
+    }
+
+    private static void OnTabAdded(TerminalTab tab)
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
+        RefreshVisibleSessionSubscriptions();
+    }
+
+    private static void OnTabClosed(TerminalTab tab)
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
+        RefreshVisibleSessionSubscriptions();
+    }
+
+    private static void RefreshVisibleSessionSubscriptions()
+    {
+        var leaves = _tabManager?.ActiveTab?.PaneTree.Leaves;
+        if (leaves == null)
+        {
+            _visibleLeaves = Array.Empty<LeafPane>();
+            foreach (var pair in _renderSubscriptions)
+                pair.Key.RenderScheduled -= pair.Value;
+            _renderSubscriptions.Clear();
+            _committedGenerations.Clear();
+            return;
+        }
+
+        var visibleSessions = new HashSet<TerminalSession>();
+        var visibleLeafSet = new HashSet<LeafPane>();
+        var nextLeaves = new LeafPane[leaves.Count];
+        for (int i = 0; i < leaves.Count; i++)
+        {
+            var leaf = leaves[i];
+            nextLeaves[i] = leaf;
+            visibleLeafSet.Add(leaf);
+            if (visibleSessions.Add(leaf.Session) && !_renderSubscriptions.ContainsKey(leaf.Session))
+            {
+                Action callback = () => WindowPresentationGate.Invalidate(WindowFrameReason.Content);
+                leaf.Session.RenderScheduled += callback;
+                _renderSubscriptions.Add(leaf.Session, callback);
+            }
+        }
+
+        var staleSessions = new List<TerminalSession>();
+        foreach (var pair in _renderSubscriptions)
+        {
+            if (!visibleSessions.Contains(pair.Key))
+                staleSessions.Add(pair.Key);
+        }
+        foreach (var session in staleSessions)
+        {
+            session.RenderScheduled -= _renderSubscriptions[session];
+            _renderSubscriptions.Remove(session);
+        }
+
+        var staleLeaves = new List<LeafPane>();
+        foreach (var pair in _committedGenerations)
+        {
+            if (!visibleLeafSet.Contains(pair.Key))
+                staleLeaves.Add(pair.Key);
+        }
+        foreach (var leaf in staleLeaves)
+            _committedGenerations.Remove(leaf);
+        _visibleLeaves = nextLeaves;
     }
 
     private static float _cellFontSizePx()
@@ -199,6 +282,7 @@ internal static class DottyWindowHost
 
     private static void OnConfigChanged(DottyUserConfig config)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
         _keybindings.RegisterDefaults();
         _keybindings.ApplyCustomBindings(config.Keybindings);
         ResolveFontAndMetrics();
@@ -220,6 +304,7 @@ internal static class DottyWindowHost
 
     private static void RefreshFontResources()
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Atlas);
         var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
         if (!ReferenceEquals(newAtlas, _atlas))
         {
@@ -239,6 +324,7 @@ internal static class DottyWindowHost
 
     private static void OnFramebufferResize(Vector2D<int> size)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Resize);
         if (size.X <= 0 || size.Y <= 0) return;
 
         float previousScale = _scale;
@@ -340,12 +426,14 @@ internal static class DottyWindowHost
 
     private static string SendControlText(TerminalTab activeTab, string text)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
         _keyboardDispatcher.HandleText(text);
         return "OK";
     }
 
     private static string SendControlKey(TerminalTab activeTab, string keyName)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
         string normalized = keyName.Trim().ToLowerInvariant();
         byte[]? bytes = normalized switch
         {
@@ -379,6 +467,7 @@ internal static class DottyWindowHost
 
     private static string ResizeFromControl(string payload)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Resize);
         int separator = payload.IndexOf(':');
         if (separator <= 0 ||
             !int.TryParse(payload[..separator], out int columns) ||
@@ -500,13 +589,109 @@ internal static class DottyWindowHost
 
         int framebufferWidth = _window.FramebufferSize.X;
         int framebufferHeight = _window.FramebufferSize.Y;
-        if (framebufferWidth <= 0 || framebufferHeight <= 0) return;
+        if (framebufferWidth <= 0 || framebufferHeight <= 0)
+            return;
 
-        if (activeTab == null)
+        long now = GetClockMilliseconds();
+        UpdateCursorBlink(now, activeTab != null);
+
+        WindowFrameReason pendingReasons = WindowPresentationGate.PendingReasons;
+        if ((pendingReasons & WindowFrameReason.TabOrPane) != 0)
+            RefreshVisibleSessionSubscriptions();
+
+        _frameGenerations.Clear();
+        bool generationDirty = false;
+        if (activeTab != null)
         {
+            foreach (var leaf in _visibleLeaves)
+            {
+                if (!TryReadGeneration(leaf.Session.Adapter.Buffer, out ulong generation))
+                {
+                    generationDirty = true;
+                    continue;
+                }
+
+                _frameGenerations[leaf] = generation;
+                if (!_committedGenerations.TryGetValue(leaf, out ulong committed) || committed != generation)
+                    generationDirty = true;
+            }
+        }
+
+        bool dirty = pendingReasons != WindowFrameReason.None ||
+            generationDirty ||
+            framebufferWidth != _committedFramebufferWidth ||
+            framebufferHeight != _committedFramebufferHeight ||
+            _atlas.ContentVersion != _committedAtlasVersion;
+        if (!dirty)
+        {
+            if (now - _lastKeepalivePresentTimestampMs >= 1000)
+            {
+                _window.SwapBuffers();
+                _lastKeepalivePresentTimestampMs = now;
+            }
+            return;
+        }
+
+        WindowFrameReason consumedReasons = WindowPresentationGate.Consume();
+        try
+        {
+            if (activeTab == null)
+            {
+                _renderer.Render(
+                    ReadOnlySpan<CellInstance>.Empty,
+                    ReadOnlySpan<ChromeQuadInstance>.Empty,
+                    _atlas.Width,
+                    _atlas.Height,
+                    framebufferWidth,
+                    framebufferHeight,
+                    _cellWidth * _scale,
+                    _cellHeight * _scale,
+                    0.85f,
+                    0.7f,
+                    0.04f,
+                    _themeBackground,
+                    false);
+                _window.SwapBuffers();
+                CommitFrameStamps(framebufferWidth, framebufferHeight);
+                return;
+            }
+
+            var theme = SilkConfig.LoadActiveTheme();
+            var padding = UserConfigService.Current.Window.Padding;
+            float padLeft = (float)padding.Left * _scale;
+            float padTop = (float)padding.Top * _scale;
+            int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+
+            var frame = _sceneComposer.Compose(
+                activeTab,
+                tabManager,
+                theme,
+                _themeForeground,
+                SilkConfig.ResolveSelectionColor(theme),
+                framebufferWidth,
+                framebufferHeight,
+                _cellWidth,
+                _cellHeight,
+                _scale,
+                _rows,
+                _cols,
+                padding,
+                _showTabBar,
+                _cursorBlinkVisible,
+                _mouseController?.IsScrollbarHovered ?? false,
+                _mouseController?.IsDraggingScrollbar ?? false,
+                new SearchOverlayRenderState(
+                    _keyboardDispatcher?.SearchActive ?? false,
+                    _keyboardDispatcher?.SearchQuery ?? string.Empty,
+                    _keyboardDispatcher?.ActiveMatchIndex ?? -1,
+                    _keyboardDispatcher?.SearchMatches?.Count ?? 0),
+                _activeContextMenu,
+                _mouseController?.HoveredTabIndex ?? -1,
+                _mouseController?.HoveredTabHitType ?? TabBarHitType.None);
+
             _renderer.Render(
-                ReadOnlySpan<CellInstance>.Empty,
-                ReadOnlySpan<ChromeQuadInstance>.Empty,
+                frame.AsSpan(),
+                frame.AsChromeSpan(),
                 _atlas.Width,
                 _atlas.Height,
                 framebufferWidth,
@@ -517,12 +702,27 @@ internal static class DottyWindowHost
                 0.7f,
                 0.04f,
                 _themeBackground,
-                false);
+                true,
+                padLeft,
+                padTop,
+                barRows,
+                frame.MenuInstanceStart,
+                frame.MenuChromeStart);
             _window.SwapBuffers();
-            return;
+            CommitFrameStamps(framebufferWidth, framebufferHeight);
         }
+        catch
+        {
+            WindowPresentationGate.Requeue(consumedReasons);
+            throw;
+        }
+    }
 
-        long now = GetClockMilliseconds();
+    private static void UpdateCursorBlink(long now, bool hasActiveTab)
+    {
+        if (!hasActiveTab)
+            return;
+
         var cursorConfig = UserConfigService.Current.Cursor;
         if (cursorConfig.Blink)
         {
@@ -531,80 +731,72 @@ internal static class DottyWindowHost
             {
                 _cursorBlinkVisible = !_cursorBlinkVisible;
                 _lastCursorBlinkTimestampMs = now;
+                WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
             }
         }
-        else
+        else if (!_cursorBlinkVisible)
         {
             _cursorBlinkVisible = true;
+            _lastCursorBlinkTimestampMs = now;
+            WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
+        }
+    }
+
+    private static bool TryReadGeneration(TerminalBuffer buffer, out ulong generation)
+    {
+        bool lockTaken = false;
+        try
+        {
+            System.Threading.Monitor.TryEnter(buffer.SyncRoot, 0, ref lockTaken);
+            if (!lockTaken)
+            {
+                generation = 0;
+                return false;
+            }
+
+            generation = buffer.Generation;
+            return true;
+        }
+        finally
+        {
+            if (lockTaken)
+                System.Threading.Monitor.Exit(buffer.SyncRoot);
+        }
+    }
+
+    private static void CommitFrameStamps(int framebufferWidth, int framebufferHeight)
+    {
+        foreach (var leaf in _visibleLeaves)
+        {
+            if (_frameGenerations.TryGetValue(leaf, out ulong before) &&
+                TryReadGeneration(leaf.Session.Adapter.Buffer, out ulong after) &&
+                before == after)
+            {
+                _committedGenerations[leaf] = after;
+            }
         }
 
-        var theme = SilkConfig.LoadActiveTheme();
-        var padding = UserConfigService.Current.Window.Padding;
-        float padLeft = (float)padding.Left * _scale;
-        float padTop = (float)padding.Top * _scale;
-        int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
-
-        var frame = _sceneComposer.Compose(
-            activeTab,
-            tabManager,
-            theme,
-            _themeForeground,
-            SilkConfig.ResolveSelectionColor(theme),
-            framebufferWidth,
-            framebufferHeight,
-            _cellWidth,
-            _cellHeight,
-            _scale,
-            _rows,
-            _cols,
-            padding,
-            _showTabBar,
-            _cursorBlinkVisible,
-            _mouseController?.IsScrollbarHovered ?? false,
-            _mouseController?.IsDraggingScrollbar ?? false,
-            new SearchOverlayRenderState(
-                _keyboardDispatcher?.SearchActive ?? false,
-                _keyboardDispatcher?.SearchQuery ?? string.Empty,
-                _keyboardDispatcher?.ActiveMatchIndex ?? -1,
-                _keyboardDispatcher?.SearchMatches?.Count ?? 0),
-            _activeContextMenu,
-            _mouseController?.HoveredTabIndex ?? -1,
-            _mouseController?.HoveredTabHitType ?? TabBarHitType.None);
-
-        _renderer.Render(
-            frame.AsSpan(),
-            frame.AsChromeSpan(),
-            _atlas.Width,
-            _atlas.Height,
-            framebufferWidth,
-            framebufferHeight,
-            _cellWidth * _scale,
-            _cellHeight * _scale,
-            0.85f,
-            0.7f,
-            0.04f,
-            _themeBackground,
-            true,
-            padLeft,
-            padTop,
-            barRows,
-            frame.MenuInstanceStart,
-            frame.MenuChromeStart);
-        _window.SwapBuffers();
+        _committedFramebufferWidth = framebufferWidth;
+        _committedFramebufferHeight = framebufferHeight;
+        _committedAtlasVersion = _atlas.ContentVersion;
+        _lastKeepalivePresentTimestampMs = GetClockMilliseconds();
     }
 
     private static void OnKeyboardDown(IKeyboard keyboard, InputKey key, int scancode)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
         _keyboardController.HandleKeyDown(key, scancode);
     }
 
     private static void OnKeyboardUp(IKeyboard keyboard, InputKey key, int scancode)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input);
         _keyboardController.HandleKeyUp(key, scancode);
     }
 
     private static void OnKeyboardChar(IKeyboard keyboard, char character)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
         _keyboardController.HandleKeyChar(character);
     }
 
@@ -612,10 +804,12 @@ internal static class DottyWindowHost
     {
         _cursorBlinkVisible = true;
         _lastCursorBlinkTimestampMs = GetClockMilliseconds();
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.CursorBlink);
     }
 
     private static void OnWindowFocusChanged(bool focused)
     {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input);
         WindowFocusRouter.Route(
             ref _lastWindowFocus,
             focused,
@@ -631,17 +825,29 @@ internal static class DottyWindowHost
     private static long GetClockMilliseconds() =>
         System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
 
-    private static void OnMouseDown(IMouse mouse, MouseButton button) =>
+    private static void OnMouseDown(IMouse mouse, MouseButton button)
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseDown(mouse, button);
+    }
 
-    private static void OnMouseMove(IMouse mouse, System.Numerics.Vector2 position) =>
+    private static void OnMouseMove(IMouse mouse, System.Numerics.Vector2 position)
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseMove(mouse, position);
+    }
 
-    private static void OnMouseUp(IMouse mouse, MouseButton button) =>
+    private static void OnMouseUp(IMouse mouse, MouseButton button)
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseUp(mouse, button);
+    }
 
-    private static void OnMouseScroll(IMouse mouse, ScrollWheel wheel) =>
+    private static void OnMouseScroll(IMouse mouse, ScrollWheel wheel)
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseScroll(mouse, wheel);
+    }
 
 
     private static void CopySelectionToClipboard()
@@ -681,6 +887,12 @@ internal static class DottyWindowHost
             request.Completion.TrySetResult("ERROR host is closed");
         _window.FocusChanged -= OnWindowFocusChanged;
         UserConfigService.ConfigChanged -= OnConfigChanged;
+        foreach (var pair in _renderSubscriptions)
+            pair.Key.RenderScheduled -= pair.Value;
+        _renderSubscriptions.Clear();
+        _visibleLeaves = Array.Empty<LeafPane>();
+        _committedGenerations.Clear();
+        _frameGenerations.Clear();
         UserConfigService.Shutdown();
         _luaHost.Dispose();
 

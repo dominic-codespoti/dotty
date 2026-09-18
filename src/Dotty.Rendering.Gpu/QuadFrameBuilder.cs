@@ -119,8 +119,6 @@ public static class QuadFrameBuilder
             var cellHotSpan = source.GetRowCells(r);
             var coldSpan = source.GetRowColdCells(r);
             int rowLength = Math.Min(cols, cellHotSpan.Length);
-            int initialAtlasCount = atlas.EntryCount;
-
             int c = 0;
             while (c < rowLength)
             {
@@ -211,17 +209,15 @@ public static class QuadFrameBuilder
                 if (!(grapheme.Length == 1 && char.IsWhiteSpace(grapheme[0])))
                 {
                     var key = new GlyphKey(grapheme, typeface, textSize, style.Bold);
-                    int countBefore = atlas.EntryCount;
-                    glyphOk = atlas.EnsureGlyph(key, out glyphInfo);
+                    glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
                     if (!glyphOk)
                     {
                         glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
                     }
-                    if (glyphOk && atlas.EntryCount > countBefore)
+                    if (glyphAdded)
                     {
                         dirtyAtlasRows?.Add(r);
                     }
-
                 }
                 if (!glyphOk)
                 {

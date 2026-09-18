@@ -155,46 +155,27 @@ public static class SearchQuadBuilder
         if (!string.IsNullOrEmpty(query))
         {
             int queryLen = Math.Min(query.Length, inputColCount);
+            ReadOnlySpan<char> querySpan = query.AsSpan(0, queryLen);
             for (int i = 0; i < queryLen; i++)
             {
                 if (written >= destination.Length)
                     return written;
 
-                char ch = query[i];
-                string grapheme = ch.ToString();
-                var key = new GlyphKey(grapheme, typeface, textSize, false);
-
-                int countBefore = atlas.EntryCount;
-                bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
-                if (!glyphOk)
-                    glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-                if (glyphOk)
-                {
-                    if (atlas.EntryCount > countBefore)
-                        dirtyAtlasRows?.Add(inputRow);
-
-                    destination[written++] = new CellInstance
-                    {
-                        Col = (ushort)(inputStartCol + i),
-                        Row = (ushort)inputRow,
-                        OffX = (short)glyphInfo.LeftBearing,
-                        OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
-                        GlyphX = (short)glyphInfo.X,
-                        GlyphY = (short)glyphInfo.Y,
-                        GlyphW = (short)glyphInfo.Width,
-                        GlyphH = (short)glyphInfo.Height,
-                        FgR = OverlayTextFg.R,
-                        FgG = OverlayTextFg.G,
-                        FgB = OverlayTextFg.B,
-                        BgR = OverlayInputBg.R,
-                        BgG = OverlayInputBg.G,
-                        BgB = OverlayInputBg.B,
-                        BgA = 255
-                    };
-                }
+                EmitTextGlyph(
+                    destination,
+                    ref written,
+                    querySpan,
+                    i,
+                    inputStartCol + i,
+                    inputRow,
+                    OverlayTextFg,
+                    OverlayInputBg,
+                    typeface,
+                    textSize,
+                    atlas,
+                    dirtyAtlasRows);
             }
         }
-
         // 3. Render match count badge (e.g. "3/42")
         int badgeStartCol = (int)(layout.MatchCountRect.X / cellWidth);
         int badgeRow = (int)(layout.MatchCountRect.Y / cellHeight);
@@ -202,43 +183,25 @@ public static class SearchQuadBuilder
 
         if (!string.IsNullOrEmpty(badge))
         {
-            for (int i = 0; i < badge.Length; i++)
+            ReadOnlySpan<char> badgeSpan = badge.AsSpan();
+            for (int i = 0; i < badgeSpan.Length; i++)
             {
                 if (written >= destination.Length)
                     return written;
 
-                char ch = badge[i];
-                string grapheme = ch.ToString();
-                var key = new GlyphKey(grapheme, typeface, textSize, false);
-
-                int countBefore = atlas.EntryCount;
-                bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
-                if (!glyphOk)
-                    glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-                if (glyphOk)
-                {
-                    if (atlas.EntryCount > countBefore)
-                        dirtyAtlasRows?.Add(badgeRow);
-
-                    destination[written++] = new CellInstance
-                    {
-                        Col = (ushort)(badgeStartCol + i),
-                        Row = (ushort)badgeRow,
-                        OffX = (short)glyphInfo.LeftBearing,
-                        OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
-                        GlyphX = (short)glyphInfo.X,
-                        GlyphY = (short)glyphInfo.Y,
-                        GlyphW = (short)glyphInfo.Width,
-                        GlyphH = (short)glyphInfo.Height,
-                        FgR = OverlayMutedFg.R,
-                        FgG = OverlayMutedFg.G,
-                        FgB = OverlayMutedFg.B,
-                        BgR = OverlayBoxBg.R,
-                        BgG = OverlayBoxBg.G,
-                        BgB = OverlayBoxBg.B,
-                        BgA = 255
-                    };
-                }
+                EmitTextGlyph(
+                    destination,
+                    ref written,
+                    badgeSpan,
+                    i,
+                    badgeStartCol + i,
+                    badgeRow,
+                    OverlayMutedFg,
+                    OverlayBoxBg,
+                    typeface,
+                    textSize,
+                    atlas,
+                    dirtyAtlasRows);
             }
         }
 
@@ -250,6 +213,52 @@ public static class SearchQuadBuilder
 
         return written;
     }
+    private static void EmitTextGlyph(
+        Span<CellInstance> destination,
+        ref int written,
+        ReadOnlySpan<char> text,
+        int index,
+        int col,
+        int row,
+        SgrColorArgb fg,
+        SgrColorArgb bg,
+        SKTypeface typeface,
+        float textSize,
+        GlyphAtlas atlas,
+        HashSet<int>? dirtyAtlasRows)
+    {
+        string grapheme = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(text, index, 1);
+        var key = new GlyphKey(grapheme, typeface, textSize, false);
+        int countBefore = atlas.EntryCount;
+        bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
+        if (!glyphOk)
+            glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+        if (!glyphOk)
+            return;
+
+        if (atlas.EntryCount > countBefore)
+            dirtyAtlasRows?.Add(row);
+
+        destination[written++] = new CellInstance
+        {
+            Col = (ushort)col,
+            Row = (ushort)row,
+            OffX = (short)glyphInfo.LeftBearing,
+            OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+            GlyphX = (short)glyphInfo.X,
+            GlyphY = (short)glyphInfo.Y,
+            GlyphW = (short)glyphInfo.Width,
+            GlyphH = (short)glyphInfo.Height,
+            FgR = fg.R,
+            FgG = fg.G,
+            FgB = fg.B,
+            BgR = bg.R,
+            BgG = bg.G,
+            BgB = bg.B,
+            BgA = 255
+        };
+    }
+
     private static void RenderButtonGlyph(
         Span<CellInstance> destination,
         ref int written,

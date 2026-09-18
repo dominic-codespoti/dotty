@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using SkiaSharp;
 
 namespace Dotty.Rendering.Gpu;
@@ -69,13 +70,30 @@ public readonly struct GlyphKey : IEquatable<GlyphKey>
     public override int GetHashCode() =>
         HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Bold);
 }
+/// <summary>One changed rectangle in the A8 atlas bitmap.</summary>
+public readonly struct AtlasDirtyRegion
+{
+    public int X { get; }
+    public int Y { get; }
+    public int Width { get; }
+    public int Height { get; }
+    public AtlasDirtyRegion(int x, int y, int width, int height)
+    {
+        X = x;
+        Y = y;
+        Width = width;
+        Height = height;
+    }
+}
+
 
 /// <summary>
 /// Single-channel (A8) coverage glyph atlas. Rasterizes graphemes once per
 /// (grapheme, typeface, size, bold) key, stores tight-bounds placement
-/// metadata (bearings + advance + baseline), and packs entries into shelves
-/// with a hard size cap. All mutation and reads are lock-protected; the
-/// bitmap is only exposed for texture upload under the lock (Phase 2).
+/// with a hard size cap. Mutation and atlas packing are lock-protected.
+/// Glyph lookup reads an immutable copy-on-write map published with
+/// <see cref="Volatile.Write"/>; bitmap access remains lock-protected for
+/// texture upload.
 /// Defects of the deleted predecessor that this design fixes:
 ///  - A8 coverage instead of baked RGBA (color applied at draw time);
 ///  - no color in the key (single key contract);
@@ -96,14 +114,21 @@ public sealed class GlyphAtlas : IDisposable
     private readonly SKTypeface _typeface;
     private readonly float _textSize;
     private FontFallbackChain? _fallbackChain;
+    private GlyphMapSnapshot _publishedMap = GlyphMapSnapshot.Empty;
     private readonly Dictionary<GlyphKey, GlyphInfo> _map = new();
     private readonly List<Shelf> _shelves = new();
+    private readonly List<AtlasDirtyRegion> _dirtyRegions = new();
     private SKBitmap _bitmap;
     private SKCanvas _canvas;
+    private int _width;
+    private int _height;
     private int _nextShelfY;
     private bool _disposed;
     private GlyphInfo _fallbackGlyph;
     private bool _hasFallbackGlyph;
+    private bool _fullUploadRequired;
+    private int _contentVersion;
+
     /// <summary>Recency stamp + refcount, maintained by <see cref="GlyphAtlasService"/> under its lock.</summary>
     internal long LastUsedStamp { get; set; }
     internal int RefCount { get; set; }
@@ -119,12 +144,12 @@ public sealed class GlyphAtlas : IDisposable
     public float TextSize => _textSize;
     public FontFallbackChain? FallbackChain
     {
-        get { lock (_lock) return _fallbackChain; }
-        set { lock (_lock) _fallbackChain = value; }
+        get => Volatile.Read(ref _fallbackChain);
+        set => Volatile.Write(ref _fallbackChain, value);
     }
-    public int Width => _bitmap.Width;
-    public int Height => _bitmap.Height;
-    public long SizeBytes => (long)_bitmap.Width * _bitmap.Height; // A8: 1 byte/px
+    public int Width => Volatile.Read(ref _width);
+    public int Height => Volatile.Read(ref _height);
+    public long SizeBytes => (long)Width * Height; // A8: 1 byte/px
     public int EntryCount
     {
         get
@@ -135,8 +160,9 @@ public sealed class GlyphAtlas : IDisposable
     }
     /// <summary>
     /// The A8 atlas bitmap. Callers must hold the atlas reference (service
-    /// Acquire) and take the <see cref="TryGetGlyph"/>-style lock discipline
-    /// around any read or texture upload.
+    /// Acquire) and use <see cref="WithAtlasBitmap"/> or
+    /// <see cref="WithAtlasUpdates"/> when reading pixels, so growth cannot
+    /// dispose the bitmap during the read.
     /// </summary>
     public SKBitmap AtlasBitmap { get { lock (_lock) return _bitmap; } }
 
@@ -157,14 +183,55 @@ public sealed class GlyphAtlas : IDisposable
         }
     }
 
+    /// <summary>
+    /// Gives the texture uploader a stable bitmap and all changed regions since
+    /// its previous call. The regions are retired only after the callback
+    /// succeeds, so an upload failure can be retried without losing pixels.
+    /// </summary>
+    public int WithAtlasUpdates(Action<SKBitmap, IReadOnlyList<AtlasDirtyRegion>, bool> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            bool completed = false;
+            try
+            {
+                action(_bitmap, _dirtyRegions, _fullUploadRequired);
+                completed = true;
+                return ContentVersion;
+            }
+            finally
+            {
+                if (completed)
+                {
+                    _dirtyRegions.Clear();
+                    _fullUploadRequired = false;
+                }
+            }
+        }
+    }
+
     /// <summary>Returns the pre-reserved tofu glyph used when the atlas is full.</summary>
     public bool TryGetFallbackGlyph(out GlyphInfo info)
     {
-        lock (_lock)
+        if (Volatile.Read(ref _hasFallbackGlyph))
         {
             info = _fallbackGlyph;
-            return _hasFallbackGlyph;
+            return true;
         }
+
+        info = default;
+        return false;
+    }
+
+    private sealed class GlyphMapSnapshot
+    {
+        public static readonly GlyphMapSnapshot Empty = new(new Dictionary<GlyphKey, GlyphInfo>());
+        private readonly Dictionary<GlyphKey, GlyphInfo> _entries;
+
+        public GlyphMapSnapshot(Dictionary<GlyphKey, GlyphInfo> entries) => _entries = entries;
+        public bool TryGetValue(GlyphKey key, out GlyphInfo info) => _entries.TryGetValue(key, out info);
     }
 
     private struct Shelf
@@ -179,7 +246,10 @@ public sealed class GlyphAtlas : IDisposable
         _typeface = typeface ?? SKTypeface.Default;
         _textSize = textSize > 0 ? textSize : 12f;
         _fallbackChain = fallbackChain;
-        _bitmap = CreateAtlasBitmap(Math.Clamp(initialSize, 64, MaxAtlasSize));
+        int size = Math.Clamp(initialSize, 64, MaxAtlasSize);
+        _bitmap = CreateAtlasBitmap(size);
+        _width = size;
+        _height = size;
         _canvas = new SKCanvas(_bitmap);
 
         // Reserve a replacement glyph before normal content can fill the
@@ -189,7 +259,7 @@ public sealed class GlyphAtlas : IDisposable
         if (EnsureGlyph(fallbackKey, out var fallbackGlyph))
         {
             _fallbackGlyph = fallbackGlyph;
-            _hasFallbackGlyph = true;
+            Volatile.Write(ref _hasFallbackGlyph, true);
         }
     }
 
@@ -202,10 +272,10 @@ public sealed class GlyphAtlas : IDisposable
 
     public bool TryGetGlyph(GlyphKey key, out GlyphInfo info)
     {
-        lock (_lock)
-        {
-            return _map.TryGetValue(key, out info);
-        }
+        // Published snapshots are never mutated after publication. This is
+        // deliberately outside _lock: the render thread's hit path takes no
+        // monitor and never probes the writer-owned dictionary.
+        return Volatile.Read(ref _publishedMap).TryGetValue(key, out info);
     }
 
     /// <summary>
@@ -215,40 +285,29 @@ public sealed class GlyphAtlas : IDisposable
     /// replacement in that case.
     /// </summary>
     public bool EnsureGlyph(GlyphKey key, out GlyphInfo info)
+        => EnsureGlyph(key, out info, out _);
+
+    /// <summary>
+    /// Ensures a glyph and reports whether this call inserted a new atlas
+    /// entry. Existing entries use the lock-free published-map path.
+    /// </summary>
+    public bool EnsureGlyph(GlyphKey key, out GlyphInfo info, out bool added)
     {
-        lock (_lock)
+        added = false;
+        if (Volatile.Read(ref _publishedMap).TryGetValue(key, out info))
+            return true;
+
+        info = default;
+        if (string.IsNullOrEmpty(key.Grapheme))
+            return false;
+
+        // Rasterization intentionally happens before taking the atlas lock.
+        // A concurrent miss may rasterize the same glyph, but the commit
+        // recheck below ensures only one copy is packed and published.
+        var raster = RasterizeTight(ResolveEffectiveKey(key));
+        using (raster.Image)
         {
-            if (_map.TryGetValue(key, out info)) return true;
-
-            info = default;
-            if (string.IsNullOrEmpty(key.Grapheme)) return false;
-
-            var effectiveKey = ResolveEffectiveKey(key);
-            var raster = RasterizeTight(effectiveKey);
-            using (raster.Image)
-            {
-                if (raster.Width <= 0 || raster.Height <= 0) return false;
-                if (raster.Width > MaxGlyphDimension || raster.Height > MaxGlyphDimension) return false;
-                if (!TryPlace(raster.Width, raster.Height, out int x, out int y)) return false;
-
-                _canvas.DrawImage(
-                    raster.Image,
-                    new SKRect(raster.Left, raster.Top, raster.Left + raster.Width, raster.Top + raster.Height),
-                    new SKRect(x, y, x + raster.Width, y + raster.Height),
-                    new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
-                    _rasterBlitPaint);
-                _canvas.Flush();
-
-                info = new GlyphInfo(
-                    x, y, raster.Width, raster.Height,
-                    raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
-                _map[key] = info;
-                // Content changed (not just capacity): consumers holding a
-                // derived GPU image of the atlas (QuadGlyphRenderer's RGBA
-                // twin) must rebuild or the new glyph is invisible.
-                ContentVersion++;
-                return true;
-            }
+            return CommitRasterizedGlyph(key, raster, out info, out added);
         }
     }
 
@@ -256,7 +315,7 @@ public sealed class GlyphAtlas : IDisposable
     /// Bumped on every successful glyph placement (not only growth). Derived
     /// copies of the atlas pixels key their freshness on this.
     /// </summary>
-    public int ContentVersion { get; private set; }
+    public int ContentVersion => Volatile.Read(ref _contentVersion);
 
     // Per-atlas blit paint: SkiaSharp paints are not thread-safe and atlases
     // are used concurrently by tests (and eventually by multiple views).
@@ -269,36 +328,63 @@ public sealed class GlyphAtlas : IDisposable
     /// </summary>
     public bool EnsureGlyphShaped(GlyphKey key, SKTextBlob blob, out GlyphInfo info)
     {
+        if (Volatile.Read(ref _publishedMap).TryGetValue(key, out info))
+            return true;
+
+        info = default;
+        if (string.IsNullOrEmpty(key.Grapheme) || blob == null)
+            return false;
+
+        var raster = RasterizeTightShaped(key, blob);
+        using (raster.Image)
+        {
+            return CommitRasterizedGlyph(key, raster, out info, out _);
+        }
+    }
+
+    private bool CommitRasterizedGlyph(
+        GlyphKey key,
+        in GlyphRaster raster,
+        out GlyphInfo info,
+        out bool added)
+    {
+        added = false;
+        info = default;
+        if (raster.Width <= 0 || raster.Height <= 0
+            || raster.Width > MaxGlyphDimension || raster.Height > MaxGlyphDimension)
+        {
+            return false;
+        }
+
         lock (_lock)
         {
-            if (_map.TryGetValue(key, out info)) return true;
-
-            info = default;
-            if (string.IsNullOrEmpty(key.Grapheme) || blob == null) return false;
-
-            var raster = RasterizeTightShaped(key, blob);
-            using (raster.Image)
-            {
-                if (raster.Width <= 0 || raster.Height <= 0) return false;
-                if (raster.Width > MaxGlyphDimension || raster.Height > MaxGlyphDimension) return false;
-
-                if (!TryPlace(raster.Width, raster.Height, out int x, out int y)) return false;
-
-                _canvas.DrawImage(
-                    raster.Image,
-                    new SKRect(raster.Left, raster.Top, raster.Left + raster.Width, raster.Top + raster.Height),
-                    new SKRect(x, y, x + raster.Width, y + raster.Height),
-                    new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
-                    _rasterBlitPaint);
-                _canvas.Flush();
-
-                info = new GlyphInfo(
-                    x, y, raster.Width, raster.Height,
-                    raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
-                _map[key] = info;
-                ContentVersion++;
+            if (_map.TryGetValue(key, out info))
                 return true;
-            }
+
+            if (!TryPlace(raster.Width, raster.Height, out int x, out int y))
+                return false;
+
+            _canvas.DrawImage(
+                raster.Image,
+                new SKRect(raster.Left, raster.Top, raster.Left + raster.Width, raster.Top + raster.Height),
+                new SKRect(x, y, x + raster.Width, y + raster.Height),
+                new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
+                _rasterBlitPaint);
+            _canvas.Flush();
+
+            info = new GlyphInfo(
+                x, y, raster.Width, raster.Height,
+                raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
+            _map[key] = info;
+
+            int nextVersion = unchecked(_contentVersion + 1);
+            Volatile.Write(ref _contentVersion, nextVersion);
+            // Copy-on-write publication: this dictionary is never mutated
+            // after the volatile write.
+            Volatile.Write(ref _publishedMap, new GlyphMapSnapshot(new Dictionary<GlyphKey, GlyphInfo>(_map)));
+            _dirtyRegions.Add(new AtlasDirtyRegion(x, y, raster.Width, raster.Height));
+            added = true;
+            return true;
         }
     }
 
@@ -331,12 +417,13 @@ public sealed class GlyphAtlas : IDisposable
     /// </summary>
     private GlyphKey ResolveEffectiveKey(GlyphKey key)
     {
-        if (_fallbackChain == null || string.IsNullOrEmpty(key.Grapheme))
+        var fallbackChain = Volatile.Read(ref _fallbackChain);
+        if (fallbackChain == null || string.IsNullOrEmpty(key.Grapheme))
         {
             return key;
         }
 
-        var resolvedTypeface = _fallbackChain.ResolveTypefaceForGrapheme(key.Grapheme, key.Bold);
+        var resolvedTypeface = fallbackChain.ResolveTypefaceForGrapheme(key.Grapheme, key.Bold);
         if (resolvedTypeface != null && !ReferenceEquals(resolvedTypeface, key.Typeface))
         {
             return new GlyphKey(key.Grapheme, resolvedTypeface, key.TextSize, key.Bold);
@@ -476,7 +563,6 @@ public sealed class GlyphAtlas : IDisposable
     /// <summary>
     /// Doubles the atlas (capped at <see cref="MaxAtlasSize"/>), preserving
     /// existing entries. Returns false when the cap is reached.
-    /// </summary>
     private bool Grow()
     {
         int newSize = _bitmap.Width * 2;
@@ -492,7 +578,13 @@ public sealed class GlyphAtlas : IDisposable
         _bitmap.Dispose();
         _bitmap = bigger;
         _canvas = new SKCanvas(_bitmap);
+        _width = newSize;
+        _height = newSize;
         Generation++;
+        // Existing content is now on a replacement bitmap. Earlier dirty
+        // rectangles are superseded by one required full allocation upload.
+        _dirtyRegions.Clear();
+        _fullUploadRequired = true;
         return true;
     }
 

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using Dotty.Abstractions.Config;
 using Dotty.Rendering.Gpu;
 using SkiaSharp;
@@ -189,12 +191,36 @@ public static class TabBarQuadBuilder
             float remainingWidth = Math.Max(0f, tabLayout.TextBounds.Right - textStartX);
             int maxChars = (int)Math.Max(1, remainingWidth / cellWidth);
             string title = tab.Title ?? "Terminal";
-            if (title.Length > maxChars)
+            int titleLength = title.Length;
+            bool appendEllipsis = false;
+            if (titleLength > maxChars)
             {
-                title = maxChars > 3 ? string.Concat(title.AsSpan(0, maxChars - 1), "…") : title.Substring(0, maxChars);
+                if (maxChars > 3)
+                {
+                    titleLength = maxChars - 1;
+                    appendEllipsis = true;
+                }
+                else
+                {
+                    titleLength = maxChars;
+                }
             }
 
-            EmitString(destination, ref written, title, textStartX, textBaselineRow, titleFg, isBold: isActive, cellWidth, typeface, fontSize, atlas, tabTextOffsetY);
+            EmitString(
+                destination,
+                ref written,
+                title,
+                textStartX,
+                textBaselineRow,
+                titleFg,
+                isBold: isActive,
+                cellWidth,
+                typeface,
+                fontSize,
+                atlas,
+                tabTextOffsetY,
+                titleLength,
+                appendEllipsis);
 
             // Close button (×): circular hover backdrop, then glyph
             bool closeHovered = hoveredTabIndex == i && hoveredHitType == TabBarHitType.CloseTab;
@@ -290,21 +316,25 @@ public static class TabBarQuadBuilder
         SKTypeface typeface,
         float fontSize,
         GlyphAtlas atlas,
-        float extraOffsetY = 0f)
+        float extraOffsetY = 0f,
+        int maxUtf16Length = -1,
+        bool appendEllipsis = false)
     {
         if (string.IsNullOrEmpty(text)) return;
         ExtractRgb(fgColor, out byte fgR, out byte fgG, out byte fgB);
 
+        ReadOnlySpan<char> span = text.AsSpan();
+        int textLength = maxUtf16Length < 0 ? span.Length : Math.Min(maxUtf16Length, span.Length);
         float curX = startPxX;
-        for (int i = 0; i < text.Length;)
+        for (int i = 0; i < textLength;)
         {
             if (written >= destination.Length) break;
 
-            int len = char.IsSurrogatePair(text, i) ? 2 : 1;
-            string grapheme = text.Substring(i, len);
+            int len = i + 1 < textLength && char.IsSurrogatePair(span[i], span[i + 1]) ? 2 : 1;
+            string grapheme = GlyphTextCache.Get(span, i, len);
             i += len;
 
-            if (char.IsWhiteSpace(grapheme[0]))
+            if (char.IsWhiteSpace(span[i - len]))
             {
                 curX += cellWidth;
                 continue;
@@ -340,6 +370,71 @@ public static class TabBarQuadBuilder
             };
 
             curX += glyphInfo.Advance > 0 ? glyphInfo.Advance : cellWidth;
+        }
+
+        if (appendEllipsis && written < destination.Length)
+        {
+            EmitString(
+                destination,
+                ref written,
+                "…",
+                curX,
+                baselineRow,
+                fgColor,
+                isBold,
+                cellWidth,
+                typeface,
+                fontSize,
+                atlas,
+                extraOffsetY);
+        }
+    }
+
+    internal static class GlyphTextCache
+    {
+        private static readonly string?[] Ascii = new string?[128];
+        private static readonly Dictionary<char, string> UnicodeSingles = new();
+        private static readonly Dictionary<int, string> SurrogatePairs = new();
+        private static readonly object UnicodeLock = new();
+        private static readonly object PairLock = new();
+
+        internal static string Get(ReadOnlySpan<char> text, int index, int length)
+        {
+            if (length == 1)
+            {
+                char value = text[index];
+                if (value < Ascii.Length)
+                {
+                    string? cached = Ascii[value];
+                    if (cached != null) return cached;
+
+                    string created = text.Slice(index, 1).ToString();
+                    return Interlocked.CompareExchange(ref Ascii[value], created, null) ?? created;
+                }
+
+                lock (UnicodeLock)
+                {
+                    if (UnicodeSingles.TryGetValue(value, out string? cached))
+                        return cached;
+
+                    string created = text.Slice(index, 1).ToString();
+                    UnicodeSingles.Add(value, created);
+                    return created;
+                }
+            }
+
+            char first = text[index];
+            char second = text[index + 1];
+            int pair = (first << 16) | second;
+            lock (PairLock)
+            {
+                if (SurrogatePairs.TryGetValue(pair, out string? cached))
+                    return cached;
+
+                string created = text.Slice(index, 2).ToString();
+                SurrogatePairs.Add(pair, created);
+                return created;
+            }
         }
     }
 }

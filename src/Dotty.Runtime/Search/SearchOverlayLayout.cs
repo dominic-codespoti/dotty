@@ -11,6 +11,37 @@ public readonly record struct SearchOverlayLayout
     public const float DefaultWidth = 320f;
     public const float DefaultHeight = 36f;
     public const float DefaultMarginRight = 16f;
+    private readonly record struct BadgeKey(
+        int ActiveMatchIndex,
+        int TotalMatches,
+        bool SearchActive);
+
+    private static readonly object BadgeCacheLock = new();
+    private static BadgeKey _badgeKey;
+    private static string? _badgeText;
+    private static bool _hasBadgeKey;
+
+    private static string GetBadgeText(string? query, int activeMatchIndex, int totalMatches)
+    {
+        var key = new BadgeKey(
+            activeMatchIndex,
+            totalMatches,
+            !string.IsNullOrEmpty(query));
+
+        lock (BadgeCacheLock)
+        {
+            if (_hasBadgeKey && key.Equals(_badgeKey))
+                return _badgeText!;
+
+            _badgeKey = key;
+            _hasBadgeKey = true;
+            _badgeText = totalMatches > 0
+                ? $"{(activeMatchIndex >= 0 ? activeMatchIndex + 1 : 0)}/{totalMatches}"
+                : "0/0";
+            return _badgeText;
+        }
+    }
+
     public const float DefaultMarginTop = 8f;
 
     /// <summary>Total width in pixels.</summary>
@@ -73,9 +104,7 @@ public readonly record struct SearchOverlayLayout
         float x = Math.Max(0f, viewportWidth - width - marginRight);
         float y = marginTop;
 
-        string badge = totalMatches > 0
-            ? $"{(activeMatchIndex >= 0 ? activeMatchIndex + 1 : 0)}/{totalMatches}"
-            : "0/0";
+        string badge = GetBadgeText(query, activeMatchIndex, totalMatches);
 
         // Internal layout:
         // [ Input text area (~160px) | Match Badge (~60px) | Prev ▲ (24px) | Next ▼ (24px) | Close × (28px) ]

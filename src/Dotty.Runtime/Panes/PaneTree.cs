@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using Dotty.Runtime.Sessions;
 
 namespace Dotty.Runtime.Panes;
@@ -8,6 +9,20 @@ public sealed class PaneTree : IDisposable
 {
     private PaneNode _root;
     private LeafPane _activePane;
+    // Leaves is a snapshot view cached until Split or Close changes the node
+    // topology. Layout only changes bounds/session sizes, not the leaf set.
+    private List<LeafPane>? _leaves;
+    private ReadOnlyCollection<LeafPane>? _leavesView;
+
+    // The only topology mutations in this class are Split's root/child
+    // replacement and Close's root/child replacement. Both call
+    // InvalidateLeaves before returning; constructors establish the initial
+    // root and Layout never replaces a node.
+    private void InvalidateLeaves()
+    {
+        _leaves = null;
+        _leavesView = null;
+    }
     private bool _isDisposed;
 
     public PaneNode Root => _root;
@@ -28,9 +43,16 @@ public sealed class PaneTree : IDisposable
     {
         get
         {
-            var list = new List<LeafPane>();
-            CollectLeaves(_root, list);
-            return list;
+            if (_leavesView != null)
+            {
+                return _leavesView;
+            }
+
+            var leaves = _leaves ?? new List<LeafPane>();
+            CollectLeaves(_root, leaves);
+            _leaves = leaves;
+            _leavesView = new ReadOnlyCollection<LeafPane>(leaves);
+            return _leavesView;
         }
     }
 
@@ -78,6 +100,7 @@ public sealed class PaneTree : IDisposable
             parent.ReplaceChild(target, splitNode);
         }
 
+        InvalidateLeaves();
         ActivePane = newPane;
         return newPane;
     }
@@ -112,6 +135,7 @@ public sealed class PaneTree : IDisposable
         {
             grandParent.ReplaceChild(parent, sibling);
         }
+        InvalidateLeaves();
 
         target.Dispose();
 

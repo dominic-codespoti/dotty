@@ -15,6 +15,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private uint _ebo;
     private uint _instanceVbo;
     private uint _vao;
+    private uint _menuVao;
 
     private int _uFramebufferPx;
     private int _uCellPx;
@@ -35,6 +36,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private int _drawInstanceCount;
     private int _drawMenuStart;
     private int _drawMenuCount;
+    private int _instanceBufferCapacityBytes;
+    private int _stagedMenuInstanceStart = -1;
+    private int _menuAttribStart = -1;
 
     private const int ChromeFloatsPerInstance = 14;
     private uint _chromeProgram;
@@ -42,11 +46,42 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private uint _chromeEbo;
     private uint _chromeInstanceVbo;
     private uint _chromeVao;
+    private uint _chromeMenuVao;
     private int _uChromeFramebufferPx;
     private float[] _chromeStaging = Array.Empty<float>();
     private float _lastFramebufferWidth;
     private float _lastFramebufferHeight;
+    private int _chromeBufferCapacityBytes;
+    private int _chromeMenuAttribStart = -1;
 
+    // These caches are valid for the lifetime of this renderer/context. Every
+    // operation that can change the cached state in this class updates them.
+    private uint _boundProgram = uint.MaxValue;
+    private uint _boundVao = uint.MaxValue;
+    private uint _boundTexture = uint.MaxValue;
+    private TextureUnit _activeTextureUnit = TextureUnit.Texture0;
+    private bool _activeTextureSet;
+    private bool _cellFramebufferSet;
+    private float _cachedCellFramebufferW;
+    private float _cachedCellFramebufferH;
+    private bool _cellSizeSet;
+    private float _cachedCellW;
+    private float _cachedCellH;
+    private bool _atlasSizeSet;
+    private float _cachedAtlasW;
+    private float _cachedAtlasH;
+    private bool _underlineSet;
+    private float _cachedUnderline;
+    private bool _strikeSet;
+    private float _cachedStrike;
+    private bool _lineHalfSet;
+    private float _cachedLineHalf;
+    private bool _passSet;
+    private int _cachedPass;
+    private bool _atlasSamplerSet;
+    private bool _chromeFramebufferSet;
+    private float _cachedChromeFramebufferW;
+    private float _cachedChromeFramebufferH;
 
     public SilkGlTextureManager TextureManager { get; }
 
@@ -75,11 +110,10 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     }
 
     public void SetAtlas(GlyphAtlas atlas) => TextureManager.SetAtlas(atlas);
-
     private void InitBuffers()
     {
         _vao = _gl.GenVertexArray();
-        _gl.BindVertexArray(_vao);
+        BindVertexArray(_vao);
 
         float[] corners = { 0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f };
         _cornerVbo = _gl.GenBuffer();
@@ -101,15 +135,25 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         }
 
         _instanceVbo = _gl.GenBuffer();
-        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instanceVbo);
-        SetupInstanceAttribs();
+        ConfigureInstanceAttribs(_vao, 0);
+
+        // OpenGL 3.3 has no base-instance draw entry point. The menu VAO
+        // provides the equivalent instance offset without changing attribute
+        // pointers between draw calls.
+        _menuVao = _gl.GenVertexArray();
+        BindVertexArray(_menuVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _cornerVbo);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _ebo);
+        ConfigureInstanceAttribs(_menuVao, 0);
     }
 
-    private void SetupInstanceAttribs(uint baseInstance = 0)
+    private void ConfigureInstanceAttribs(uint vao, uint baseInstance)
     {
-        // VertexAttribPointer captures the currently bound ARRAY_BUFFER, so the
-        // instance buffer must be bound here: chrome draws leave their own VBO
-        // bound and would otherwise re-point the glyph attributes at chrome data.
+        BindVertexArray(vao);
+        // VertexAttribPointer captures ARRAY_BUFFER in the VAO. Keep this
+        // explicit so neither setup path can accidentally capture chrome data.
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instanceVbo);
         uint stride = FloatsPerInstance * sizeof(float);
         uint baseOffset = baseInstance * stride;
@@ -143,10 +187,19 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         _gl.VertexAttribDivisor(6, 1);
     }
 
+    private void EnsureMenuInstanceAttribs(int firstInstance)
+    {
+        if (firstInstance == _menuAttribStart)
+            return;
+
+        ConfigureInstanceAttribs(_menuVao, checked((uint)firstInstance));
+        _menuAttribStart = firstInstance;
+    }
+
     private void InitChromeBuffers()
     {
         _chromeVao = _gl.GenVertexArray();
-        _gl.BindVertexArray(_chromeVao);
+        BindVertexArray(_chromeVao);
 
         float[] corners = { 0f, 0f, 1f, 0f, 1f, 1f, 0f, 1f };
         _chromeCornerVbo = _gl.GenBuffer();
@@ -168,19 +221,28 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         }
 
         _chromeInstanceVbo = _gl.GenBuffer();
-        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _chromeInstanceVbo);
-        SetupChromeInstanceAttribs();
+        ConfigureChromeInstanceAttribs(_chromeVao, 0);
+
+        _chromeMenuVao = _gl.GenVertexArray();
+        BindVertexArray(_chromeMenuVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _chromeCornerVbo);
+        _gl.EnableVertexAttribArray(0);
+        _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, 2 * sizeof(float), (void*)0);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _chromeEbo);
+        ConfigureChromeInstanceAttribs(_chromeMenuVao, 0);
     }
 
-    private void SetupChromeInstanceAttribs()
+    private void ConfigureChromeInstanceAttribs(uint vao, uint baseInstance)
     {
+        BindVertexArray(vao);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _chromeInstanceVbo);
         uint stride = ChromeFloatsPerInstance * sizeof(float);
+        uint baseOffset = baseInstance * stride;
 
         void Attrib(uint loc, int size, uint offsetFloats)
         {
             _gl.EnableVertexAttribArray(loc);
-            _gl.VertexAttribPointer(loc, size, VertexAttribPointerType.Float, false, stride, (void*)(offsetFloats * sizeof(float)));
+            _gl.VertexAttribPointer(loc, size, VertexAttribPointerType.Float, false, stride, (void*)(baseOffset + offsetFloats * sizeof(float)));
             _gl.VertexAttribDivisor(loc, 1);
         }
 
@@ -189,6 +251,16 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         Attrib(3, 4, 6);   // aColorTop (r, g, b, a)
         Attrib(4, 4, 10);  // aColorBottom (r, g, b, a)
     }
+
+    private void EnsureMenuChromeAttribs(int firstInstance)
+    {
+        if (firstInstance == _chromeMenuAttribStart)
+            return;
+
+        ConfigureChromeInstanceAttribs(_chromeMenuVao, checked((uint)firstInstance));
+        _chromeMenuAttribStart = firstInstance;
+    }
+
 
     public void Render(
         ReadOnlySpan<CellInstance> instances,
@@ -232,6 +304,10 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         {
             _instanceBufferDirty = true;
         }
+        if (menuInstanceStart != _stagedMenuInstanceStart)
+        {
+            _instanceBufferDirty = true;
+        }
 
         _lastFramebufferWidth = framebufferWidth;
         _lastFramebufferHeight = framebufferHeight;
@@ -240,16 +316,15 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
         uint texId = TextureManager.UpdateTexture();
-        _gl.UseProgram(_program);
-        _gl.Uniform2(_uFramebufferPx, (float)framebufferWidth, (float)framebufferHeight);
-        _gl.Uniform2(_uCellPx, cellW, cellH);
-        _gl.Uniform2(_uAtlasSize, (float)atlasWidth, (float)atlasHeight);
-        _gl.Uniform1(_uUnderlineY, underlineY);
-        _gl.Uniform1(_uStrikeY, strikeY);
-        _gl.Uniform1(_uLineHalf, lineHalf);
-        _gl.ActiveTexture(TextureUnit.Texture0);
-        _gl.BindTexture(TextureTarget.Texture2D, texId);
-        _gl.Uniform1(_uAtlas, 0);
+        UseProgram(_program);
+        Uniform2CellFramebuffer((float)framebufferWidth, (float)framebufferHeight);
+        Uniform2CellSize(cellW, cellH);
+        Uniform2AtlasSize((float)atlasWidth, (float)atlasHeight);
+        Uniform1Underline(underlineY);
+        Uniform1Strike(strikeY);
+        Uniform1LineHalf(lineHalf);
+        BindAtlasTexture(texId);
+        Uniform1AtlasSampler();
 
         UploadAndDraw(
             cellW,
@@ -273,17 +348,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         int menuChromeStart)
     {
         int cellCount = _lastInstanceCount;
-        if (cellCount == 0)
-        {
-            DrawChrome(chromeQuads);
-            return;
-        }
-
-        if (_instanceBufferDirty)
+        if (cellCount > 0 && _instanceBufferDirty)
         {
             // Worst case: every cell has a decoration instance appended.
-            int maxInstances = cellCount * 2;
-            int maxFloats = maxInstances * FloatsPerInstance;
+            int maxInstances = checked(cellCount * 2);
+            int maxFloats = checked(maxInstances * FloatsPerInstance);
             if (_staging.Length < maxFloats)
             {
                 _staging = new float[maxFloats];
@@ -361,22 +430,37 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 menuOutputStart = outputInstanceCount;
             }
 
-            int uploadFloats = outputInstanceCount * FloatsPerInstance;
-            _gl.BindVertexArray(_vao);
+            int uploadBytes = checked(outputInstanceCount * FloatsPerInstance * sizeof(float));
+            BindVertexArray(_vao);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instanceVbo);
+            EnsureBufferCapacity(ref _instanceBufferCapacityBytes, uploadBytes);
             fixed (float* fp = stagingArr)
             {
+                // Orphan the retained allocation, then transfer only the used
+                // range. This avoids reallocating/copying unused capacity.
                 _gl.BufferData(
                     BufferTargetARB.ArrayBuffer,
-                    (nuint)(uploadFloats * sizeof(float)),
-                    fp,
+                    (nuint)_instanceBufferCapacityBytes,
+                    (void*)0,
                     BufferUsageARB.DynamicDraw);
+                if (uploadBytes > 0)
+                {
+                    _gl.BufferSubData(
+                        BufferTargetARB.ArrayBuffer,
+                        0,
+                        (nuint)uploadBytes,
+                        fp);
+                }
             }
 
-            SetupInstanceAttribs();
             _drawInstanceCount = outputInstanceCount;
             _drawMenuStart = menuOutputStart;
             _drawMenuCount = menuOutputStart >= 0 ? outputInstanceCount - menuOutputStart : 0;
+            if (_drawMenuStart >= 0)
+            {
+                EnsureMenuInstanceAttribs(_drawMenuStart);
+            }
+            _stagedMenuInstanceStart = menuInstanceStart;
             _stagedCellW = cellW;
             _stagedCellH = cellH;
             _instanceBufferDirty = false;
@@ -392,32 +476,35 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             ? Math.Clamp(menuChromeStart, 0, chromeQuads.Length)
             : chromeQuads.Length;
 
-        DrawCellRange(0, baseInstanceCount, pass: 0);
+        UploadChrome(chromeQuads);
+
+        DrawCellRange(0, baseInstanceCount, pass: 0, menuVao: false);
         if (baseChromeCount > 0)
         {
-            DrawChrome(chromeQuads[..baseChromeCount]);
+            DrawChromeRange(0, baseChromeCount, menuVao: false);
         }
 
-        DrawCellRange(0, baseInstanceCount, pass: 1);
+        DrawCellRange(0, baseInstanceCount, pass: 1, menuVao: false);
         if (baseChromeCount < chromeQuads.Length)
         {
-            DrawChrome(chromeQuads[baseChromeCount..]);
+            EnsureMenuChromeAttribs(baseChromeCount);
+            DrawChromeRange(baseChromeCount, chromeQuads.Length - baseChromeCount, menuVao: true);
         }
 
         if (hasMenuOverlay && _drawMenuCount > 0)
         {
-            DrawCellRange(_drawMenuStart, _drawMenuCount, pass: 1);
+            DrawCellRange(_drawMenuStart, _drawMenuCount, pass: 1, menuVao: true);
         }
     }
-    private void DrawCellRange(int firstInstance, int instanceCount, int pass)
+
+    private void DrawCellRange(int firstInstance, int instanceCount, int pass, bool menuVao)
     {
         if (instanceCount <= 0)
             return;
 
-        _gl.UseProgram(_program);
-        _gl.BindVertexArray(_vao);
-        SetupInstanceAttribs((uint)firstInstance);
-        _gl.Uniform1(_uPass, pass);
+        UseProgram(_program);
+        BindVertexArray(menuVao ? _menuVao : _vao);
+        Uniform1Pass(pass);
         _gl.DrawElementsInstanced(
             PrimitiveType.Triangles,
             6,
@@ -426,15 +513,13 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             (uint)instanceCount);
     }
 
-    private void DrawChrome(ReadOnlySpan<ChromeQuadInstance> chromeQuads)
+    private void UploadChrome(ReadOnlySpan<ChromeQuadInstance> chromeQuads)
     {
         if (chromeQuads.IsEmpty)
-        {
             return;
-        }
 
         int count = chromeQuads.Length;
-        int floats = count * ChromeFloatsPerInstance;
+        int floats = checked(count * ChromeFloatsPerInstance);
         if (_chromeStaging.Length < floats)
         {
             _chromeStaging = new float[floats];
@@ -461,33 +546,207 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             staging[o + 13] = q.BottomA;
         }
 
-        _gl.UseProgram(_chromeProgram);
-        _gl.Uniform2(_uChromeFramebufferPx, _lastFramebufferWidth, _lastFramebufferHeight);
-        _gl.BindVertexArray(_chromeVao);
+        int uploadBytes = checked(floats * sizeof(float));
+        BindVertexArray(_chromeVao);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _chromeInstanceVbo);
+        EnsureBufferCapacity(ref _chromeBufferCapacityBytes, uploadBytes);
         fixed (float* fp = staging)
         {
             _gl.BufferData(
                 BufferTargetARB.ArrayBuffer,
-                (nuint)(floats * sizeof(float)),
-                fp,
+                (nuint)_chromeBufferCapacityBytes,
+                (void*)0,
                 BufferUsageARB.DynamicDraw);
+            _gl.BufferSubData(
+                BufferTargetARB.ArrayBuffer,
+                0,
+                (nuint)uploadBytes,
+                fp);
         }
-        SetupChromeInstanceAttribs();
+    }
 
+    private void DrawChromeRange(int firstInstance, int instanceCount, bool menuVao)
+    {
+        if (instanceCount <= 0)
+            return;
+
+        UseProgram(_chromeProgram);
+        Uniform2ChromeFramebuffer(_lastFramebufferWidth, _lastFramebufferHeight);
+        BindVertexArray(menuVao ? _chromeMenuVao : _chromeVao);
         _gl.DrawElementsInstanced(
             PrimitiveType.Triangles,
             6,
             DrawElementsType.UnsignedShort,
             null,
-            (uint)count);
+            (uint)instanceCount);
     }
 
 
 
+    private static void EnsureBufferCapacity(ref int capacityBytes, int requiredBytes)
+    {
+        if (requiredBytes <= capacityBytes)
+            return;
+
+        int capacity = capacityBytes == 0 ? 4096 : capacityBytes;
+        while (capacity < requiredBytes)
+        {
+            capacity = capacity <= int.MaxValue / 2
+                ? capacity * 2
+                : requiredBytes;
+        }
+
+        capacityBytes = capacity;
+    }
+
+    private void UseProgram(uint program)
+    {
+        if (_boundProgram != program)
+        {
+            _gl.UseProgram(program);
+            _boundProgram = program;
+        }
+    }
+
+    private void BindVertexArray(uint vao)
+    {
+        if (_boundVao != vao)
+        {
+            _gl.BindVertexArray(vao);
+            _boundVao = vao;
+        }
+    }
+
+    private void BindAtlasTexture(uint texture)
+    {
+        if (!_activeTextureSet || _activeTextureUnit != TextureUnit.Texture0)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture0);
+            _activeTextureUnit = TextureUnit.Texture0;
+            _activeTextureSet = true;
+        }
+
+        if (_boundTexture != texture)
+        {
+            _gl.BindTexture(TextureTarget.Texture2D, texture);
+            _boundTexture = texture;
+        }
+    }
+
+    private void Uniform2CellFramebuffer(float width, float height)
+    {
+        if (_cellFramebufferSet && _cachedCellFramebufferW == width && _cachedCellFramebufferH == height)
+            return;
+
+        _gl.Uniform2(_uFramebufferPx, width, height);
+        _cachedCellFramebufferW = width;
+        _cachedCellFramebufferH = height;
+        _cellFramebufferSet = true;
+    }
+
+    private void Uniform2CellSize(float width, float height)
+    {
+        if (_cellSizeSet && _cachedCellW == width && _cachedCellH == height)
+            return;
+
+        _gl.Uniform2(_uCellPx, width, height);
+        _cachedCellW = width;
+        _cachedCellH = height;
+        _cellSizeSet = true;
+    }
+
+    private void Uniform2AtlasSize(float width, float height)
+    {
+        if (_atlasSizeSet && _cachedAtlasW == width && _cachedAtlasH == height)
+            return;
+
+        _gl.Uniform2(_uAtlasSize, width, height);
+        _cachedAtlasW = width;
+        _cachedAtlasH = height;
+
+        _atlasSizeSet = true;
+    }
+
+    private void Uniform1Underline(float value)
+    {
+        if (_underlineSet && _cachedUnderline == value)
+            return;
+
+        _gl.Uniform1(_uUnderlineY, value);
+        _cachedUnderline = value;
+        _underlineSet = true;
+    }
+
+    private void Uniform1Strike(float value)
+    {
+        if (_strikeSet && _cachedStrike == value)
+            return;
+
+        _gl.Uniform1(_uStrikeY, value);
+        _cachedStrike = value;
+        _strikeSet = true;
+    }
+
+    private void Uniform1LineHalf(float value)
+    {
+        if (_lineHalfSet && _cachedLineHalf == value)
+            return;
+
+        _gl.Uniform1(_uLineHalf, value);
+        _cachedLineHalf = value;
+        _lineHalfSet = true;
+    }
+
+    private void Uniform1Pass(int pass)
+    {
+        if (_passSet && _cachedPass == pass)
+            return;
+
+        _gl.Uniform1(_uPass, pass);
+        _cachedPass = pass;
+        _passSet = true;
+    }
+
+    private void Uniform1AtlasSampler()
+    {
+        if (_atlasSamplerSet)
+            return;
+
+        _gl.Uniform1(_uAtlas, 0);
+        _atlasSamplerSet = true;
+    }
+
+    private void Uniform2ChromeFramebuffer(float width, float height)
+    {
+        if (_chromeFramebufferSet && _cachedChromeFramebufferW == width && _cachedChromeFramebufferH == height)
+            return;
+
+        _gl.Uniform2(_uChromeFramebufferPx, width, height);
+        _cachedChromeFramebufferW = width;
+        _cachedChromeFramebufferH = height;
+        _chromeFramebufferSet = true;
+    }
+
     private void EnsureNotDisposed()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+    }
+
+    private void InvalidateGlStateCache()
+    {
+        _boundProgram = uint.MaxValue;
+        _boundVao = uint.MaxValue;
+        _boundTexture = uint.MaxValue;
+        _activeTextureSet = false;
+        _cellFramebufferSet = false;
+        _cellSizeSet = false;
+        _atlasSizeSet = false;
+        _underlineSet = false;
+        _strikeSet = false;
+        _lineHalfSet = false;
+        _passSet = false;
+        _atlasSamplerSet = false;
+        _chromeFramebufferSet = false;
     }
 
     public void Dispose()
@@ -525,6 +784,12 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 _gl.DeleteVertexArray(_vao);
                 _vao = 0;
             }
+            if (_menuVao != 0)
+            {
+                _gl.DeleteVertexArray(_menuVao);
+                _menuVao = 0;
+            }
+
 
             if (_chromeProgram != 0)
             {
@@ -555,6 +820,14 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 _gl.DeleteVertexArray(_chromeVao);
                 _chromeVao = 0;
             }
+            if (_chromeMenuVao != 0)
+            {
+                _gl.DeleteVertexArray(_chromeMenuVao);
+                _chromeMenuVao = 0;
+            }
+
+
+            InvalidateGlStateCache();
 
             _disposed = true;
         }

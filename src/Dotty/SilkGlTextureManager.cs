@@ -10,6 +10,8 @@ public sealed unsafe class SilkGlTextureManager : IDisposable
     private GlyphAtlas _atlas;
     private uint _textureId;
     private int _lastUploadedVersion = -1;
+    private int _uploadedWidth;
+    private int _uploadedHeight;
     private bool _disposed;
 
     public uint TextureId => _textureId;
@@ -35,6 +37,8 @@ public sealed unsafe class SilkGlTextureManager : IDisposable
 
         _atlas = atlas;
         _lastUploadedVersion = -1;
+        _uploadedWidth = 0;
+        _uploadedHeight = 0;
     }
 
     public void Bind()
@@ -45,14 +49,17 @@ public sealed unsafe class SilkGlTextureManager : IDisposable
             _gl.BindTexture(TextureTarget.Texture2D, _textureId);
         }
     }
-
-    // Re-uploads only when the atlas content changed (new glyph rasterized or grow).
+    // Allocates only when the atlas dimensions changed; ordinary glyphs update
+    // their own A8 rectangles with TexSubImage2D.
     public uint UpdateTexture()
     {
         EnsureNotDisposed();
 
         int currentVersion = _atlas.ContentVersion;
-        if (_textureId != 0 && currentVersion == _lastUploadedVersion)
+        if (_textureId != 0
+            && currentVersion == _lastUploadedVersion
+            && _uploadedWidth == _atlas.Width
+            && _uploadedHeight == _atlas.Height)
         {
             return _textureId;
         }
@@ -63,28 +70,73 @@ public sealed unsafe class SilkGlTextureManager : IDisposable
         }
 
         Bind();
-        int uploadedVersion = _atlas.WithAtlasBitmap(bitmap =>
+        int uploadedVersion = _atlas.WithAtlasUpdates((bitmap, regions, fullUpload) =>
         {
             if (bitmap.IsNull)
                 return;
-
             _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-            _gl.TexImage2D(
-                TextureTarget.Texture2D,
-                0,
-                InternalFormat.R8,
-                (uint)bitmap.Width,
-                (uint)bitmap.Height,
-                0,
-                PixelFormat.Red,
-                PixelType.UnsignedByte,
-                (void*)bitmap.GetPixels());
-            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+            try
+            {
+                bool dimensionsChanged = _uploadedWidth != bitmap.Width || _uploadedHeight != bitmap.Height;
+                if (dimensionsChanged)
+                {
+                    _gl.TexImage2D(
+                        TextureTarget.Texture2D,
+                        0,
+                        InternalFormat.R8,
+                        (uint)bitmap.Width,
+                        (uint)bitmap.Height,
+                        0,
+                        PixelFormat.Red,
+                        PixelType.UnsignedByte,
+                        (void*)bitmap.GetPixels());
+                    _uploadedWidth = bitmap.Width;
+                    _uploadedHeight = bitmap.Height;
+                }
+                else if (fullUpload)
+                {
+                    UploadRegion(bitmap, new AtlasDirtyRegion(0, 0, bitmap.Width, bitmap.Height));
+                }
+                else
+                {
+                    for (int i = 0; i < regions.Count; i++)
+                    {
+                        UploadRegion(bitmap, regions[i]);
+                    }
+                }
+            }
+            finally
+            {
+                _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
+                _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+            }
         });
 
         _lastUploadedVersion = uploadedVersion;
         return _textureId;
     }
+
+    private void UploadRegion(SkiaSharp.SKBitmap bitmap, AtlasDirtyRegion region)
+    {
+        if (region.Width <= 0 || region.Height <= 0)
+            return;
+
+        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, bitmap.RowBytes);
+        byte* pixels = (byte*)bitmap.GetPixels();
+        pixels += region.Y * bitmap.RowBytes + region.X;
+        _gl.TexSubImage2D(
+            TextureTarget.Texture2D,
+            0,
+            region.X,
+            region.Y,
+            (uint)region.Width,
+            (uint)region.Height,
+            PixelFormat.Red,
+            PixelType.UnsignedByte,
+            pixels);
+    }
+
 
     private void EnsureNotDisposed()
     {

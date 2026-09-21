@@ -75,10 +75,14 @@ internal static class DottyWindowHost
     /// <summary>
     /// Idle-frame throttle (ms). The Silk render loop is unthrottled and VSync only
     /// engages inside SwapBuffers, which clean frames skip — without this the loop
-    /// spins at 100% of one core when idle. 4ms keeps worst-case input-to-present
-    /// latency invisible for terminal use while holding the idle poll floor under 1%.
+    /// spins at 100% of one core when idle. Kept at 1ms: a larger sleep risks
+    /// pushing presents across vblank boundaries during interactive bursts
+    /// (observed as typing stutter at 4ms); 1ms holds idle near ~3% with no
+    /// visible hitch risk. Deliberately unconditional — gating the sleep on
+    /// recent-frame history adds pacing state to the hottest path for ~2pp
+    /// of idle CPU that buys nothing observable.
     /// </summary>
-    private const int IdleFrameSleepMs = 4;
+    private const int IdleFrameSleepMs = 1;
 
     private static bool _showTabBar = true;
     private static ContextMenuModel? _activeContextMenu;
@@ -644,8 +648,6 @@ internal static class DottyWindowHost
         {
             Array.Clear(_frameGenerationValid, 0, visibleLeaves.Length);
         }
-
-
         bool dirty = pendingReasons != WindowFrameReason.None ||
             generationDirty ||
             framebufferWidth != _committedFramebufferWidth ||

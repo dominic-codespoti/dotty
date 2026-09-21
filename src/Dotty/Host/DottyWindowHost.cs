@@ -71,7 +71,6 @@ internal static class DottyWindowHost
     private static int _committedFramebufferWidth = -1;
     private static int _committedFramebufferHeight = -1;
     private static int _committedAtlasVersion = int.MinValue;
-    private static long _lastKeepalivePresentTimestampMs;
     /// <summary>
     /// Idle-frame throttle (ms). The Silk render loop is unthrottled and VSync only
     /// engages inside SwapBuffers, which clean frames skip — without this the loop
@@ -415,7 +414,8 @@ internal static class DottyWindowHost
         {
             int tabCount = _tabManager?.Count ?? 0;
             int activeIndex = _tabManager?.ActiveIndex ?? -1;
-            return $"{{\"tabs\":{tabCount},\"activeTab\":{activeIndex}}}";
+            long skipped = _sceneComposer?.SkippedLeafFrames ?? 0;
+            return $"{{\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped}}}";
         }
         if (string.Equals(command, "SHUTDOWN", StringComparison.OrdinalIgnoreCase))
         {
@@ -655,11 +655,11 @@ internal static class DottyWindowHost
             _atlas.ContentVersion != _committedAtlasVersion;
         if (!dirty)
         {
-            if (now - _lastKeepalivePresentTimestampMs >= 1000)
-            {
-                _window.SwapBuffers();
-                _lastKeepalivePresentTimestampMs = now;
-            }
+            // No SwapBuffers here: swapping without a fresh render presents the
+            // stale back buffer (one full frame behind, or uninitialized garbage
+            // at startup) — a periodic fullscreen flash to old content every
+            // time the keepalive would have fired. Holding the front buffer is
+            // always correct when nothing changed.
             Thread.Sleep(IdleFrameSleepMs);
             return;
         }
@@ -721,6 +721,15 @@ internal static class DottyWindowHost
                 _mouseController?.HoveredTabIndex ?? -1,
                 _mouseController?.HoveredTabHitType ?? TabBarHitType.None);
 
+            if (frame.IsIncomplete)
+            {
+                // A leaf lost the buffer-lock race mid-burst; its quads are missing.
+                // Presenting would flash background where live content belongs, so
+                // hold the previous front buffer and retry next frame. Requeue the
+                // consumed reasons so the retry still has work to do.
+                WindowPresentationGate.Requeue(consumedReasons);
+                return;
+            }
             _renderer.Render(
                 frame.AsSpan(),
                 frame.AsChromeSpan(),
@@ -817,7 +826,6 @@ internal static class DottyWindowHost
         _committedFramebufferWidth = framebufferWidth;
         _committedFramebufferHeight = framebufferHeight;
         _committedAtlasVersion = _atlas.ContentVersion;
-        _lastKeepalivePresentTimestampMs = GetClockMilliseconds();
     }
 
     private static void OnKeyboardDown(IKeyboard keyboard, InputKey key, int scancode)

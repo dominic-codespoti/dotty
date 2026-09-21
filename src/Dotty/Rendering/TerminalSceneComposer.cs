@@ -38,6 +38,13 @@ public sealed class TerminalSceneFrame
     public int MenuInstanceStart { get; }
     /// <summary>Chrome-quad index at which context-menu chrome begins.</summary>
     public int MenuChromeStart { get; }
+    /// <summary>
+    /// True when <see cref="TerminalSceneComposer.Compose"/> skipped one or more
+    /// leaves on buffer-lock contention. The instances omit those leaves, so the
+    /// host must skip SwapBuffers for this frame (repeat the previous front
+    /// buffer) instead of presenting a background hole where live content belongs.
+    /// </summary>
+    public bool IsIncomplete { get; }
 
     public TerminalSceneFrame(
         CellInstance[] instances,
@@ -46,7 +53,8 @@ public sealed class TerminalSceneFrame
         ChromeQuadInstance[] chromeQuads,
         int chromeQuadCount,
         int menuInstanceStart = -1,
-        int menuChromeStart = -1)
+        int menuChromeStart = -1,
+        bool isIncomplete = false)
     {
         Instances = instances;
         InstanceCount = instanceCount;
@@ -55,6 +63,7 @@ public sealed class TerminalSceneFrame
         ChromeQuadCount = chromeQuadCount;
         MenuInstanceStart = menuInstanceStart;
         MenuChromeStart = menuChromeStart;
+        IsIncomplete = isIncomplete;
     }
 
     public ReadOnlySpan<CellInstance> AsSpan() => new(Instances, 0, InstanceCount);
@@ -74,6 +83,9 @@ public sealed class TerminalSceneComposer
     private CellInstance[] _frameScratch = Array.Empty<CellInstance>();
     private ChromeQuadInstance[] _chromeScratch = Array.Empty<ChromeQuadInstance>();
     private readonly HashSet<int> _dirtyAtlasRows = new();
+    private long _skippedLeafFrames;
+    /// <summary>Cumulative Compose calls in which at least one leaf was skipped on lock contention.</summary>
+    public long SkippedLeafFrames => _skippedLeafFrames;
 
     public TerminalSceneComposer(
         GlyphAtlas atlas,
@@ -136,6 +148,7 @@ public sealed class TerminalSceneComposer
         int chromeQuadCount = 0;
         int menuInstanceStart = -1;
         int menuChromeStart = -1;
+        bool skippedLeaf = false;
         _dirtyAtlasRows.Clear();
 
         float terminalWidth = Math.Max(10f, framebufferWidth - padX);
@@ -173,7 +186,10 @@ public sealed class TerminalSceneComposer
             }
 
             if (leafSnapshot == null)
+            {
+                skippedLeaf = true;
                 continue;
+            }
 
             using (leafSnapshot)
             {
@@ -400,9 +416,10 @@ public sealed class TerminalSceneComposer
             instanceCount += menuQuads;
             chromeQuadCount += menuChromeWritten;
         }
-
         // The frame is consumed synchronously by the OpenGL host before the next
         // Compose call, so reuse the scratch buffers and avoid per-frame copies.
+        if (skippedLeaf)
+            _skippedLeafFrames++;
         return new TerminalSceneFrame(
             _frameScratch,
             instanceCount,
@@ -410,7 +427,8 @@ public sealed class TerminalSceneComposer
             _chromeScratch,
             chromeQuadCount,
             menuInstanceStart,
-            menuChromeStart);
+            menuChromeStart,
+            isIncomplete: skippedLeaf);
     }
 
     private void EnsureChromeScratchCapacity(int required)

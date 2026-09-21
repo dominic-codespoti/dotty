@@ -72,6 +72,13 @@ internal static class DottyWindowHost
     private static int _committedFramebufferHeight = -1;
     private static int _committedAtlasVersion = int.MinValue;
     private static long _lastKeepalivePresentTimestampMs;
+    /// <summary>
+    /// Idle-frame throttle (ms). The Silk render loop is unthrottled and VSync only
+    /// engages inside SwapBuffers, which clean frames skip — without this the loop
+    /// spins at 100% of one core when idle. 4ms keeps worst-case input-to-present
+    /// latency invisible for terminal use while holding the idle poll floor under 1%.
+    /// </summary>
+    private const int IdleFrameSleepMs = 4;
 
     private static bool _showTabBar = true;
     private static ContextMenuModel? _activeContextMenu;
@@ -651,6 +658,7 @@ internal static class DottyWindowHost
                 _window.SwapBuffers();
                 _lastKeepalivePresentTimestampMs = now;
             }
+            Thread.Sleep(IdleFrameSleepMs);
             return;
         }
 

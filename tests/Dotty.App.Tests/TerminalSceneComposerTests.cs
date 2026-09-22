@@ -108,7 +108,7 @@ public sealed class TerminalSceneComposerTests
     }
 
     [Fact]
-    public void Compose_HoveredScrollbarAddsTrackGroove()
+    public void Compose_HoveredScrollbarAddsTrackAndAccentChrome()
     {
         using var tab = new TerminalTab(rows: 4, columns: 20);
         for (int row = 0; row < 4; row++)
@@ -144,7 +144,13 @@ public sealed class TerminalSceneComposerTests
             false,
             new SearchOverlayRenderState(false, string.Empty, -1, 0),
             null);
-        Assert.Contains(frame.Instances.AsSpan(0, frame.InstanceCount).ToArray(), instance => instance.BgA == 50);
+
+        Assert.Equal(2, frame.ChromeQuadCount);
+        Assert.Equal(0, frame.ScrollbarChromeStart);
+        Assert.Equal(-1, frame.MenuChromeStart);
+        Assert.Equal(80f, frame.ChromeQuads[frame.ScrollbarChromeStart].H);
+        Assert.True(frame.ChromeQuads[0].W > frame.ChromeQuads[1].W);
+        Assert.True(frame.ChromeQuads[1].W > 4f);
     }
 
     [Fact]

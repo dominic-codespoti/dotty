@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 
+using static Dotty.Runtime.Rendering.ChromeStyleUtils;
 namespace Dotty.Runtime.ContextMenu;
 
 /// <summary>
@@ -104,7 +105,15 @@ public sealed class ContextMenuLayout
             return new ContextMenuLayout(emptyRect, emptyRect, Array.Empty<MenuItemLayout>());
         }
 
-        // 1. Measure required width & height
+        var metrics = ResolveMetrics(itemHeight);
+        float scale = metrics.Scale;
+        float scaledPaddingX = paddingX * scale;
+        float scaledPaddingY = paddingY * scale;
+        float scaledItemHeight = Math.Max(itemHeight, DefaultItemHeight * scale);
+        float scaledSeparatorHeight = Math.Max(separatorHeight, DefaultSeparatorHeight * scale);
+        float shortcutGap = DefaultShortcutGap;
+        float iconWidth = DefaultIconWidth * scale;
+
         float maxLabelWidth = 0f;
         float maxShortcutWidth = 0f;
         bool hasAnyIcon = false;
@@ -115,124 +124,77 @@ public sealed class ContextMenuLayout
             var item = items[i];
             if (item.IsSeparator)
             {
-                totalContentHeight += separatorHeight;
+                totalContentHeight += scaledSeparatorHeight;
                 continue;
             }
 
-            totalContentHeight += itemHeight;
-
-            if (!string.IsNullOrEmpty(item.Icon))
-            {
-                hasAnyIcon = true;
-            }
-
-            if (!string.IsNullOrEmpty(item.Label))
-            {
-                float lw = item.Label.Length * charWidth;
-                if (lw > maxLabelWidth) maxLabelWidth = lw;
-            }
-
-            if (!string.IsNullOrEmpty(item.Shortcut))
-            {
-                float sw = item.Shortcut.Length * charWidth;
-                if (sw > maxShortcutWidth) maxShortcutWidth = sw;
-            }
+            totalContentHeight += scaledItemHeight;
+            hasAnyIcon |= !string.IsNullOrEmpty(item.Icon);
+            maxLabelWidth = Math.Max(maxLabelWidth, (item.Label?.Length ?? 0) * charWidth);
+            maxShortcutWidth = Math.Max(maxShortcutWidth, (item.Shortcut?.Length ?? 0) * charWidth);
         }
 
-        float iconAreaWidth = hasAnyIcon ? DefaultIconWidth : 0f;
-        float shortcutAreaWidth = maxShortcutWidth > 0f ? (maxShortcutWidth + DefaultShortcutGap) : 0f;
+        float iconAreaWidth = hasAnyIcon ? iconWidth : 0f;
+        float shortcutAreaWidth = maxShortcutWidth > 0f ? maxShortcutWidth + shortcutGap : 0f;
         float innerWidth = iconAreaWidth + maxLabelWidth + shortcutAreaWidth;
-        float menuWidth = Math.Max(DefaultMinWidth, innerWidth + (paddingX * 2f));
-        float menuHeight = totalContentHeight + (paddingY * 2f);
+        float menuWidth = Math.Max(DefaultMinWidth * scale, innerWidth + (scaledPaddingX * 2f));
+        float menuHeight = totalContentHeight + (scaledPaddingY * 2f);
 
-        // 2. Position & clamp to viewport
         float originX = model.X;
         float originY = model.Y;
-
-        if (viewportWidth > 0f)
-        {
-            if (originX + menuWidth > viewportWidth)
-            {
-                originX = Math.Max(0f, viewportWidth - menuWidth);
-            }
-        }
-
-        if (viewportHeight > 0f)
-        {
-            if (originY + menuHeight > viewportHeight)
-            {
-                originY = Math.Max(0f, viewportHeight - menuHeight);
-            }
-        }
-
+        if (viewportWidth > 0f && originX + menuWidth > viewportWidth)
+            originX = Math.Max(0f, viewportWidth - menuWidth);
+        if (viewportHeight > 0f && originY + menuHeight > viewportHeight)
+            originY = Math.Max(0f, viewportHeight - menuHeight);
         originX = Math.Max(0f, originX);
         originY = Math.Max(0f, originY);
 
         var menuBounds = new MenuRect(originX, originY, menuWidth, menuHeight);
         var shadowBounds = new MenuRect(
-            originX - 1f,
-            originY - 1f,
-            menuWidth + DefaultShadowOffset,
-            menuHeight + DefaultShadowOffset);
+            originX - metrics.Hairline,
+            originY - metrics.Hairline,
+            menuWidth + DefaultShadowOffset * scale,
+            menuHeight + DefaultShadowOffset * scale);
 
-        // 3. Compute item bounds
         var itemLayouts = new MenuItemLayout[items.Count];
-        float currentY = originY + paddingY;
-        float itemContentWidth = menuWidth - (paddingX * 2f);
+        float currentY = originY + scaledPaddingY;
+        float itemContentWidth = menuWidth - (scaledPaddingX * 2f);
 
         for (int i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            float rowHeight = item.IsSeparator ? separatorHeight : itemHeight;
-            var itemBounds = new MenuRect(originX + paddingX, currentY, itemContentWidth, rowHeight);
+            float rowHeight = item.IsSeparator ? scaledSeparatorHeight : scaledItemHeight;
+            var itemBounds = new MenuRect(originX + scaledPaddingX, currentY, itemContentWidth, rowHeight);
 
             if (item.IsSeparator)
             {
                 itemLayouts[i] = new MenuItemLayout(
-                    i,
-                    itemBounds,
-                    new MenuRect(0, 0, 0, 0),
-                    new MenuRect(0, 0, 0, 0),
-                    new MenuRect(0, 0, 0, 0),
-                    IsSeparator: true,
-                    IsDisabled: true);
+                    i, itemBounds, default, default, default, IsSeparator: true, IsDisabled: true);
             }
             else
             {
                 float cursorX = itemBounds.Left;
-
                 MenuRect iconRect = default;
                 if (hasAnyIcon)
                 {
-                    iconRect = new MenuRect(cursorX, currentY, DefaultIconWidth, rowHeight);
-                    cursorX += DefaultIconWidth;
+                    iconRect = new MenuRect(cursorX, currentY, iconWidth, rowHeight);
+                    cursorX += iconWidth;
                 }
 
                 float shortcutW = !string.IsNullOrEmpty(item.Shortcut) ? item.Shortcut.Length * charWidth : 0f;
                 float shortcutColumnLeft = itemBounds.Right - maxShortcutWidth;
-                MenuRect shortcutRect = default;
-                if (shortcutW > 0f)
-                {
-                    // Keep every shortcut on the same right edge while the
-                    // label column reserves room for the longest shortcut.
-                    shortcutRect = new MenuRect(
-                        itemBounds.Right - shortcutW,
-                        currentY,
-                        shortcutW,
-                        rowHeight);
-                }
-
+                MenuRect shortcutRect = shortcutW > 0f
+                    ? new MenuRect(itemBounds.Right - shortcutW, currentY, shortcutW, rowHeight)
+                    : default;
                 float labelW = maxShortcutWidth > 0f
-                    ? Math.Max(0f, shortcutColumnLeft - cursorX - DefaultShortcutGap)
+                    ? Math.Max(0f, shortcutColumnLeft - cursorX - shortcutGap)
                     : Math.Max(0f, itemBounds.Right - cursorX);
-
-                var labelRect = new MenuRect(cursorX, currentY, labelW, rowHeight);
 
                 itemLayouts[i] = new MenuItemLayout(
                     i,
                     itemBounds,
                     iconRect,
-                    labelRect,
+                    new MenuRect(cursorX, currentY, labelW, rowHeight),
                     shortcutRect,
                     IsSeparator: false,
                     IsDisabled: item.IsDisabled);

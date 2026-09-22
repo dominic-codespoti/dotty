@@ -9,22 +9,12 @@ using static Dotty.Runtime.Rendering.ChromeStyleUtils;
 namespace Dotty.Runtime.Tabs;
 
 /// <summary>
-/// Builds GPU instances for rendering the tab bar in OpenGL / GPU terminal pipelines.
-/// Emits:
-/// - <see cref="CellInstance"/> quads for the tab bar background strip, the divider,
-///   and all glyphs (title text, close ×, new-tab +) via the grid glyph pass.
-/// - <see cref="ChromeQuadInstance"/> quads for pixel-precise rounded chrome: tab
-///   pills (with a subtle gradient and, for the active tab, a soft drop shadow and
-///   an accent top strip), the close-button hover circle, and the new-tab button.
+/// Builds the pixel-precise tab rail and its glyph content. Surfaces, accents,
+/// hover states, and separators are emitted as chrome quads; text and symbols
+/// remain CellInstance glyphs so they use the normal atlas pipeline.
 /// </summary>
 public static class TabBarQuadBuilder
 {
-    /// <summary>
-    /// Builds cell instances (background strip + glyphs) and chrome quads (rounded
-    /// pills, shadow, buttons) for the entire tab bar. Returns the number of cell
-    /// instances written; <paramref name="chromeWritten"/> receives the number of
-    /// chrome quads written.
-    /// </summary>
     public static int Build(
         TerminalTabManager tabManager,
         GlyphAtlas atlas,
@@ -47,261 +37,158 @@ public static class TabBarQuadBuilder
         ArgumentNullException.ThrowIfNull(theme);
 
         chromeWritten = 0;
-
-        if (windowWidth <= 0 || cellWidth <= 0 || cellHeight <= 0 || destination.IsEmpty)
-        {
+        if (windowWidth <= 0f || cellWidth <= 0f || cellHeight <= 0f)
             return 0;
-        }
 
         int written = 0;
-        int tabCount = tabManager.Count;
-        int activeIndex = tabManager.ActiveIndex;
+        var palette = ResolvePalette(theme);
+        var metrics = ResolveMetrics(cellHeight);
+        var layout = TabBarLayout.Calculate(windowWidth, tabManager.Count, tabManager.ActiveIndex, barHeight);
 
-        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight);
+        // The rail and divider are deliberately pixel-precise. No cell-grid
+        // background instances are emitted, avoiding seams when cell size and
+        // the configured bar height do not line up exactly.
+        EmitSolid(chromeDestination, ref chromeWritten,
+            0f, 0f, windowWidth, Math.Max(0f, barHeight), 0f, palette.Rail);
+        float dividerHeight = Math.Min(metrics.Hairline, Math.Max(0f, barHeight));
+        EmitSolid(chromeDestination, ref chromeWritten,
+            0f, Math.Max(0f, barHeight - dividerHeight), windowWidth, dividerHeight, 0f, palette.Divider);
 
-        // Derive palette
-        uint themeBg = theme.Background != 0 ? theme.Background : 0xFF1E1E1E;
-        uint themeFg = theme.Foreground != 0 ? theme.Foreground : 0xFFD4D4D4;
-        // Background strip color: sleek dark header, darker than either pill so
-        // the floating rounded pills read as elevated surfaces above it.
-        uint barBg = Darken(themeBg, 0.55f);
-        // Inactive tab pill background: subtle contrast pill, with a slightly
-        // lighter flat variant used on hover for feedback.
-        uint inactivePillBg = Darken(themeBg, 0.80f);
-        uint inactivePillBgHover = Darken(themeBg, 0.94f);
-        // Active tab pill: flat elevated fill, no gradient.
-        uint activePillBg = Lighten(themeBg, 1.45f);
-        // Inactive text color: soft gray
-        uint inactiveFg = Darken(themeFg, 0.65f);
-        uint activeFg = themeFg;
-        // 1. Tab bar background strip across the top of the window
-        int barCols = (int)Math.Ceiling(windowWidth / cellWidth);
-        int barRows = (int)Math.Ceiling(barHeight / cellHeight);
-
-        ExtractRgb(barBg, out byte barBgR, out byte barBgG, out byte barBgB);
-        for (int r = 0; r < barRows; r++)
-        {
-            for (int c = 0; c < barCols; c++)
-            {
-                if (written >= destination.Length) break;
-                destination[written++] = new CellInstance
-                {
-                    Col = (ushort)c,
-                    Row = (ushort)r,
-                    BgR = barBgR,
-                    BgG = barBgG,
-                    BgB = barBgB,
-                    BgA = 255
-                };
-            }
-        }
-
-        // 2. Render each tab: rounded pill chrome quad (+ shadow/accent for the
-        // active tab) positioned from the pixel-precise layout rect, then title
-        // text and the close glyph through the grid glyph pass.
         for (int i = 0; i < layout.Tabs.Length && i < tabManager.Tabs.Count; i++)
         {
             var tabLayout = layout.Tabs[i];
             var tab = tabManager.Tabs[i];
             bool isActive = tabLayout.IsActive;
-            bool isTabHovered = hoveredTabIndex == i &&
+            bool tabHovered = hoveredTabIndex == i &&
                 (hoveredHitType == TabBarHitType.SelectTab || hoveredHitType == TabBarHitType.CloseTab);
             var bounds = tabLayout.TabBounds;
+            if (bounds.Width <= 0f || bounds.Height <= 0f)
+                continue;
 
             if (isActive)
             {
-                // Soft drop shadow beneath the elevated active pill.
-                EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
-                {
-                    X = bounds.X - 3f,
-                    Y = bounds.Y + 2f,
-                    W = bounds.Width + 6f,
-                    H = bounds.Height + 4f,
-                    Radius = 11f,
-                    Blur = 7f,
-                    TopR = 0f,
-                    TopG = 0f,
-                    TopB = 0f,
-                    TopA = 0.35f,
-                    BottomR = 0f,
-                    BottomG = 0f,
-                    BottomB = 0f,
-                    BottomA = 0.35f
-                });
+                // A restrained shadow gives the active tab elevation without
+                // changing the interaction geometry.
+                EmitSolid(chromeDestination, ref chromeWritten,
+                    bounds.X - metrics.Scale,
+                    bounds.Y + metrics.Scale,
+                    bounds.Width + metrics.Scale * 2f,
+                    bounds.Height + metrics.Scale * 2f,
+                    metrics.Radius,
+                    palette.Shadow,
+                    0.28f,
+                    metrics.ShadowBlur);
+                EmitSolid(chromeDestination, ref chromeWritten,
+                    bounds.X, bounds.Y, bounds.Width, bounds.Height,
+                    metrics.Radius, palette.SurfaceRaised);
 
-                var (pR, pG, pB, pA) = ToFloatColor(activePillBg, 1f);
-                EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
-                {
-                    X = bounds.X,
-                    Y = bounds.Y,
-                    W = bounds.Width,
-                    H = bounds.Height,
-                    Radius = 8f,
-                    Blur = 0f,
-                    TopR = pR,
-                    TopG = pG,
-                    TopB = pB,
-                    TopA = pA,
-                    BottomR = pR,
-                    BottomG = pG,
-                    BottomB = pB,
-                    BottomA = pA
-                });
+                // Crisp accent indicator at the active tab's lower edge.
+                EmitSolid(chromeDestination, ref chromeWritten,
+                    bounds.X, Math.Max(bounds.Top, bounds.Bottom - metrics.Hairline),
+                    bounds.Width, Math.Min(metrics.Hairline, bounds.Height),
+                    0f, palette.Accent);
             }
             else
             {
-                uint pillBg = isTabHovered ? inactivePillBgHover : inactivePillBg;
-                var (pR, pG, pB, pA) = ToFloatColor(pillBg, 1f);
-                EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
-                {
-                    X = bounds.X,
-                    Y = bounds.Y,
-                    W = bounds.Width,
-                    H = bounds.Height,
-                    Radius = 8f,
-                    Blur = 0f,
-                    TopR = pR,
-                    TopG = pG,
-                    TopB = pB,
-                    TopA = pA,
-                    BottomR = pR,
-                    BottomG = pG,
-                    BottomB = pB,
-                    BottomA = pA
-                });
+                EmitSolid(chromeDestination, ref chromeWritten,
+                    bounds.X, bounds.Y, bounds.Width, bounds.Height,
+                    metrics.RadiusSmall,
+                    tabHovered ? palette.SurfaceHover : palette.Surface);
             }
 
             int startRow = (int)Math.Floor(bounds.Top / cellHeight);
-            float tabTextOffsetY = ComputeCenteredOffsetY(typeface, fontSize, startRow, cellHeight, bounds.Top, bounds.Height);
-
-            // Tab Title Text
-            uint titleFg = isActive ? activeFg : inactiveFg;
+            float textOffsetY = ComputeCenteredOffsetY(
+                typeface, fontSize, startRow, cellHeight, bounds.Top, bounds.Height);
+            uint titleColor = isActive ? palette.TextPrimary : palette.TextSecondary;
             float textStartX = tabLayout.TextBounds.Left;
-            float textBaselineRow = startRow;
+            float textRight = tabLayout.TextBounds.Right;
 
-            // If tab has an active bell alert, prepend vibrant alert dot
             if (tab.HasBellAlert)
             {
-                uint alertColor = 0xFFFFB454; // Bright amber alert dot
-                EmitString(destination, ref written, "●", textStartX, textBaselineRow, alertColor, isBold: true, cellWidth, typeface, fontSize, atlas, tabTextOffsetY);
+                EmitString(destination, ref written, "●", textStartX, startRow,
+                    palette.Warning, isBold: true, cellWidth, typeface, fontSize, atlas,
+                    textOffsetY, textRight);
                 textStartX += cellWidth * 1.2f;
             }
 
-            // Measure available chars to prevent title text spilling past text bounds
-            float remainingWidth = Math.Max(0f, tabLayout.TextBounds.Right - textStartX);
-            int maxChars = (int)Math.Max(1, remainingWidth / cellWidth);
-            string title = tab.Title ?? "Terminal";
-            int titleLength = title.Length;
-            bool appendEllipsis = false;
-            if (titleLength > maxChars)
-            {
-                if (maxChars > 3)
-                {
-                    titleLength = maxChars - 1;
-                    appendEllipsis = true;
-                }
-                else
-                {
-                    titleLength = maxChars;
-                }
-            }
+            // EmitString clips by measured glyph bounds, not UTF-16 length, so
+            // a surrogate pair is always retained or omitted as one glyph.
+            EmitString(destination, ref written, tab.Title ?? "Terminal",
+                textStartX, startRow, titleColor, isBold: isActive,
+                cellWidth, typeface, fontSize, atlas, textOffsetY,
+                textRight, appendEllipsis: true);
 
-            EmitString(
-                destination,
-                ref written,
-                title,
-                textStartX,
-                textBaselineRow,
-                titleFg,
-                isBold: isActive,
-                cellWidth,
-                typeface,
-                fontSize,
-                atlas,
-                tabTextOffsetY,
-                titleLength,
-                appendEllipsis);
-
-            // Close button (×): circular hover backdrop, then glyph
-            bool closeHovered = hoveredTabIndex == i && hoveredHitType == TabBarHitType.CloseTab;
             var closeBounds = tabLayout.CloseButtonBounds;
+            bool closeHovered = hoveredTabIndex == i && hoveredHitType == TabBarHitType.CloseTab;
             if (closeHovered)
             {
                 float diameter = Math.Min(closeBounds.Width, closeBounds.Height);
-                EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
-                {
-                    X = closeBounds.Left + (closeBounds.Width - diameter) * 0.5f,
-                    Y = closeBounds.Top + (closeBounds.Height - diameter) * 0.5f,
-                    W = diameter,
-                    H = diameter,
-                    Radius = diameter * 0.5f,
-                    Blur = 0f,
-                    TopR = 0.92f,
-                    TopG = 0.30f,
-                    TopB = 0.30f,
-                    TopA = 0.85f,
-                    BottomR = 0.92f,
-                    BottomG = 0.30f,
-                    BottomB = 0.30f,
-                    BottomA = 0.85f
-                });
+                EmitSolid(chromeDestination, ref chromeWritten,
+                    closeBounds.Left + (closeBounds.Width - diameter) * 0.5f,
+                    closeBounds.Top + (closeBounds.Height - diameter) * 0.5f,
+                    diameter, diameter, diameter * 0.5f, palette.Danger, 0.88f);
             }
 
             float closeX = closeBounds.Left + (closeBounds.Width - cellWidth) * 0.5f;
-            uint closeFg = closeHovered ? 0xFFFFFFFF : Darken(titleFg, 0.85f);
-            float closeOffsetY = ComputeCenteredOffsetY(typeface, fontSize, startRow, cellHeight, closeBounds.Top, closeBounds.Height);
-            EmitString(destination, ref written, "×", closeX, startRow, closeFg, isBold: false, cellWidth, typeface, fontSize, atlas, closeOffsetY);
+            float closeOffsetY = ComputeCenteredOffsetY(
+                typeface, fontSize, startRow, cellHeight, closeBounds.Top, closeBounds.Height);
+            EmitString(destination, ref written, "×", closeX, startRow,
+                closeHovered ? palette.TextPrimary : palette.TextMuted,
+                isBold: false, cellWidth, typeface, fontSize, atlas, closeOffsetY);
         }
 
-        // 4. New tab (+) button: rounded chrome quad + glyph
+        var newTab = layout.NewTabButtonBounds;
+        if (newTab.Width > 0f && newTab.Height > 0f)
         {
             bool newTabHovered = hoveredHitType == TabBarHitType.NewTab;
-            uint newTabBg = newTabHovered ? Darken(themeBg, 0.95f) : Darken(themeBg, 0.85f);
-            var (nR, nG, nB, nA) = ToFloatColor(newTabBg, 1f);
-            var nb = layout.NewTabButtonBounds;
-            EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
-            {
-                X = nb.X,
-                Y = nb.Y,
-                W = nb.Width,
-                H = nb.Height,
-                Radius = 6f,
-                Blur = 0f,
-                TopR = nR,
-                TopG = nG,
-                TopB = nB,
-                TopA = nA,
-                BottomR = nR,
-                BottomG = nG,
-                BottomB = nB,
-                BottomA = nA
-            });
+            EmitSolid(chromeDestination, ref chromeWritten,
+                newTab.X, newTab.Y, newTab.Width, newTab.Height,
+                metrics.RadiusSmall,
+                newTabHovered ? palette.SurfaceHover : palette.Surface);
 
-            int newTabRow = (int)Math.Floor(nb.Top / cellHeight);
-            float plusX = nb.Left + (nb.Width - cellWidth) * 0.5f;
-            float newTabOffsetY = ComputeCenteredOffsetY(typeface, fontSize, newTabRow, cellHeight, nb.Top, nb.Height);
-            EmitString(destination, ref written, "+", plusX, newTabRow, newTabHovered ? activeFg : inactiveFg, isBold: false, cellWidth, typeface, fontSize, atlas, newTabOffsetY);
-        }
-
-        // 5. Divider border line separating tab bar header from terminal viewport
-        uint dividerColor = Darken(themeBg, 0.45f);
-        ExtractRgb(dividerColor, out byte divR, out byte divG, out byte divB);
-        int lastBarRow = Math.Max(0, barRows - 1);
-        for (int c = 0; c < barCols; c++)
-        {
-            if (written >= destination.Length) break;
-            destination[written++] = new CellInstance
-            {
-                Col = (ushort)c,
-                Row = (ushort)lastBarRow,
-                BgR = divR,
-                BgG = divG,
-                BgB = divB,
-                BgA = 255
-            };
+            int newTabRow = (int)Math.Floor(newTab.Top / cellHeight);
+            float plusX = newTab.Left + (newTab.Width - cellWidth) * 0.5f;
+            float plusOffsetY = ComputeCenteredOffsetY(
+                typeface, fontSize, newTabRow, cellHeight, newTab.Top, newTab.Height);
+            EmitString(destination, ref written, "+", plusX, newTabRow,
+                newTabHovered ? palette.Accent : palette.TextSecondary,
+                isBold: newTabHovered, cellWidth, typeface, fontSize, atlas, plusOffsetY,
+                newTab.Right);
         }
 
         return written;
+    }
+
+    private static void EmitSolid(
+        Span<ChromeQuadInstance> destination,
+        ref int written,
+        float x,
+        float y,
+        float width,
+        float height,
+        float radius,
+        uint color,
+        float alpha = 1f,
+        float blur = 0f)
+    {
+        var (r, g, b, _) = ToFloatColor(color, alpha);
+        EmitChrome(destination, ref written, new ChromeQuadInstance
+        {
+            X = x,
+            Y = y,
+            W = Math.Max(0f, width),
+            H = Math.Max(0f, height),
+            Radius = Math.Max(0f, radius),
+            Blur = Math.Max(0f, blur),
+            TopR = r,
+            TopG = g,
+            TopB = b,
+            TopA = alpha,
+            BottomR = r,
+            BottomG = g,
+            BottomB = b,
+            BottomA = alpha
+        });
     }
 
     private static void EmitString(
@@ -317,26 +204,31 @@ public static class TabBarQuadBuilder
         float fontSize,
         GlyphAtlas atlas,
         float extraOffsetY = 0f,
-        int maxUtf16Length = -1,
+        float maxRightPx = float.PositiveInfinity,
         bool appendEllipsis = false)
     {
         if (string.IsNullOrEmpty(text)) return;
         ExtractRgb(fgColor, out byte fgR, out byte fgG, out byte fgB);
 
         ReadOnlySpan<char> span = text.AsSpan();
-        int textLength = maxUtf16Length < 0 ? span.Length : Math.Min(maxUtf16Length, span.Length);
         float curX = startPxX;
-        for (int i = 0; i < textLength;)
+        int initialWritten = written;
+        float lastGlyphStart = startPxX;
+        bool clipped = false;
+        for (int i = 0; i < span.Length;)
         {
-            if (written >= destination.Length) break;
-
-            int len = i + 1 < textLength && char.IsSurrogatePair(span[i], span[i + 1]) ? 2 : 1;
+            int len = i + 1 < span.Length && char.IsSurrogatePair(span[i], span[i + 1]) ? 2 : 1;
             string grapheme = GlyphTextCache.Get(span, i, len);
             i += len;
 
             if (char.IsWhiteSpace(span[i - len]))
             {
                 curX += cellWidth;
+                if (curX > maxRightPx)
+                {
+                    clipped = i < span.Length;
+                    break;
+                }
                 continue;
             }
 
@@ -349,13 +241,23 @@ public static class TabBarQuadBuilder
             }
 
             int col = (int)Math.Round(curX / cellWidth);
-            int row = (int)baselineRow;
             int pixelColOffset = (int)(curX - (col * cellWidth));
+            float drawLeft = col * cellWidth + pixelColOffset + glyphInfo.LeftBearing;
+            float drawRight = drawLeft + glyphInfo.Width;
+            if (drawLeft < startPxX || drawRight > maxRightPx)
+            {
+                clipped = true;
+                break;
+            }
 
+            if (written >= destination.Length)
+                break;
+
+            lastGlyphStart = curX;
             destination[written++] = new CellInstance
             {
                 Col = (ushort)Math.Max(0, col),
-                Row = (ushort)Math.Max(0, row),
+                Row = (ushort)Math.Max(0, (int)baselineRow),
                 OffX = (short)(glyphInfo.LeftBearing + pixelColOffset),
                 OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing + extraOffsetY),
                 GlyphX = (short)glyphInfo.X,
@@ -372,21 +274,17 @@ public static class TabBarQuadBuilder
             curX += glyphInfo.Advance > 0 ? glyphInfo.Advance : cellWidth;
         }
 
-        if (appendEllipsis && written < destination.Length)
+        if (appendEllipsis && clipped && written > initialWritten)
         {
-            EmitString(
-                destination,
-                ref written,
-                "…",
-                curX,
-                baselineRow,
-                fgColor,
-                isBold,
-                cellWidth,
-                typeface,
-                fontSize,
-                atlas,
-                extraOffsetY);
+            written--;
+            curX = lastGlyphStart;
+        }
+
+        if (appendEllipsis && clipped && written < destination.Length)
+        {
+            EmitString(destination, ref written, "…", curX, baselineRow,
+                fgColor, isBold, cellWidth, typeface, fontSize, atlas,
+                extraOffsetY, maxRightPx);
         }
     }
 

@@ -11,17 +11,15 @@ public static class DefaultContextMenus
     /// <summary>
     /// Builds a default context menu for tab headers.
     /// </summary>
-    /// <param name="tabIndex">Index of the targeted tab.</param>
     /// <param name="onSplitRight">Action to split the active pane to the right.</param>
     /// <param name="onSplitDown">Action to split the active pane downwards.</param>
-    /// <param name="onRename">Action to rename the targeted tab.</param>
+    /// <param name="onNewTab">Action to open a new tab.</param>
     /// <param name="onClose">Action to close the targeted tab.</param>
     /// <returns>A list of configured <see cref="ContextMenuItem"/>s.</returns>
     public static IReadOnlyList<ContextMenuItem> BuildTabMenu(
-        int tabIndex,
         Action onSplitRight,
         Action onSplitDown,
-        Action onRename,
+        Action onNewTab,
         Action onClose)
     {
         return new[]
@@ -40,10 +38,11 @@ public static class DefaultContextMenus
                 icon: "⊟"),
             ContextMenuItem.Separator("tab.sep1"),
             new ContextMenuItem(
-                id: "tab.rename",
-                label: "Rename Tab...",
-                action: onRename,
-                icon: "✎"),
+                id: "tab.new",
+                label: "New Tab",
+                shortcut: "Ctrl+Shift+T",
+                action: onNewTab,
+                icon: "+"),
             ContextMenuItem.Separator("tab.sep2"),
             new ContextMenuItem(
                 id: "tab.close",

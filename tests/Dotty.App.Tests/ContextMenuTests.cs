@@ -84,10 +84,9 @@ public class ContextMenuTests
     {
         var splitRight = false;
         var menu = DefaultContextMenus.BuildTabMenu(
-            tabIndex: 0,
             onSplitRight: () => splitRight = true,
             onSplitDown: () => { },
-            onRename: () => { },
+            onNewTab: () => { },
             onClose: () => { });
 
         Assert.NotNull(menu);
@@ -96,5 +95,26 @@ public class ContextMenuTests
         // Trigger Split Right action
         menu[0].Action?.Invoke();
         Assert.True(splitRight);
+    }
+
+    [Fact]
+    public void ContextMenuModel_KeyboardFocusSkipsUnavailableRowsAndWraps()
+    {
+        bool invoked = false;
+        var model = new ContextMenuModel(items: new[]
+        {
+            ContextMenuItem.Item("disabled", "Disabled", () => { }, isDisabled: true),
+            ContextMenuItem.Separator(),
+            ContextMenuItem.Item("first", "First", () => { }),
+            ContextMenuItem.Item("last", "Last", () => invoked = true)
+        });
+
+        Assert.True(model.MoveFocus(1));
+        Assert.Equal(2, model.HoveredIndex);
+        Assert.True(model.MoveFocus(-1));
+        Assert.Equal(3, model.HoveredIndex);
+        Assert.True(model.ExecuteFocused());
+        Assert.True(invoked);
+        Assert.False(model.IsVisible);
     }
 }

@@ -34,6 +34,8 @@ public sealed class TerminalSceneFrame
     public HashSet<int> DirtyAtlasRows { get; }
     public ChromeQuadInstance[] ChromeQuads { get; }
     public int ChromeQuadCount { get; }
+    /// <summary>Chrome-quad index at which scrollbar chrome begins.</summary>
+    public int ScrollbarChromeStart { get; }
     /// <summary>Original cell-instance index at which context-menu glyphs begin.</summary>
     public int MenuInstanceStart { get; }
     /// <summary>Chrome-quad index at which context-menu chrome begins.</summary>
@@ -54,6 +56,7 @@ public sealed class TerminalSceneFrame
         int chromeQuadCount,
         int menuInstanceStart = -1,
         int menuChromeStart = -1,
+        int scrollbarChromeStart = -1,
         bool isIncomplete = false)
     {
         Instances = instances;
@@ -61,6 +64,7 @@ public sealed class TerminalSceneFrame
         DirtyAtlasRows = dirtyAtlasRows;
         ChromeQuads = chromeQuads;
         ChromeQuadCount = chromeQuadCount;
+        ScrollbarChromeStart = scrollbarChromeStart;
         MenuInstanceStart = menuInstanceStart;
         MenuChromeStart = menuChromeStart;
         IsIncomplete = isIncomplete;
@@ -82,6 +86,7 @@ public sealed class TerminalSceneComposer
     private float _fontSize;
     private CellInstance[] _frameScratch = Array.Empty<CellInstance>();
     private ChromeQuadInstance[] _chromeScratch = Array.Empty<ChromeQuadInstance>();
+    private ChromeQuadInstance[] _scrollbarScratch = Array.Empty<ChromeQuadInstance>();
     private readonly HashSet<int> _dirtyAtlasRows = new();
     private long _skippedLeafFrames;
     /// <summary>Cumulative Compose calls in which at least one leaf was skipped on lock contention.</summary>
@@ -135,6 +140,7 @@ public sealed class TerminalSceneComposer
         ArgumentNullException.ThrowIfNull(padding);
 
         var activePane = activeTab.ActivePane;
+        var leaves = activeTab.PaneTree.Leaves;
         scale = Math.Max(0.1f, scale);
         float padLeft = (float)padding.Left * scale;
         float padTop = (float)padding.Top * scale;
@@ -144,8 +150,11 @@ public sealed class TerminalSceneComposer
         float topOffset = barRows * cellHeight * scale;
         int maxInstances = checked(Math.Max(1024, rows * columns * 2 + 1024));
         EnsureScratchCapacity(maxInstances);
+        EnsureScrollbarScratchCapacity(checked(Math.Max(2, leaves.Count * 2)));
         int instanceCount = 0;
         int chromeQuadCount = 0;
+        int scrollbarChromeCount = 0;
+        int scrollbarChromeStart = -1;
         int menuInstanceStart = -1;
         int menuChromeStart = -1;
         bool skippedLeaf = false;
@@ -156,7 +165,7 @@ public sealed class TerminalSceneComposer
         activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness: 2f);
 
 
-        foreach (var leaf in activeTab.PaneTree.Leaves)
+        foreach (var leaf in leaves)
         {
             if (leaf.Columns > 0 && leaf.Rows > 0 &&
                 (leaf.Session.Adapter.Buffer.Columns != leaf.Columns || leaf.Session.Adapter.Buffer.Rows != leaf.Rows))
@@ -327,18 +336,18 @@ public sealed class TerminalSceneComposer
                 if (leafBuffer.ScrollbackCount > 0)
                 {
                     bool emphasizedScrollbar = ReferenceEquals(leaf, activePane) && (scrollbarDragging || scrollbarHovered);
-                    EnsureScratchCapacity(instanceCount + paneRows + 1);
                     int scrollbarQuads = ScrollbarQuadBuilder.Build(
-                        startColumnOffset,
-                        startRowOffset,
-                        paneColumns,
-                        paneRows,
-                        leafBuffer.ScrollbackCount,
-                        activeTab.ScrollOffset,
-                        theme,
-                        _frameScratch.AsSpan(instanceCount),
+                        paneX: padLeft + leaf.Bounds.X,
+                        paneY: padTop + topOffset + leaf.Bounds.Y,
+                        paneWidth: leaf.Bounds.Width,
+                        paneHeight: leaf.Bounds.Height,
+                        scrollbackCount: leafBuffer.ScrollbackCount,
+                        scrollOffset: scrollOffset,
+                        cellHeight: cellHeight * scale,
+                        theme: theme,
+                        destination: _scrollbarScratch.AsSpan(scrollbarChromeCount),
                         isHoveredOrDragging: emphasizedScrollbar);
-                    instanceCount += scrollbarQuads;
+                    scrollbarChromeCount += scrollbarQuads;
                 }
             }
         }
@@ -387,6 +396,18 @@ public sealed class TerminalSceneComposer
             instanceCount += overlayQuads;
         }
 
+        // Scrollbars are collected separately while panes are rendered so they
+        // can be appended after all base chrome/glyphs and before the menu.
+        if (scrollbarChromeCount > 0)
+        {
+            scrollbarChromeStart = chromeQuadCount;
+            EnsureChromeScratchCapacity(chromeQuadCount + scrollbarChromeCount);
+            _scrollbarScratch.AsSpan(0, scrollbarChromeCount)
+                .CopyTo(_chromeScratch.AsSpan(chromeQuadCount));
+            chromeQuadCount += scrollbarChromeCount;
+        }
+
+
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
             menuInstanceStart = instanceCount;
@@ -428,6 +449,7 @@ public sealed class TerminalSceneComposer
             chromeQuadCount,
             menuInstanceStart,
             menuChromeStart,
+            scrollbarChromeStart,
             isIncomplete: skippedLeaf);
     }
 
@@ -438,6 +460,14 @@ public sealed class TerminalSceneComposer
 
         int capacity = Math.Max(required, _chromeScratch.Length == 0 ? 64 : _chromeScratch.Length * 2);
         Array.Resize(ref _chromeScratch, capacity);
+    }
+
+    private void EnsureScrollbarScratchCapacity(int required)
+    {
+        if (required <= _scrollbarScratch.Length)
+            return;
+
+        Array.Resize(ref _scrollbarScratch, required);
     }
 
     private void EnsureScratchCapacity(int required)

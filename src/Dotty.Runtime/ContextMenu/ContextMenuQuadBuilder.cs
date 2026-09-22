@@ -16,9 +16,6 @@ namespace Dotty.Runtime.ContextMenu;
 /// </summary>
 public static class ContextMenuQuadBuilder
 {
-    private const float MenuRadius = 10f;
-    private const float BorderThickness = 1f;
-    private const float ItemPillRadius = 6f;
 
     /// <summary>
     /// Builds cell instances (glyphs) and chrome quads (panel, shadow, hover
@@ -56,46 +53,41 @@ public static class ContextMenuQuadBuilder
 
         int written = 0;
 
-        // Colors
-        uint themeBg = theme.Background != 0 ? theme.Background : 0xFF1E1E1E;
-        uint themeFg = theme.Foreground != 0 ? theme.Foreground : 0xFFD4D4D4;
+        var palette = ResolvePalette(theme);
+        var metrics = ResolveMetrics(cellHeight);
+        uint itemFgColor = palette.TextPrimary;
+        uint disabledFgColor = palette.TextMuted;
+        uint shortcutFgColor = palette.TextSecondary;
 
-        uint menuBgColor = Darken(themeBg, 0.75f);
-        uint borderColor = Darken(themeBg, 0.45f);
-        uint hoverPillBg = Lighten(themeBg, 1.35f);
-        uint separatorColor = Darken(themeBg, 0.55f);
-        uint itemFgColor = themeFg;
-        uint disabledFgColor = Darken(themeFg, 0.40f);
-        uint shortcutFgColor = Darken(themeFg, 0.65f);
-
-        // 1. Soft drop shadow behind the floating panel.
+        // 1. Elevated shadow behind the floating panel.
+        var (shadowR, shadowG, shadowB, _) = ToFloatColor(palette.Shadow, 0.36f);
         EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
         {
-            X = layout.Bounds.X - 2f,
-            Y = layout.Bounds.Y + 3f,
-            W = layout.Bounds.Width + 4f,
-            H = layout.Bounds.Height + 4f,
-            Radius = MenuRadius + 3f,
-            Blur = 10f,
-            TopR = 0f,
-            TopG = 0f,
-            TopB = 0f,
-            TopA = 0.40f,
-            BottomR = 0f,
-            BottomG = 0f,
-            BottomB = 0f,
-            BottomA = 0.40f
+            X = layout.ShadowBounds.X,
+            Y = layout.ShadowBounds.Y + metrics.Scale * 2f,
+            W = layout.ShadowBounds.Width,
+            H = layout.ShadowBounds.Height,
+            Radius = metrics.RadiusLarge,
+            Blur = metrics.ShadowBlur,
+            TopR = shadowR,
+            TopG = shadowG,
+            TopB = shadowB,
+            TopA = 0.36f,
+            BottomR = shadowR,
+            BottomG = shadowG,
+            BottomB = shadowB,
+            BottomA = 0.36f
         });
 
-        // 2. Menu panel: thin flat border, flat fill (no gradient), rounded.
-        var (brR, brG, brB, brA) = ToFloatColor(borderColor, 1f);
+        // 2. Raised border and inset surface.
+        var (brR, brG, brB, brA) = ToFloatColor(palette.Border, 1f);
         EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
         {
             X = layout.Bounds.X,
             Y = layout.Bounds.Y,
             W = layout.Bounds.Width,
             H = layout.Bounds.Height,
-            Radius = MenuRadius,
+            Radius = metrics.RadiusLarge,
             Blur = 0f,
             TopR = brR,
             TopG = brG,
@@ -107,14 +99,15 @@ public static class ContextMenuQuadBuilder
             BottomA = brA
         });
 
-        var (bgR, bgG, bgB, bgA) = ToFloatColor(menuBgColor, 1f);
+        var (bgR, bgG, bgB, bgA) = ToFloatColor(palette.SurfaceRaised, 1f);
+        float border = metrics.Hairline;
         EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
         {
-            X = layout.Bounds.X + BorderThickness,
-            Y = layout.Bounds.Y + BorderThickness,
-            W = Math.Max(0f, layout.Bounds.Width - BorderThickness * 2f),
-            H = Math.Max(0f, layout.Bounds.Height - BorderThickness * 2f),
-            Radius = Math.Max(0f, MenuRadius - BorderThickness),
+            X = layout.Bounds.X + border,
+            Y = layout.Bounds.Y + border,
+            W = Math.Max(0f, layout.Bounds.Width - border * 2f),
+            H = Math.Max(0f, layout.Bounds.Height - border * 2f),
+            Radius = Math.Max(0f, metrics.RadiusLarge - border),
             Blur = 0f,
             TopR = bgR,
             TopG = bgG,
@@ -135,15 +128,15 @@ public static class ContextMenuQuadBuilder
 
             if (itemLayout.IsSeparator)
             {
-                var (sepR, sepG, sepB, sepA) = ToFloatColor(separatorColor, 0.8f);
-                const float sepInset = 6f;
+                var (sepR, sepG, sepB, sepA) = ToFloatColor(palette.Divider, 0.86f);
+                float sepInset = metrics.Scale * 8f;
                 float sepY = itemLayout.Bounds.Top + itemLayout.Bounds.Height * 0.5f;
                 EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
                 {
                     X = itemLayout.Bounds.Left + sepInset,
                     Y = sepY,
-                    W = Math.Max(1f, itemLayout.Bounds.Width - sepInset * 2f),
-                    H = 1f,
+                    W = Math.Max(metrics.Hairline, itemLayout.Bounds.Width - sepInset * 2f),
+                    H = metrics.Hairline,
                     Radius = 0f,
                     Blur = 0f,
                     TopR = sepR,
@@ -160,17 +153,17 @@ public static class ContextMenuQuadBuilder
 
             bool isHovered = (model.HoveredIndex == i) && !item.IsDisabled;
 
-            // Hovered item background pill
+            // Accent-tinted hover surface.
             if (isHovered)
             {
-                var (hR, hG, hB, hA) = ToFloatColor(hoverPillBg, 1f);
+                var (hR, hG, hB, hA) = ToFloatColor(palette.SurfaceHover, 1f);
                 EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
                 {
                     X = itemLayout.Bounds.Left,
                     Y = itemLayout.Bounds.Top,
                     W = itemLayout.Bounds.Width,
                     H = itemLayout.Bounds.Height,
-                    Radius = ItemPillRadius,
+                    Radius = metrics.Radius,
                     Blur = 0f,
                     TopR = hR,
                     TopG = hG,
@@ -183,7 +176,10 @@ public static class ContextMenuQuadBuilder
                 });
             }
 
-            uint fgColor = item.IsDisabled ? disabledFgColor : (isHovered ? 0xFFFFFFFF : itemFgColor);
+            uint fgColor = item.IsDisabled ? disabledFgColor : itemFgColor;
+            uint iconColor = item.IsDisabled
+                ? disabledFgColor
+                : (isHovered ? palette.Accent : palette.TextSecondary);
             float boxTop = itemLayout.Bounds.Top - paddingTop;
             int itemRow = (int)Math.Floor(boxTop / cellHeight);
             float itemOffsetY = ComputeCenteredOffsetY(typeface, fontSize, itemRow, cellHeight, boxTop, itemLayout.Bounds.Height);
@@ -197,7 +193,7 @@ public static class ContextMenuQuadBuilder
                     item.Icon,
                     itemLayout.IconBounds.Left - paddingLeft,
                     itemRow,
-                    fgColor,
+                    iconColor,
                     isBold: false,
                     cellWidth,
                     typeface,
@@ -216,7 +212,7 @@ public static class ContextMenuQuadBuilder
                     itemLayout.LabelBounds.Left - paddingLeft,
                     itemRow,
                     fgColor,
-                    isBold: isHovered,
+                    isBold: false,
                     cellWidth,
                     typeface,
                     fontSize,

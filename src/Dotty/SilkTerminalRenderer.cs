@@ -282,6 +282,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         float paddingLeft = 0f,
         float paddingTop = 0f,
         int barRows = 0,
+        int scrollbarChromeStart = -1,
         int menuInstanceStart = -1,
         int menuChromeStart = -1)
     {
@@ -328,7 +329,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         Uniform1LineHalf(lineHalf);
         BindAtlasTexture(texId);
         Uniform1AtlasSampler();
-
         UploadAndDraw(
             cellW,
             cellH,
@@ -336,10 +336,10 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             paddingTop,
             barRows,
             chromeQuads,
+            scrollbarChromeStart,
             menuInstanceStart,
             menuChromeStart);
     }
-
     private void UploadAndDraw(
         float cellW,
         float cellH,
@@ -347,6 +347,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         float paddingTop,
         int barRows,
         ReadOnlySpan<ChromeQuadInstance> chromeQuads,
+        int scrollbarChromeStart,
         int menuInstanceStart,
         int menuChromeStart)
     {
@@ -474,24 +475,38 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             && menuInstanceStart <= cellCount
             && _drawMenuStart >= 0
             && _drawMenuStart <= _drawInstanceCount;
-        int baseInstanceCount = hasMenuOverlay ? _drawMenuStart : _drawInstanceCount;
-        int baseChromeCount = hasMenuOverlay
+        int menuChromeFirst = hasMenuOverlay
             ? Math.Clamp(menuChromeStart, 0, chromeQuads.Length)
             : chromeQuads.Length;
+        int scrollbarChromeFirst = scrollbarChromeStart >= 0
+            ? Math.Clamp(scrollbarChromeStart, 0, menuChromeFirst)
+            : menuChromeFirst;
+        int baseInstanceCount = hasMenuOverlay ? _drawMenuStart : _drawInstanceCount;
 
         UploadChrome(chromeQuads, menuChromeStart);
 
+        // Base backgrounds/chrome/glyphs are drawn first. Scrollbar chrome is
+        // a separate overlay so rightmost glyphs can never cover the thumb.
         DrawCellRange(0, baseInstanceCount, pass: 0, menuVao: false);
+        int baseChromeCount = scrollbarChromeFirst;
         if (baseChromeCount > 0)
         {
             DrawChromeRange(0, baseChromeCount, menuVao: false);
         }
 
         DrawCellRange(0, baseInstanceCount, pass: 1, menuVao: false);
-        if (baseChromeCount < chromeQuads.Length)
+        int scrollbarCount = menuChromeFirst - scrollbarChromeFirst;
+        if (scrollbarCount > 0)
         {
-            EnsureMenuChromeAttribs(baseChromeCount);
-            DrawChromeRange(baseChromeCount, chromeQuads.Length - baseChromeCount, menuVao: true);
+            EnsureMenuChromeAttribs(scrollbarChromeFirst);
+            DrawChromeRange(scrollbarChromeFirst, scrollbarCount, menuVao: true);
+        }
+
+        int menuChromeCount = chromeQuads.Length - menuChromeFirst;
+        if (menuChromeCount > 0)
+        {
+            EnsureMenuChromeAttribs(menuChromeFirst);
+            DrawChromeRange(menuChromeFirst, menuChromeCount, menuVao: true);
         }
 
         if (hasMenuOverlay && _drawMenuCount > 0)

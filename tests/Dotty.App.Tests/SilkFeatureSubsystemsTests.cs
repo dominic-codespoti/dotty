@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
 using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Search;
+using Dotty.Runtime.Rendering;
 using Dotty.Runtime.Tabs;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
@@ -26,6 +28,25 @@ public class TabBarSubsystemTests
     }
 
     [Fact]
+    public void TabBarLayout_CompressedTabs_KeepNewTabButtonInsideViewport()
+    {
+        var layout = TabBarLayout.Calculate(windowWidth: 120f, tabCount: 8, activeIndex: 2);
+
+        Assert.InRange(layout.NewTabButtonBounds.Left, 0f, 120f);
+        Assert.InRange(layout.NewTabButtonBounds.Right, 0f, 120f);
+        int visibleTabs = 0;
+        foreach (var tab in layout.Tabs)
+        {
+            if (tab.TabBounds.Width <= 0f)
+                continue;
+            visibleTabs++;
+            Assert.True(tab.TabBounds.Right <= layout.NewTabButtonBounds.Left);
+        }
+        Assert.Equal(1, visibleTabs);
+        Assert.True(layout.Tabs[2].TabBounds.Width > 0f);
+    }
+
+    [Fact]
     public void TabBarHitTester_ClickingTab_ReturnsSelectTab()
     {
         var result = TabBarHitTester.HitTest(x: 50f, y: 15f, windowWidth: 1000f, tabCount: 3, activeIndex: 0);
@@ -42,6 +63,16 @@ public class TabBarSubsystemTests
         var result = TabBarHitTester.HitTest(x: plusCenter, y: 15f, windowWidth: 1000f, tabCount: 2, activeIndex: 0);
         Assert.IsType<TabBarHitResult.NewTab>(result);
     }
+    [Fact]
+    public void ChromePalette_LightTheme_UsesContrastingShadow()
+    {
+        var palette = ChromeStyleUtils.ResolvePalette(BuiltInThemes.LightPlus);
+
+        Assert.True(
+            ChromeStyleUtils.RelativeLuminance(palette.Shadow) <
+            ChromeStyleUtils.RelativeLuminance(palette.Canvas));
+    }
+
 }
 
 public class ModalCursorSubsystemTests

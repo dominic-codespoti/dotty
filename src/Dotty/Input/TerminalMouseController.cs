@@ -143,14 +143,11 @@ public sealed class TerminalMouseController
                 geom.CellHeight * geom.Scale);
 
             int hitItemIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
-            if (hitItemIndex >= 0 && hitItemIndex < activeContextMenu.Items.Count)
-            {
-                var item = activeContextMenu.Items[hitItemIndex];
-                if (!item.IsDisabled && !item.IsSeparator)
-                {
-                    item.Action?.Invoke();
-                }
-            }
+            activeContextMenu.HoveredIndex = hitItemIndex;
+            if (hitItemIndex >= 0)
+                activeContextMenu.ExecuteHovered();
+            else
+                activeContextMenu.Close();
             _host.ActiveContextMenu = null;
             return;
         }
@@ -163,13 +160,14 @@ public sealed class TerminalMouseController
                 var hit = TabBarHitTester.HitTest(physX, physY, geom.FramebufferWidth, _host.TabManager.Count, _host.TabManager.ActiveIndex, geom.TopOffset);
                 if (hit is TabBarHitResult.SelectTab select)
                 {
-                    _host.ActiveContextMenu = new ContextMenuModel(pos.X * geom.Scale, pos.Y * geom.Scale, DefaultContextMenus.BuildTabMenu(
-                        select.Index,
-                        onSplitRight: () => activeTab.PaneTree.Split(activeTab.ActivePane, SplitDirection.Vertical),
-                        onSplitDown: () => activeTab.PaneTree.Split(activeTab.ActivePane, SplitDirection.Horizontal),
-                        onRename: () => { },
-                        onClose: () => _host.TabManager.CloseTab(_host.TabManager.Tabs[select.Index])
-                    ));
+                    _host.ActiveContextMenu = new ContextMenuModel(
+                        pos.X * geom.Scale,
+                        pos.Y * geom.Scale,
+                        DefaultContextMenus.BuildTabMenu(
+                            onSplitRight: () => activeTab.PaneTree.Split(activeTab.ActivePane, SplitDirection.Vertical),
+                            onSplitDown: () => activeTab.PaneTree.Split(activeTab.ActivePane, SplitDirection.Horizontal),
+                            onNewTab: () => _host.CreateTab(activeTab),
+                            onClose: () => _host.TabManager.CloseTab(_host.TabManager.Tabs[select.Index])));
                     return;
                 }
             }
@@ -179,7 +177,15 @@ public sealed class TerminalMouseController
                     hasSelection: _host.SelectionService.HasSelection,
                     onCopy: _host.CopySelection,
                     onPaste: _host.PasteClipboard,
-                    onSelectAll: () => { },
+                    onSelectAll: () =>
+                    {
+                        var pane = activeTab.ActivePane;
+                        if (pane != null && pane.Rows > 0 && pane.Columns > 0)
+                        {
+                            _host.SelectionService.StartSelection(0, 0, SelectionMode.Character);
+                            _host.SelectionService.UpdateSelection(pane.Rows - 1, pane.Columns - 1);
+                        }
+                    },
                     onSplitRight: () => activeTab.PaneTree.Split(activeTab.ActivePane, SplitDirection.Vertical),
                     onSplitDown: () => activeTab.PaneTree.Split(activeTab.ActivePane, SplitDirection.Horizontal),
                     onClear: () => _host.ClearTerminal(activeTab)
@@ -286,12 +292,19 @@ public sealed class TerminalMouseController
                 geom.CellWidth * geom.Scale,
                 geom.CellHeight * geom.Scale);
 
-            int hitItemIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
-            activeContextMenu.HoveredIndex = hitItemIndex;
-            _host.SetPointerCursor(hitItemIndex >= 0 ? StandardCursor.Hand : StandardCursor.Default);
+            bool actionableHit = ContextMenuHitTester.TryHitInteractiveItem(
+                menuLayout,
+                physX,
+                physY,
+                out int interactiveIndex) &&
+                interactiveIndex >= 0 &&
+                interactiveIndex < activeContextMenu.Items.Count &&
+                activeContextMenu.Items[interactiveIndex].Action != null;
+            activeContextMenu.HoveredIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
+            _host.SetPointerCursor(actionableHit ? StandardCursor.Hand : StandardCursor.Default);
             return;
-        }
 
+        }
         // 2. Check Tab Bar hover
         if (geom.ShowTabBar && _host.TabManager != null && physY < geom.TopOffset)
         {

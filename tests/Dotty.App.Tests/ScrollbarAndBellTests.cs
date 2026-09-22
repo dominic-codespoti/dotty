@@ -13,14 +13,15 @@ public sealed class ScrollbarAndBellTests
     [Fact]
     public void ScrollbarQuadBuilder_WhenNoScrollback_EmitsZeroQuads()
     {
-        Span<CellInstance> destination = stackalloc CellInstance[64];
+        Span<ChromeQuadInstance> destination = stackalloc ChromeQuadInstance[2];
         int written = ScrollbarQuadBuilder.Build(
-            startColOffset: 0,
-            startRowOffset: 1,
-            paneCols: 80,
-            paneRows: 24,
+            paneX: 0f,
+            paneY: 0f,
+            paneWidth: 800f,
+            paneHeight: 480f,
             scrollbackCount: 0,
             scrollOffset: 0,
+            cellHeight: 20f,
             theme: BuiltInThemes.DarkPlus,
             destination: destination);
 
@@ -28,53 +29,49 @@ public sealed class ScrollbarAndBellTests
     }
 
     [Fact]
-    public void ScrollbarQuadBuilder_WhenScrollbackExists_EmitsThumbQuadsInRightmostColumn()
+    public void ScrollbarQuadBuilder_WhenScrollbackExists_EmitsSlimProportionalThumb()
     {
-        Span<CellInstance> destination = stackalloc CellInstance[64];
+        Span<ChromeQuadInstance> destination = stackalloc ChromeQuadInstance[2];
         int written = ScrollbarQuadBuilder.Build(
-            startColOffset: 0,
-            startRowOffset: 0,
-            paneCols: 80,
-            paneRows: 24,
+            paneX: 0f,
+            paneY: 0f,
+            paneWidth: 800f,
+            paneHeight: 480f,
             scrollbackCount: 100,
             scrollOffset: 50,
+            cellHeight: 20f,
             theme: BuiltInThemes.DarkPlus,
             destination: destination);
 
-        Assert.True(written > 0);
-        for (int i = 0; i < written; i++)
-        {
-            Assert.Equal(79, destination[i].Col); // Rightmost column (80 - 1)
-            Assert.True(destination[i].Row >= 0 && destination[i].Row < 24);
-            Assert.True(destination[i].BgA > 0);
-        }
+        Assert.Equal(1, written);
+        Assert.InRange(destination[0].X, 790f, 796f);
+        Assert.InRange(destination[0].W, 2f, 5f);
+        Assert.InRange(destination[0].Y, 180f, 230f);
+        Assert.True(destination[0].H > 0f && destination[0].H < 480f);
+        Assert.True(destination[0].Radius > 0f);
     }
+
     [Fact]
-    public void ScrollbarQuadBuilder_WhenHoveredOrDragging_EmitsTrackGrooveAndProminentThumb()
+    public void ScrollbarQuadBuilder_WhenHoveredOrDragging_EmitsTrackAndAccentThumb()
     {
-        Span<CellInstance> destination = stackalloc CellInstance[128];
+        Span<ChromeQuadInstance> destination = stackalloc ChromeQuadInstance[2];
         int written = ScrollbarQuadBuilder.Build(
-            startColOffset: 0,
-            startRowOffset: 0,
-            paneCols: 80,
-            paneRows: 24,
+            paneX: 0f,
+            paneY: 0f,
+            paneWidth: 800f,
+            paneHeight: 480f,
             scrollbackCount: 100,
             scrollOffset: 50,
+            cellHeight: 20f,
             theme: BuiltInThemes.DarkPlus,
             destination: destination,
             isHoveredOrDragging: true);
 
-        Assert.True(written >= 24); // Contains track groove + thumb
-        bool hasHighAlphaThumb = false;
-        bool hasTrackGroove = false;
-        for (int i = 0; i < written; i++)
-        {
-            if (destination[i].BgA >= 200) hasHighAlphaThumb = true;
-            if (destination[i].BgA == 50) hasTrackGroove = true;
-        }
-
-        Assert.True(hasHighAlphaThumb);
-        Assert.True(hasTrackGroove);
+        Assert.Equal(2, written);
+        Assert.Equal(480f, destination[0].H);
+        Assert.True(destination[0].W > destination[1].W);
+        Assert.True(destination[1].W > 4f);
+        Assert.True(destination[1].TopA >= 0.99f);
     }
 
     [Fact]

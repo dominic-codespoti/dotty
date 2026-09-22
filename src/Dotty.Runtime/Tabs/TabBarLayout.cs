@@ -62,6 +62,9 @@ public static class TabBarLayout
     public const float CloseButtonHeight = 20f;
     public const float CloseButtonPaddingRight = 4f;
     public const float TextPaddingLeft = 8f;
+    private const float HardMinTabWidth = 56f;
+    private const float NewTabGap = 4f;
+    private const float RightPadding = 6f;
 
     private readonly record struct LayoutKey(
         float WindowWidth,
@@ -107,11 +110,7 @@ public static class TabBarLayout
                 if (windowWidth <= 0f || tabCount <= 0)
                 {
                     var emptyBarBounds = new TabRect(0f, 0f, Math.Max(0f, windowWidth), barHeight);
-                    var emptyNewTabBounds = new TabRect(
-                        PaddingLeft,
-                        PaddingTop,
-                        NewTabButtonWidth,
-                        Math.Max(0f, barHeight - PaddingTop - PaddingBottom));
+                    var emptyNewTabBounds = ClampNewTabBounds(windowWidth, barHeight, PaddingLeft);
                     result = new TabBarLayoutResult(
                         emptyBarBounds,
                         Array.Empty<TabLayoutItem>(),
@@ -153,30 +152,43 @@ public static class TabBarLayout
         float barHeight)
     {
         float tabHeight = Math.Max(0f, barHeight - PaddingTop - PaddingBottom);
-
-        // Calculate available width for tabs (reserve space for padding, spacing, and the + new tab button)
-        float availableWidth = windowWidth - PaddingLeft - NewTabButtonWidth - (tabCount * TabSpacing) - 8f;
-        float tabWidth = availableWidth / tabCount;
-        tabWidth = Math.Clamp(tabWidth, MinTabWidth, MaxTabWidth);
-
-        // If tabs overflow the window width, shrink them proportionally down to a hard minimum
-        if (tabWidth * tabCount > availableWidth && tabCount > 0)
-        {
-            float hardMin = 40f;
-            tabWidth = Math.Max(hardMin, availableWidth / tabCount);
-        }
+        float tabAreaWidth = Math.Max(
+            0f,
+            windowWidth - PaddingLeft - NewTabButtonWidth - NewTabGap - RightPadding);
+        int maxVisibleTabs = Math.Max(
+            1,
+            (int)MathF.Floor((tabAreaWidth + TabSpacing) / (HardMinTabWidth + TabSpacing)));
+        int visibleCount = Math.Min(tabCount, maxVisibleTabs);
+        int firstVisible = Math.Clamp(
+            activeIndex - visibleCount / 2,
+            0,
+            Math.Max(0, tabCount - visibleCount));
+        int lastVisibleExclusive = firstVisible + visibleCount;
+        float tabWidth = visibleCount > 0
+            ? Math.Min(
+                MaxTabWidth,
+                Math.Max(0f, (tabAreaWidth - (visibleCount - 1) * TabSpacing) / visibleCount))
+            : 0f;
 
         float currentX = PaddingLeft;
+        var hidden = new TabRect(-1f, -1f, 0f, 0f);
         for (int i = 0; i < tabCount; i++)
         {
-            var tabRect = new TabRect(currentX, PaddingTop, tabWidth, tabHeight);
+            if (i < firstVisible || i >= lastVisibleExclusive)
+            {
+                tabs[i] = new TabLayoutItem(
+                    Index: i,
+                    TabBounds: hidden,
+                    CloseButtonBounds: hidden,
+                    TextBounds: hidden,
+                    IsActive: i == activeIndex);
+                continue;
+            }
 
-            // Close button rect (positioned at the right edge of the tab pill)
+            var tabRect = new TabRect(currentX, PaddingTop, tabWidth, tabHeight);
             float closeX = tabRect.Right - CloseButtonWidth - CloseButtonPaddingRight;
             float closeY = tabRect.Top + (tabHeight - CloseButtonHeight) * 0.5f;
             var closeRect = new TabRect(closeX, closeY, CloseButtonWidth, CloseButtonHeight);
-
-            // Text bounds (from left padding to the left of the close button)
             float textX = tabRect.Left + TextPaddingLeft;
             float textWidth = Math.Max(0f, closeX - textX - 2f);
             var textRect = new TabRect(textX, tabRect.Top, textWidth, tabHeight);
@@ -187,15 +199,24 @@ public static class TabBarLayout
                 CloseButtonBounds: closeRect,
                 TextBounds: textRect,
                 IsActive: i == activeIndex);
-
             currentX += tabWidth + TabSpacing;
         }
 
-        // New tab (+) button rect positioned right after the last tab
-        return new TabRect(
-            currentX + 2f,
-            PaddingTop,
-            NewTabButtonWidth,
-            tabHeight);
+        return ClampNewTabBounds(
+            windowWidth,
+            barHeight,
+            Math.Max(PaddingLeft, windowWidth - RightPadding - NewTabButtonWidth));
+    }
+
+    private static TabRect ClampNewTabBounds(float windowWidth, float barHeight, float preferredX)
+    {
+        float height = Math.Max(0f, barHeight - PaddingTop - PaddingBottom);
+        float width = Math.Max(0f, windowWidth);
+        if (width <= 0f)
+            return new TabRect(0f, PaddingTop, 0f, height);
+
+        float x = Math.Clamp(preferredX, 0f, Math.Max(0f, width - NewTabButtonWidth));
+        float buttonWidth = Math.Min(NewTabButtonWidth, width - x);
+        return new TabRect(x, PaddingTop, buttonWidth, height);
     }
 }

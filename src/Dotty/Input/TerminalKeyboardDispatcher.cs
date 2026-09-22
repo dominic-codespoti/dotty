@@ -58,9 +58,11 @@ public sealed class TerminalKeyboardDispatcher
 
     public void HandleKeyDown(Key key, int scancode)
     {
+        if (HandleContextMenuKey(key))
+            return;
+
         var activeTab = _host.ActiveTab;
         if (activeTab == null) return;
-
         if (_host.LuaHost.Keybinds.TryExecute(_host.Ctrl, _host.Shift, _host.Alt, _host.Super, key.ToString()))
         {
             return;
@@ -239,9 +241,10 @@ public sealed class TerminalKeyboardDispatcher
 
     public void HandleText(string text)
     {
+        if (_host.ActiveContextMenu is { IsVisible: true })
+            return;
         if (string.IsNullOrEmpty(text) || _host.Ctrl || _host.Alt)
             return;
-
         var activeTab = _host.ActiveTab;
         if (activeTab == null)
             return;
@@ -268,6 +271,41 @@ public sealed class TerminalKeyboardDispatcher
             _host.SelectionService.ClearSelection();
 
         activeTab.Session.WriteInput(Encoding.UTF8.GetBytes(text));
+    }
+
+    private bool HandleContextMenuKey(Key key)
+    {
+        var menu = _host.ActiveContextMenu;
+        if (menu is not { IsVisible: true })
+            return false;
+
+        switch (key)
+        {
+            case Key.Up:
+                menu.MoveFocus(-1);
+                break;
+            case Key.Down:
+                menu.MoveFocus(1);
+                break;
+            case Key.Home:
+                menu.FocusFirst();
+                break;
+            case Key.End:
+                menu.FocusLast();
+                break;
+            case Key.Enter:
+            case Key.Space:
+                menu.ExecuteFocused();
+                if (!menu.IsVisible && ReferenceEquals(_host.ActiveContextMenu, menu))
+                    _host.ActiveContextMenu = null;
+                break;
+            case Key.Escape:
+                menu.Close();
+                _host.ActiveContextMenu = null;
+                break;
+        }
+
+        return true;
     }
 
     private void ToggleSearch()

@@ -769,6 +769,7 @@ internal static class DottyWindowHost
                 padLeft,
                 padTop,
                 barRows,
+                frame.ScrollbarChromeStart,
                 frame.MenuInstanceStart,
                 frame.MenuChromeStart);
             _window.SwapBuffers();

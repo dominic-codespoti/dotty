@@ -55,6 +55,9 @@ public class ContextMenuTests
             longestShortcut.ShortcutBounds.Left - ContextMenuLayout.DefaultShortcutGap,
             longestShortcut.LabelBounds.Right);
         Assert.True(shorterShortcut.LabelBounds.Right < shorterShortcut.ShortcutBounds.Left);
+        Assert.True(
+            longestShortcut.Bounds.Right - longestShortcut.ShortcutBounds.Right >=
+            ContextMenuLayout.DefaultTrailingTextInset);
     }
 
     [Fact]

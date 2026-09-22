@@ -45,6 +45,7 @@ public sealed class ContextMenuLayout
     public const float DefaultIconWidth = 22f;
     public const float DefaultShortcutGap = 20f;
     public const float DefaultShadowOffset = 4f;
+    public const float DefaultTrailingTextInset = 8f;
 
     /// <summary>Total bounding box of the menu popup background (including padding).</summary>
     public MenuRect Bounds { get; }
@@ -113,6 +114,7 @@ public sealed class ContextMenuLayout
         float scaledSeparatorHeight = Math.Max(separatorHeight, DefaultSeparatorHeight * scale);
         float shortcutGap = DefaultShortcutGap;
         float iconWidth = DefaultIconWidth * scale;
+        float trailingTextInset = Math.Max(charWidth, DefaultTrailingTextInset * scale);
 
         float maxLabelWidth = 0f;
         float maxShortcutWidth = 0f;
@@ -135,7 +137,9 @@ public sealed class ContextMenuLayout
         }
 
         float iconAreaWidth = hasAnyIcon ? iconWidth : 0f;
-        float shortcutAreaWidth = maxShortcutWidth > 0f ? maxShortcutWidth + shortcutGap : 0f;
+        float shortcutAreaWidth = maxShortcutWidth > 0f
+            ? maxShortcutWidth + shortcutGap + trailingTextInset
+            : trailingTextInset;
         float innerWidth = iconAreaWidth + maxLabelWidth + shortcutAreaWidth;
         float menuWidth = Math.Max(DefaultMinWidth * scale, innerWidth + (scaledPaddingX * 2f));
         float menuHeight = totalContentHeight + (scaledPaddingY * 2f);
@@ -182,13 +186,14 @@ public sealed class ContextMenuLayout
                 }
 
                 float shortcutW = !string.IsNullOrEmpty(item.Shortcut) ? item.Shortcut.Length * charWidth : 0f;
-                float shortcutColumnLeft = itemBounds.Right - maxShortcutWidth;
+                float shortcutColumnRight = itemBounds.Right - trailingTextInset;
+                float shortcutColumnLeft = shortcutColumnRight - maxShortcutWidth;
                 MenuRect shortcutRect = shortcutW > 0f
-                    ? new MenuRect(itemBounds.Right - shortcutW, currentY, shortcutW, rowHeight)
+                    ? new MenuRect(shortcutColumnRight - shortcutW, currentY, shortcutW, rowHeight)
                     : default;
                 float labelW = maxShortcutWidth > 0f
                     ? Math.Max(0f, shortcutColumnLeft - cursorX - shortcutGap)
-                    : Math.Max(0f, itemBounds.Right - cursorX);
+                    : Math.Max(0f, shortcutColumnRight - cursorX);
 
                 itemLayouts[i] = new MenuItemLayout(
                     i,

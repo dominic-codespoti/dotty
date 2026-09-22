@@ -56,7 +56,7 @@ public static class TabBarLayout
     public const float TabSpacing = 2f;
     public const float PaddingLeft = 6f;
     public const float PaddingTop = 2f;
-    public const float PaddingBottom = 2f;
+    public const float PaddingBottom = 4f;
     public const float NewTabButtonWidth = 28f;
     public const float CloseButtonWidth = 20f;
     public const float CloseButtonHeight = 20f;

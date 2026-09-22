@@ -25,6 +25,9 @@ public class TabBarSubsystemTests
         Assert.Single(layout.Tabs);
         Assert.True(layout.Tabs[0].TabBounds.Width > 0);
         Assert.True(layout.NewTabButtonBounds.Width > 0);
+        Assert.Equal(
+            TabBarLayout.PaddingBottom,
+            layout.BarBounds.Bottom - layout.Tabs[0].TabBounds.Bottom);
     }
 
     [Fact]

@@ -28,10 +28,12 @@ public class TerminalSession : IDisposable
     private int _initialCols = 0;
     private int _initialRows = 0;
     private bool _isStarted = false;
+    private int _pendingOutputChunks;
 
     public ITerminalParser Parser { get; }
     public TerminalAdapter Adapter { get; }
     public bool IsStarted => _isStarted;
+    public bool OutputBacklogged => Volatile.Read(ref _pendingOutputChunks) != 0;
 
     public event Action<byte[]>? RawInputReceived;
     public event Action<string>? ClipboardWriteRequested;
@@ -283,6 +285,7 @@ public class TerminalSession : IDisposable
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     byte[] chunk = ArrayPool<byte>.Shared.Rent(131072);
+                    bool counted = false;
                     bool handedOff = false;
                     try
                     {
@@ -293,12 +296,19 @@ public class TerminalSession : IDisposable
                             break;
                         }
 
+                        Interlocked.Increment(ref _pendingOutputChunks);
+                        counted = true;
                         await channel.Writer.WriteAsync((chunk, bytesRead), cancellationToken);
                         handedOff = true;
                     }
                     catch
                     {
-                        if (!handedOff) ArrayPool<byte>.Shared.Return(chunk);
+                        if (!handedOff)
+                        {
+                            if (counted)
+                                Interlocked.Decrement(ref _pendingOutputChunks);
+                            ArrayPool<byte>.Shared.Return(chunk);
+                        }
                         break;
                     }
                 }
@@ -369,6 +379,7 @@ public class TerminalSession : IDisposable
                     catch { }
                     finally
                     {
+                        Interlocked.Decrement(ref _pendingOutputChunks);
                         ArrayPool<byte>.Shared.Return(chunk);
                     }
                     try { Adapter.FlushRender(); } catch { }
@@ -379,9 +390,12 @@ public class TerminalSession : IDisposable
             {
                 try { await readerTask.ConfigureAwait(false); } catch { }
                 while (channel.Reader.TryRead(out var pending))
+                {
+                    Interlocked.Decrement(ref _pendingOutputChunks);
                     ArrayPool<byte>.Shared.Return(pending.Data);
+                }
             }
-        }, cancellationToken);
+        });
     }
 
     public void Dispose()

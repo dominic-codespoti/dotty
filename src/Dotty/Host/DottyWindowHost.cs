@@ -71,6 +71,7 @@ internal static class DottyWindowHost
     private static int _committedFramebufferWidth = -1;
     private static int _committedFramebufferHeight = -1;
     private static int _committedAtlasVersion = int.MinValue;
+    private static long _lastPresentTimestampMs;
     /// <summary>
     /// Idle-frame throttle (ms). The Silk render loop is unthrottled and VSync only
     /// engages inside SwapBuffers, which clean frames skip — without this the loop
@@ -82,6 +83,12 @@ internal static class DottyWindowHost
     /// of idle CPU that buys nothing observable.
     /// </summary>
     private const int IdleFrameSleepMs = 1;
+    /// <summary>
+    /// While a PTY consumer has queued output, coalesce repaint requests to
+    /// roughly 30 FPS. Interactive writes have no backlog by the time they
+    /// request a frame, so they retain normal VSync cadence and latency.
+    /// </summary>
+    private const int BackloggedFrameIntervalMs = 30;
 
     private static bool _showTabBar = true;
     private static ContextMenuModel? _activeContextMenu;
@@ -90,6 +97,7 @@ internal static class DottyWindowHost
     public static void Run()
     {
         _closed = false;
+        _lastPresentTimestampMs = 0;
         _lifecycle = new WindowLifecycleCoordinator();
         global::Silk.NET.Windowing.Glfw.GlfwWindowing.RegisterPlatform();
         global::Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
@@ -663,7 +671,20 @@ internal static class DottyWindowHost
             Thread.Sleep(IdleFrameSleepMs);
             return;
         }
-
+        bool contentOnly = (pendingReasons & ~WindowFrameReason.Content) == WindowFrameReason.None;
+        if (contentOnly &&
+            _lastPresentTimestampMs != 0 &&
+            now - _lastPresentTimestampMs < BackloggedFrameIntervalMs)
+        {
+            for (int i = 0; i < visibleLeaves.Length; i++)
+            {
+                if (visibleLeaves[i].Session.OutputBacklogged)
+                {
+                    Thread.Sleep(IdleFrameSleepMs);
+                    return;
+                }
+            }
+        }
         WindowFrameReason consumedReasons = WindowPresentationGate.Consume();
         try
         {
@@ -684,6 +705,7 @@ internal static class DottyWindowHost
                     _themeBackground,
                     false);
                 _window.SwapBuffers();
+                _lastPresentTimestampMs = GetClockMilliseconds();
                 CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
                 return;
             }
@@ -750,6 +772,7 @@ internal static class DottyWindowHost
                 frame.MenuInstanceStart,
                 frame.MenuChromeStart);
             _window.SwapBuffers();
+            _lastPresentTimestampMs = GetClockMilliseconds();
             CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
         }
         catch

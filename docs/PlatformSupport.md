@@ -52,6 +52,36 @@ The CI matrix builds Linux x64, macOS Intel, macOS arm64, and Windows x64 on
 native runners. Nightly builds additionally validate Linux arm64 and Windows
 arm64 publish outputs.
 
+## Desktop presentation and native verification
+
+The desktop host requests an OpenGL 3.3 core context on every platform, with
+VSync disabled and automatic buffer swaps disabled. It renders and explicitly
+swaps only after a pending invalidation produces a complete dirty frame. On a
+native Wayland session this is a manual-swap, demand-driven presentation
+policy: clean frames retain the current front buffer instead of continuously
+swapping. Focus, resize, content, input, tab/pane topology, overlays, cursor
+blink, theme/atlas changes, selection, and selection autoscroll all invalidate
+the next frame.
+
+Window focus loss resets transient keyboard and mouse state before focus can
+return, including held modifiers, pressed buttons, pointer/reporting ownership,
+selection-drag ownership, hover state, and click tracking. When terminal focus
+reporting is enabled, the active pane receives the corresponding focus report.
+Each pane keeps its own selection and scroll offset; while a pane is scrolled
+through its retained scrollback, its cursor is not drawn.
+
+Keep these verification targets separate:
+
+- The automated GUI smoke is Linux X11 under Xvfb. It checks host startup and
+  does not provide a Wayland compositor or native macOS/Windows desktop.
+- Native Wayland verification must run inside a real Wayland compositor.
+  Exercise startup, focus loss/return during a held key or mouse drag,
+  scrolling and selection autoscroll, pane/tab changes, resize, and cursor
+  suppression while scrolled.
+- macOS and Windows desktop verification likewise requires native sessions.
+  Passing X11/Xvfb startup does not establish native Wayland, macOS, or
+  Windows rendering, input, OpenGL, or presentation behavior.
+
 ## Configuration and user data
 
 The configuration file is JSON and is watched for atomic changes:

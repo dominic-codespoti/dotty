@@ -77,6 +77,8 @@ public partial class TerminalBuffer : IRenderSource
     private CursorState _alternateSavedCursorState;
 
     private ulong[] _rowGenerations = Array.Empty<ulong>();
+    private readonly object _snapshotPoolGate = new();
+    private RenderSnapshot? _snapshotPoolHead;
     private ulong _globalGeneration;
     /// <summary>
     /// Monotonic identity generation for diagnostic correlation.
@@ -176,21 +178,22 @@ public partial class TerminalBuffer : IRenderSource
         _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
         ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
-    public ushort GetOrCreateHyperlinkId(string uri)
+    public ushort GetOrCreateHyperlinkId(string uri) =>
+        GetOrCreateHyperlinkId(uri.AsSpan());
+
+    internal ushort GetOrCreateHyperlinkId(ReadOnlySpan<char> uri)
     {
-        if (string.IsNullOrEmpty(uri))
-        {
+        if (uri.IsEmpty)
             return 0;
-        }
-        // O(1) lookup using dictionary
-        if (_hyperlinkLookup.TryGetValue(uri, out ushort id))
-        {
+
+        var lookup = _hyperlinkLookup.GetAlternateLookup<ReadOnlySpan<char>>();
+        if (lookup.TryGetValue(uri, out ushort id))
             return id;
-        }
-        // Not found - add new entry
+
+        string value = uri.ToString();
         ushort idx = (ushort)_hyperlinks.Count;
-        _hyperlinks.Add(uri);
-        _hyperlinkLookup[uri] = idx;
+        _hyperlinks.Add(value);
+        _hyperlinkLookup[value] = idx;
         return idx;
     }
 
@@ -263,11 +266,11 @@ public partial class TerminalBuffer : IRenderSource
 
     private void InitializeTabStops()
     {
-        _tabStops = new bool[Columns];
+        if (_tabStops == null || _tabStops.Length < Columns)
+            Array.Resize(ref _tabStops, Columns);
+        Array.Clear(_tabStops!, 0, Columns);
         for (int c = 0; c < Columns; c += 8)
-        {
             _tabStops[c] = true;
-        }
     }
 
     public void SetTabStopAt(int col)
@@ -533,6 +536,36 @@ public partial class TerminalBuffer : IRenderSource
     public string GetScrollbackLineText(int index)
         => GetScrollbackLine(index).Text ?? string.Empty;
 
+    internal RenderSnapshot RentRenderSnapshot()
+    {
+        lock (_snapshotPoolGate)
+        {
+            RenderSnapshot snapshot;
+            if (_snapshotPoolHead is null)
+            {
+                snapshot = new RenderSnapshot();
+            }
+            else
+            {
+                snapshot = _snapshotPoolHead;
+                _snapshotPoolHead = snapshot.NextPooled;
+                snapshot.NextPooled = null;
+            }
+
+            snapshot.Activate(this);
+            return snapshot;
+        }
+    }
+
+    internal void ReturnRenderSnapshot(RenderSnapshot snapshot)
+    {
+        lock (_snapshotPoolGate)
+        {
+            snapshot.NextPooled = _snapshotPoolHead;
+            _snapshotPoolHead = snapshot;
+        }
+    }
+
     /// <summary>
     /// Captures the render state under the caller's SyncRoot hold: one bounded
     /// memcpy of the cell arenas plus style/generation/scrollback metadata.
@@ -545,6 +578,7 @@ public partial class TerminalBuffer : IRenderSource
     {
         var styles = StyleSet.CaptureStylesShared();
         var snapshot = RenderSnapshot.Capture(
+            this,
             ActiveBuffer,
             _rowGenerations,
             styles,
@@ -582,6 +616,7 @@ public partial class TerminalBuffer : IRenderSource
     {
         var styles = StyleSet.CaptureStylesShared();
         var snapshot = RenderSnapshot.CaptureVisible(
+            this,
             ActiveBuffer,
             _rowGenerations,
             styles,
@@ -994,7 +1029,7 @@ public partial class TerminalBuffer : IRenderSource
 
     internal void MarkRowDirty(int row)
     {
-        if (row < 0 || row >= _rowGenerations.Length) return;
+        if (row < 0 || row >= Rows) return;
         unchecked { _rowGenerations[row]++; }
         unchecked { _globalGeneration++; }
     }
@@ -1002,7 +1037,7 @@ public partial class TerminalBuffer : IRenderSource
     private void MarkRowRangeDirty(int start, int count)
     {
         if (start < 0) start = 0;
-        int end = Math.Min(start + count, _rowGenerations.Length);
+        int end = Math.Min(start + count, Rows);
         for (int i = start; i < end; i++)
         {
             unchecked { _rowGenerations[i]++; }
@@ -1012,12 +1047,13 @@ public partial class TerminalBuffer : IRenderSource
 
     private void MarkAllRowsDirty()
     {
-        for (int i = 0; i < _rowGenerations.Length; i++)
+        for (int i = 0; i < Rows; i++)
         {
             unchecked { _rowGenerations[i]++; }
         }
-        unchecked { _globalGeneration += (ulong)_rowGenerations.Length; }
+        unchecked { _globalGeneration += (ulong)Rows; }
     }
+
 
     /// <summary>
     /// Bumps only the identity generations for [start, start+count). Used by
@@ -1028,7 +1064,7 @@ public partial class TerminalBuffer : IRenderSource
     private void BumpIdentity(int start, int count)
     {
         if (start < 0) start = 0;
-        int end = Math.Min(start + count, _rowGenerations.Length);
+        int end = Math.Min(start + count, Rows);
         for (int i = start; i < end; i++)
             unchecked { _rowGenerations[i]++; }
         unchecked { _globalGeneration += (ulong)(end - start); }
@@ -1036,11 +1072,11 @@ public partial class TerminalBuffer : IRenderSource
 
     public ulong GetRowGeneration(int row)
     {
-        if (row < 0 || row >= _rowGenerations.Length) return 0;
+        if (row < 0 || row >= Rows) return 0;
         return _rowGenerations[row];
     }
 
-    public ReadOnlySpan<ulong> RowGenerations => _rowGenerations;
+    public ReadOnlySpan<ulong> RowGenerations => _rowGenerations.AsSpan(0, Rows);
 
     /// <summary>
     /// Notify the active screen that a render cycle is starting so it can

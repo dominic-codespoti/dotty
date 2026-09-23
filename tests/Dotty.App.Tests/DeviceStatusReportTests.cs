@@ -10,7 +10,7 @@ public class DeviceStatusReportTests
     {
         var adapter = new TerminalAdapter(rows: 24, columns: 80);
         string? reply = null;
-        adapter.ReplyRequested += r => reply = r;
+        adapter.ReplyRequested += r => reply = r.ToString();
 
         adapter.OnDeviceStatusReport(6);
 
@@ -22,7 +22,7 @@ public class DeviceStatusReportTests
     {
         var adapter = new TerminalAdapter(rows: 24, columns: 80);
         string? reply = null;
-        adapter.ReplyRequested += r => reply = r;
+        adapter.ReplyRequested += r => reply = r.ToString();
 
         adapter.OnCursorPositionReport();
 

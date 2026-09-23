@@ -3,6 +3,7 @@ obj
 BenchmarkDotNet.Artifacts/
 artifacts/
 .ci-publish/
+/publish/
 *.nupkg
 *.snupkg
 

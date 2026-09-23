@@ -142,8 +142,27 @@ Changes are debounced and applied on the desktop UI thread. Invalid JSON keeps
 the last valid configuration and is reported through the host diagnostics.
 Themes belong in the platform themes directory; Lua startup scripts (`config.lua`
 or `init.lua`) belong in the platform configuration directory. See
-[Configuration Guide](docs/Configuration.md) for the complete field list and
+[Configuration reference](docs/Configuration.md) for the complete field list and
 [Platform Support](docs/PlatformSupport.md) for path and troubleshooting details.
+
+### Controls at a glance
+
+Common built-in chords include `ctrl+shift+t` (new tab),
+`ctrl+shift+w` (close the focused pane, or the tab when it is the only pane),
+`ctrl+tab`/`ctrl+shift+tab` (next/previous tab), `alt+1` through `alt+9`
+(switch tab), `ctrl+shift+c`/`ctrl+shift+v` (copy/paste),
+`ctrl+shift+f` (search), `ctrl+shift+d`/`ctrl+shift+s` (split),
+`alt+left`/`alt+right`/`alt+up`/`alt+down` (focus a pane), `f11` (fullscreen),
+`ctrl+plus`/`ctrl+minus` (zoom), `ctrl+0` (reset zoom), and `ctrl+shift+q`
+(quit). `CloseTab` has no built-in chord; the full reference also lists every
+other configurable action without a default binding.
+
+Search is per tab, includes scrollback, and reveals the selected match.
+Pointer input targets the pane under the pointer; terminal mouse reporting
+takes precedence, while `Shift` exposes local scrolling and selection. See the
+[Configuration reference](docs/Configuration.md#keybindings) for the exact
+chord/action table, search editing rules, and pointer ergonomics, or the
+[Configuration walkthrough](docs/guides/Configuration.md) for examples.
 
 ## Documentation
 

@@ -6,7 +6,6 @@ namespace Dotty.Runtime.Tabs;
 public sealed class TerminalTab : IDisposable
 {
     private string _title;
-    private int _scrollOffset;
     private bool _isDisposed;
 
     public Guid Id { get; } = Guid.NewGuid();
@@ -29,46 +28,20 @@ public sealed class TerminalTab : IDisposable
     public TerminalSession Session => ActivePane.Session;
     public string? WorkingDirectory { get; }
 
-    public int ScrollOffset
-    {
-        get => _scrollOffset;
-        private set => _scrollOffset = Math.Max(0, value);
-    }
-
     public bool IsActive { get; set; }
     public bool HasBellAlert { get; set; }
     public event Action<string>? TitleChanged;
+    public event Action<LeafPane, int>? ProcessExited;
 
-    public TerminalTab(string? title = null, string? workingDirectory = null, int rows = 24, int columns = 80)
+    public TerminalTab(string? title = null, string? workingDirectory = null, int rows = 24, int columns = 80, string? shell = null, bool deferStart = false)
     {
         _title = string.IsNullOrWhiteSpace(title) ? "Terminal" : title;
         WorkingDirectory = workingDirectory;
-        PaneTree = new PaneTree(workingDirectory: workingDirectory, rows: rows, columns: columns);
+        PaneTree = new PaneTree(rows: rows, columns: columns);
         Session.TitleChanged += OnSessionTitleChanged;
-    }
-
-    public void ScrollToBottom()
-    {
-        _scrollOffset = 0;
-    }
-
-    public void ScrollUp(int lines, int maxScrollback)
-    {
-        if (lines <= 0) return;
-        var maxOffset = Math.Max(0, maxScrollback);
-        _scrollOffset = Math.Min(maxOffset, _scrollOffset + lines);
-    }
-
-    public void ScrollDown(int lines)
-    {
-        if (lines <= 0) return;
-        _scrollOffset = Math.Max(0, _scrollOffset - lines);
-    }
-
-    public void ScrollTo(int offset, int maxScrollback)
-    {
-        var maxOffset = Math.Max(0, maxScrollback);
-        _scrollOffset = Math.Clamp(offset, 0, maxOffset);
+        PaneTree.ProcessExited += OnPaneProcessExited;
+        if (!deferStart && (!string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell)))
+            Session.StartWithOptions(shell: shell, workingDirectory: workingDirectory);
     }
 
     private void OnSessionTitleChanged(string newTitle)
@@ -78,13 +51,18 @@ public sealed class TerminalTab : IDisposable
             Title = newTitle;
         }
     }
+    private void OnPaneProcessExited(LeafPane leaf, int exitCode)
+    {
+        if (!_isDisposed)
+            ProcessExited?.Invoke(leaf, exitCode);
+    }
 
     public void Dispose()
     {
         if (_isDisposed) return;
         _isDisposed = true;
-
         Session.TitleChanged -= OnSessionTitleChanged;
+        PaneTree.ProcessExited -= OnPaneProcessExited;
         PaneTree.Dispose();
     }
 }

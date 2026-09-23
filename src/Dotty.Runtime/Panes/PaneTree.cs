@@ -9,10 +9,15 @@ public sealed class PaneTree : IDisposable
 {
     private PaneNode _root;
     private LeafPane _activePane;
-    // Leaves is a snapshot view cached until Split or Close changes the node
-    // topology. Layout only changes bounds/session sizes, not the leaf set.
     private List<LeafPane>? _leaves;
     private ReadOnlyCollection<LeafPane>? _leavesView;
+    private readonly Dictionary<LeafPane, Action<int>> _exitHandlers = new();
+    private readonly object _exitLock = new();
+    private bool _isDisposed;
+
+    public event Action<LeafPane, LeafPane>? ActivePaneChanged;
+    public event Action? TopologyChanged;
+    public event Action<LeafPane, int>? ProcessExited;
 
     // The only topology mutations in this class are Split's root/child
     // replacement and Close's root/child replacement. Both call
@@ -23,19 +28,34 @@ public sealed class PaneTree : IDisposable
         _leaves = null;
         _leavesView = null;
     }
-    private bool _isDisposed;
 
-    public PaneNode Root => _root;
+    public PaneNode Root
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _root;
+        }
+    }
 
     public LeafPane ActivePane
     {
-        get => _activePane;
+        get
+        {
+            ThrowIfDisposed();
+            return _activePane;
+        }
         set
         {
-            if (value == null) throw new ArgumentNullException(nameof(value));
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(value);
             if (!ContainsLeaf(value))
                 throw new InvalidOperationException("Active pane must belong to the pane tree.");
+            if (ReferenceEquals(_activePane, value)) return;
+
+            var previous = _activePane;
             _activePane = value;
+            ActivePaneChanged?.Invoke(previous, value);
         }
     }
 
@@ -43,11 +63,8 @@ public sealed class PaneTree : IDisposable
     {
         get
         {
-            if (_leavesView != null)
-            {
-                return _leavesView;
-            }
-
+            ThrowIfDisposed();
+            if (_leavesView != null) return _leavesView;
             var leaves = _leaves ?? new List<LeafPane>();
             CollectLeaves(_root, leaves);
             _leaves = leaves;
@@ -60,33 +77,36 @@ public sealed class PaneTree : IDisposable
     {
         _activePane = initialPane ?? throw new ArgumentNullException(nameof(initialPane));
         _root = initialPane;
+        Subscribe(initialPane);
     }
 
     public PaneTree(string? workingDirectory = null, string? shell = null, int rows = 24, int columns = 80)
     {
         var session = new TerminalSession(rows: rows, columns: columns);
+        var initialPane = new LeafPane(session);
+        _activePane = initialPane;
+        _root = initialPane;
+        Subscribe(initialPane);
         if (!string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell))
         {
             session.StartWithOptions(shell: shell, workingDirectory: workingDirectory);
         }
-        var initialPane = new LeafPane(session);
-        _activePane = initialPane;
-        _root = initialPane;
     }
 
     public LeafPane Split(LeafPane target, SplitDirection direction, string? workingDirectory = null, string? shell = null)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(target);
         if (!ContainsLeaf(target))
             throw new InvalidOperationException("Target pane does not belong to this pane tree.");
 
         var session = new TerminalSession(rows: Math.Max(1, target.Rows), columns: Math.Max(1, target.Columns));
+        var newPane = new LeafPane(session);
+        Subscribe(newPane);
         if (!string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell))
         {
             session.StartWithOptions(shell: shell, workingDirectory: workingDirectory);
         }
-
-        var newPane = new LeafPane(session);
         var parent = target.Parent;
 
         var splitNode = new SplitPaneNode(direction, target, newPane, splitRatio: 0.5f);
@@ -101,12 +121,16 @@ public sealed class PaneTree : IDisposable
         }
 
         InvalidateLeaves();
-        ActivePane = newPane;
+        var previous = _activePane;
+        _activePane = newPane;
+        TopologyChanged?.Invoke();
+        ActivePaneChanged?.Invoke(previous, newPane);
         return newPane;
     }
 
     public bool Close(LeafPane target)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(target);
         if (!ContainsLeaf(target))
             return false;
@@ -135,27 +159,33 @@ public sealed class PaneTree : IDisposable
         {
             grandParent.ReplaceChild(parent, sibling);
         }
+        Unsubscribe(target);
         InvalidateLeaves();
 
-        target.Dispose();
-
-        if (ReferenceEquals(_activePane, target))
+        var wasActive = ReferenceEquals(_activePane, target);
+        LeafPane? nextActive = null;
+        if (wasActive)
         {
-            if (sibling is LeafPane siblingLeaf)
+            nextActive = sibling as LeafPane;
+            if (nextActive == null)
             {
-                _activePane = siblingLeaf;
+                var remaining = new List<LeafPane>();
+                CollectLeaves(_root, remaining);
+                nextActive = remaining[0];
             }
-            else
-            {
-                var remaining = Leaves;
-                _activePane = remaining[0];
-            }
+            _activePane = nextActive;
         }
+
+        target.Dispose();
+        TopologyChanged?.Invoke();
+        if (wasActive)
+            ActivePaneChanged?.Invoke(target, nextActive!);
         return true;
     }
 
     public void Layout(float totalWidth, float totalHeight, float cellWidth, float cellHeight, float dividerThickness = 2f)
     {
+        ThrowIfDisposed();
         if (totalWidth <= 0 || totalHeight <= 0) return;
         LayoutNode(_root, new PaneRect(0, 0, totalWidth, totalHeight), cellWidth, cellHeight, dividerThickness);
     }
@@ -219,6 +249,7 @@ public sealed class PaneTree : IDisposable
 
     public LeafPane? FindPaneAt(float x, float y)
     {
+        ThrowIfDisposed();
         return FindPaneAtNode(_root, x, y);
     }
 
@@ -239,6 +270,7 @@ public sealed class PaneTree : IDisposable
 
     public SplitPaneNode? HitTestDivider(float x, float y, float hitTolerance = 4f)
     {
+        ThrowIfDisposed();
         return HitTestDividerNode(_root, x, y, hitTolerance);
     }
 
@@ -268,6 +300,7 @@ public sealed class PaneTree : IDisposable
 
     public LeafPane? NavigateFocus(LeafPane current, PaneDirection direction)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(current);
         var leaves = Leaves;
         if (leaves.Count <= 1) return null;
@@ -340,14 +373,56 @@ public sealed class PaneTree : IDisposable
         }
     }
 
+    private void Subscribe(LeafPane leaf)
+    {
+        Action<int> handler = code =>
+        {
+            lock (_exitLock)
+            {
+                if (_isDisposed || !_exitHandlers.ContainsKey(leaf)) return;
+            }
+
+            try { ProcessExited?.Invoke(leaf, code); } catch { }
+        };
+        lock (_exitLock)
+        {
+            if (_isDisposed || _exitHandlers.ContainsKey(leaf)) return;
+            _exitHandlers.Add(leaf, handler);
+            leaf.Session.ProcessExited += handler;
+        }
+    }
+
+    private void Unsubscribe(LeafPane leaf)
+    {
+        lock (_exitLock)
+        {
+            if (!_exitHandlers.Remove(leaf, out var handler)) return;
+            try { leaf.Session.ProcessExited -= handler; } catch { }
+        }
+    }
+
     public void Dispose()
     {
-        if (_isDisposed) return;
-        _isDisposed = true;
-
-        foreach (var leaf in Leaves)
+        lock (_exitLock)
         {
-            leaf.Dispose();
+            if (_isDisposed) return;
+            _isDisposed = true;
+            foreach (var entry in _exitHandlers)
+            {
+                try { entry.Key.Session.ProcessExited -= entry.Value; } catch { }
+            }
+            _exitHandlers.Clear();
         }
+
+        var leaves = new List<LeafPane>();
+        CollectLeaves(_root, leaves);
+        foreach (var leaf in leaves)
+            leaf.Dispose();
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_isDisposed)
+            throw new ObjectDisposedException(nameof(PaneTree));
     }
 }

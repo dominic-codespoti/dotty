@@ -34,14 +34,21 @@ public static class SearchQuadBuilder
     /// <param name="visibleRows">Number of visible rows in the viewport.</param>
     /// <param name="visibleCols">Number of visible columns in the viewport.</param>
     /// <param name="destination">Destination span for generated CellInstances.</param>
+    /// <param name="logicalRowOffset">Offset from a match's logical row to its visible row.</param>
+    /// <param name="globalRowOffset">Global row offset of the pane in the composed frame.</param>
+    /// <param name="globalColumnOffset">Global column offset of the pane in the composed frame.</param>
     /// <returns>Number of cell instances written.</returns>
     public static int BuildHighlightQuads(
         IReadOnlyList<SearchMatch> matches,
         int visibleRows,
         int visibleCols,
-        Span<CellInstance> destination)
+        Span<CellInstance> destination,
+        int logicalRowOffset = 0,
+        int globalRowOffset = 0,
+        int globalColumnOffset = 0)
     {
-        if (matches == null || matches.Count == 0 || destination.IsEmpty)
+        if (matches == null || matches.Count == 0 || destination.IsEmpty
+            || visibleRows <= 0 || visibleCols <= 0)
         {
             return 0;
         }
@@ -51,9 +58,11 @@ public static class SearchQuadBuilder
         for (int m = 0; m < matches.Count; m++)
         {
             var match = matches[m];
+            long visibleRow = (long)match.Row + logicalRowOffset;
 
-            // Only highlight visible rows (row >= 0 and row < visibleRows)
-            if (match.Row < 0 || match.Row >= visibleRows)
+            // Match rows are logical rows. Translate them into the pane viewport
+            // before clipping, then place the surviving cells globally.
+            if (visibleRow < 0 || visibleRow >= visibleRows)
                 continue;
 
             int startCol = Math.Max(0, match.StartCol);
@@ -64,6 +73,7 @@ public static class SearchQuadBuilder
 
             var bg = match.IsActive ? ActiveMatchBackground : MatchBackground;
             var fg = match.IsActive ? ActiveMatchForeground : MatchForeground;
+            int targetRow = checked((int)visibleRow + globalRowOffset);
 
             for (int col = startCol; col < endCol; col++)
             {
@@ -72,8 +82,8 @@ public static class SearchQuadBuilder
 
                 destination[written++] = new CellInstance
                 {
-                    Col = (ushort)col,
-                    Row = (ushort)match.Row,
+                    Col = checked((ushort)(col + globalColumnOffset)),
+                    Row = checked((ushort)targetRow),
                     FgR = fg.R,
                     FgG = fg.G,
                     FgB = fg.B,

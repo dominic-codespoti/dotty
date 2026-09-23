@@ -11,7 +11,7 @@ current host is documented as Silk.NET/GLFW/OpenGL with SkiaSharp.
 | **Core Language** | C# (.NET 10) | Zig | Rust |
 | **Memory Management** | Managed (Garbage Collected with `Span<T>`/`ref struct` optimizations) | Manual / Arenas | Borrow Checker / Safe Manual |
 | **UI Framework** | Silk.NET/GLFW windowing with an OpenGL 3.3 renderer | Custom / Native (AppKit/GTK) | Custom Windowing (Mux/GUI split) |
-| **Configuration** | JSON with atomic hot reload | Plain text configuration | Lua scripting engine |
+| **Configuration** | JSON with atomic hot reload plus a Lua startup script API for configuration, keybindings, tabs/panes, and event hooks | Plain text configuration | Lua scripting engine |
 
 **Analysis:**
 Both Ghostty and Wezterm are written in low-level systems programming languages without a Garbage Collector runtime. While Dotty employs aggressive memory optimization techniques (zero-allocation parsing, `Span<T>`), it fundamentally relies on the .NET runtime. This means Dotty always carries a heavier baseline memory footprint and is subject to potential GC pauses, unlike the deterministic memory models of Zig and Rust.
@@ -45,7 +45,7 @@ contract; the helper must not depend on repository-relative paths.
 
 **Comparison notes:**
 *   **Multiplexing (tmux-like behavior):** Wezterm has a built-in client/server architecture allowing users to detach and reattach to terminal sessions locally or over SSH. Dotty provides local terminal sessions, tabs, and panes but no client/server multiplexer.
-*   **Scriptability:** Dotty provides Lua startup/configuration hooks and keybinding hooks. Wezterm's Lua engine exposes a broader client/server and event-hook surface.
+*   **Scriptability:** Dotty exposes Lua configuration, keybinding callbacks, tab/pane operations, timers, actions, and event/value hooks; Wezterm's Lua engine exposes a broader client/server and event-hook surface.
 *   **Split Panes and Native Tabs:** Dotty provides tabs and split panes in its runtime. Ghostty and Wezterm also provide built-in window management.
 *   **Image Protocol Support:** Wezterm supports the Kitty image protocol and iTerm2 image protocols to display inline graphics; Dotty does not currently document those protocols as supported.
 

@@ -36,6 +36,27 @@ internal sealed class ReflowMapping
     public bool InScrollback { get; internal set; }
     public bool IsMapped { get; internal set; }
 
+
+    internal void Reset(int rows, int columns)
+    {
+        _positions.Clear();
+        _lineLengths.Clear();
+        NewScrollbackRows = 0;
+        RetainedStart = 0;
+        NewRows = rows;
+        NewColumns = columns;
+        Row = -1;
+        Column = -1;
+        WrapPending = false;
+        InScrollback = false;
+        IsMapped = false;
+    }
+
+    internal void EnsureCapacity(int positionCount, int lineCount)
+    {
+        _positions.EnsureCapacity(positionCount);
+        _lineLengths.EnsureCapacity(lineCount);
+    }
     internal void SetLineLength(int logicalLine, int length) => _lineLengths[logicalLine] = length;
 
     internal void Add(int logicalLine, int cellOffset, ReflowPosition position) =>

@@ -1,9 +1,7 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
-using System.Text;
+using System.IO;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Parser;
@@ -16,29 +14,131 @@ namespace Dotty.Runtime.Sessions;
 
 public class TerminalSession : IDisposable
 {
+    private const int InitialPtyOutputChunkCount = 2;
+    private const int PtyOutputChunkCount = 32;
+    private const int PtyOutputChunkSize = 128 * 1024;
+
     private readonly Func<IPty> _ptyFactory;
     private readonly bool _checkPtySupport;
+    private readonly object _lifecycleLock = new();
+    private readonly object _ptyInputQueueLock = new();
+    private readonly object _ptyOutputQueueLock = new();
+    private byte[][] _ptyOutputChunks = CreateOutputChunks();
+    private byte[][] _ptyOutputChunkScratch = new byte[PtyOutputChunkCount][];
+    private int[] _ptyOutputLengths = new int[PtyOutputChunkCount];
+    private int[] _ptyOutputLengthScratch = new int[PtyOutputChunkCount];
+    private readonly ManualResetEventSlim _ptyOutputAvailable = new(false);
+    private readonly ManualResetEventSlim _ptyOutputSpaceAvailable = new(true);
+    private byte[] _ptyInputBuffer = new byte[4096];
+    private int[] _ptyInputLengths = new int[128];
+    private readonly ManualResetEventSlim _ptyInputAvailable = new(false);
     private IPty? _pty;
     private CancellationTokenSource? _readCancellation;
-    private readonly SemaphoreSlim _ptyInputWriteLock = new(1, 1);
-    private readonly object _ptyInputQueueLock = new();
-    private Task _ptyInputTail = Task.CompletedTask;
+    private Thread? _ptyInputWriterThread;
+    private Thread? _ptyOutputReaderThread;
+    private Thread? _ptyOutputConsumerThread;
+    private Stream? _ptyOutputReader;
+    private CancellationToken _ptyOutputCancellationToken;
+    private int _ptyInputReadOffset;
+    private int _ptyInputWriteOffset;
+    private int _ptyInputQueuedBytes;
+    private int _ptyInputLengthRead;
+    private int _ptyInputLengthWrite;
+    private int _ptyInputLengthCount;
+    private int _inputWaitEventDisposed;
+    private int _outputWaitEventsDisposed;
+    private bool _ptyInputWriterStopping;
+    private int _ptyOutputReadIndex;
+    private int _ptyOutputWriteIndex;
+    private int _ptyOutputCount;
+    private int _ptyOutputCapacity = InitialPtyOutputChunkCount;
+    private bool _ptyOutputReaderCompleted;
     private bool _disposed;
+    private bool _suppressProcessExit;
+    private int _processExitRaised;
     private bool _hasReceivedInitialResize = false;
     private int _initialCols = 0;
     private int _initialRows = 0;
-    private bool _isStarted = false;
+    private int _isStarted;
     private int _pendingOutputChunks;
+    // Test-only checkpoints keep allocation measurements local to the PTY worker
+    // threads instead of observing unrelated process-wide activity.
+    private int _allocationProbeEnabled;
+    private long _ptyInputWriterAllocatedBytes;
+    private int _ptyInputWriterMeasuredWrites;
+    private long _ptyOutputReaderAllocatedBytes;
+    private int _ptyOutputReaderMeasuredChunks;
+    private long _ptyOutputConsumerAllocatedBytes;
+    private int _ptyOutputConsumerMeasuredChunks;
+    private Task _ptyPipelineCompletion = Task.CompletedTask;
+    private TaskCompletionSource<object?>? _ptyPipelineCompletionSource;
+
+    internal void BeginAllocationProbe()
+    {
+        Interlocked.Exchange(ref _ptyInputWriterAllocatedBytes, 0);
+        Volatile.Write(ref _ptyInputWriterMeasuredWrites, 0);
+        Interlocked.Exchange(ref _ptyOutputReaderAllocatedBytes, 0);
+        Volatile.Write(ref _ptyOutputReaderMeasuredChunks, 0);
+        Interlocked.Exchange(ref _ptyOutputConsumerAllocatedBytes, 0);
+        Volatile.Write(ref _ptyOutputConsumerMeasuredChunks, 0);
+        Volatile.Write(ref _allocationProbeEnabled, 1);
+    }
+
+    internal void EndAllocationProbe() => Volatile.Write(ref _allocationProbeEnabled, 0);
+
+    internal long PtyInputWriterAllocatedBytes => Interlocked.Read(ref _ptyInputWriterAllocatedBytes);
+    internal int PtyInputWriterMeasuredWrites => Volatile.Read(ref _ptyInputWriterMeasuredWrites);
+    internal long PtyOutputReaderAllocatedBytes => Interlocked.Read(ref _ptyOutputReaderAllocatedBytes);
+    internal int PtyOutputReaderMeasuredChunks => Volatile.Read(ref _ptyOutputReaderMeasuredChunks);
+    internal long PtyOutputConsumerAllocatedBytes => Interlocked.Read(ref _ptyOutputConsumerAllocatedBytes);
+    internal int PtyOutputConsumerMeasuredChunks => Volatile.Read(ref _ptyOutputConsumerMeasuredChunks);
+
+    private static byte[][] CreateOutputChunks()
+    {
+        var chunks = new byte[PtyOutputChunkCount][];
+        for (int i = 0; i < InitialPtyOutputChunkCount; i++)
+            chunks[i] = new byte[PtyOutputChunkSize];
+        return chunks;
+    }
+
+    private void GrowPtyOutputRing()
+    {
+        int oldCapacity = _ptyOutputCapacity;
+        int newCapacity = Math.Min(oldCapacity * 2, PtyOutputChunkCount);
+        Array.Clear(_ptyOutputChunkScratch, 0, _ptyOutputChunkScratch.Length);
+        Array.Clear(_ptyOutputLengthScratch, 0, _ptyOutputLengthScratch.Length);
+
+        for (int i = 0; i < _ptyOutputCount; i++)
+        {
+            int oldIndex = _ptyOutputReadIndex + i;
+            if (oldIndex >= oldCapacity)
+                oldIndex -= oldCapacity;
+            _ptyOutputChunkScratch[i] = _ptyOutputChunks[oldIndex];
+            _ptyOutputLengthScratch[i] = _ptyOutputLengths[oldIndex];
+        }
+        for (int i = oldCapacity; i < newCapacity; i++)
+            _ptyOutputChunkScratch[i] = new byte[PtyOutputChunkSize];
+
+        (_ptyOutputChunks, _ptyOutputChunkScratch) = (_ptyOutputChunkScratch, _ptyOutputChunks);
+        (_ptyOutputLengths, _ptyOutputLengthScratch) = (_ptyOutputLengthScratch, _ptyOutputLengths);
+        Array.Clear(_ptyOutputChunkScratch, 0, _ptyOutputChunkScratch.Length);
+        Array.Clear(_ptyOutputLengthScratch, 0, _ptyOutputLengthScratch.Length);
+        _ptyOutputCapacity = newCapacity;
+        _ptyOutputReadIndex = 0;
+        _ptyOutputWriteIndex = _ptyOutputCount;
+    }
 
     public ITerminalParser Parser { get; }
     public TerminalAdapter Adapter { get; }
-    public bool IsStarted => _isStarted;
+    public bool IsStarted => Volatile.Read(ref _isStarted) != 0;
     public bool OutputBacklogged => Volatile.Read(ref _pendingOutputChunks) != 0;
 
     public event Action<byte[]>? RawInputReceived;
     public event Action<string>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
     public event Action? RenderScheduled;
+    public event Action<int>? ProcessExited;
+
 
     private TimeSpan _refreshInterval = TimeSpan.FromMilliseconds(16);
 
@@ -96,29 +196,20 @@ public class TerminalSession : IDisposable
 
     public void Start()
     {
-        if (_isStarted) return;
-        _isStarted = true;
-
+        if (!BeginStart()) return;
         try
         {
             if (_checkPtySupport && !PtyFactory.IsSupported)
                 throw new PtyException(PtyFactory.GetUnsupportedReason() ?? "PTY is not supported on this platform.");
-
             _pty = _ptyFactory();
             _pty.ProcessExited += OnPtyProcessExited;
-
             var shell = Environment.GetEnvironmentVariable("DOTTY_SHELL")
                         ?? Environment.GetEnvironmentVariable("SHELL");
             if (string.IsNullOrWhiteSpace(shell)) shell = null;
-
-            var startCols = Adapter.Buffer?.Columns ?? 80;
-            var startRows = Adapter.Buffer?.Rows ?? 24;
-            _initialCols = startCols;
-            _initialRows = startRows;
+            _initialCols = Adapter.Buffer?.Columns ?? 80;
+            _initialRows = Adapter.Buffer?.Rows ?? 24;
             _hasReceivedInitialResize = false;
-
-            _pty.Start(shell: shell, columns: startCols, rows: startRows);
-
+            _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }
@@ -134,29 +225,21 @@ public class TerminalSession : IDisposable
         string? workingDirectory = null,
         IDictionary<string, string>? environmentVariables = null)
     {
-        if (_isStarted) return;
-        _isStarted = true;
-
+        if (!BeginStart()) return;
         try
         {
             if (_checkPtySupport && !PtyFactory.IsSupported)
                 throw new PtyException(PtyFactory.GetUnsupportedReason() ?? "PTY is not supported on this platform.");
-
             _pty = _ptyFactory();
             _pty.ProcessExited += OnPtyProcessExited;
             shell ??= Environment.GetEnvironmentVariable("DOTTY_SHELL")
                       ?? Environment.GetEnvironmentVariable("SHELL");
             if (string.IsNullOrWhiteSpace(shell)) shell = null;
-
-            var startCols = Adapter.Buffer?.Columns ?? 80;
-            var startRows = Adapter.Buffer?.Rows ?? 24;
-            _initialCols = startCols;
-            _initialRows = startRows;
+            _initialCols = Adapter.Buffer?.Columns ?? 80;
+            _initialRows = Adapter.Buffer?.Rows ?? 24;
             _hasReceivedInitialResize = false;
-
-            _pty.Start(shell: shell, columns: startCols, rows: startRows,
+            _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows,
                        workingDirectory: workingDirectory, environmentVariables: environmentVariables);
-
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }
@@ -167,20 +250,103 @@ public class TerminalSession : IDisposable
         }
     }
 
+    private bool BeginStart()
+    {
+        lock (_lifecycleLock)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(TerminalSession));
+            if (Volatile.Read(ref _isStarted) != 0) return false;
+            Volatile.Write(ref _isStarted, 1);
+            _suppressProcessExit = false;
+            Volatile.Write(ref _processExitRaised, 0);
+            var completion = new TaskCompletionSource<object?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _ptyPipelineCompletionSource = completion;
+            _ptyPipelineCompletion = completion.Task;
+            return true;
+        }
+    }
+
     private void ResetFailedStart()
     {
-        _isStarted = false;
+        TaskCompletionSource<object?>? completion;
+        lock (_lifecycleLock)
+        {
+            Volatile.Write(ref _isStarted, 0);
+            _suppressProcessExit = true;
+            Volatile.Write(ref _processExitRaised, 1);
+            completion = _ptyPipelineCompletionSource;
+        }
+
         try { _readCancellation?.Cancel(); } catch { }
+        lock (_ptyInputQueueLock)
+        {
+            _ptyInputWriterStopping = true;
+            _ptyInputAvailable.Set();
+        }
+        _ptyOutputSpaceAvailable.Set();
+        _ptyOutputAvailable.Set();
         try { if (_pty != null) _pty.ProcessExited -= OnPtyProcessExited; } catch { }
         try { _pty?.Dispose(); } catch { }
+        JoinThread(_ptyInputWriterThread);
+        JoinThread(_ptyOutputConsumerThread);
+        JoinThread(_ptyOutputReaderThread);
         try { _readCancellation?.Dispose(); } catch { }
+
+        lock (_ptyInputQueueLock)
+        {
+            _ptyInputWriterThread = null;
+            _ptyInputLengthCount = 0;
+            _ptyInputQueuedBytes = 0;
+            _ptyInputLengthRead = 0;
+            _ptyInputLengthWrite = 0;
+            _ptyInputReadOffset = 0;
+            _ptyInputWriteOffset = 0;
+        }
+        _ptyOutputReaderThread = null;
+        _ptyOutputConsumerThread = null;
+        _ptyOutputReader = null;
+        _ptyOutputCount = 0;
+        _ptyOutputReadIndex = 0;
+        _ptyOutputWriteIndex = 0;
+        _ptyOutputReaderCompleted = false;
+        Interlocked.Exchange(ref _pendingOutputChunks, 0);
+        lock (_lifecycleLock)
+        {
+            _ptyPipelineCompletionSource = null;
+            _ptyPipelineCompletion = Task.CompletedTask;
+        }
+        completion?.TrySetResult(null);
         _pty = null;
         _readCancellation = null;
     }
 
-    public void WriteInput(byte[] data)
+    private static void JoinThread(Thread? thread)
     {
-        if (_disposed || data == null || _pty?.InputStream == null) return;
+        if (thread != null
+            && thread != Thread.CurrentThread
+            && (thread.ThreadState & ThreadState.Unstarted) == 0)
+            thread.Join();
+    }
+
+    private void DisposeInputWaitEvent()
+    {
+        if (Interlocked.Exchange(ref _inputWaitEventDisposed, 1) == 0)
+            _ptyInputAvailable.Dispose();
+    }
+
+    private void DisposeOutputWaitEvents()
+    {
+        if (Interlocked.Exchange(ref _outputWaitEventsDisposed, 1) == 0)
+        {
+            _ptyOutputAvailable.Dispose();
+            _ptyOutputSpaceAvailable.Dispose();
+        }
+    }
+
+    public void WriteInput(ReadOnlySpan<byte> data)
+    {
+        if (_disposed || data.IsEmpty || _pty?.InputStream == null) return;
         QueuePtyInputWrite(data);
     }
 
@@ -189,44 +355,217 @@ public class TerminalSession : IDisposable
         if (_disposed || !Adapter.FocusReportingEnabled || _pty?.InputStream == null)
             return;
 
-        QueuePtyInputWrite(Encoding.ASCII.GetBytes(focused ? "\x1b[I" : "\x1b[O"));
+        if (focused)
+            QueuePtyInputWrite("\x1b[I"u8);
+        else
+            QueuePtyInputWrite("\x1b[O"u8);
     }
 
-    private void OnAdapterReplyRequested(string reply)
+    private void OnAdapterReplyRequested(ReadOnlySpan<char> reply)
     {
-        if (string.IsNullOrEmpty(reply)) return;
-        QueuePtyInputWrite(Encoding.ASCII.GetBytes(reply));
+        if (!reply.IsEmpty)
+            QueuePtyInputAsciiWrite(reply);
     }
 
-    private void QueuePtyInputWrite(byte[] data)
+    private void QueuePtyInputWrite(ReadOnlySpan<byte> data)
     {
-        if (data.Length == 0) return;
+        if (data.IsEmpty) return;
 
         lock (_ptyInputQueueLock)
         {
-            var previous = _ptyInputTail;
-            _ptyInputTail = Task.Run(async () =>
-            {
-                try { await previous.ConfigureAwait(false); } catch { }
-                await WritePtyInputAsync(data).ConfigureAwait(false);
-            });
+            if (_disposed || _ptyInputWriterStopping || _pty?.InputStream == null)
+                return;
+
+            EnsurePtyInputCapacity(data.Length);
+            EnsurePtyInputLengthCapacity();
+
+            int wasEmpty = _ptyInputLengthCount;
+            int writeOffset = _ptyInputWriteOffset;
+            int firstLength = Math.Min(data.Length, _ptyInputBuffer.Length - writeOffset);
+            data[..firstLength].CopyTo(_ptyInputBuffer.AsSpan(writeOffset, firstLength));
+            data[firstLength..].CopyTo(_ptyInputBuffer.AsSpan(0, data.Length - firstLength));
+            EnqueuePtyInputLength(data.Length, wasEmpty == 0);
         }
     }
 
-    private async Task WritePtyInputAsync(byte[] data)
+    private void QueuePtyInputAsciiWrite(ReadOnlySpan<char> text)
     {
-        var input = _pty?.InputStream;
-        if (input == null) return;
-        try
+        lock (_ptyInputQueueLock)
         {
-            await _ptyInputWriteLock.WaitAsync().ConfigureAwait(false);
-            await input.WriteAsync(data, 0, data.Length).ConfigureAwait(false);
-            await input.FlushAsync().ConfigureAwait(false);
+            if (_disposed || _ptyInputWriterStopping || _pty?.InputStream == null)
+                return;
+
+            EnsurePtyInputCapacity(text.Length);
+            EnsurePtyInputLengthCapacity();
+
+            int wasEmpty = _ptyInputLengthCount;
+            int writeOffset = _ptyInputWriteOffset;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char value = text[i];
+                _ptyInputBuffer[writeOffset] = value <= 0x7F ? (byte)value : (byte)'?';
+                if (++writeOffset == _ptyInputBuffer.Length)
+                    writeOffset = 0;
+            }
+            EnqueuePtyInputLength(text.Length, wasEmpty == 0);
         }
-        catch { }
-        finally
+    }
+
+    private void EnqueuePtyInputLength(int length, bool wasEmpty)
+    {
+        _ptyInputLengths[_ptyInputLengthWrite] = length;
+        if (++_ptyInputLengthWrite == _ptyInputLengths.Length)
+            _ptyInputLengthWrite = 0;
+        _ptyInputLengthCount++;
+        _ptyInputQueuedBytes += length;
+        _ptyInputWriteOffset += length;
+        if (_ptyInputWriteOffset >= _ptyInputBuffer.Length)
+            _ptyInputWriteOffset %= _ptyInputBuffer.Length;
+        if (wasEmpty)
+            _ptyInputAvailable.Set();
+    }
+
+    private void EnsurePtyInputCapacity(int additionalBytes)
+    {
+        int required = checked(_ptyInputQueuedBytes + additionalBytes);
+        if (required <= _ptyInputBuffer.Length)
+            return;
+
+        int capacity = _ptyInputBuffer.Length;
+        while (capacity < required)
+            capacity = capacity <= int.MaxValue / 2 ? capacity * 2 : required;
+
+        var expanded = new byte[capacity];
+        int firstLength = Math.Min(_ptyInputQueuedBytes, _ptyInputBuffer.Length - _ptyInputReadOffset);
+        _ptyInputBuffer.AsSpan(_ptyInputReadOffset, firstLength).CopyTo(expanded);
+        _ptyInputBuffer.AsSpan(0, _ptyInputQueuedBytes - firstLength)
+            .CopyTo(expanded.AsSpan(firstLength));
+        _ptyInputBuffer = expanded;
+        _ptyInputReadOffset = 0;
+        _ptyInputWriteOffset = _ptyInputQueuedBytes;
+    }
+
+    private void EnsurePtyInputLengthCapacity()
+    {
+        if (_ptyInputLengthCount < _ptyInputLengths.Length)
+            return;
+
+        var expanded = new int[checked(_ptyInputLengths.Length * 2)];
+        int firstLength = Math.Min(_ptyInputLengthCount, _ptyInputLengths.Length - _ptyInputLengthRead);
+        Array.Copy(_ptyInputLengths, _ptyInputLengthRead, expanded, 0, firstLength);
+        Array.Copy(_ptyInputLengths, 0, expanded, firstLength, _ptyInputLengthCount - firstLength);
+        _ptyInputLengths = expanded;
+        _ptyInputLengthRead = 0;
+        _ptyInputLengthWrite = _ptyInputLengthCount;
+    }
+
+    private void StartPtyInputWriter()
+    {
+        Thread writer;
+        lock (_ptyInputQueueLock)
         {
-            try { _ptyInputWriteLock.Release(); } catch { }
+            if (_ptyInputWriterThread != null)
+                return;
+            _ptyInputWriterStopping = false;
+            writer = new Thread(PtyInputWriterLoop) { IsBackground = true };
+            _ptyInputWriterThread = writer;
+        }
+        writer.Start();
+    }
+
+    private void PtyInputWriterLoop()
+    {
+        bool measureWrite = false;
+        long allocatedBeforeWrite = 0;
+        while (true)
+        {
+            if (!measureWrite)
+            {
+                measureWrite = Volatile.Read(ref _allocationProbeEnabled) != 0;
+                if (measureWrite)
+                    allocatedBeforeWrite = GC.GetAllocatedBytesForCurrentThread();
+            }
+
+            byte[] buffer;
+            int readOffset;
+            int length;
+            lock (_ptyInputQueueLock)
+            {
+                if (_ptyInputWriterStopping)
+                {
+                    if (_disposed)
+                        DisposeInputWaitEvent();
+                    return;
+                }
+                if (_ptyInputLengthCount == 0)
+                {
+                    _ptyInputAvailable.Reset();
+                    length = 0;
+                    buffer = _ptyInputBuffer;
+                    readOffset = 0;
+                }
+                else
+                {
+                    length = _ptyInputLengths[_ptyInputLengthRead];
+                    buffer = _ptyInputBuffer;
+                    readOffset = _ptyInputReadOffset;
+                }
+            }
+
+            if (length == 0)
+            {
+                _ptyInputAvailable.Wait();
+                continue;
+            }
+
+            try
+            {
+                var input = _pty?.InputStream;
+                if (input == null)
+                    throw new ObjectDisposedException(nameof(IPty.InputStream));
+                int firstLength = Math.Min(length, buffer.Length - readOffset);
+                input.Write(buffer.AsSpan(readOffset, firstLength));
+                if (firstLength < length)
+                    input.Write(buffer.AsSpan(0, length - firstLength));
+                input.Flush();
+            }
+            catch
+            {
+                lock (_ptyInputQueueLock)
+                {
+                    _ptyInputWriterStopping = true;
+                    _ptyInputLengthCount = 0;
+                    _ptyInputQueuedBytes = 0;
+                    _ptyInputLengthRead = _ptyInputLengthWrite;
+                    _ptyInputReadOffset = _ptyInputWriteOffset;
+                    _ptyInputAvailable.Reset();
+                }
+                if (_disposed)
+                    DisposeInputWaitEvent();
+                return;
+            }
+
+            lock (_ptyInputQueueLock)
+            {
+                _ptyInputQueuedBytes -= length;
+                _ptyInputReadOffset += length;
+                if (_ptyInputReadOffset >= _ptyInputBuffer.Length)
+                    _ptyInputReadOffset %= _ptyInputBuffer.Length;
+                if (++_ptyInputLengthRead == _ptyInputLengths.Length)
+                    _ptyInputLengthRead = 0;
+                _ptyInputLengthCount--;
+                if (_ptyInputLengthCount == 0)
+                    _ptyInputAvailable.Reset();
+            }
+
+            if (measureWrite)
+            {
+                Interlocked.Add(
+                    ref _ptyInputWriterAllocatedBytes,
+                    GC.GetAllocatedBytesForCurrentThread() - allocatedBeforeWrite);
+                Interlocked.Increment(ref _ptyInputWriterMeasuredWrites);
+                measureWrite = false;
+            }
         }
     }
 
@@ -259,154 +598,329 @@ public class TerminalSession : IDisposable
         }
     }
 
-    private void OnPtyProcessExited(object? sender, int exitCode) { }
+    private void OnPtyProcessExited(object? sender, int exitCode)
+    {
+        Task pipelineCompletion;
+        lock (_lifecycleLock)
+        {
+            if (_disposed || _suppressProcessExit || Volatile.Read(ref _isStarted) == 0)
+                return;
+            if (Interlocked.Exchange(ref _processExitRaised, 1) != 0)
+                return;
+            pipelineCompletion = _ptyPipelineCompletion;
+        }
+
+        _ = DeliverProcessExitAfterPipelineAsync(pipelineCompletion, exitCode);
+    }
+
+    private async Task DeliverProcessExitAfterPipelineAsync(Task pipelineCompletion, int exitCode)
+    {
+        try { await pipelineCompletion.ConfigureAwait(false); } catch { }
+
+        Action<int>? processExited;
+        lock (_lifecycleLock)
+        {
+            if (_disposed || _suppressProcessExit)
+                return;
+            processExited = ProcessExited;
+        }
+
+        try { processExited?.Invoke(exitCode); } catch { }
+    }
 
     private void StartPtyPipeline(CancellationToken cancellationToken)
     {
-        if (_pty?.OutputStream == null) return;
+        var completion = _ptyPipelineCompletionSource;
+        if (completion == null) return;
+        // Prime each lazy wait path on the starting thread, not on the workers.
+        _ptyInputAvailable.Wait(1);
+        _ptyOutputAvailable.Wait(1);
+        _ptyOutputSpaceAvailable.Reset();
+        _ptyOutputSpaceAvailable.Wait(1);
+        _ptyOutputSpaceAvailable.Set();
 
-        var reader = _pty.OutputStream;
-        // Depth 32 (4 MB): decouples kernel PTY delivery from parse. At depth 4
-        // the producer stalls whenever parse falls behind, serializing the
-        // stages — measured 118ms/500K-line flood of non-overlapped parse.
-        var channel = Channel.CreateBounded<(byte[] Data, int Length)>(new BoundedChannelOptions(32)
+        StartPtyInputWriter();
+        var reader = _pty?.OutputStream;
+        if (reader == null)
         {
-            SingleReader = true,
-            SingleWriter = true,
-            FullMode = BoundedChannelFullMode.Wait
-        });
+            completion.TrySetResult(null);
+            return;
+        }
+        // Start with two 128 KiB chunks (256 KiB/session) and double only when
+        // the reader meets backlog, up to the existing 32-chunk burst budget.
+        // Reused chunks avoid cross-thread ArrayPool returns; wakeups occur only
+        // at empty/full transitions so queued output is drained in batches.
 
-        // Reader: reads from PTY, writes to channel (never blocks on processing).
-        // Uses ArrayPool directly to avoid the intermediate read-buffer copy.
-        var readerTask = Task.Run(async () =>
+        lock (_ptyOutputQueueLock)
         {
-            try
+            _ptyOutputReadIndex = 0;
+            _ptyOutputWriteIndex = 0;
+            _ptyOutputCount = 0;
+            _ptyOutputReaderCompleted = false;
+            _ptyOutputAvailable.Reset();
+            _ptyOutputSpaceAvailable.Set();
+        }
+
+        _ptyOutputReader = reader;
+        _ptyOutputCancellationToken = cancellationToken;
+        _ptyOutputConsumerThread = new Thread(ConsumePtyOutput) { IsBackground = true };
+        _ptyOutputReaderThread = new Thread(ReadPtyOutput) { IsBackground = true };
+        _ptyOutputConsumerThread.Start();
+        _ptyOutputReaderThread.Start();
+        _ptyPipelineCompletion = completion.Task;
+    }
+
+    private void ReadPtyOutput()
+    {
+        bool measureRead = false;
+        long allocatedBeforeRead = 0;
+        try
+        {
+            while (!_ptyOutputCancellationToken.IsCancellationRequested)
             {
-                while (!cancellationToken.IsCancellationRequested)
+                if (!measureRead)
                 {
-                    byte[] chunk = ArrayPool<byte>.Shared.Rent(131072);
-                    bool counted = false;
-                    bool handedOff = false;
-                    try
-                    {
-                        int bytesRead = await reader.ReadAsync(chunk, 0, chunk.Length, cancellationToken);
-                        if (bytesRead <= 0)
-                        {
-                            ArrayPool<byte>.Shared.Return(chunk);
-                            break;
-                        }
+                    measureRead = Volatile.Read(ref _allocationProbeEnabled) != 0;
+                    if (measureRead)
+                        allocatedBeforeRead = GC.GetAllocatedBytesForCurrentThread();
+                }
 
-                        Interlocked.Increment(ref _pendingOutputChunks);
-                        counted = true;
-                        await channel.Writer.WriteAsync((chunk, bytesRead), cancellationToken);
-                        handedOff = true;
-                    }
-                    catch
-                    {
-                        if (!handedOff)
-                        {
-                            if (counted)
-                                Interlocked.Decrement(ref _pendingOutputChunks);
-                            ArrayPool<byte>.Shared.Return(chunk);
-                        }
-                        break;
-                    }
+                byte[]? chunk = null;
+                lock (_ptyOutputQueueLock)
+                {
+                    if (_ptyOutputCount == _ptyOutputCapacity
+                        && _ptyOutputCapacity < PtyOutputChunkCount)
+                        GrowPtyOutputRing();
+                    if (_ptyOutputCount < _ptyOutputCapacity)
+                        chunk = _ptyOutputChunks[_ptyOutputWriteIndex];
+                    else
+                        _ptyOutputSpaceAvailable.Reset();
+                }
+
+                if (chunk == null)
+                {
+                    _ptyOutputSpaceAvailable.Wait();
+                    continue;
+                }
+
+                int bytesRead = _ptyOutputReader!.Read(chunk, 0, chunk.Length);
+                if (bytesRead <= 0 || _ptyOutputCancellationToken.IsCancellationRequested)
+                    break;
+
+                lock (_ptyOutputQueueLock)
+                {
+                    bool wasEmpty = _ptyOutputCount == 0;
+                    _ptyOutputLengths[_ptyOutputWriteIndex] = bytesRead;
+                    if (++_ptyOutputWriteIndex == _ptyOutputCapacity)
+                        _ptyOutputWriteIndex = 0;
+                    _ptyOutputCount++;
+                    Interlocked.Increment(ref _pendingOutputChunks);
+                    if (wasEmpty)
+                        _ptyOutputAvailable.Set();
+                }
+
+                if (measureRead)
+                {
+                    Interlocked.Add(
+                        ref _ptyOutputReaderAllocatedBytes,
+                        GC.GetAllocatedBytesForCurrentThread() - allocatedBeforeRead);
+                    Interlocked.Increment(ref _ptyOutputReaderMeasuredChunks);
+                    measureRead = false;
                 }
             }
-            catch { }
-            channel.Writer.Complete();
-        }, cancellationToken);
-
-        // Consumer: reads from channel, processes sequentially.
-        // SyncRoot is acquired so the renderer never reads a partially-updated buffer state.
-        // FlushRender is called after each chunk so the view's presentation gate
-        // never presents an intermediate state between related operations (e.g. scroll+write).
-        _ = Task.Run(async () =>
+        }
+        catch { }
+        finally
         {
-            // Writer lock-hold bound: feed the chunk in 8 KiB slices, releasing
-            // SyncRoot between them so the renderer's bounded TryEnter can win
-            // the lock during a sustained burst. The parser tolerates partial
-            // sequences (it accumulates leftovers), so splits are safe. Each
-            // slice gets its own acquisition/release regardless of whether the
-            // renderer is currently waiting — coalescing multiple slices under
-            // one hold let a delayed renderer signal go unobserved for the
-            // whole remaining chunk, reintroducing the starvation this bound
-            // exists to prevent.
-            const int FeedChunkSize = 8192;
-            try
+            lock (_ptyOutputQueueLock)
             {
-                await foreach (var entry in channel.Reader.ReadAllAsync(cancellationToken))
-                {
-                    var (chunk, length) = entry;
-                    try
-                    {
-                        var rawInputReceived = RawInputReceived;
-                        if (rawInputReceived != null)
-                            rawInputReceived(chunk.AsSpan(0, length).ToArray());
-                        var buffer = Adapter.Buffer;
-                        int offset = 0;
-                        while (offset < length)
-                        {
-                            int subLen = Math.Min(FeedChunkSize, length - offset);
-                            bool taken = false;
-                            try
-                            {
-                                Monitor.Enter(buffer.SyncRoot, ref taken);
-                                Parser.Feed(chunk.AsSpan(offset, subLen));
-                            }
-                            finally
-                            {
-                                if (taken) Monitor.Exit(buffer.SyncRoot);
-                            }
-                            offset += subLen;
+                _ptyOutputReaderCompleted = true;
+                _ptyOutputAvailable.Set();
+                _ptyOutputSpaceAvailable.Set();
+            }
+        }
+    }
 
-                            if (offset < length && buffer.ReaderWaiting)
-                            {
-                                // Reader-priority handoff. A single Yield lets
-                                // this thread barge straight back into the
-                                // Monitor (pthread mutexes are not FIFO and the
-                                // renderer is parked in a bounded TryEnter) —
-                                // with the deep channel keeping a chunk always
-                                // queued, that barging can starve the renderer.
-                                // Hold off until the renderer clears the flag
-                                // or the bounded spin elapses.
-                                int handoffSpins = 0;
-                                while (buffer.ReaderWaiting && handoffSpins++ < 64)
-                                    Thread.Yield();
-                            }
+    private void ConsumePtyOutput()
+    {
+        // Bound each buffer-lock hold so renderer acquisition stays responsive.
+        const int FeedChunkSize = 8192;
+        bool measureChunk = false;
+        long allocatedBeforeChunk = 0;
+        try
+        {
+            while (!_ptyOutputCancellationToken.IsCancellationRequested)
+            {
+                if (!measureChunk)
+                {
+                    measureChunk = Volatile.Read(ref _allocationProbeEnabled) != 0;
+                    if (measureChunk)
+                        allocatedBeforeChunk = GC.GetAllocatedBytesForCurrentThread();
+                }
+                byte[]? chunk = null;
+                int length = 0;
+                bool finished = false;
+                lock (_ptyOutputQueueLock)
+                {
+                    if (_ptyOutputCount != 0)
+                    {
+                        chunk = _ptyOutputChunks[_ptyOutputReadIndex];
+                        length = _ptyOutputLengths[_ptyOutputReadIndex];
+                    }
+                    else if (_ptyOutputReaderCompleted)
+                    {
+                        finished = true;
+                    }
+                    else
+                    {
+                        _ptyOutputAvailable.Reset();
+                    }
+                }
+
+                if (finished)
+                    break;
+                if (chunk == null)
+                {
+                    _ptyOutputAvailable.Wait();
+                    continue;
+                }
+                try
+                {
+                    var rawInputReceived = RawInputReceived;
+                    if (rawInputReceived != null)
+                        rawInputReceived(chunk.AsSpan(0, length).ToArray());
+                    var buffer = Adapter.Buffer;
+                    int offset = 0;
+                    while (offset < length)
+                    {
+                        int subLen = Math.Min(FeedChunkSize, length - offset);
+                        bool taken = false;
+                        try
+                        {
+                            Monitor.Enter(buffer.SyncRoot, ref taken);
+                            Parser.Feed(chunk.AsSpan(offset, subLen));
+                        }
+                        finally
+                        {
+                            if (taken) Monitor.Exit(buffer.SyncRoot);
+                        }
+                        offset += subLen;
+
+                        // A short handoff prevents this consumer from repeatedly
+                        // barging past a waiting renderer.
+                        if (offset < length && buffer.ReaderWaiting)
+                        {
+                            int handoffSpins = 0;
+                            while (buffer.ReaderWaiting && handoffSpins++ < 64)
+                                Thread.Yield();
                         }
                     }
-                    catch { }
-                    finally
-                    {
-                        Interlocked.Decrement(ref _pendingOutputChunks);
-                        ArrayPool<byte>.Shared.Return(chunk);
-                    }
-                    try { Adapter.FlushRender(); } catch { }
                 }
-            }
-            catch { }
-            finally
-            {
-                try { await readerTask.ConfigureAwait(false); } catch { }
-                while (channel.Reader.TryRead(out var pending))
+                catch { }
+                finally
                 {
+                    bool wasFull;
+                    lock (_ptyOutputQueueLock)
+                    {
+                        wasFull = _ptyOutputCount == _ptyOutputCapacity;
+                        if (_ptyOutputCount != 0)
+                        {
+                            if (++_ptyOutputReadIndex == _ptyOutputCapacity)
+                                _ptyOutputReadIndex = 0;
+                            _ptyOutputCount--;
+                        }
+                        if (_ptyOutputCount == 0)
+                            _ptyOutputAvailable.Reset();
+                        if (wasFull)
+                            _ptyOutputSpaceAvailable.Set();
+                    }
                     Interlocked.Decrement(ref _pendingOutputChunks);
-                    ArrayPool<byte>.Shared.Return(pending.Data);
+                }
+                try { Adapter.FlushRender(); } catch { }
+                if (measureChunk)
+                {
+                    Interlocked.Add(
+                        ref _ptyOutputConsumerAllocatedBytes,
+                        GC.GetAllocatedBytesForCurrentThread() - allocatedBeforeChunk);
+                    Interlocked.Increment(ref _ptyOutputConsumerMeasuredChunks);
+                    measureChunk = false;
                 }
             }
-        });
+        }
+        catch { }
+        finally
+        {
+            _ptyOutputSpaceAvailable.Set();
+            JoinThread(_ptyOutputReaderThread);
+            int dropped;
+            lock (_ptyOutputQueueLock)
+            {
+                dropped = _ptyOutputCount;
+                _ptyOutputCount = 0;
+                _ptyOutputReadIndex = _ptyOutputWriteIndex;
+                _ptyOutputAvailable.Reset();
+                _ptyOutputSpaceAvailable.Set();
+            }
+            if (dropped != 0)
+                Interlocked.Add(ref _pendingOutputChunks, -dropped);
+            _ptyPipelineCompletionSource?.TrySetResult(null);
+            if (_disposed)
+                DisposeOutputWaitEvents();
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _readCancellation?.Cancel();
+        Thread currentThread = Thread.CurrentThread;
+        bool onInputThread = currentThread == _ptyInputWriterThread;
+        bool onOutputThread = currentThread == _ptyOutputReaderThread
+            || currentThread == _ptyOutputConsumerThread;
+        lock (_lifecycleLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _suppressProcessExit = true;
+            Volatile.Write(ref _isStarted, 0);
+            Volatile.Write(ref _processExitRaised, 1);
+        }
+
+        try { _readCancellation?.Cancel(); } catch { }
+        lock (_ptyInputQueueLock)
+        {
+            _ptyInputWriterStopping = true;
+            _ptyInputAvailable.Set();
+        }
+        _ptyOutputSpaceAvailable.Set();
+        _ptyOutputAvailable.Set();
         try { Adapter.ReplyRequested -= OnAdapterReplyRequested; } catch { }
         try { if (_pty != null) _pty.ProcessExited -= OnPtyProcessExited; } catch { }
         try { _pty?.Dispose(); } catch { }
+        if (!onInputThread)
+            JoinThread(_ptyInputWriterThread);
+        if (!onOutputThread)
+        {
+            JoinThread(_ptyOutputConsumerThread);
+            JoinThread(_ptyOutputReaderThread);
+        }
         try { _readCancellation?.Dispose(); } catch { }
-        try { _ptyInputWriteLock.Dispose(); } catch { }
+        TaskCompletionSource<object?>? completion = null;
+        if (!onOutputThread)
+        {
+            lock (_lifecycleLock)
+            {
+                completion = _ptyPipelineCompletionSource;
+                _ptyPipelineCompletionSource = null;
+                _ptyPipelineCompletion = Task.CompletedTask;
+            }
+        }
+        if (!onOutputThread)
+            completion?.TrySetResult(null);
+
+        _pty = null;
+        _readCancellation = null;
+        if (!onInputThread)
+            DisposeInputWaitEvent();
+        if (!onOutputThread)
+            DisposeOutputWaitEvents();
     }
 }

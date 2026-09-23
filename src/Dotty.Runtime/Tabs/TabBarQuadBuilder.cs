@@ -15,6 +15,15 @@ namespace Dotty.Runtime.Tabs;
 /// </summary>
 public static class TabBarQuadBuilder
 {
+    private static readonly object StatusWidthLock = new();
+    private static char[] _cachedStatus = Array.Empty<char>();
+    private static int _cachedStatusLength = -1;
+    private static SKTypeface? _cachedStatusTypeface;
+    private static float _cachedStatusFontSize;
+    private static float _cachedStatusCellWidth;
+    private static bool _cachedStatusBold;
+    private static float _cachedStatusWidth;
+    private static GlyphAtlas? _cachedStatusAtlas;
     public static int Build(
         TerminalTabManager tabManager,
         GlyphAtlas atlas,
@@ -29,7 +38,10 @@ public static class TabBarQuadBuilder
         out int chromeWritten,
         float barHeight = TabBarLayout.DefaultBarHeight,
         int hoveredTabIndex = -1,
-        TabBarHitType hoveredHitType = TabBarHitType.None)
+        TabBarHitType hoveredHitType = TabBarHitType.None,
+        ITabTitleSource? titles = null,
+        ReadOnlySpan<char> status = default,
+        bool statusWarning = false)
     {
         ArgumentNullException.ThrowIfNull(tabManager);
         ArgumentNullException.ThrowIfNull(atlas);
@@ -43,7 +55,8 @@ public static class TabBarQuadBuilder
         int written = 0;
         var palette = ResolvePalette(theme);
         var metrics = ResolveMetrics(cellHeight);
-        var layout = TabBarLayout.Calculate(windowWidth, tabManager.Count, tabManager.ActiveIndex, barHeight);
+        float statusWidth = MeasureStatusWidth(status, cellWidth, typeface, fontSize, atlas, statusWarning);
+        var layout = TabBarLayout.Calculate(windowWidth, tabManager.Count, tabManager.ActiveIndex, barHeight, statusWidth);
 
         // The rail and divider are deliberately pixel-precise. No cell-grid
         // background instances are emitted, avoiding seams when cell size and
@@ -54,9 +67,10 @@ public static class TabBarQuadBuilder
         EmitSolid(chromeDestination, ref chromeWritten,
             0f, Math.Max(0f, barHeight - dividerHeight), windowWidth, dividerHeight, 0f, palette.Divider);
 
-        for (int i = 0; i < layout.Tabs.Length && i < tabManager.Tabs.Count; i++)
+        ReadOnlySpan<TabLayoutItem> layoutTabs = layout.AsSpan();
+        for (int i = 0; i < layoutTabs.Length && i < tabManager.Tabs.Count; i++)
         {
-            var tabLayout = layout.Tabs[i];
+            ref readonly var tabLayout = ref layoutTabs[i];
             var tab = tabManager.Tabs[i];
             bool isActive = tabLayout.IsActive;
             bool tabHovered = hoveredTabIndex == i &&
@@ -113,7 +127,10 @@ public static class TabBarQuadBuilder
 
             // EmitString clips by measured glyph bounds, not UTF-16 length, so
             // a surrogate pair is always retained or omitted as one glyph.
-            EmitString(destination, ref written, tab.Title ?? "Terminal",
+            ReadOnlySpan<char> title = titles != null
+                ? titles.GetTitle(tab, i)
+                : (tab.Title ?? "Terminal").AsSpan();
+            EmitString(destination, ref written, title,
                 textStartX, startRow, titleColor, isBold: isActive,
                 cellWidth, typeface, fontSize, atlas, textOffsetY,
                 textRight, appendEllipsis: true);
@@ -155,6 +172,19 @@ public static class TabBarQuadBuilder
                 isBold: newTabHovered, cellWidth, typeface, fontSize, atlas, plusOffsetY,
                 newTab.Right);
         }
+        if (!status.IsEmpty)
+        {
+            var statusBounds = layout.StatusBounds;
+            int statusRow = (int)Math.Floor(statusBounds.Top / cellHeight);
+            float statusOffsetY = ComputeCenteredOffsetY(
+                typeface, fontSize, statusRow, cellHeight, statusBounds.Top, statusBounds.Height);
+            EmitString(destination, ref written, status,
+                statusBounds.Left + TabBarLayout.TextPaddingLeft, statusRow,
+                statusWarning ? palette.Warning : palette.TextSecondary,
+                isBold: statusWarning, cellWidth, typeface, fontSize, atlas,
+                statusOffsetY, statusBounds.Right);
+        }
+
 
         return written;
     }
@@ -191,10 +221,74 @@ public static class TabBarQuadBuilder
         });
     }
 
+    public static float MeasureStatusWidth(
+        ReadOnlySpan<char> text,
+        float cellWidth,
+        SKTypeface typeface,
+        float fontSize,
+        GlyphAtlas atlas,
+        bool isBold = false)
+    {
+        if (text.IsEmpty)
+            return 0f;
+
+        lock (StatusWidthLock)
+        {
+            bool sameText = text.Length == _cachedStatusLength &&
+                text.SequenceEqual(_cachedStatus.AsSpan(0, Math.Max(0, _cachedStatusLength)));
+            if (sameText && ReferenceEquals(typeface, _cachedStatusTypeface) &&
+                ReferenceEquals(atlas, _cachedStatusAtlas) &&
+                fontSize == _cachedStatusFontSize && cellWidth == _cachedStatusCellWidth &&
+                isBold == _cachedStatusBold)
+                return _cachedStatusWidth;
+
+            _cachedStatusWidth = MeasureTextWidth(text, cellWidth, typeface, fontSize, atlas, isBold) +
+                TabBarLayout.TextPaddingLeft;
+            if (_cachedStatus.Length < text.Length)
+                _cachedStatus = new char[Math.Max(text.Length, Math.Max(32, _cachedStatus.Length * 2))];
+            text.CopyTo(_cachedStatus);
+            _cachedStatusLength = text.Length;
+            _cachedStatusTypeface = typeface;
+            _cachedStatusAtlas = atlas;
+            _cachedStatusFontSize = fontSize;
+            _cachedStatusCellWidth = cellWidth;
+            _cachedStatusBold = isBold;
+            return _cachedStatusWidth;
+        }
+    }
+
+    private static float MeasureTextWidth(
+        ReadOnlySpan<char> span,
+        float cellWidth,
+        SKTypeface typeface,
+        float fontSize,
+        GlyphAtlas atlas,
+        bool isBold)
+    {
+        float width = 0f;
+        for (int i = 0; i < span.Length;)
+        {
+            int length = i + 1 < span.Length && char.IsSurrogatePair(span[i], span[i + 1]) ? 2 : 1;
+            if (char.IsWhiteSpace(span[i]))
+                width += cellWidth;
+            else
+            {
+                string grapheme = GlyphTextCache.Get(span, i, length);
+                var key = new GlyphKey(grapheme, typeface, fontSize, isBold);
+                if (atlas.EnsureGlyph(key, out var glyphInfo) || atlas.TryGetFallbackGlyph(out glyphInfo))
+                    width += glyphInfo.Advance > 0 ? glyphInfo.Advance : cellWidth;
+                else
+                    width += cellWidth;
+            }
+            i += length;
+        }
+        return width;
+    }
+
     private static void EmitString(
         Span<CellInstance> destination,
         ref int written,
-        string text,
+        ReadOnlySpan<char> text,
         float startPxX,
         float baselineRow,
         uint fgColor,
@@ -207,10 +301,10 @@ public static class TabBarQuadBuilder
         float maxRightPx = float.PositiveInfinity,
         bool appendEllipsis = false)
     {
-        if (string.IsNullOrEmpty(text)) return;
+        if (text.IsEmpty) return;
         ExtractRgb(fgColor, out byte fgR, out byte fgG, out byte fgB);
 
-        ReadOnlySpan<char> span = text.AsSpan();
+        ReadOnlySpan<char> span = text;
         float curX = startPxX;
         int initialWritten = written;
         float lastGlyphStart = startPxX;

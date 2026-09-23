@@ -1,6 +1,6 @@
 using System;
+using Dotty.Runtime.Selection;
 using Dotty.Runtime.Sessions;
-
 namespace Dotty.Runtime.Panes;
 
 public sealed class LeafPane : PaneNode, IDisposable
@@ -9,14 +9,17 @@ public sealed class LeafPane : PaneNode, IDisposable
 
     public string Id { get; }
     public TerminalSession Session { get; }
+    public TextSelectionService Selection { get; }
     public PaneRect Bounds { get; internal set; }
     public int Columns { get; internal set; }
     public int Rows { get; internal set; }
+    public int ScrollOffset { get; private set; }
 
     public LeafPane(TerminalSession session, string? id = null)
     {
         Id = id ?? Guid.NewGuid().ToString("N");
         Session = session ?? throw new ArgumentNullException(nameof(session));
+        Selection = new TextSelectionService();
         Columns = session.Adapter.Buffer.Columns;
         Rows = session.Adapter.Buffer.Rows;
     }
@@ -24,6 +27,27 @@ public sealed class LeafPane : PaneNode, IDisposable
     public LeafPane(int rows = 24, int columns = 80, string? id = null)
         : this(new TerminalSession(rows: rows, columns: columns), id)
     {
+    }
+
+    public void ScrollToBottom() => ScrollOffset = 0;
+
+    public void ScrollUp(int lines, int maxScrollback)
+    {
+        if (lines <= 0) return;
+        int maxOffset = Math.Max(0, maxScrollback);
+        ScrollOffset = Math.Min(maxOffset, ScrollOffset + lines);
+    }
+
+    public void ScrollDown(int lines)
+    {
+        if (lines <= 0) return;
+        ScrollOffset = Math.Max(0, ScrollOffset - lines);
+    }
+
+    public void ScrollTo(int offset, int maxScrollback)
+    {
+        int maxOffset = Math.Max(0, maxScrollback);
+        ScrollOffset = Math.Clamp(offset, 0, maxOffset);
     }
 
     public void Dispose()

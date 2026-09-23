@@ -1,12 +1,15 @@
 using System;
+using System.IO;
 using System.Text;
+using System.Collections.Generic;
 using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Themes;
 using Dotty.Runtime.Input;
+using Dotty.Runtime.Panes;
 using Dotty.Runtime.Selection;
 using Dotty.Runtime.Tabs;
-using Dotty.Silk;
 using Dotty.Silk.Config;
+using Dotty.Silk;
 using Dotty.Terminal.Adapter;
 using SilkKey = Silk.NET.Input.Key;
 using Xunit;
@@ -35,6 +38,59 @@ public class TerminalTabManagerTests
         Assert.NotNull(tab.Session);
         Assert.Equal(100, tab.Session.Adapter.Buffer.Columns);
         Assert.Equal(30, tab.Session.Adapter.Buffer.Rows);
+    }
+
+    [Fact]
+    public void CreateTab_PreservesWorkingDirectory()
+    {
+        var workingDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"dotty-working-directory-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workingDirectory);
+
+        try
+        {
+            using (var manager = new TerminalTabManager())
+            {
+                var tab = manager.CreateTab(
+                    cols: 80,
+                    rows: 24,
+                    workingDirectory: workingDirectory);
+
+                Assert.Equal(workingDirectory, tab.WorkingDirectory);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(workingDirectory))
+            {
+                Directory.Delete(workingDirectory, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public void CloseBackgroundTabs_FromSnapshot_PreservesActiveTab()
+    {
+        using var manager = new TerminalTabManager();
+        var first = manager.CreateTab(cols: 80, rows: 24);
+        var active = manager.CreateTab(cols: 80, rows: 24);
+        var last = manager.CreateTab(cols: 80, rows: 24);
+        manager.SelectTab(active);
+
+        var snapshot = new List<TerminalTab>(manager.Tabs);
+        foreach (var tab in snapshot)
+        {
+            if (!ReferenceEquals(tab, active))
+                manager.CloseTab(tab);
+        }
+        manager.SelectTab(active);
+
+        Assert.Single(manager.Tabs);
+        Assert.Same(active, manager.ActiveTab);
+        Assert.False(first.IsActive);
+        Assert.True(active.IsActive);
+        Assert.False(last.IsActive);
     }
 
     [Fact]
@@ -70,6 +126,80 @@ public class TerminalTabManagerTests
         Assert.Equal(0, manager.Count);
         Assert.Equal(-1, manager.ActiveIndex);
         Assert.Null(manager.ActiveTab);
+    }
+
+    [Fact]
+    public void CloseExitedPane_SplitLeafClosesOnlyThatLeaf()
+    {
+        using var manager = new TerminalTabManager();
+        var tab = manager.CreateTab(cols: 80, rows: 24);
+        var exitedLeaf = tab.PaneTree.Split(tab.ActivePane, SplitDirection.Vertical);
+
+        Assert.True(manager.CloseExitedPane(tab, exitedLeaf));
+        Assert.Single(tab.PaneTree.Leaves);
+        Assert.Single(manager.Tabs);
+        Assert.Same(tab, manager.ActiveTab);
+    }
+
+    [Fact]
+    public void CloseExitedPane_SoleLeafClosesTabAndClearsFinalActiveTab()
+    {
+        using var manager = new TerminalTabManager();
+        var tab = manager.CreateTab(cols: 80, rows: 24);
+        TerminalTab? lastActive = tab;
+        manager.ActiveTabChanged += changed => lastActive = changed;
+
+        Assert.True(manager.CloseExitedPane(tab, tab.ActivePane));
+        Assert.Empty(manager.Tabs);
+        Assert.Null(manager.ActiveTab);
+        Assert.Null(lastActive);
+    }
+
+    [Fact]
+    public void CloseExitedPane_StaleDuplicateExitIsNoOp()
+    {
+        using var manager = new TerminalTabManager();
+        var tab = manager.CreateTab(cols: 80, rows: 24);
+        var leaf = tab.ActivePane;
+
+        Assert.True(manager.CloseExitedPane(tab, leaf));
+        Assert.False(manager.CloseExitedPane(tab, leaf));
+        Assert.Empty(manager.Tabs);
+    }
+
+    [Fact]
+    public void CloseExitedPane_ClosesBackgroundOwnerWithoutChangingActiveTab()
+    {
+        using var manager = new TerminalTabManager();
+        var background = manager.CreateTab(cols: 80, rows: 24);
+        var active = manager.CreateTab(cols: 80, rows: 24);
+        manager.SelectTab(active);
+
+        Assert.True(manager.CloseExitedPane(background, background.ActivePane));
+        Assert.Single(manager.Tabs);
+        Assert.Same(active, manager.ActiveTab);
+    }
+
+    [Fact]
+    public void SplitAndClosePane_RaiseTopologyAndActivePaneChangesOnce()
+    {
+        using var manager = new TerminalTabManager();
+        var tab = manager.CreateTab(cols: 80, rows: 24);
+        int topologyChanges = 0;
+        var activeChanges = new List<(LeafPane OldPane, LeafPane NewPane)>();
+        tab.PaneTree.TopologyChanged += () => topologyChanges++;
+        tab.PaneTree.ActivePaneChanged += (oldPane, newPane) =>
+            activeChanges.Add((oldPane, newPane));
+
+        var splitLeaf = tab.PaneTree.Split(tab.ActivePane, SplitDirection.Vertical);
+        Assert.Equal(1, topologyChanges);
+        Assert.Single(activeChanges);
+        Assert.Same(tab.ActivePane, activeChanges[0].NewPane);
+
+        Assert.True(manager.CloseExitedPane(tab, splitLeaf));
+        Assert.Equal(2, topologyChanges);
+        Assert.Equal(2, activeChanges.Count);
+        Assert.Same(tab.ActivePane, activeChanges[1].NewPane);
     }
 
     [Fact]
@@ -144,6 +274,29 @@ public class TerminalTabManagerTests
         Assert.Same(tab, reportedTab);
         Assert.Equal("My Custom Tab Title", reportedTitle);
         Assert.Equal("My Custom Tab Title", tab.Title);
+    }
+}
+
+public class LeafPaneSelectionOwnershipTests
+{
+    [Fact]
+    public void LeafPanes_OwnIndependentSelections()
+    {
+        using var first = new LeafPane(rows: 2, columns: 8);
+        using var second = new LeafPane(rows: 2, columns: 8);
+
+        first.Selection.StartSelection(0, 0, SelectionMode.Character);
+        first.Selection.UpdateSelection(0, 2);
+
+        Assert.True(first.Selection.HasSelection);
+        Assert.False(second.Selection.HasSelection);
+
+        second.Selection.StartSelection(1, 1, SelectionMode.Character);
+        second.Selection.UpdateSelection(1, 3);
+        first.Selection.ClearSelection();
+
+        Assert.False(first.Selection.HasSelection);
+        Assert.True(second.Selection.HasSelection);
     }
 }
 
@@ -271,6 +424,48 @@ public class TextSelectionServiceTests
         Assert.False(service.IsCellSelected(2, 4));
         Assert.False(service.IsCellSelected(4, 8));
     }
+
+    [Fact]
+    public void SelectWord_SelectsWordAndPunctuationRuns()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 24);
+        buffer.WriteText("echo foo.bar".AsSpan(), CellAttributes.Default);
+        var service = new TextSelectionService();
+
+        service.SelectWord(buffer, row: 0, col: 6);
+        Assert.Equal(SelectionMode.Word, service.Mode);
+        Assert.Equal("foo", service.GetSelectedText(buffer));
+
+        service.SelectWord(buffer, row: 0, col: 8);
+        Assert.Equal(".", service.GetSelectedText(buffer));
+    }
+
+    [Fact]
+    public void CharacterCopy_TrimsPaddingAndJoinsSoftWrappedRows()
+    {
+        var buffer = new TerminalBuffer(rows: 2, columns: 5);
+        buffer.WriteText("ab  cd".AsSpan(), CellAttributes.Default);
+        var service = new TextSelectionService();
+        service.StartSelection(0, 0);
+        service.UpdateSelection(1, 0);
+
+        Assert.Equal("ab  cd", service.GetSelectedText(buffer));
+    }
+
+    [Fact]
+    public void BlockCopy_PreservesRequestedCellWidth()
+    {
+        var buffer = new TerminalBuffer(rows: 2, columns: 5);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("x".AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(1, 0);
+        buffer.WriteText("y".AsSpan(), CellAttributes.Default);
+        var service = new TextSelectionService();
+        service.StartSelection(0, 0, SelectionMode.Block);
+        service.UpdateSelection(1, 3);
+
+        Assert.Equal("x   \ny   ", service.GetSelectedText(buffer));
+    }
 }
 
 public class SilkKeyMapperTests
@@ -279,17 +474,17 @@ public class SilkKeyMapperTests
     public void Map_Letters_WithControl_EncodesControlBytes()
     {
         // Ctrl+C -> 0x03 (ETX)
-        var ctrlC = SilkKeyMapper.Encode(SilkKey.C, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var ctrlC = SilkKeyMapperTestEncoding.Encode(SilkKey.C, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(ctrlC);
         Assert.Equal(new byte[] { 0x03 }, ctrlC);
 
         // Ctrl+A -> 0x01 (SOH)
-        var ctrlA = SilkKeyMapper.Encode(SilkKey.A, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var ctrlA = SilkKeyMapperTestEncoding.Encode(SilkKey.A, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(ctrlA);
         Assert.Equal(new byte[] { 0x01 }, ctrlA);
 
         // Ctrl+Z -> 0x1A (SUB)
-        var ctrlZ = SilkKeyMapper.Encode(SilkKey.Z, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var ctrlZ = SilkKeyMapperTestEncoding.Encode(SilkKey.Z, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(ctrlZ);
         Assert.Equal(new byte[] { 0x1A }, ctrlZ);
     }
@@ -298,32 +493,32 @@ public class SilkKeyMapperTests
     public void Map_Arrows_EncodesXtermSequences()
     {
         // Plain Up -> \e[A
-        var up = SilkKeyMapper.Encode(SilkKey.Up, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var up = SilkKeyMapperTestEncoding.Encode(SilkKey.Up, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(up);
         Assert.Equal("\x1b[A", Encoding.UTF8.GetString(up!));
 
         // Plain Down -> \e[B
-        var down = SilkKeyMapper.Encode(SilkKey.Down, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var down = SilkKeyMapperTestEncoding.Encode(SilkKey.Down, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(down);
         Assert.Equal("\x1b[B", Encoding.UTF8.GetString(down!));
 
         // Plain Right -> \e[C
-        var right = SilkKeyMapper.Encode(SilkKey.Right, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var right = SilkKeyMapperTestEncoding.Encode(SilkKey.Right, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(right);
         Assert.Equal("\x1b[C", Encoding.UTF8.GetString(right!));
 
         // Plain Left -> \e[D
-        var left = SilkKeyMapper.Encode(SilkKey.Left, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var left = SilkKeyMapperTestEncoding.Encode(SilkKey.Left, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(left);
         Assert.Equal("\x1b[D", Encoding.UTF8.GetString(left!));
 
         // Shift+Up -> \e[1;2A
-        var shiftUp = SilkKeyMapper.Encode(SilkKey.Up, ctrl: false, shift: true, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var shiftUp = SilkKeyMapperTestEncoding.Encode(SilkKey.Up, ctrl: false, shift: true, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(shiftUp);
         Assert.Equal("\x1b[1;2A", Encoding.UTF8.GetString(shiftUp!));
 
         // Ctrl+Up -> \e[1;5A
-        var ctrlUp = SilkKeyMapper.Encode(SilkKey.Up, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var ctrlUp = SilkKeyMapperTestEncoding.Encode(SilkKey.Up, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(ctrlUp);
         Assert.Equal("\x1b[1;5A", Encoding.UTF8.GetString(ctrlUp!));
     }
@@ -332,17 +527,17 @@ public class SilkKeyMapperTests
     public void Map_Keypad_EncodesApplicationSequences()
     {
         // Keypad 0 in application mode -> \eOp
-        var kp0 = SilkKeyMapper.Encode(SilkKey.Keypad0, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var kp0 = SilkKeyMapperTestEncoding.Encode(SilkKey.Keypad0, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(kp0);
         Assert.Equal("\x1bOp", Encoding.UTF8.GetString(kp0!));
 
         // Keypad 5 in application mode -> \eOu
-        var kp5 = SilkKeyMapper.Encode(SilkKey.Keypad5, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
+        var kp5 = SilkKeyMapperTestEncoding.Encode(SilkKey.Keypad5, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(kp5);
         Assert.Equal("\x1bOu", Encoding.UTF8.GetString(kp5!));
 
-        // Keypad Enter in application mode -> \eOM (or standard enter if not mapped specifically in application mode)
-        var kpAdd = SilkKeyMapper.Encode(SilkKey.KeypadAdd, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
+        // Keypad Add in application mode -> \eOm
+        var kpAdd = SilkKeyMapperTestEncoding.Encode(SilkKey.KeypadAdd, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
         Assert.NotNull(kpAdd);
         Assert.Equal("\x1bOm", Encoding.UTF8.GetString(kpAdd!));
     }

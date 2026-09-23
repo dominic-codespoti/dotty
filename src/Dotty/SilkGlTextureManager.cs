@@ -23,8 +23,10 @@ public sealed unsafe class SilkGlTextureManager : IDisposable
         _atlas = atlas ?? throw new ArgumentNullException(nameof(atlas));
         _textureId = _gl.GenTexture();
         _gl.BindTexture(TextureTarget.Texture2D, _textureId);
-        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
-        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        // The atlas is single-channel A8 coverage rasterized at device
+        // pixels. Nearest keeps hinted 1:1 coverage from being re-blurred.
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
     }

@@ -5,10 +5,10 @@ using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Panes;
+using Dotty.Runtime.Tabs;
 using Dotty.Runtime.Scrollbar;
 using Dotty.Runtime.Search;
-using Dotty.Runtime.Selection;
-using Dotty.Runtime.Tabs;
+using RuntimeSearchMatch = Dotty.Runtime.Search.SearchMatch;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Adapter.Buffer;
 using SkiaSharp;
@@ -22,31 +22,23 @@ public readonly record struct SearchOverlayRenderState(
     bool IsActive,
     string Query,
     int ActiveMatchIndex,
-    int TotalMatches);
+    int TotalMatches,
+    IReadOnlyList<RuntimeSearchMatch>? Matches);
 
 /// <summary>
 /// The GPU instances and atlas rows produced by <see cref="TerminalSceneComposer"/>.
 /// </summary>
 public sealed class TerminalSceneFrame
 {
-    public CellInstance[] Instances { get; }
-    public int InstanceCount { get; }
-    public HashSet<int> DirtyAtlasRows { get; }
-    public ChromeQuadInstance[] ChromeQuads { get; }
-    public int ChromeQuadCount { get; }
-    /// <summary>Chrome-quad index at which scrollbar chrome begins.</summary>
-    public int ScrollbarChromeStart { get; }
-    /// <summary>Original cell-instance index at which context-menu glyphs begin.</summary>
-    public int MenuInstanceStart { get; }
-    /// <summary>Chrome-quad index at which context-menu chrome begins.</summary>
-    public int MenuChromeStart { get; }
-    /// <summary>
-    /// True when <see cref="TerminalSceneComposer.Compose"/> skipped one or more
-    /// leaves on buffer-lock contention. The instances omit those leaves, so the
-    /// host must skip SwapBuffers for this frame (repeat the previous front
-    /// buffer) instead of presenting a background hole where live content belongs.
-    /// </summary>
-    public bool IsIncomplete { get; }
+    public CellInstance[] Instances { get; private set; } = null!;
+    public int InstanceCount { get; private set; }
+    public HashSet<int> DirtyAtlasRows { get; private set; } = null!;
+    public ChromeQuadInstance[] ChromeQuads { get; private set; } = null!;
+    public int ChromeQuadCount { get; private set; }
+    public int ScrollbarChromeStart { get; private set; }
+    public int MenuInstanceStart { get; private set; }
+    public int MenuChromeStart { get; private set; }
+    public bool IsIncomplete { get; private set; }
 
     public TerminalSceneFrame(
         CellInstance[] instances,
@@ -59,16 +51,32 @@ public sealed class TerminalSceneFrame
         int scrollbarChromeStart = -1,
         bool isIncomplete = false)
     {
+        Update(instances, instanceCount, dirtyAtlasRows, chromeQuads, chromeQuadCount,
+            menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete);
+    }
+
+    internal void Update(
+        CellInstance[] instances,
+        int instanceCount,
+        HashSet<int> dirtyAtlasRows,
+        ChromeQuadInstance[] chromeQuads,
+        int chromeQuadCount,
+        int menuInstanceStart,
+        int menuChromeStart,
+        int scrollbarChromeStart,
+        bool isIncomplete)
+    {
         Instances = instances;
         InstanceCount = instanceCount;
         DirtyAtlasRows = dirtyAtlasRows;
         ChromeQuads = chromeQuads;
         ChromeQuadCount = chromeQuadCount;
-        ScrollbarChromeStart = scrollbarChromeStart;
         MenuInstanceStart = menuInstanceStart;
         MenuChromeStart = menuChromeStart;
+        ScrollbarChromeStart = scrollbarChromeStart;
         IsIncomplete = isIncomplete;
     }
+
 
     public ReadOnlySpan<CellInstance> AsSpan() => new(Instances, 0, InstanceCount);
     public ReadOnlySpan<ChromeQuadInstance> AsChromeSpan() => new(ChromeQuads, 0, ChromeQuadCount);
@@ -80,14 +88,25 @@ public sealed class TerminalSceneFrame
 /// </summary>
 public sealed class TerminalSceneComposer
 {
-    private readonly TextSelectionService _selectionService;
-    private GlyphAtlas _atlas;
     private SKTypeface _typeface;
+    private GlyphAtlas _atlas;
     private float _fontSize;
     private CellInstance[] _frameScratch = Array.Empty<CellInstance>();
     private ChromeQuadInstance[] _chromeScratch = Array.Empty<ChromeQuadInstance>();
     private ChromeQuadInstance[] _scrollbarScratch = Array.Empty<ChromeQuadInstance>();
     private readonly HashSet<int> _dirtyAtlasRows = new();
+    private TerminalSceneFrame? _cachedFrame;
+    private ContextMenuModel? _cachedMenuModel;
+    private IReadOnlyList<ContextMenuItem>? _cachedMenuItems;
+    private ContextMenuLayout? _cachedMenuLayout;
+    private float _cachedMenuX;
+    private float _cachedMenuY;
+    private float _cachedMenuViewportWidth;
+    private float _cachedMenuViewportHeight;
+    private float _cachedMenuCellWidth;
+    private float _cachedMenuCellHeight;
+    private ContextMenuItem[] _cachedMenuItemSnapshot = Array.Empty<ContextMenuItem>();
+    private int _cachedMenuItemCount = -1;
     private long _skippedLeafFrames;
     /// <summary>Cumulative Compose calls in which at least one leaf was skipped on lock contention.</summary>
     public long SkippedLeafFrames => _skippedLeafFrames;
@@ -95,13 +114,11 @@ public sealed class TerminalSceneComposer
     public TerminalSceneComposer(
         GlyphAtlas atlas,
         SKTypeface typeface,
-        float fontSize,
-        TextSelectionService selectionService)
+        float fontSize)
     {
         _atlas = atlas ?? throw new ArgumentNullException(nameof(atlas));
         _typeface = typeface ?? throw new ArgumentNullException(nameof(typeface));
         _fontSize = fontSize;
-        _selectionService = selectionService ?? throw new ArgumentNullException(nameof(selectionService));
     }
 
     public void UpdateResources(GlyphAtlas atlas, SKTypeface typeface, float fontSize)
@@ -132,7 +149,10 @@ public sealed class TerminalSceneComposer
         SearchOverlayRenderState searchOverlay,
         ContextMenuModel? activeContextMenu,
         int hoveredTabIndex = -1,
-        TabBarHitType hoveredTabHitType = TabBarHitType.None)
+        TabBarHitType hoveredTabHitType = TabBarHitType.None,
+        ITabTitleSource? titles = null,
+        ReadOnlySpan<char> status = default,
+        bool statusWarning = false)
     {
         ArgumentNullException.ThrowIfNull(activeTab);
         ArgumentNullException.ThrowIfNull(tabManager);
@@ -165,8 +185,9 @@ public sealed class TerminalSceneComposer
         activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness: 2f);
 
 
-        foreach (var leaf in leaves)
+        for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
         {
+            var leaf = leaves[leafIndex];
             if (leaf.Columns > 0 && leaf.Rows > 0 &&
                 (leaf.Session.Adapter.Buffer.Columns != leaf.Columns || leaf.Session.Adapter.Buffer.Rows != leaf.Rows))
             {
@@ -176,7 +197,7 @@ public sealed class TerminalSceneComposer
             RenderSnapshot? leafSnapshot = null;
             bool lockTaken = false;
             var leafBuffer = leaf.Session.Adapter.Buffer;
-            int scrollOffset = ReferenceEquals(leaf, activePane) ? activeTab.ScrollOffset : 0;
+            int scrollOffset = leaf.ScrollOffset;
 
             try
             {
@@ -228,7 +249,7 @@ public sealed class TerminalSceneComposer
                 }
                 instanceCount += written;
 
-                if (ReferenceEquals(leaf, activePane) && _selectionService.HasSelection)
+                if (leaf.Selection.HasSelection)
                 {
                     byte selectionAlpha = (byte)((selectionColor.A != 0 && selectionColor.A != 255) ? selectionColor.A : 128);
 
@@ -236,8 +257,9 @@ public sealed class TerminalSceneComposer
                     {
                         ref var instance = ref _frameScratch[startInstanceIndex + i];
                         int localColumn = instance.Col - startColumnOffset;
-                        int localRow = instance.Row - startRowOffset - scrollOffset;
-                        if (_selectionService.IsCellSelected(localRow, localColumn))
+                        int viewRow = instance.Row - startRowOffset;
+                        int logicalRow = viewRow - scrollOffset;
+                        if (leaf.Selection.IsCellSelected(logicalRow, localColumn))
                         {
                             instance.BgR = selectionColor.R;
                             instance.BgG = selectionColor.G;
@@ -246,22 +268,25 @@ public sealed class TerminalSceneComposer
                         }
                     }
 
-                    var range = _selectionService.GetNormalizedRange();
-                    int minRow = Math.Max(0, range.StartRow);
-                    int maxRow = Math.Min(paneRows - 1, range.EndRow);
-                    EnsureScratchCapacity(instanceCount + Math.Max(0, (maxRow - minRow + 1) * paneColumns));
-                    for (int row = minRow; row <= maxRow; row++)
+                    var range = leaf.Selection.GetNormalizedRange();
+                    int firstLogicalRow = Math.Max(range.StartRow, -scrollOffset);
+                    int lastLogicalRow = Math.Min(range.EndRow, paneRows - 1 - scrollOffset);
+                    int estimatedRows = Math.Max(0, lastLogicalRow - firstLogicalRow + 1);
+                    EnsureScratchCapacity(instanceCount + checked(estimatedRows * paneColumns));
+                    for (int logicalRow = firstLogicalRow; logicalRow <= lastLogicalRow; logicalRow++)
                     {
-                        int minColumn = row == range.StartRow ? range.StartColumn : 0;
-                        int maxColumn = row == range.EndRow ? range.EndColumn : paneColumns - 1;
+                        int viewRow = logicalRow + scrollOffset;
+                        int minColumn = logicalRow == range.StartRow ? range.StartColumn : 0;
+                        int maxColumn = logicalRow == range.EndRow ? range.EndColumn : paneColumns - 1;
+                        minColumn = Math.Max(0, minColumn);
+                        maxColumn = Math.Min(paneColumns - 1, maxColumn);
                         for (int column = minColumn; column <= maxColumn; column++)
                         {
-                            int logicalRow = row - scrollOffset;
-                            if (!_selectionService.IsCellSelected(logicalRow, column))
+                            if (!leaf.Selection.IsCellSelected(logicalRow, column))
                                 continue;
 
                             int targetColumn = column + startColumnOffset;
-                            int targetRow = row + startRowOffset;
+                            int targetRow = viewRow + startRowOffset;
                             bool covered = false;
                             for (int i = startInstanceIndex; i < instanceCount; i++)
                             {
@@ -290,7 +315,7 @@ public sealed class TerminalSceneComposer
                     }
                 }
 
-                if (cursorVisible && ReferenceEquals(leaf, activePane)
+                if (cursorVisible && scrollOffset == 0 && ReferenceEquals(leaf, activePane)
                     && leafSnapshot.CursorRow >= 0 && leafSnapshot.CursorRow < paneRows
                     && leafSnapshot.CursorCol >= 0 && leafSnapshot.CursorCol < paneColumns)
                 {
@@ -332,6 +357,38 @@ public sealed class TerminalSceneComposer
                         };
                     }
                 }
+                if (ReferenceEquals(leaf, activePane)
+                    && searchOverlay.Matches is { Count: > 0 } matches)
+                {
+                    long highlightCapacity = 0;
+                    for (int i = 0; i < matches.Count; i++)
+                    {
+                        var match = matches[i];
+                        long visibleRow = (long)match.Row + scrollOffset;
+                        if (visibleRow < 0 || visibleRow >= paneRows)
+                            continue;
+
+                        int startColumn = Math.Max(0, match.StartCol);
+                        int endColumn = Math.Min(paneColumns, match.EndCol);
+                        if (startColumn < endColumn)
+                            highlightCapacity += endColumn - startColumn;
+                    }
+
+                    if (highlightCapacity > 0)
+                    {
+                        EnsureScratchCapacity(checked(instanceCount + checked((int)highlightCapacity)));
+                        int highlightQuads = SearchQuadBuilder.BuildHighlightQuads(
+                            matches,
+                            paneRows,
+                            paneColumns,
+                            _frameScratch.AsSpan(instanceCount),
+                            logicalRowOffset: scrollOffset,
+                            globalRowOffset: startRowOffset,
+                            globalColumnOffset: startColumnOffset);
+                        instanceCount += highlightQuads;
+                    }
+                }
+
 
                 if (leafBuffer.ScrollbackCount > 0)
                 {
@@ -370,7 +427,10 @@ public sealed class TerminalSceneComposer
                 out int chromeQuadsWritten,
                 barRows * cellHeight * scale,
                 hoveredTabIndex,
-                hoveredTabHitType);
+                hoveredTabHitType,
+                titles,
+                status,
+                statusWarning);
             instanceCount += tabQuads;
             chromeQuadCount += chromeQuadsWritten;
         }
@@ -412,7 +472,7 @@ public sealed class TerminalSceneComposer
         {
             menuInstanceStart = instanceCount;
             menuChromeStart = chromeQuadCount;
-            var menuLayout = ContextMenuLayout.Calculate(
+            var menuLayout = GetContextMenuLayout(
                 activeContextMenu,
                 framebufferWidth,
                 framebufferHeight,
@@ -441,16 +501,75 @@ public sealed class TerminalSceneComposer
         // Compose call, so reuse the scratch buffers and avoid per-frame copies.
         if (skippedLeaf)
             _skippedLeafFrames++;
-        return new TerminalSceneFrame(
-            _frameScratch,
-            instanceCount,
-            _dirtyAtlasRows,
-            _chromeScratch,
-            chromeQuadCount,
-            menuInstanceStart,
-            menuChromeStart,
-            scrollbarChromeStart,
-            isIncomplete: skippedLeaf);
+        if (_cachedFrame == null)
+        {
+            _cachedFrame = new TerminalSceneFrame(
+                _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
+                chromeQuadCount, menuInstanceStart, menuChromeStart,
+                scrollbarChromeStart, skippedLeaf);
+        }
+        else
+        {
+            _cachedFrame.Update(
+                _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
+                chromeQuadCount, menuInstanceStart, menuChromeStart,
+                scrollbarChromeStart, skippedLeaf);
+        }
+        return _cachedFrame;
+    }
+    private ContextMenuLayout GetContextMenuLayout(
+        ContextMenuModel model,
+        float viewportWidth,
+        float viewportHeight,
+        float cellWidth,
+        float cellHeight)
+    {
+        var items = model.Items;
+        bool sameItems = items.Count == _cachedMenuItemCount;
+        if (sameItems)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (!ReferenceEquals(items[i], _cachedMenuItemSnapshot[i]))
+                {
+                    sameItems = false;
+                    break;
+                }
+            }
+        }
+
+        if (sameItems
+            && ReferenceEquals(model, _cachedMenuModel)
+            && ReferenceEquals(items, _cachedMenuItems)
+            && model.X == _cachedMenuX
+            && model.Y == _cachedMenuY
+            && viewportWidth == _cachedMenuViewportWidth
+            && viewportHeight == _cachedMenuViewportHeight
+            && cellWidth == _cachedMenuCellWidth
+            && cellHeight == _cachedMenuCellHeight
+            && _cachedMenuLayout != null)
+            return _cachedMenuLayout;
+
+        var layout = ContextMenuLayout.Calculate(model, viewportWidth, viewportHeight, cellWidth, cellHeight);
+        if (_cachedMenuItemSnapshot.Length < items.Count)
+        {
+            int capacity = Math.Max(items.Count, _cachedMenuItemSnapshot.Length == 0 ? 8 : _cachedMenuItemSnapshot.Length * 2);
+            _cachedMenuItemSnapshot = new ContextMenuItem[capacity];
+        }
+        for (int i = 0; i < items.Count; i++)
+            _cachedMenuItemSnapshot[i] = items[i];
+
+        _cachedMenuItemCount = items.Count;
+        _cachedMenuModel = model;
+        _cachedMenuItems = items;
+        _cachedMenuX = model.X;
+        _cachedMenuY = model.Y;
+        _cachedMenuViewportWidth = viewportWidth;
+        _cachedMenuViewportHeight = viewportHeight;
+        _cachedMenuCellWidth = cellWidth;
+        _cachedMenuCellHeight = cellHeight;
+        _cachedMenuLayout = layout;
+        return layout;
     }
 
     private void EnsureChromeScratchCapacity(int required)
@@ -467,7 +586,8 @@ public sealed class TerminalSceneComposer
         if (required <= _scrollbarScratch.Length)
             return;
 
-        Array.Resize(ref _scrollbarScratch, required);
+        int capacity = Math.Max(required, _scrollbarScratch.Length == 0 ? 16 : _scrollbarScratch.Length * 2);
+        Array.Resize(ref _scrollbarScratch, capacity);
     }
 
     private void EnsureScratchCapacity(int required)

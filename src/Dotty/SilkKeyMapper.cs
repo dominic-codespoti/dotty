@@ -11,6 +11,19 @@ using Dotty.Runtime.Input;
 public static class SilkKeyMapper
 {
     private static readonly TerminalInputEncoder s_encoder = new();
+    private static readonly TerminalInputEncoder s_kittyEncoder = new() { KittyMode = 1 };
+    private static readonly System.Collections.Generic.Dictionary<SilkKey, string> s_keyNames = BuildKeyNames();
+
+    private static System.Collections.Generic.Dictionary<SilkKey, string> BuildKeyNames()
+    {
+        var names = new System.Collections.Generic.Dictionary<SilkKey, string>();
+        foreach (SilkKey key in Enum.GetValues<SilkKey>())
+            names[key] = Enum.GetName(key) ?? string.Empty;
+        return names;
+    }
+
+    public static string GetKeyName(SilkKey key) =>
+        s_keyNames.TryGetValue(key, out string? name) ? name : string.Empty;
 
     /// <summary>
     /// Maps Silk.NET Key and modifier flags to <see cref="TerminalKey"/> and <see cref="TerminalKeyModifiers"/>.
@@ -174,21 +187,22 @@ public static class SilkKeyMapper
     /// <summary>
     /// Encodes Silk.NET key input into terminal escape sequences or control bytes.
     /// </summary>
-    public static byte[]? Encode(
+    public static int Encode(
         SilkKey key,
         bool ctrl,
         bool shift,
         bool alt,
         bool keypadAppMode,
+        Span<byte> destination,
         int kittyMode = 0,
         bool super = false,
         bool applicationCursorKeys = false)
     {
         var (terminalKey, modifiers) = Map(key, ctrl, shift, alt, super);
         if (terminalKey == TerminalKey.Unknown)
-            return null;
-
-        var encoder = (kittyMode == 0) ? s_encoder : new TerminalInputEncoder { KittyMode = kittyMode };
-        return encoder.Encode(terminalKey, modifiers, keypadAppMode, applicationCursorKeys);
+            return 0;
+        return (kittyMode == 0 ? s_encoder : s_kittyEncoder)
+            .Encode(terminalKey, modifiers, destination, keypadAppMode, applicationCursorKeys);
     }
+
 }

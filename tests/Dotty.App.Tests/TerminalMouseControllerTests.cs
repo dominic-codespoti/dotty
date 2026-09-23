@@ -1,10 +1,14 @@
+using Dotty.Abstractions.Config;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Text;
 using Dotty.Runtime.ContextMenu;
+using Dotty.Runtime.Panes;
 using Dotty.Runtime.Selection;
 using Dotty.Runtime.Tabs;
 using Dotty.Silk.Input;
+using Dotty.Terminal.Adapter;
 using Silk.NET.Input;
 using Xunit;
 
@@ -58,11 +62,10 @@ public sealed class TerminalMouseControllerTests
         public bool IsButtonPressed(MouseButton btn) => false;
     }
 
-    private sealed class FakeTerminalMouseHost : ITerminalMouseHost, IDisposable
+    internal sealed class FakeTerminalMouseHost : ITerminalMouseHost, IDisposable
     {
         public TerminalTabManager TabManager { get; } = new();
         public TerminalTab? ActiveTab => TabManager.ActiveTab;
-        public TextSelectionService SelectionService { get; } = new();
         public ContextMenuModel? ActiveContextMenu { get; set; }
 
         public TerminalMouseGeometry Geometry { get; set; } = new(
@@ -88,19 +91,36 @@ public sealed class TerminalMouseControllerTests
         public bool CreateTabCalled { get; private set; }
         public bool ClearTerminalCalled { get; private set; }
         public string? OpenedHyperlink { get; private set; }
+        public LeafPane? PasteTarget { get; private set; }
         public StandardCursor CurrentCursor { get; private set; } = StandardCursor.Default;
 
         public void CopySelection() => CopyCalled = true;
         public void PasteClipboard() => PasteCalled = true;
+        public void PasteClipboard(LeafPane targetPane)
+        {
+            PasteCalled = true;
+            PasteTarget = targetPane;
+        }
         public void CreateTab(TerminalTab activeTab) => CreateTabCalled = true;
         public void ClearTerminal(TerminalTab activeTab) => ClearTerminalCalled = true;
         public void OpenHyperlink(string url) => OpenedHyperlink = url;
         public void SetPointerCursor(StandardCursor cursor) => CurrentCursor = cursor;
+        public bool TryExecuteAction(TerminalAction action) => true;
 
         public void Dispose()
         {
             TabManager.Dispose();
         }
+    }
+
+    private static void EnableMouseMode(LeafPane pane, int mode)
+    {
+        pane.Session.Parser.Feed(Encoding.ASCII.GetBytes($"\u001b[?{mode}h"));
+    }
+
+    private static void Feed(LeafPane pane, string text)
+    {
+        pane.Session.Parser.Feed(Encoding.UTF8.GetBytes(text));
     }
 
     [Fact]
@@ -178,7 +198,7 @@ public sealed class TerminalMouseControllerTests
         Assert.True(controller.LeftMouseDown);
         Assert.True(controller.IsScrollbarHovered);
         Assert.Equal(StandardCursor.Hand, host.CurrentCursor);
-        Assert.False(host.SelectionService.HasSelection);
+        Assert.False(tab.ActivePane.Selection.HasSelection);
     }
 
     [Fact]
@@ -226,11 +246,11 @@ public sealed class TerminalMouseControllerTests
 
         controller.HandleMouseDown(mouse, MouseButton.Left);
         Assert.True(controller.IsDraggingScrollbar);
-        Assert.Equal(100, tab.ScrollOffset);
+        Assert.Equal(100, tab.ActivePane.ScrollOffset);
 
         // Drag to halfway down (physY = 260 -> localY = 240 / 480 = 0.5)
         controller.HandleMouseMove(mouse, new Vector2(795f, 260f));
-        Assert.Equal(50, tab.ScrollOffset);
+        Assert.Equal(50, tab.ActivePane.ScrollOffset);
         Assert.Equal(StandardCursor.Hand, host.CurrentCursor);
 
         // Release mouse
@@ -254,44 +274,45 @@ public sealed class TerminalMouseControllerTests
 
         Assert.False(controller.IsDraggingScrollbar);
         Assert.True(controller.LeftMouseDown);
-        Assert.True(host.SelectionService.HasSelection);
-        Assert.Equal(SelectionMode.Character, host.SelectionService.Mode);
-        Assert.Equal(2, host.SelectionService.AnchorRow);
-        Assert.Equal(5, host.SelectionService.AnchorColumn);
+        Assert.True(tab.ActivePane.Selection.HasSelection);
+        Assert.Equal(SelectionMode.Character, tab.ActivePane.Selection.Mode);
+        Assert.Equal(2, tab.ActivePane.Selection.AnchorRow);
+        Assert.Equal(5, tab.ActivePane.Selection.AnchorColumn);
 
         // Drag to col 10, row 3
         controller.HandleMouseMove(mouse, new Vector2(100f, 80f));
-        Assert.Equal(3, host.SelectionService.ActiveRow);
-        Assert.Equal(10, host.SelectionService.ActiveColumn);
+        Assert.Equal(10, tab.ActivePane.Selection.ActiveColumn);
     }
 
     [Fact]
-    public void HandleMouseDown_DoubleClick_SelectsWholeLine()
+    public void HandleMouseDown_LeftClickAllocatesNothingAfterWarmup()
     {
-        long currentTime = 1000;
         using var host = new FakeTerminalMouseHost();
         var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
         host.TabManager.SelectTab(tab);
         tab.PaneTree.Layout(800, 480, 10, 20);
 
-        var controller = new TerminalMouseController(host, () => currentTime);
+        long now = 1000;
+        var controller = new TerminalMouseController(host, () => now);
         var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
 
-        // First click
-        controller.HandleMouseDown(mouse, MouseButton.Left);
-        controller.HandleMouseUp(mouse, MouseButton.Left);
-        Assert.Equal(SelectionMode.Character, host.SelectionService.Mode);
+        for (int i = 0; i < 8; i++)
+            Click();
 
-        // Second click within double-click window
-        currentTime += 100;
-        controller.HandleMouseDown(mouse, MouseButton.Left);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 20; i++)
+            Click();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
 
-        Assert.True(host.SelectionService.HasSelection);
-        Assert.Equal(SelectionMode.Line, host.SelectionService.Mode);
-        Assert.Equal(2, host.SelectionService.AnchorRow);
-        Assert.Equal(0, host.SelectionService.AnchorColumn);
-        Assert.Equal(79, host.SelectionService.ActiveColumn);
+        void Click()
+        {
+            now += 500;
+            controller.HandleMouseDown(mouse, MouseButton.Left);
+            controller.HandleMouseUp(mouse, MouseButton.Left);
+        }
     }
+
+
 
     [Fact]
     public void HandleMouseDown_ActiveContextMenu_TakesHighestPrecedence()
@@ -314,7 +335,7 @@ public sealed class TerminalMouseControllerTests
 
         Assert.True(itemClicked);
         Assert.Null(host.ActiveContextMenu);
-        Assert.False(host.SelectionService.HasSelection);
+        Assert.False(tab.ActivePane.Selection.HasSelection);
     }
 
     [Fact]
@@ -332,4 +353,241 @@ public sealed class TerminalMouseControllerTests
         Assert.NotNull(host.ActiveContextMenu);
         Assert.True(host.ActiveContextMenu.Items.Count > 0);
     }
+    [Fact]
+    public void HandleMouseDown_SplitPane_UsesPaneLocalCoordinates()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        var rightPane = tab.PaneTree.Split(tab.ActivePane, SplitDirection.Vertical);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+
+        var controller = new TerminalMouseController(host);
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(500f, 60f) }, MouseButton.Left);
+
+        Assert.Same(rightPane, tab.ActivePane);
+        Assert.Equal(2, rightPane.Selection.AnchorRow);
+        Assert.Equal(9, rightPane.Selection.AnchorColumn);
+        Assert.False(tab.PaneTree.Leaves[0].Selection.HasSelection);
+    }
+
+    [Theory]
+    [InlineData(MouseButton.Left)]
+    [InlineData(MouseButton.Middle)]
+    [InlineData(MouseButton.Right)]
+    public void ReportingMode_ReportsPressAndReleaseWithoutLocalPointerActions(MouseButton button)
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        EnableMouseMode(tab.ActivePane, 1000);
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+        controller.HandleMouseDown(mouse, button);
+        controller.HandleMouseUp(mouse, button);
+
+        Assert.Equal(TerminalAdapter.MouseMode.Normal, tab.ActivePane.Session.Adapter.CurrentMouseMode);
+        Assert.False(tab.ActivePane.Selection.HasSelection);
+        Assert.Null(host.ActiveContextMenu);
+        Assert.False(host.PasteCalled);
+        Assert.False(controller.LeftMouseDown);
+    }
+
+    [Fact]
+    public void ReportingMotion_ButtonEventRequiresPressedButton_WhileAnyEventReportsHover()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse();
+
+        EnableMouseMode(tab.ActivePane, 1002);
+        controller.HandleMouseMove(mouse, new Vector2(50f, 60f));
+        Assert.Equal(TerminalAdapter.MouseMode.ButtonEvent, tab.ActivePane.Session.Adapter.CurrentMouseMode);
+        Assert.Equal(StandardCursor.IBeam, host.CurrentCursor);
+
+        controller.ResetState();
+        host.SetPointerCursor(StandardCursor.Default);
+        EnableMouseMode(tab.ActivePane, 1003);
+        controller.HandleMouseMove(mouse, new Vector2(50f, 60f));
+        Assert.Equal(TerminalAdapter.MouseMode.AnyEvent, tab.ActivePane.Session.Adapter.CurrentMouseMode);
+        Assert.Equal(StandardCursor.Default, host.CurrentCursor);
+    }
+
+    [Fact]
+    public void Shift_OverridesMouseReportingAndKeepsLocalSelection()
+    {
+        using var host = new FakeTerminalMouseHost { Shift = true };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        EnableMouseMode(tab.ActivePane, 1003);
+
+        var controller = new TerminalMouseController(host);
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(50f, 60f) }, MouseButton.Left);
+
+        Assert.True(tab.ActivePane.Selection.HasSelection);
+        Assert.Equal(SelectionMode.Character, tab.ActivePane.Selection.Mode);
+        Assert.True(controller.LeftMouseDown);
+    }
+
+    [Fact]
+    public void MiddleClick_PastesIntoPaneUnderPointer()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        var rightPane = tab.PaneTree.Split(tab.ActivePane, SplitDirection.Vertical);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+
+        var controller = new TerminalMouseController(host);
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(500f, 60f) }, MouseButton.Middle);
+
+        Assert.True(host.PasteCalled);
+        Assert.Same(rightPane, host.PasteTarget);
+        Assert.Same(rightPane, tab.ActivePane);
+    }
+
+    [Fact]
+    public void DoubleClick_SelectsWord_AndTripleClickSelectsLine()
+    {
+        long now = 1000;
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        Feed(tab.ActivePane, "hello world");
+
+        var controller = new TerminalMouseController(host, () => now);
+        var mouse = new FakeMouse { Position = new Vector2(15f, 30f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+        now += 100;
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+
+        Assert.Equal(SelectionMode.Word, tab.ActivePane.Selection.Mode);
+        Assert.Equal(0, tab.ActivePane.Selection.AnchorRow);
+        Assert.Equal(0, tab.ActivePane.Selection.AnchorColumn);
+        Assert.Equal(4, tab.ActivePane.Selection.ActiveColumn);
+
+        now += 100;
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        Assert.Equal(SelectionMode.Line, tab.ActivePane.Selection.Mode);
+        Assert.Equal(0, tab.ActivePane.Selection.AnchorColumn);
+        Assert.Equal(79, tab.ActivePane.Selection.ActiveColumn);
+    }
+
+    [Fact]
+    public void Selection_UsesScrolledLogicalRows()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        for (int i = 0; i < 40; i++)
+            Feed(tab.ActivePane, $"line-{i}\n");
+        tab.ActivePane.ScrollUp(3, tab.ActivePane.Session.Adapter.Buffer.ScrollbackCount);
+
+        var controller = new TerminalMouseController(host);
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(50f, 60f) }, MouseButton.Left);
+
+        Assert.Equal(-1, tab.ActivePane.Selection.AnchorRow);
+        Assert.Equal(5, tab.ActivePane.Selection.AnchorColumn);
+    }
+
+    [Fact]
+    public void StationarySelectionAutoscrollsUpAndDown_AndStopsAtBounds()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        for (int i = 0; i < 100; i++)
+            Feed(tab.ActivePane, $"line-{i}\n");
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseMove(mouse, new Vector2(50f, 0f));
+        Assert.True(controller.TickSelectionAutoscroll());
+        Assert.True(tab.ActivePane.ScrollOffset > 0);
+
+        tab.ActivePane.ScrollTo(tab.ActivePane.Session.Adapter.Buffer.ScrollbackCount, tab.ActivePane.Session.Adapter.Buffer.ScrollbackCount);
+        int maxOffset = tab.ActivePane.ScrollOffset;
+        controller.HandleMouseMove(mouse, new Vector2(50f, 0f));
+        controller.TickSelectionAutoscroll();
+        Assert.Equal(maxOffset, tab.ActivePane.ScrollOffset);
+        Assert.False(controller.TickSelectionAutoscroll());
+
+        tab.ActivePane.ScrollTo(1, tab.ActivePane.Session.Adapter.Buffer.ScrollbackCount);
+        controller.HandleMouseMove(mouse, new Vector2(50f, 600f));
+        Assert.True(controller.TickSelectionAutoscroll());
+        Assert.Equal(0, tab.ActivePane.ScrollOffset);
+        Assert.False(controller.TickSelectionAutoscroll());
+    }
+
+    [Fact]
+    public void ResetState_ClearsCaptureHoverAndClickHistory()
+    {
+        long now = 1000;
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        for (int i = 0; i < 30; i++)
+            Feed(tab.ActivePane, $"line-{i}\n");
+
+        var controller = new TerminalMouseController(host, () => now);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+        mouse.Position = new Vector2(795f, 50f);
+        controller.HandleMouseMove(mouse, mouse.Position);
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        Assert.True(controller.IsDraggingScrollbar);
+        Assert.True(controller.LeftMouseDown);
+
+        controller.ResetState();
+        Assert.False(controller.LeftMouseDown);
+        Assert.False(controller.IsDraggingScrollbar);
+        Assert.False(controller.IsScrollbarHovered);
+        Assert.Equal(-1, controller.HoveredTabIndex);
+        Assert.Equal(TabBarHitType.None, controller.HoveredTabHitType);
+
+        mouse.Position = new Vector2(50f, 60f);
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        Assert.Equal(SelectionMode.Character, tab.ActivePane.Selection.Mode);
+    }
+
+    [Fact]
+    public void WheelAndScrollbarOperateOnPaneUnderPointer()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        var rightPane = tab.PaneTree.Split(tab.ActivePane, SplitDirection.Vertical);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        foreach (var pane in tab.PaneTree.Leaves)
+        {
+            for (int i = 0; i < 50; i++)
+                Feed(pane, $"line-{i}\n");
+        }
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(500f, 60f) };
+        controller.HandleMouseScroll(mouse, new ScrollWheel(0f, 1f));
+        Assert.True(rightPane.ScrollOffset > 0);
+        Assert.Equal(0, tab.PaneTree.Leaves[0].ScrollOffset);
+
+        mouse.Position = new Vector2(795f, 100f);
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        Assert.Same(rightPane, tab.ActivePane);
+        Assert.True(controller.IsDraggingScrollbar);
+        Assert.Equal(0, tab.PaneTree.Leaves[0].ScrollOffset);
+    }
+
 }

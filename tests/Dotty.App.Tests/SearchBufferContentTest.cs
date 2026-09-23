@@ -1,60 +1,62 @@
 using System;
-using Xunit;
+using Dotty.Runtime.Search;
 using Dotty.Terminal.Adapter;
+using Xunit;
 
 namespace Dotty.App.Tests;
 
 public class SearchBufferContentTest
 {
     [Fact]
-    public void Search_CanFindText_FromRealBufferOutput()
+    public void SearchEngine_FindMatches_UsesDisplayColumnsAfterWideGlyph()
     {
-        // Create buffer like real terminal
-        var buffer = new TerminalBuffer(rows: 10, columns: 80);
-
-        // Write actual text that would appear in terminal
+        var buffer = new TerminalBuffer(rows: 2, columns: 20);
         buffer.SetCursor(0, 0);
-        buffer.WriteText("Desktop    Notes    Templates".AsSpan(), CellAttributes.Default);
+        buffer.WriteText("界needle".AsSpan(), CellAttributes.Default);
 
-        buffer.SetCursor(1, 0);
-        buffer.WriteText("Documents  Pictures  Unity".AsSpan(), CellAttributes.Default);
+        using var snapshot = buffer.CaptureRenderSnapshotVisible();
+        var matches = SearchEngine.FindMatches(snapshot, "needle", matchCase: false, regex: false);
 
-        buffer.SetCursor(2, 0);
-        buffer.WriteText("Downloads  Postman   Videos".AsSpan(), CellAttributes.Default);
-
-        // Search for "Notes"
-        var search = new TerminalSearch(buffer);
-        int count = search.Search("Notes", caseSensitive: false, useRegex: false);
-
-        Console.WriteLine($"Found {count} matches for 'Notes'");
-
-        // Debug: Print what's actually in the buffer
-        for (int row = 0; row < 3; row++)
-        {
-            var lineText = GetLineText(buffer, row);
-            Console.WriteLine($"Row {row}: '{lineText}'");
-        }
-
-        // Should find "Notes"
-        Assert.True(count > 0, $"Should find 'Notes' in buffer but found {count} matches");
+        var match = Assert.Single(matches);
+        Assert.Equal(0, match.Row);
+        Assert.Equal(2, match.StartCol);
+        Assert.Equal(8, match.EndCol);
     }
 
-    private string GetLineText(TerminalBuffer buffer, int row)
+    [Fact]
+    public void SearchEngine_FindMatches_MapsCombiningAndEmojiGraphemesToCells()
     {
-        System.Text.StringBuilder sb = new();
-        for (int col = 0; col < buffer.Columns; col++)
-        {
-            var cell = buffer.GetCell(row, col);
-            if (!cell.IsEmpty && !cell.IsContinuation)
-            {
-                var cold = buffer.GetColdCell(row, col);
-                sb.Append(GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex) ?? " ");
-            }
-            else
-            {
-                sb.Append(' ');
-            }
-        }
-        return sb.ToString().TrimEnd();
+        var buffer = new TerminalBuffer(rows: 2, columns: 20);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("e\u0301😀target".AsSpan(), CellAttributes.Default);
+
+        using var snapshot = buffer.CaptureRenderSnapshotVisible();
+        var matches = SearchEngine.FindMatches(snapshot, "😀target", matchCase: false, regex: false);
+
+        var match = Assert.Single(matches);
+        Assert.Equal(0, match.Row);
+        Assert.Equal(1, match.StartCol);
+        Assert.Equal(9, match.EndCol);
+    }
+
+    [Fact]
+    public void SearchEngine_FindMatches_ReportsNegativeScrollbackRowsInDisplayColumns()
+    {
+        var buffer = new TerminalBuffer(rows: 2, columns: 24);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("prefix界needle".AsSpan(), CellAttributes.Default);
+        buffer.ScrollUpLines(1);
+
+        int scrollbackCount = buffer.ScrollbackCount;
+        Assert.True(scrollbackCount > 0);
+        using var snapshot = buffer.CaptureRenderSnapshotVisible(
+            sbStart: 0,
+            sbEnd: scrollbackCount - 1);
+        var matches = SearchEngine.FindMatches(snapshot, "needle", matchCase: false, regex: false);
+
+        var match = Assert.Single(matches);
+        Assert.Equal(-1, match.Row);
+        Assert.Equal(8, match.StartCol);
+        Assert.Equal(14, match.EndCol);
     }
 }

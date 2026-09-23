@@ -6,6 +6,7 @@ namespace Dotty.Terminal.Adapter;
 public partial class TerminalBuffer
 {
     private readonly record struct PromptAnchor(PromptMark Mark, ReflowCursorAnchor Anchor);
+    private readonly List<PromptAnchor> _promptAnchorScratch = new();
 
     private void ResizeWithReflow(int requestedRows, int requestedColumns)
     {
@@ -25,14 +26,14 @@ public partial class TerminalBuffer
         int oldMainScrollback = _isAlternate
             ? Math.Min(_savedTotalScrolled, oldMainScreen.ScrollbackCapacity)
             : oldActiveScrollback;
-        var activeLayout = oldActiveScreen.BuildSourceLayout(oldActiveScrollback);
-        var mainLayout = ReferenceEquals(oldMainScreen, oldActiveScreen)
-            ? activeLayout
-            : oldMainScreen.BuildSourceLayout(oldMainScrollback);
+        var mainLayout = _screens.BuildMainLayout(oldMainScreen, oldMainScrollback);
         var alternateScreen = _screens.Alternate;
-        var alternateLayout = _isAlternate
-            ? activeLayout
-            : alternateScreen?.BuildSourceLayout(0);
+        var alternateLayout = alternateScreen is null
+            ? null
+            : _screens.BuildAlternateLayout(alternateScreen, scrollbackRows: 0);
+        var activeLayout = ReferenceEquals(oldActiveScreen, oldMainScreen)
+            ? mainLayout
+            : alternateLayout!;
 
         var activeAnchor = oldActiveScreen.GetReflowAnchor(
             cursorState.Row,
@@ -71,34 +72,17 @@ public partial class TerminalBuffer
             oldRows,
             oldTotalScrolled);
 
-
-        ReflowMapping? mainMapping = null;
-        ReflowMapping? alternateMapping = null;
-        _screens.Reflow(rows, columns, (screen, isAlternate) =>
-        {
-            if (isAlternate)
-            {
-                var resized = screen.ReflowWithOptions(
-                    rows,
-                    columns,
-                    alternateAnchor,
-                    out alternateMapping,
-                    alternateLayout!,
-                    scrollbackRows: 0,
-                    includeScrollback: false);
-                return resized;
-            }
-
-            var resizedMain = screen.ReflowWithOptions(
-                rows,
-                columns,
-                mainAnchor,
-                out mainMapping,
-                mainLayout,
-                scrollbackRows: oldMainScrollback,
-                includeScrollback: true);
-            return resizedMain;
-        });
+        _screens.Reflow(
+            rows,
+            columns,
+            mainAnchor,
+            mainLayout,
+            oldMainScrollback,
+            alternateAnchor,
+            alternateLayout,
+            alternateScrollbackRows: 0,
+            out ReflowMapping? mainMapping,
+            out ReflowMapping? alternateMapping);
 
         Rows = rows;
         Columns = columns;
@@ -163,7 +147,7 @@ public partial class TerminalBuffer
         }
 
         ResizeTabStops(columns, oldColumns);
-        Array.Resize(ref _rowGenerations, rows);
+        ResizeRowGenerations(rows, oldRows);
         _writer.ResetRowDirtyCoalescing();
         unchecked { _globalGeneration++; }
         MarkAllRowsDirty();
@@ -194,6 +178,14 @@ public partial class TerminalBuffer
         };
     }
 
+    private void ResizeRowGenerations(int rows, int oldRows)
+    {
+        if (rows < oldRows)
+            Array.Clear(_rowGenerations, rows, oldRows - rows);
+        if (rows > _rowGenerations.Length)
+            Array.Resize(ref _rowGenerations, rows);
+    }
+
     private List<PromptAnchor> CapturePromptAnchors(
         Screen screen,
         Screen.SourceLayout layout,
@@ -201,7 +193,8 @@ public partial class TerminalBuffer
         int rows,
         int totalScrolled)
     {
-        var anchors = new List<PromptAnchor>(_promptMarks.Count);
+        var anchors = _promptAnchorScratch;
+        anchors.Clear();
         foreach (var mark in _promptMarks)
         {
             int chronologicalIndex = mark.AbsoluteRow - totalScrolled + scrollbackRows;
@@ -221,7 +214,7 @@ public partial class TerminalBuffer
     }
 
     private void RebasePromptMarks(
-        IReadOnlyList<PromptAnchor> anchors,
+        List<PromptAnchor> anchors,
         ReflowMapping mapping,
         int newRows)
     {
@@ -248,7 +241,10 @@ public partial class TerminalBuffer
             return;
         }
 
-        Array.Resize(ref _tabStops, columns);
+        if (columns < oldColumns)
+            Array.Clear(_tabStops, columns, oldColumns - columns);
+        if (columns > _tabStops.Length)
+            Array.Resize(ref _tabStops, columns);
         for (int column = oldColumns; column < columns; column++)
         {
             if (column % 8 == 0)

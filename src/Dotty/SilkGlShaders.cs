@@ -34,7 +34,11 @@ public static class SilkGlShaders
             vec2 size = cell;
             if (uPass != 0)
             {
+                // Atlas coverage is rasterized at device-pixel positions.
+                // Snap only the destination origin; keeping the atlas-derived
+                // size unchanged preserves its 1:1 dimensions.
                 origin += vec2(aMetrics.z, aMetrics.y - aMetrics.w);
+                origin = floor(origin + vec2(0.5));
                 size = aAtlasPx.zw;
                 vUv = (aAtlasPx.xy + aCorner * size) / uAtlasSize;
             }

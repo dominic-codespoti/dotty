@@ -264,6 +264,8 @@ public static class UserConfigService
         }
     }
 
+    public static void RequestReload() => ScheduleReload();
+
     private static void ScheduleReload()
     {
         int version = Interlocked.Increment(ref _reloadVersion);
@@ -289,12 +291,10 @@ public static class UserConfigService
             return;
 
         string path = GetConfigPath();
-        DottyUserConfig? loaded;
+        DottyUserConfig loaded;
         try
         {
-            if (!File.Exists(path))
-                return;
-            loaded = ReadConfig(path);
+            loaded = File.Exists(path) ? ReadConfig(path) ?? new DottyUserConfig() : new DottyUserConfig();
         }
         catch (Exception ex)
         {

@@ -344,7 +344,7 @@ public class TerminalKeyboardControllerTests
     {
         var payloads = new List<string>();
         var controller = new TerminalKeyboardController(
-            textReceived: payloads.Add);
+            textReceived: text => payloads.Add(text.ToString()));
 
         controller.HandleKeyDown(Key.A, 30);
         controller.HandleKeyChar('\uD83D');
@@ -354,5 +354,92 @@ public class TerminalKeyboardControllerTests
 
         Assert.Single(payloads);
         Assert.Equal("😀", payloads[0]);
+    }
+    [Fact]
+    public void ModifierSides_ReleaseIndependently_AndExposeAltGr()
+    {
+        var controller = new TerminalKeyboardController();
+
+        controller.HandleKeyDown(Key.ControlLeft, 1);
+        controller.HandleKeyDown(Key.ControlRight, 2);
+        controller.HandleKeyUp(Key.ControlLeft, 1);
+        Assert.True(controller.Ctrl);
+        Assert.False(controller.LeftCtrl);
+        Assert.True(controller.RightCtrl);
+
+        controller.HandleKeyDown(Key.AltLeft, 3);
+        controller.HandleKeyDown(Key.AltRight, 4);
+        controller.HandleKeyUp(Key.AltLeft, 3);
+        Assert.True(controller.Alt);
+        Assert.False(controller.LeftAlt);
+        Assert.True(controller.RightAlt);
+        Assert.True(controller.AltGr);
+        controller.HandleKeyUp(Key.AltRight, 4);
+        controller.HandleKeyUp(Key.ControlRight, 2);
+        Assert.False(controller.Alt);
+        Assert.False(controller.Ctrl);
+    }
+
+    [Fact]
+    public void RightAlt_ComposedText_IsDeliveredAndRepeatedAsWholeString()
+    {
+        var clock = new FakeClock();
+        var payloads = new List<string>();
+        var controller = new TerminalKeyboardController(
+            textReceived: text => payloads.Add(text.ToString()),
+            clockMilliseconds: () => clock.CurrentTimeMs,
+            initialDelayMs: 1,
+            repeatIntervalMs: 1);
+
+        controller.HandleKeyDown(Key.AltRight, 1);
+        controller.HandleKeyDown(Key.A, 2);
+        controller.HandleKeyChar('\uD83D');
+        controller.HandleKeyChar('\uDE00');
+        clock.Advance(1);
+        controller.Tick();
+
+        Assert.Equal(new[] { "😀", "😀" }, payloads);
+    }
+
+    [Fact]
+    public void SpecialKeyRepeat_TriggersActivity()
+    {
+        var clock = new FakeClock();
+        int activityCount = 0;
+        var controller = new TerminalKeyboardController(
+            keyPressed: (_, _) => { },
+            activity: () => activityCount++,
+            clockMilliseconds: () => clock.CurrentTimeMs,
+            initialDelayMs: 1);
+
+        controller.HandleKeyDown(Key.Up, 1);
+        clock.Advance(1);
+        controller.Tick();
+
+        Assert.Equal(2, activityCount);
+    }
+
+    [Fact]
+    public void ResetState_ClearsFocusSensitiveKeyboardState()
+    {
+        var clock = new FakeClock();
+        var payloads = new List<string>();
+        var controller = new TerminalKeyboardController(
+            textReceived: text => payloads.Add(text.ToString()),
+            clockMilliseconds: () => clock.CurrentTimeMs,
+            initialDelayMs: 1);
+
+        controller.HandleKeyDown(Key.ControlLeft, 1);
+        controller.HandleKeyDown(Key.AltRight, 2);
+        controller.HandleKeyDown(Key.A, 3);
+        controller.HandleKeyChar('\uD83D');
+        controller.ResetState();
+        controller.HandleKeyChar('\uDE00');
+        clock.Advance(2);
+        controller.Tick();
+
+        Assert.False(controller.Ctrl);
+        Assert.False(controller.Alt);
+        Assert.Empty(payloads);
     }
 }

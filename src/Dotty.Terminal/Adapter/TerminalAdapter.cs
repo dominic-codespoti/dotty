@@ -4,6 +4,8 @@ using Dotty.Abstractions.Config;
 
 namespace Dotty.Terminal.Adapter;
 
+public delegate void TerminalReplyHandler(ReadOnlySpan<char> reply);
+
 /// <summary>
 /// Adapter that connects the parser callbacks to a TerminalBuffer and exposes a render event.
 /// Keeps responsibilities minimal: buffer management and render notification.
@@ -58,7 +60,75 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnHyperlink(string uri) => _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri);
 
-    public event Action<string>? ReplyRequested;
+    public event TerminalReplyHandler? ReplyRequested;
+    private void SendTwoNumberReply(ReadOnlySpan<char> prefix, int first, int second, char suffix)
+    {
+        var handler = ReplyRequested;
+        if (handler is null)
+            return;
+
+        Span<char> reply = stackalloc char[48];
+        prefix.CopyTo(reply);
+        int length = prefix.Length;
+        first.TryFormat(reply[length..], out int written);
+        length += written;
+        reply[length++] = ';';
+        second.TryFormat(reply[length..], out written);
+        length += written;
+        reply[length++] = suffix;
+        handler(reply[..length]);
+    }
+
+    private void SendNumberReply(ReadOnlySpan<char> prefix, int value, char suffix)
+    {
+        var handler = ReplyRequested;
+        if (handler is null)
+            return;
+
+        Span<char> reply = stackalloc char[32];
+        prefix.CopyTo(reply);
+        int length = prefix.Length;
+        value.TryFormat(reply[length..], out int written);
+        length += written;
+        reply[length++] = suffix;
+        handler(reply[..length]);
+    }
+
+    private void SendColorReply(int code, ReadOnlySpan<char> hex)
+    {
+        var handler = ReplyRequested;
+        if (handler is null)
+            return;
+
+        if (hex.Length <= 64)
+        {
+            Span<char> reply = stackalloc char[72];
+            WriteColorReply(handler, code, hex, reply);
+        }
+        else
+        {
+            char[] reply = new char[hex.Length + 8];
+            WriteColorReply(handler, code, hex, reply);
+        }
+    }
+
+    private static void WriteColorReply(
+        TerminalReplyHandler handler,
+        int code,
+        ReadOnlySpan<char> hex,
+        Span<char> reply)
+    {
+        "\x1b]".AsSpan().CopyTo(reply);
+        int length = 2;
+        code.TryFormat(reply[length..], out int written);
+        length += written;
+        reply[length++] = ';';
+        hex.CopyTo(reply[length..]);
+        length += hex.Length;
+        reply[length++] = '\a';
+        handler(reply[..length]);
+    }
+
     public TerminalBuffer Buffer => _buffer;
     object? ITerminalHandler.Buffer => _buffer;
     public Buffer.StyleSet StyleSet => _buffer.StyleSet;
@@ -106,16 +176,16 @@ public class TerminalAdapter : ITerminalHandler
         {
             case 14:
                 // CSI 14 t → report window pixel size: CSI 4 ; height ; width t
-                ReplyRequested?.Invoke($"\u001b[4;{_windowPixelHeight};{_windowPixelWidth}t");
+                SendTwoNumberReply("\x1b[4;".AsSpan(), _windowPixelHeight, _windowPixelWidth, 't');
                 break;
             case 18:
                 // CSI 18 t → report window cell size: CSI 8 ; rows ; cols t
-                ReplyRequested?.Invoke($"\u001b[8;{_buffer.Rows};{_buffer.Columns}t");
+                SendTwoNumberReply("\x1b[8;".AsSpan(), _buffer.Rows, _buffer.Columns, 't');
                 break;
             case 20:
             case 21:
                 // Icon title (20) / window title (21) — respond with empty for now.
-                ReplyRequested?.Invoke($"\u001b]0;\u001b\\");
+                ReplyRequested?.Invoke("\x1b]0;\x1b\\".AsSpan());
                 break;
         }
     }
@@ -160,23 +230,17 @@ public class TerminalAdapter : ITerminalHandler
     {
         if (code == 0 || code == 2)
         {
-            _windowTitle = payload.ToString();
+            if (_windowTitle is null || !payload.SequenceEqual(_windowTitle.AsSpan()))
+                _windowTitle = payload.ToString();
             TitleChanged?.Invoke(_windowTitle);
             RequestRender();
         }
         else if (code == 8)
         {
-            var payloadStr = payload.ToString();
-            int semiIdx = payloadStr.IndexOf(';');
-            if (semiIdx >= 0)
-            {
-                var uri = payloadStr.Substring(semiIdx + 1);
-                OnHyperlink(uri);
-            }
-            else
-            {
-                OnHyperlink(string.Empty);
-            }
+            int semiIdx = payload.IndexOf(';');
+            _currentAttributes.HyperlinkId = semiIdx >= 0
+                ? _buffer.GetOrCreateHyperlinkId(payload[(semiIdx + 1)..])
+                : (ushort)0;
         }
         else if (code == 52)
         {
@@ -204,7 +268,7 @@ public class TerminalAdapter : ITerminalHandler
                 11 => _defaultBgHex,
                 _ => "#FFFFFF",
             };
-            ReplyRequested?.Invoke($"\x1b]{code};{hex}\a");
+            SendColorReply(code, hex.AsSpan());
         }
         else if (code == 133)
         {
@@ -285,18 +349,16 @@ public class TerminalAdapter : ITerminalHandler
         {
             case 6:
                 // Cursor Position Report (CPR) requested via DSR variant:
-                var r = _buffer.CursorRow + 1;
-                var c = _buffer.CursorCol + 1;
-                ReplyRequested?.Invoke($"\u001b[{r};{c}R");
+                SendTwoNumberReply("\x1b[".AsSpan(), _buffer.CursorRow + 1, _buffer.CursorCol + 1, 'R');
                 break;
             case 5:
             case 0:
                 // Terminal status OK
-                ReplyRequested?.Invoke("\u001b[0n");
+                ReplyRequested?.Invoke("\x1b[0n".AsSpan());
                 break;
             default:
                 // Unknown/unsupported: return failure
-                ReplyRequested?.Invoke("\u001b[3n");
+                ReplyRequested?.Invoke("\x1b[3n".AsSpan());
                 break;
         }
     }
@@ -304,9 +366,7 @@ public class TerminalAdapter : ITerminalHandler
     public void OnCursorPositionReport()
     {
         // DEC private CPR response for CSI ? 6 n requests.
-        var r = _buffer.CursorRow + 1;
-        var c = _buffer.CursorCol + 1;
-        ReplyRequested?.Invoke($"\u001b[?{r};{c}R");
+        SendTwoNumberReply("\x1b[?".AsSpan(), _buffer.CursorRow + 1, _buffer.CursorCol + 1, 'R');
     }
 
     public void OnInsertChars(int n)
@@ -517,6 +577,8 @@ public class TerminalAdapter : ITerminalHandler
         _windowTitle = null;
         CursorShape = 0;
         KeypadApplicationMode = false;
+        ApplicationCursorKeysEnabled = false;
+        KittyKeyboardMode = 0;
         RequestRender();
     }
 
@@ -590,10 +652,10 @@ public class TerminalAdapter : ITerminalHandler
         {
             case 0:
             case 1:
-                ReplyRequested?.Invoke("\u001b[?1;0c");
+                ReplyRequested?.Invoke("\x1b[?1;0c".AsSpan());
                 break;
             case 2:
-                ReplyRequested?.Invoke(_da2Response);
+                ReplyRequested?.Invoke(_da2Response.AsSpan());
                 break;
         }
     }
@@ -661,7 +723,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnQueryKittyKeyboard()
     {
-        ReplyRequested?.Invoke($"\x1b[{KittyKeyboardMode}u");
+        SendNumberReply("\x1b[".AsSpan(), KittyKeyboardMode, 'u');
     }
 
     public void FlushRender()

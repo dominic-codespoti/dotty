@@ -32,15 +32,26 @@ static char *g_control_path = NULL;
 static void *proxy_master_to_stdout(void *arg) {
     (void)arg;
     char buf[8192];
-    while (1) {
+    for (;;) {
         ssize_t r = read(master_fd, buf, sizeof(buf));
-        if (r <= 0) break;
-        ssize_t w = 0;
-        while (w < r) {
-            ssize_t n = write(STDOUT_FILENO, buf + w, r - w);
-            if (n <= 0) break;
-            w += n;
+        if (r > 0) {
+            ssize_t written = 0;
+            while (written < r) {
+                ssize_t n = write(STDOUT_FILENO, buf + written, (size_t)(r - written));
+                if (n > 0) {
+                    written += n;
+                } else if (n < 0 && errno == EINTR) {
+                    continue;
+                } else {
+                    return NULL;
+                }
+            }
+            continue;
         }
+        if (r < 0 && errno == EINTR) continue;
+        // Linux reports EIO when the slave side of a PTY closes; other
+        // POSIX systems may report EOF instead.
+        break;
     }
     return NULL;
 }
@@ -48,17 +59,63 @@ static void *proxy_master_to_stdout(void *arg) {
 static void *proxy_stdin_to_master(void *arg) {
     (void)arg;
     char buf[4096];
-    while (1) {
+    for (;;) {
         ssize_t r = read(STDIN_FILENO, buf, sizeof(buf));
-        if (r <= 0) break;
-        ssize_t w = 0;
-        while (w < r) {
-            ssize_t n = write(master_fd, buf + w, r - w);
-            if (n <= 0) break;
-            w += n;
+        if (r > 0) {
+            ssize_t written = 0;
+            while (written < r) {
+                ssize_t n = write(master_fd, buf + written, (size_t)(r - written));
+                if (n > 0) {
+                    written += n;
+                } else if (n < 0 && errno == EINTR) {
+                    continue;
+                } else {
+                    return NULL;
+                }
+            }
+            continue;
         }
+        if (r < 0 && errno == EINTR) continue;
+        break;
     }
     return NULL;
+}
+
+static void apply_control_line(const char *line) {
+    // Look for resize JSON: {"type":"resize","cols":NN,"rows":MM}
+    if (strstr(line, "resize") != NULL) {
+        int cols = 80, rows = 24;
+        const char *c = strstr(line, "\"cols\"");
+        if (c) sscanf(c, "\"cols\"%*[^0-9]%d", &cols);
+        const char *r = strstr(line, "\"rows\"");
+        if (r) sscanf(r, "\"rows\"%*[^0-9]%d", &rows);
+        struct winsize ws;
+        ws.ws_col = cols;
+        ws.ws_row = rows;
+        ws.ws_xpixel = 0;
+        ws.ws_ypixel = 0;
+        ioctl(master_fd, TIOCSWINSZ, &ws);
+    }
+}
+
+struct control_cleanup_state {
+    int *listener_fd;
+    int *client_fd;
+    const char *path;
+};
+
+static void control_cleanup(void *arg) {
+    struct control_cleanup_state *state = (struct control_cleanup_state *)arg;
+    if (*state->client_fd >= 0) {
+        close(*state->client_fd);
+        *state->client_fd = -1;
+    }
+    if (*state->listener_fd >= 0) {
+        if (control_sock_fd == *state->listener_fd) control_sock_fd = -1;
+        close(*state->listener_fd);
+        *state->listener_fd = -1;
+    }
+    if (state->path) unlink(state->path);
 }
 
 static void handle_control_messages(const char *path) {
@@ -85,52 +142,44 @@ static void handle_control_messages(const char *path) {
         return;
     }
     control_sock_fd = lsock;
-    // Accept one client and read lines (blocking)
-    int asock = accept(lsock, NULL, NULL);
-    if (asock < 0) {
-        close(lsock);
-        unlink(path);
-        return;
-    }
-    // set close-on-exec on accepted socket
-    int flags = fcntl(asock, F_GETFD);
-    if (flags != -1) fcntl(asock, F_SETFD, flags | FD_CLOEXEC);
-    FILE *f = fdopen(asock, "r");
-    if (!f) {
-        close(asock);
-        close(lsock);
-        unlink(path);
-        return;
-    }
-    char line[1024];
-    while (fgets(line, sizeof(line), f)) {
-        // Look for resize JSON: {"type":"resize","cols":NN,"rows":MM}
-        if (strstr(line, "resize") != NULL) {
-            int cols = 80, rows = 24;
-            // crude parse
-            char *c = strstr(line, "\"cols\"");
-            if (c) sscanf(c, "\"cols\"%*[^0-9]%d", &cols);
-            char *r = strstr(line, "\"rows\"");
-            if (r) sscanf(r, "\"rows\"%*[^0-9]%d", &rows);
-            struct winsize ws;
-            ws.ws_col = cols;
-            ws.ws_row = rows;
-            ws.ws_xpixel = 0;
-            ws.ws_ypixel = 0;
-            ioctl(master_fd, TIOCSWINSZ, &ws);
+
+    int asock = -1;
+    struct control_cleanup_state cleanup = { &lsock, &asock, path };
+    pthread_cleanup_push(control_cleanup, &cleanup);
+    asock = accept(lsock, NULL, NULL);
+    if (asock >= 0) {
+        int flags = fcntl(asock, F_GETFD);
+        if (flags != -1) fcntl(asock, F_SETFD, flags | FD_CLOEXEC);
+
+        char line[1024];
+        size_t line_length = 0;
+        for (;;) {
+            char input[1024];
+            ssize_t n = read(asock, input, sizeof(input));
+            if (n > 0) {
+                for (ssize_t i = 0; i < n; ++i) {
+                    if (input[i] == '\n' || line_length == sizeof(line) - 1) {
+                        line[line_length] = '\0';
+                        apply_control_line(line);
+                        line_length = 0;
+                    } else {
+                        line[line_length++] = input[i];
+                    }
+                }
+                continue;
+            }
+            if (n < 0 && errno == EINTR) continue;
+            break;
         }
     }
-    fclose(f);
-    close(lsock);
-    unlink(path);
+    pthread_cleanup_pop(1);
 }
 
 static void *control_thread_entry(void *arg) {
     char *path = (char *)arg;
-    if (path) {
-        handle_control_messages(path);
-        free(path);
-    }
+    pthread_cleanup_push(free, path);
+    handle_control_messages(path);
+    pthread_cleanup_pop(1);
     return NULL;
 }
 
@@ -253,28 +302,26 @@ int main(int argc, char **argv) {
     child_pid = pid;
     fprintf(stderr, "pty-helper: started child pid=%d slave=%s\n", (int)child_pid, slave_name);
 
-    // If a control socket is provided, handle it in a background thread
+    // If a control socket is provided, handle it in a joinable thread.
     pthread_t ctrl_thread;
+    int control_thread_started = 0;
     if (control_path) {
-        // store global path for signal cleanup
         g_control_path = strdup(control_path);
         char *path_copy = strdup(control_path);
-        if (pthread_create(&ctrl_thread, NULL, control_thread_entry, path_copy) == 0) {
-            pthread_detach(ctrl_thread);
+        if (path_copy && pthread_create(&ctrl_thread, NULL, control_thread_entry, path_copy) == 0) {
+            control_thread_started = 1;
         } else {
             free(path_copy);
         }
     }
 
-    // Start proxy threads
     pthread_t t1, t2;
-    pthread_create(&t1, NULL, proxy_master_to_stdout, NULL);
-    pthread_create(&t2, NULL, proxy_stdin_to_master, NULL);
+    int output_thread_started = pthread_create(&t1, NULL, proxy_master_to_stdout, NULL) == 0;
+    int input_thread_started = pthread_create(&t2, NULL, proxy_stdin_to_master, NULL) == 0;
 
-    // Ignore SIGPIPE so writes to closed pipes don't kill the helper
     signal(SIGPIPE, SIG_IGN);
-    // Install simple cleanup handlers to unlink control socket on termination
     struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
     sa.sa_handler = cleanup_and_exit;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
@@ -282,17 +329,41 @@ int main(int argc, char **argv) {
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGHUP, &sa, NULL);
 
-    // Wait for child to exit
     int status = 0;
-    waitpid(child_pid, &status, 0);
+    pid_t waited;
+    do {
+        waited = waitpid(child_pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
 
-    // cleanup
-    // Close master; threads will exit when read/write return
-    if (master_fd >= 0) close(master_fd);
-    if (control_path && control_sock_fd >= 0) close(control_sock_fd);
-    if (control_path) unlink(control_path);
+    // Drain all PTY output before stopping the other blocking proxy threads.
+    if (output_thread_started) pthread_join(t1, NULL);
+    if (input_thread_started) {
+        pthread_cancel(t2);
+        pthread_join(t2, NULL);
+    }
+    if (control_thread_started) {
+        pthread_cancel(ctrl_thread);
+        pthread_join(ctrl_thread, NULL);
+    }
 
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-    return 0;
+    if (master_fd >= 0) {
+        close(master_fd);
+        master_fd = -1;
+    }
+    if (control_sock_fd >= 0) {
+        close(control_sock_fd);
+        control_sock_fd = -1;
+    }
+    if (g_control_path) {
+        unlink(g_control_path);
+        free(g_control_path);
+        g_control_path = NULL;
+    } else if (control_path) {
+        unlink(control_path);
+    }
+
+    int exit_code = 0;
+    if (waited >= 0 && WIFEXITED(status)) exit_code = WEXITSTATUS(status);
+    else if (waited >= 0 && WIFSIGNALED(status)) exit_code = 128 + WTERMSIG(status);
+    _exit(exit_code);
 }

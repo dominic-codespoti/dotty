@@ -45,6 +45,47 @@ namespace Dotty.App.Tests
         }
 
         [Fact]
+        public void MeasureCell_UsesA8AtlasFontMetricsPolicy()
+        {
+            using var typeface = SKTypeface.Default;
+            const float fontSize = 17f;
+            const double lineHeight = 1.25;
+            const float scale = 1.5f;
+            float scaledFontSize = fontSize * scale;
+
+            var (cellWidth, cellHeight) = FontMetricsService.MeasureCell(
+                typeface, fontSize, lineHeight, scale);
+
+            using var atlasFont = new SKFont(typeface, scaledFontSize)
+            {
+                Subpixel = false,
+                Hinting = SKFontHinting.Full,
+                Edging = SKFontEdging.Antialias,
+            };
+            var metrics = atlasFont.Metrics;
+            float ascent = float.IsFinite(metrics.Ascent)
+                ? MathF.Abs(metrics.Ascent)
+                : scaledFontSize;
+            float descent = float.IsFinite(metrics.Descent)
+                ? MathF.Abs(metrics.Descent)
+                : 0f;
+            float glyphHeight = MathF.Max(scaledFontSize, ascent + descent);
+            float glyphAdvance = float.IsFinite(metrics.AverageCharacterWidth)
+                ? MathF.Max(0.5f, metrics.AverageCharacterWidth)
+                : scaledFontSize * 0.6f;
+            float wideGlyphAdvance = atlasFont.MeasureText("W");
+            if (float.IsFinite(wideGlyphAdvance))
+                glyphAdvance = MathF.Max(glyphAdvance, wideGlyphAdvance);
+
+            Assert.Equal(
+                MathF.Round(MathF.Max(4f, glyphAdvance / scale)),
+                cellWidth);
+            Assert.Equal(
+                MathF.Round(MathF.Max(fontSize * (float)lineHeight, glyphHeight / scale)),
+                cellHeight);
+        }
+
+        [Fact]
         public void MeasureCell_ScalesLineHeight_WhenLineHeightIncreases()
         {
             using var typeface = SKTypeface.Default;

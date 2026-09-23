@@ -53,13 +53,158 @@ public static partial class HyperlinkScanner
         return results;
     }
 
-    /// <summary>
-    /// Hit-tests whether a given (row, col) coordinate lies within a detected hyperlink.
-    /// </summary>
-    /// <param name="source">The terminal render source.</param>
-    /// <param name="row">0-based visible row index.</param>
-    /// <param name="col">0-based column index.</param>
-    /// <returns>The matching <see cref="HyperlinkSpan"/> if found; otherwise null.</returns>
+    /// <summary>Reusable per-thread row storage used by allocation-free hover queries.</summary>
+
+    private sealed class HoverScratch
+    {
+        public char[] Text = Array.Empty<char>();
+        public int[] Columns = Array.Empty<int>();
+    }
+
+    [ThreadStatic]
+    private static HoverScratch? t_hoverScratch;
+
+    /// <summary>Tests link coverage without materializing URLs or allocating per hover event.</summary>
+    public static bool ContainsLinkAt(IRenderSource source, int row, int col)
+    {
+        if (source == null || row < 0 || row >= source.Rows || col < 0 || col >= source.Columns)
+            return false;
+
+        var hotCells = source.GetRowCells(row);
+        var coldCells = source.GetRowColdCells(row);
+        if (col < coldCells.Length)
+        {
+            ushort id = coldCells[col].HyperlinkId;
+            if (id != 0 && source is TerminalBuffer buffer && !string.IsNullOrEmpty(buffer.GetHyperlinkUrl(id)))
+                return true;
+        }
+
+        int colLimit = Math.Min(source.Columns, hotCells.Length);
+        if (colLimit == 0)
+            return false;
+
+        var scratch = t_hoverScratch ??= new HoverScratch();
+        EnsureHoverCapacity(scratch, Math.Max(16, colLimit * 2));
+        int textLength = 0;
+        for (int c = 0; c < colLimit; c++)
+        {
+            var hot = hotCells[c];
+            if (hot.IsContinuation)
+                continue;
+
+            short graphemeIndex = c < coldCells.Length ? coldCells[c].GraphemeIndex : (short)-1;
+            if (graphemeIndex > 0)
+            {
+                string? grapheme = GraphemeHelper.Resolve(hot.Rune, graphemeIndex);
+                if (string.IsNullOrEmpty(grapheme))
+                    AppendHoverChar(scratch, ref textLength, ' ', c);
+                else
+                    AppendHoverSpan(scratch, ref textLength, grapheme.AsSpan(), c);
+            }
+            else if (hot.Rune == 0)
+            {
+                AppendHoverChar(scratch, ref textLength, ' ', c);
+            }
+            else if (Rune.TryCreate(hot.Rune, out Rune rune))
+            {
+                EnsureHoverCapacity(scratch, textLength + 2);
+                int written = rune.EncodeToUtf16(scratch.Text.AsSpan(textLength));
+                for (int i = 0; i < written; i++)
+                    scratch.Columns[textLength + i] = c;
+                textLength += written;
+            }
+            else
+            {
+                AppendHoverChar(scratch, ref textLength, ' ', c);
+            }
+        }
+
+        if (textLength == 0)
+            return false;
+
+        ReadOnlySpan<char> text = scratch.Text.AsSpan(0, textLength);
+        foreach (var match in UrlRegex().EnumerateMatches(text))
+        {
+            int start = match.Index;
+            int end = match.Index + match.Length;
+            if (match.Length == 0 || start >= textLength || end > textLength)
+                continue;
+
+            int trimmed = GetTrailingPunctuationLength(text.Slice(start, end - start));
+            end -= trimmed;
+            if (end <= start)
+                continue;
+
+            int startCol = scratch.Columns[start];
+            int endCol = scratch.Columns[end - 1];
+            if (col < startCol || col > endCol)
+                continue;
+            if (OverlapsExplicitLink(source, startCol, endCol, coldCells))
+                continue;
+            return true;
+        }
+        return false;
+    }
+
+    private static bool OverlapsExplicitLink(
+        IRenderSource source,
+        int startCol,
+        int endCol,
+        ReadOnlySpan<ColdCell> coldCells)
+    {
+        if (source is not TerminalBuffer buffer)
+            return false;
+        int limit = Math.Min(endCol, coldCells.Length - 1);
+        for (int col = Math.Max(0, startCol); col <= limit; col++)
+        {
+            ushort id = coldCells[col].HyperlinkId;
+            if (id != 0 && !string.IsNullOrEmpty(buffer.GetHyperlinkUrl(id)))
+                return true;
+        }
+        return false;
+    }
+
+    private static int GetTrailingPunctuationLength(ReadOnlySpan<char> url)
+    {
+        int end = url.Length;
+        while (end > 0)
+        {
+            char c = url[end - 1];
+            if (c is not ('.' or ',' or ';' or ':' or '!' or '?' or ')' or ']' or '}'))
+                break;
+            if (c == ')' && CountChar(url[..(end - 1)], '(') >= CountChar(url[..end], ')'))
+                break;
+            if (c == ']' && CountChar(url[..(end - 1)], '[') >= CountChar(url[..end], ']'))
+                break;
+            end--;
+        }
+        return url.Length - end;
+    }
+
+    private static void AppendHoverChar(HoverScratch scratch, ref int length, char value, int col)
+    {
+        EnsureHoverCapacity(scratch, length + 1);
+        scratch.Text[length] = value;
+        scratch.Columns[length++] = col;
+    }
+
+    private static void AppendHoverSpan(HoverScratch scratch, ref int length, ReadOnlySpan<char> value, int col)
+    {
+        EnsureHoverCapacity(scratch, length + value.Length);
+        value.CopyTo(scratch.Text.AsSpan(length));
+        scratch.Columns.AsSpan(length, value.Length).Fill(col);
+        length += value.Length;
+    }
+
+    private static void EnsureHoverCapacity(HoverScratch scratch, int required)
+    {
+        if (scratch.Text.Length >= required)
+            return;
+        int size = Math.Max(required, Math.Max(32, scratch.Text.Length * 2));
+        Array.Resize(ref scratch.Text, size);
+        Array.Resize(ref scratch.Columns, size);
+    }
+    /// <summary>Returns the matching link with its URL materialized for activation.</summary>
     public static HyperlinkSpan? FindLinkAt(IRenderSource source, int row, int col)
     {
         if (source == null || row < 0 || row >= source.Rows || col < 0 || col >= source.Columns)

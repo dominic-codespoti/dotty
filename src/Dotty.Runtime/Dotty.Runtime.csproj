@@ -14,6 +14,6 @@
     <ProjectReference Include="..\Dotty.Rendering.Gpu\Dotty.Rendering.Gpu.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="NLua" />
+    <PackageReference Include="KeraLua" />
   </ItemGroup>
 </Project>

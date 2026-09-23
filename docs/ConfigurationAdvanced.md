@@ -14,9 +14,10 @@ Use `DOTTY_CONFIG_HOME` for portable or test installations.
 
 ## Themes and Lua
 
-Place user theme files in `<config-directory>/themes`. Lua startup scripts
-(`config.lua` or `init.lua`) live in the configuration directory. Both follow
-the same `DOTTY_CONFIG_HOME` override as `config.json`.
+Place user theme files in `<config-directory>/themes`. Lua startup scripts can
+override JSON settings and add bindings, tabs, panes, and event hooks. See the
+[Lua scripting guide](guides/Lua.md) for the API and reload lifecycle; both
+configuration files follow the `DOTTY_CONFIG_HOME` override.
 
 ## Safe live reload
 
@@ -25,5 +26,4 @@ atomically renaming it over `config.json`. The watcher debounces the resulting
 `Changed`, `Created`, and `Renamed` events. Invalid JSON leaves the last valid
 configuration active and exposes the error through `UserConfigService.LastError`.
 
-This guide intentionally presents only JSON configuration; no other
-configuration syntax is supported.
+This page covers JSON configuration; see the Lua guide for the Lua API.

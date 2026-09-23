@@ -1,86 +1,195 @@
 using System;
 using System.Collections.Generic;
+using Dotty.Runtime.Panes;
+using Dotty.Runtime.Text;
 using Dotty.Runtime.Tabs;
-using NLua;
 
 namespace Dotty.Runtime.Scripting;
 
-/// <summary>
-/// Manages user-registered event hooks in Lua.
-/// </summary>
 public sealed class LuaHookManager
 {
-    private readonly Dictionary<string, List<LuaFunction>> _hooks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _sync = new();
+    private readonly Dictionary<string, LuaCallbackReference[]> _hooks = new(StringComparer.OrdinalIgnoreCase);
 
-    public void Register(string eventName, LuaFunction callback)
+    internal LuaScriptHost? Owner { get; set; }
+
+    internal void Register(string name, LuaCallbackReference callback)
     {
-        if (string.IsNullOrWhiteSpace(eventName) || callback == null) return;
-        string key = eventName.Trim().ToLowerInvariant();
-
-        if (!_hooks.TryGetValue(key, out var list))
+        if (string.IsNullOrWhiteSpace(name))
         {
-            list = new List<LuaFunction>();
-            _hooks[key] = list;
+            callback.Dispose();
+            return;
         }
 
-        list.Add(callback);
+        lock (_sync)
+        {
+            string key = name.Trim();
+            if (_hooks.TryGetValue(key, out LuaCallbackReference[]? previous))
+            {
+                var updated = new LuaCallbackReference[previous.Length + 1];
+                previous.CopyTo(updated, 0);
+                updated[^1] = callback;
+                _hooks[key] = updated;
+            }
+            else
+            {
+                _hooks[key] = new[] { callback };
+            }
+        }
     }
 
-    public string? FormatTabTitle(TerminalTab tab, int index)
+    internal bool HasHandlers(string eventName)
     {
-        if (!_hooks.TryGetValue("format_tab_title", out var list) || list.Count == 0)
-        {
-            return null;
-        }
+        LuaCallbackReference[] callbacks = Get(eventName);
+        return callbacks.Length != 0;
+    }
 
-        var handle = new LuaTabHandle(tab, index);
-        foreach (var func in list)
+    internal void Clear()
+    {
+        lock (_sync)
         {
-            try
+            foreach (LuaCallbackReference[] callbacks in _hooks.Values)
             {
-                var result = func.Call(handle);
-                if (result != null && result.Length > 0 && result[0] is string formatted && !string.IsNullOrWhiteSpace(formatted))
+                foreach (LuaCallbackReference callback in callbacks)
                 {
-                    return formatted;
+                    callback.Dispose();
                 }
             }
-            catch (Exception ex)
+
+            _hooks.Clear();
+        }
+    }
+
+    internal void Emit(string eventName)
+    {
+        LuaCallbackReference[] callbacks = Get(eventName);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            callbacks[i].Invoke(out _);
+        }
+    }
+
+    internal void Emit(string eventName, LuaValue arg0)
+    {
+        LuaCallbackReference[] callbacks = Get(eventName);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            callbacks[i].Invoke(arg0, out _);
+        }
+    }
+
+    internal void Emit(string eventName, LuaValue arg0, LuaValue arg1)
+    {
+        LuaCallbackReference[] callbacks = Get(eventName);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            callbacks[i].Invoke(arg0, arg1, out _);
+        }
+    }
+
+    internal void Emit(string eventName, LuaValue arg0, LuaValue arg1, LuaValue arg2)
+    {
+        LuaCallbackReference[] callbacks = Get(eventName);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            callbacks[i].Invoke(arg0, arg1, arg2, out _);
+        }
+    }
+
+    private bool TryInvokeFirst(string eventName, LuaValue arg0, out LuaValue result)
+    {
+        LuaCallbackReference[] callbacks = Get(eventName);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            if (callbacks[i].Invoke(arg0, out result) && !result.IsNil)
             {
-                Console.WriteLine($"[Lua Hook Error] 'format_tab_title': {ex.Message}");
+                return true;
             }
         }
 
-        return null;
+        result = LuaValue.Nil;
+        return false;
     }
 
-    public bool TryOpenUrl(string url)
+    private bool TryInvokeFirst(string eventName, LuaValue arg0, LuaValue arg1, out LuaValue result)
     {
-        if (!_hooks.TryGetValue("open_url", out var list) || list.Count == 0)
+        LuaCallbackReference[] callbacks = Get(eventName);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            if (callbacks[i].Invoke(arg0, arg1, out result) && !result.IsNil)
+            {
+                return true;
+            }
+        }
+
+        result = LuaValue.Nil;
+        return false;
+    }
+
+    private LuaCallbackReference[] Get(string name)
+    {
+        lock (_sync)
+        {
+            return _hooks.TryGetValue(name, out LuaCallbackReference[]? callbacks)
+                ? callbacks
+                : Array.Empty<LuaCallbackReference>();
+        }
+    }
+
+    public bool TryFormatTabTitle(TerminalTab tab, int index, ReusableTextBuffer destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (Owner == null)
         {
             return false;
         }
 
-        foreach (var func in list)
+        LuaValue argument = LuaValue.FromTab(tab);
+        LuaCallbackReference[] callbacks = Get("format_tab_title");
+        for (int i = 0; i < callbacks.Length; i++)
         {
-            try
+            if (callbacks[i].InvokeString(argument, destination))
             {
-                var result = func.Call(url);
-                if (result != null && result.Length > 0 && result[0] is bool handled && handled)
-                {
-                    return true;
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Lua Hook Error] 'open_url': {ex.Message}");
+                return true;
             }
         }
 
         return false;
     }
 
-    public void Clear()
+    public bool TryOpenUrl(string url)
     {
-        _hooks.Clear();
+        return Owner != null
+            && TryInvokeFirst("open_url", LuaValue.From(url), out LuaValue value)
+            && value.TryGetBoolean(out bool handled)
+            && handled;
+    }
+
+    public bool TryFormatStatus(ReusableTextBuffer destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        if (Owner == null)
+        {
+            return false;
+        }
+
+        LuaCallbackReference[] callbacks = Get("update_status");
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            if (callbacks[i].InvokeString(destination))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public bool AllowClipboardWrite(LeafPane pane, TerminalTab tab, string text)
+    {
+        return !(Owner != null
+            && TryInvokeFirst("clipboard_write", LuaValue.FromPane(pane, tab), LuaValue.From(text), out LuaValue value)
+            && value.TryGetBoolean(out bool allow)
+            && !allow);
     }
 }

@@ -12,6 +12,7 @@ public unsafe partial class Screen : IDisposable
     private IntPtr _cellsPtr;
     private IntPtr _coldCellsPtr;
     private int _cellCount;
+    private int _cellCapacity;
     public int Head => _head;
     private int _head;
     public int ScrollbackCapacity => _scrollbackCapacity;
@@ -19,13 +20,15 @@ public unsafe partial class Screen : IDisposable
     public int TotalRows => _scrollbackCapacity + Rows;
 
     public int[] RowMaxCol => _rowMaxCol;
-    private int[] _rowMaxCol;
+    private int[] _rowMaxCol = Array.Empty<int>();
     // Per-physical-row flag: tracks whether any cell has hyperlinks or graphemes.
     // Allows BufferTextWriter to skip the per-cell cold-reset loop entirely on clean rows.
     public bool[] RowColdFlags => _rowColdFlags;
-    private bool[] _rowColdFlags;
-    public bool[] RowContinuesPrevious { get; }
-    public int[] RowEndCol { get; }
+    private bool[] _rowColdFlags = Array.Empty<bool>();
+    private bool[] _rowContinuesPrevious = Array.Empty<bool>();
+    public bool[] RowContinuesPrevious => _rowContinuesPrevious;
+    private int[] _rowEndCol = Array.Empty<int>();
+    public int[] RowEndCol => _rowEndCol;
 
     public int GetRowMaxCol(int logicalRow)
     {
@@ -86,24 +89,65 @@ public unsafe partial class Screen : IDisposable
 
     public Screen(int rows, int columns, int scrollbackCapacity = 10000)
     {
-        Rows = rows;
-        Columns = columns;
         _scrollbackCapacity = scrollbackCapacity;
+        PrepareForReuse(rows, columns);
+    }
+
+    internal void ResetForReflow(int rows, int columns) =>
+        PrepareForReuse(rows, columns);
+
+    internal void EnsureCapacity(int rows, int columns)
+    {
+        rows = Math.Max(1, rows);
+        columns = Math.Max(1, columns);
+        int total = _scrollbackCapacity + rows;
+        int requiredCells = total * columns;
+
+        if (_cellCapacity < requiredCells || _cellsPtr == IntPtr.Zero || _coldCellsPtr == IntPtr.Zero)
+        {
+            int capacity = Math.Max(_cellCapacity, requiredCells);
+            IntPtr cells = Marshal.AllocHGlobal(capacity * Unsafe.SizeOf<CellHot>());
+            IntPtr cold = Marshal.AllocHGlobal(capacity * Unsafe.SizeOf<ColdCell>());
+            long hotBytes = (long)_cellCount * Unsafe.SizeOf<CellHot>();
+            long coldBytes = (long)_cellCount * Unsafe.SizeOf<ColdCell>();
+            if (_cellsPtr != IntPtr.Zero && _cellCount > 0)
+                System.Buffer.MemoryCopy((void*)_cellsPtr, (void*)cells, (long)capacity * Unsafe.SizeOf<CellHot>(), hotBytes);
+            if (_coldCellsPtr != IntPtr.Zero && _cellCount > 0)
+                System.Buffer.MemoryCopy((void*)_coldCellsPtr, (void*)cold, (long)capacity * Unsafe.SizeOf<ColdCell>(), coldBytes);
+            if (_cellsPtr != IntPtr.Zero)
+                Marshal.FreeHGlobal(_cellsPtr);
+            if (_coldCellsPtr != IntPtr.Zero)
+                Marshal.FreeHGlobal(_coldCellsPtr);
+            _cellsPtr = cells;
+            _coldCellsPtr = cold;
+            _cellCapacity = capacity;
+        }
+
+        if (_rowMaxCol.Length < total)
+            Array.Resize(ref _rowMaxCol, total);
+        if (_rowColdFlags.Length < total)
+            Array.Resize(ref _rowColdFlags, total);
+        if (_rowContinuesPrevious.Length < total)
+            Array.Resize(ref _rowContinuesPrevious, total);
+        if (_rowEndCol.Length < total)
+            Array.Resize(ref _rowEndCol, total);
+    }
+
+    private void PrepareForReuse(int rows, int columns)
+    {
+        Rows = Math.Max(1, rows);
+        Columns = Math.Max(1, columns);
+        EnsureCapacity(Rows, Columns);
+        int total = TotalRows;
+        _cellCount = total * Columns;
         _head = 0;
-        int total = scrollbackCapacity + rows;
-        _cellCount = total * columns;
-        _cellsPtr = Marshal.AllocHGlobal(_cellCount * Unsafe.SizeOf<CellHot>());
-        _coldCellsPtr = Marshal.AllocHGlobal(_cellCount * Unsafe.SizeOf<ColdCell>());
         new Span<CellHot>((void*)_cellsPtr, _cellCount).Clear();
-        var coldSpan = new Span<ColdCell>((void*)_coldCellsPtr, _cellCount);
-        for (int i = 0; i < _cellCount; i++)
-            coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
-        _rowMaxCol = new int[total];
-        Array.Fill(_rowMaxCol, -1);
-        _rowColdFlags = new bool[total];
-        RowContinuesPrevious = new bool[total];
-        RowEndCol = new int[total];
-        Array.Fill(RowEndCol, -1);
+        new Span<ColdCell>((void*)_coldCellsPtr, _cellCount)
+            .Fill(new ColdCell { GraphemeIndex = -1 });
+        Array.Fill(_rowMaxCol, -1, 0, total);
+        Array.Clear(_rowColdFlags, 0, total);
+        Array.Clear(_rowContinuesPrevious, 0, total);
+        Array.Fill(_rowEndCol, -1, 0, total);
     }
 
     public void Dispose()
@@ -664,11 +708,16 @@ public unsafe partial class Screen : IDisposable
         if (rows == Rows && columns == Columns)
             return this;
 
+        var layout = BuildSourceLayout(_scrollbackCapacity, new SourceLayout());
+        var workspace = new ReflowWorkspace();
+        var mapping = new ReflowMapping();
         return ReflowWithOptions(
             rows,
             columns,
             new ReflowCursorAnchor(0, 0),
-            out _,
+            layout,
+            workspace,
+            mapping,
             scrollbackRows: _scrollbackCapacity,
             includeScrollback: true);
     }

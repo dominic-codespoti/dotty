@@ -10,7 +10,6 @@
   </ItemGroup>
   <!-- Lua Scripting -->
   <ItemGroup>
-    <PackageVersion Include="NLua" Version="1.7.9" />
     <PackageVersion Include="KeraLua" Version="1.4.9" />
   </ItemGroup>
   <!-- Benchmarking -->

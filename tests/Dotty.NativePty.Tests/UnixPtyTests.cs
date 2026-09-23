@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Dotty.Abstractions.Pty;
 using Xunit;
 using FluentAssertions;
@@ -545,13 +546,68 @@ public class UnixPtyTests : IDisposable
     }
 
     #endregion
+    /// <summary>
+    /// Verifies that a naturally exiting child drains its final PTY output and
+    /// terminates the helper, including control socket cleanup.
+    /// </summary>
+    [ConditionalFacts.UnixOnlyFact]
+    public async Task UnixPty_Helper_NaturalExitDrainsOutputAndCleansUp()
+    {
+        var helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+        helper.Should().NotBeNullOrWhiteSpace();
+
+        var socketPath = Path.Combine(Path.GetTempPath(), $"dotty-pty-test-{Guid.NewGuid():N}.sock");
+        var processStarted = false;
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = helper!,
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            },
+        };
+        process.StartInfo.ArgumentList.Add("/bin/sh");
+        process.StartInfo.ArgumentList.Add("-c");
+        process.StartInfo.ArgumentList.Add("printf FINAL_MARKER; sleep 0.1; exit 42");
+        process.StartInfo.Environment["DOTTY_CONTROL_SOCKET"] = socketPath;
+
+        try
+        {
+            process.Start().Should().BeTrue();
+            processStarted = true;
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await process.WaitForExitAsync(timeout.Token);
+            var output = await outputTask;
+            _ = await errorTask;
+
+            process.ExitCode.Should().Be(42);
+            output.Should().Contain("FINAL_MARKER");
+            File.Exists(socketPath).Should().BeFalse();
+        }
+        finally
+        {
+            if (processStarted && !process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+            File.Delete(socketPath);
+        }
+    }
+
 
     #region ProcessExited Event Tests
 
     /// <summary>
-    /// Verifies that ProcessExited event fires when process exits.
-    /// Note: The pty-helper's proxy threads block on I/O, so natural shell exit
-    /// doesn't reliably terminate the helper. We use Kill() to trigger the exit.
+    /// Verifies that ProcessExited fires when the PTY helper is forcibly terminated.
+    /// This test covers the forced-termination path; natural process exit is covered
+    /// separately by UnixPty_Helper_NaturalExitDrainsOutputAndCleansUp.
     /// </summary>
     [ConditionalFacts.UnixOnlyFact]
     public async Task UnixPty_ProcessExited_FiresOnProcessTermination()
@@ -585,9 +641,8 @@ public class UnixPtyTests : IDisposable
     }
 
     /// <summary>
-    /// Verifies that ProcessExited fires with an exit code when process is killed.
-    /// Note: Due to pty-helper architecture with blocking I/O threads,
-    /// we use Kill() to reliably trigger process termination.
+    /// Verifies that ProcessExited fires with an exit code when the PTY helper is
+    /// forcibly terminated.
     /// </summary>
     [ConditionalFacts.UnixOnlyFact]
     public async Task UnixPty_ProcessExited_FiresWithCorrectExitCode()
@@ -623,9 +678,7 @@ public class UnixPtyTests : IDisposable
     #region WaitForExitAsync Tests
 
     /// <summary>
-    /// Verifies that WaitForExitAsync returns exit code.
-    /// Uses Kill() to trigger process exit since the pty-helper's 
-    /// proxy threads block on I/O and don't respond to shell-initiated exit.
+    /// Verifies that WaitForExitAsync returns the exit code after forced termination.
     /// </summary>
     [ConditionalFacts.UnixOnlyFact]
     public async Task UnixPty_WaitForExitAsync_ReturnsExitCode()
@@ -645,9 +698,7 @@ public class UnixPtyTests : IDisposable
 
     /// <summary>
     /// Verifies that WaitForExitAsync returns the exit code after Kill().
-    /// Note: Due to pty-helper architecture with blocking I/O threads,
-    /// natural shell exit via "exit" command doesn't reliably terminate the helper.
-    /// We test the exit code reporting via Kill() instead.
+    /// This test exercises forced termination; natural exit is covered separately.
     /// </summary>
     [ConditionalFacts.UnixOnlyFact]
     public async Task UnixPty_WaitForExitAsync_ReturnsCorrectExitCode()

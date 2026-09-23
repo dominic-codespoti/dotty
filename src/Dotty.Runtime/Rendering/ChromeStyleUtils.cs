@@ -1,5 +1,7 @@
-using Dotty.Abstractions.Config;
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using Dotty.Abstractions.Config;
 using Dotty.Rendering.Gpu;
 using SkiaSharp;
 
@@ -45,6 +47,57 @@ public readonly record struct ChromeMetrics(
 /// </summary>
 public static class ChromeStyleUtils
 {
+    private readonly struct FontCacheKey : IEquatable<FontCacheKey>
+    {
+        private readonly SKTypeface _typeface;
+        private readonly float _size;
+
+        public FontCacheKey(SKTypeface typeface, float size) { _typeface = typeface; _size = size; }
+        public bool Equals(FontCacheKey other) => ReferenceEquals(_typeface, other._typeface) && _size.Equals(other._size);
+        public override bool Equals(object? obj) => obj is FontCacheKey other && Equals(other);
+        public override int GetHashCode() => HashCode.Combine(RuntimeHelpers.GetHashCode(_typeface), _size);
+    }
+
+    private sealed class CachedFont
+    {
+        public readonly SKFont Font;
+        public readonly float Ascent;
+        public readonly float Descent;
+
+        public CachedFont(SKTypeface typeface, float size)
+        {
+            Font = new SKFont(typeface, size);
+            var metrics = Font.Metrics;
+            Ascent = MathF.Abs(metrics.Ascent);
+            Descent = MathF.Abs(metrics.Descent);
+        }
+    }
+
+    private static readonly object FontCacheLock = new();
+    private static readonly Dictionary<FontCacheKey, CachedFont> FontCache = new();
+
+    private static CachedFont GetCachedFont(SKTypeface typeface, float fontSize)
+    {
+        var key = new FontCacheKey(typeface, fontSize);
+        lock (FontCacheLock)
+        {
+            if (!FontCache.TryGetValue(key, out CachedFont? cached))
+            {
+                cached = new CachedFont(typeface, fontSize);
+                FontCache.Add(key, cached);
+            }
+            return cached;
+        }
+    }
+
+    internal static (float Ascent, float Descent) GetFontMetrics(SKTypeface typeface, float fontSize)
+    {
+        var cached = GetCachedFont(typeface, fontSize);
+        return (cached.Ascent, cached.Descent);
+    }
+
+    internal static SKFont GetCachedSKFont(SKTypeface typeface, float fontSize) =>
+        GetCachedFont(typeface, fontSize).Font;
     public static ChromePalette ResolvePalette(IColorScheme theme)
     {
         ArgumentNullException.ThrowIfNull(theme);
@@ -168,20 +221,16 @@ public static class ChromeStyleUtils
     }
 
     /// <summary>
-    /// Computes a uniform extra Y offset (added to every glyph's OffY within
-    /// a single text run) that vertically centers a text row within an
-    /// arbitrary-height box, using the font's ascent/descent rather than
-    /// per-glyph ink bounds so the whole row shifts as one block and
-    /// different strings on the same row line up consistently.
+    /// Computes the extra Y offset needed to center a text row vertically in
+    /// a box, using cached font ascent and descent so every glyph in the row
+    /// shifts together.
     /// </summary>
     public static float ComputeCenteredOffsetY(SKTypeface typeface, float fontSize, int row, float cellHeight, float boxTop, float boxHeight)
     {
-        using var font = new SKFont(typeface, fontSize);
-        float ascent = MathF.Abs(font.Metrics.Ascent);
-        float descent = MathF.Abs(font.Metrics.Descent);
+        var font = GetCachedFont(typeface, fontSize);
         float boxCenter = boxTop + boxHeight * 0.5f;
-        float naturalBaselineY = row * cellHeight + ascent;
-        float targetBaselineY = boxCenter + (ascent - descent) * 0.5f;
+        float naturalBaselineY = row * cellHeight + font.Ascent;
+        float targetBaselineY = boxCenter + (font.Ascent - font.Descent) * 0.5f;
         return targetBaselineY - naturalBaselineY;
     }
 

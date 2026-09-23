@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dotty.Terminal.Adapter;
+using Dotty.Runtime.Search;
 using Xunit;
 
 namespace Dotty.App.Tests;
@@ -28,6 +29,31 @@ public class SearchHighlightRenderingTests
     }
 
     #endregion
+
+    [Fact]
+    public void SearchEngine_FindMatches_MarksRequestedActiveMatch()
+    {
+        var buffer = CreateBuffer(rows: 2, columns: 20);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("needle".AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(1, 0);
+        buffer.WriteText("needle".AsSpan(), CellAttributes.Default);
+
+        using var snapshot = buffer.CaptureRenderSnapshotVisible();
+        var matches = SearchEngine.FindMatches(
+            snapshot,
+            "needle",
+            matchCase: false,
+            regex: false,
+            activeMatchIndex: 1);
+
+        Assert.Equal(2, matches.Count);
+        Assert.False(matches[0].IsActive);
+        Assert.True(matches[1].IsActive);
+        Assert.Equal(1, matches[1].Row);
+        Assert.Equal(0, matches[1].StartCol);
+        Assert.Equal(6, matches[1].EndCol);
+    }
 
     #region Match Highlighting Tests
 

@@ -30,12 +30,41 @@ public sealed class P0TerminalCompatibilityTests
     }
 
     [Fact]
+    public void FullReset_ClearsKeyboardModesAndRestoresNormalCursorEncoding()
+    {
+        var adapter = new TerminalAdapter(rows: 2, columns: 8);
+        var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
+
+        parser.Feed("\x1b[?1h"u8);
+        parser.Feed("\x1b="u8);
+        parser.Feed("\x1b[?1u"u8);
+
+        parser.Feed("\u001bc"u8);
+
+        Assert.False(adapter.ApplicationCursorKeysEnabled);
+        Assert.False(adapter.KeypadApplicationMode);
+        Assert.Equal(0, adapter.KittyKeyboardMode);
+
+        var bytes = SilkKeyMapperTestEncoding.Encode(
+            SilkKey.Up,
+            ctrl: false,
+            shift: false,
+            alt: false,
+            keypadAppMode: adapter.KeypadApplicationMode,
+            kittyMode: adapter.KittyKeyboardMode,
+            super: false,
+            applicationCursorKeys: adapter.ApplicationCursorKeysEnabled);
+
+        Assert.Equal("\x1b[A", Encoding.ASCII.GetString(bytes!));
+    }
+
+    [Fact]
     public void KittyMode_SetAndQuery_UsesExactReply()
     {
         var adapter = new TerminalAdapter(rows: 2, columns: 8);
         var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
         var replies = new List<string>();
-        adapter.ReplyRequested += replies.Add;
+        adapter.ReplyRequested += reply => replies.Add(reply.ToString());
 
         parser.Feed("\x1b[?1u"u8);
         parser.Feed("\x1b[?u"u8);
@@ -51,7 +80,7 @@ public sealed class P0TerminalCompatibilityTests
         var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
         parser.Feed("\x1b[?1u"u8);
 
-        var bytes = SilkKeyMapper.Encode(
+        var bytes = SilkKeyMapperTestEncoding.Encode(
             SilkKey.Up,
             ctrl: false,
             shift: false,
@@ -61,13 +90,13 @@ public sealed class P0TerminalCompatibilityTests
             super: false,
             applicationCursorKeys: adapter.ApplicationCursorKeysEnabled);
 
-        Assert.Equal("\x1b[1:", Encoding.ASCII.GetString(bytes!));
+        Assert.Equal("\x1b[A", Encoding.ASCII.GetString(bytes!));
     }
 
     [Fact]
     public void SuperModifier_UsesMetaModifierAndUnknownKeyIsUnsupported()
     {
-        var bytes = SilkKeyMapper.Encode(
+        var bytes = SilkKeyMapperTestEncoding.Encode(
             SilkKey.Up,
             ctrl: false,
             shift: false,
@@ -78,7 +107,7 @@ public sealed class P0TerminalCompatibilityTests
             applicationCursorKeys: false);
 
         Assert.Equal("\x1b[1;9A", Encoding.ASCII.GetString(bytes!));
-        Assert.Null(SilkKeyMapper.Encode(
+        Assert.Null(SilkKeyMapperTestEncoding.Encode(
             SilkKey.Unknown,
             ctrl: false,
             shift: false,
@@ -143,6 +172,55 @@ public sealed class P0TerminalCompatibilityTests
     }
 
     [Fact]
+    public void ProcessExit_PropagatesOnce_AndDisposalIsSafe()
+    {
+        var pty = new CapturingPty();
+        using var session = new TerminalSession(2, 8, () => pty);
+        var exitCodes = new List<int>();
+        session.ProcessExited += exitCodes.Add;
+
+        session.Start();
+        pty.RaiseExit(23);
+        pty.RaiseExit(99);
+
+        Assert.True(SpinWait.SpinUntil(() => exitCodes.Count == 1, TimeSpan.FromSeconds(5)));
+        Assert.Equal(new[] { 23 }, exitCodes);
+        session.Dispose();
+        pty.RaiseExit(7);
+        Assert.Equal(new[] { 23 }, exitCodes);
+    }
+
+    [Fact]
+    public async Task ProcessExit_WaitsForFinalOutputToBeParsed()
+    {
+        var output = new CapturingPty.BlockingOutputStream(Encoding.ASCII.GetBytes("final output"));
+        var pty = new CapturingPty(output);
+        using var session = new TerminalSession(2, 20, () => pty);
+        var exited = new TaskCompletionSource<int>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        bool finalOutputVisibleAtExit = false;
+        session.ProcessExited += code =>
+        {
+            finalOutputVisibleAtExit = session.Adapter.Buffer.GetCell(0, 0).Rune == 'f';
+            exited.TrySetResult(code);
+        };
+
+        session.Start();
+        pty.RaiseExit(23);
+
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var completed = await Task.WhenAny(
+            exited.Task,
+            Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken));
+        Assert.NotSame(exited.Task, completed);
+        output.Release();
+
+        Assert.Equal(23, await exited.Task.WaitAsync(cancellationToken));
+        Assert.True(finalOutputVisibleAtExit);
+        Assert.Equal('f', (char)session.Adapter.Buffer.GetCell(0, 0).Rune);
+    }
+
+    [Fact]
     public void FocusReports_DisabledDisconnectedAndDisposedAreNoOps()
     {
         var disconnectedPty = new CapturingPty();
@@ -152,7 +230,6 @@ public sealed class P0TerminalCompatibilityTests
             disconnected.SendFocusReport(true);
         }
         Assert.Empty(disconnectedPty.InputBytes);
-
 
         var pty = new CapturingPty();
         var session = new TerminalSession(2, 8, () => pty);
@@ -188,16 +265,24 @@ public sealed class P0TerminalCompatibilityTests
     {
         public bool IsRunning { get; private set; }
         public int ProcessId => 1;
-        public Stream OutputStream { get; } = new MemoryStream();
+        public Stream OutputStream { get; }
         private CapturingStream Input { get; } = new();
         public int InputCount => Input.CapturedCount;
         public byte[] InputBytes => Input.CapturedBytes;
         Stream? IPty.InputStream => Input;
+
+        public CapturingPty(Stream? outputStream = null)
+        {
+            OutputStream = outputStream ?? new MemoryStream();
+        }
+        private event EventHandler<int>? _processExited;
         public event EventHandler<int>? ProcessExited
         {
-            add { }
-            remove { }
+            add => _processExited += value;
+            remove => _processExited -= value;
         }
+
+        public void RaiseExit(int exitCode) => _processExited?.Invoke(this, exitCode);
 
         public void Start(string? shell = null, int columns = 80, int rows = 24,
             string? workingDirectory = null,
@@ -207,6 +292,73 @@ public sealed class P0TerminalCompatibilityTests
         public void Kill(bool force = false) => IsRunning = false;
         public Task<int> WaitForExitAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
         public void Dispose() => IsRunning = false;
+
+        public sealed class BlockingOutputStream : Stream
+        {
+            private readonly byte[] _payload;
+            private int _offset;
+            private bool _released;
+            private TaskCompletionSource<int>? _pendingRead;
+            private readonly object _sync = new();
+
+            public BlockingOutputStream(byte[] payload)
+            {
+                _payload = payload;
+            }
+
+            public void Release()
+            {
+                TaskCompletionSource<int>? pending;
+                lock (_sync)
+                {
+                    _released = true;
+                    pending = _pendingRead;
+                    _pendingRead = null;
+                }
+                pending?.TrySetResult(0);
+            }
+
+            public override Task<int> ReadAsync(
+                byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+            {
+                lock (_sync)
+                {
+                    if (_offset < _payload.Length)
+                    {
+                        var length = Math.Min(count, _payload.Length - _offset);
+                        Array.Copy(_payload, _offset, buffer, offset, length);
+                        _offset += length;
+                        return Task.FromResult(length);
+                    }
+
+                    if (_released)
+                        return Task.FromResult(0);
+
+                    var pending = new TaskCompletionSource<int>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    _pendingRead = pending;
+                    if (cancellationToken.CanBeCanceled)
+                    {
+                        cancellationToken.Register(
+                            static state => ((TaskCompletionSource<int>)state!).TrySetCanceled(),
+                            pending);
+                    }
+                    return pending.Task;
+                }
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) =>
+                ReadAsync(buffer, offset, count, CancellationToken.None).GetAwaiter().GetResult();
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => _payload.Length;
+            public override long Position { get => _offset; set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        }
 
         private sealed class CapturingStream : MemoryStream
         {

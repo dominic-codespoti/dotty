@@ -61,29 +61,10 @@ public enum TerminalAction
     /// <summary>Close all other tabs.</summary>
     CloseOtherTabs,
 
-    /// <summary>Rename current tab.</summary>
-    RenameTab,
-
-    /// <summary>Toggle terminal visibility (minimize/restore).</summary>
-    ToggleVisibility,
-
-    /// <summary>Increase scrollback buffer size.</summary>
-    IncreaseScrollback,
-
-    /// <summary>Decrease scrollback buffer size.</summary>
-    DecreaseScrollback,
-
-    /// <summary>Send a custom escape sequence to the terminal.</summary>
-    SendEscapeSequence,
 
     /// <summary>Quit the application.</summary>
     Quit,
 
-    /// <summary>Scroll to previous shell prompt.</summary>
-    PreviousPrompt,
-
-    /// <summary>Scroll to next shell prompt.</summary>
-    NextPrompt,
     /// <summary>Split the active pane vertically (left/right).</summary>
     SplitVertical,
 

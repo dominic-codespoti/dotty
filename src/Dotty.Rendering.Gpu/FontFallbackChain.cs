@@ -213,9 +213,19 @@ public sealed class FontFallbackChain : IDisposable
     /// if not, checks fallback typefaces in order, and finally queries <see cref="SKFontManager.Default.MatchCharacter"/>.
     /// </summary>
     public SKTypeface ResolveTypefaceForGrapheme(string grapheme, bool bold = false)
+        => ResolveTypefaceForGrapheme(grapheme, bold, out _);
+
+    /// <summary>
+    /// Resolves a grapheme and reports whether the result came from a
+    /// fallback typeface. The primary typeface is never classified as a
+    /// fallback, even when the caller supplied an equivalent font instance.
+    /// </summary>
+    public SKTypeface ResolveTypefaceForGrapheme(
+        string grapheme, bool bold, out bool isFallback)
     {
         if (string.IsNullOrEmpty(grapheme))
         {
+            isFallback = false;
             return PrimaryTypeface;
         }
 
@@ -223,11 +233,13 @@ public sealed class FontFallbackChain : IDisposable
         {
             if (_resolutionCache.TryGetValue(grapheme, out var cached))
             {
+                isFallback = !ReferenceEquals(cached, PrimaryTypeface);
                 return cached;
             }
 
             var resolved = ResolveTypefaceCore(grapheme);
             _resolutionCache[grapheme] = resolved;
+            isFallback = !ReferenceEquals(resolved, PrimaryTypeface);
             return resolved;
         }
     }

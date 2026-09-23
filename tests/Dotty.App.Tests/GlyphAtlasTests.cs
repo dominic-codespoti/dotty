@@ -18,6 +18,30 @@ public sealed class GlyphAtlasTests
 
     private static SKTypeface Font => SKTypeface.Default;
 
+    private static bool TryFindMissingGlyph(out string grapheme, out SKTypeface typeface)
+    {
+        int[] candidates = { 0x4E16, 0x754C, 0x1F642, 0x1F680, 0x1F4A1 };
+        foreach (int codepoint in candidates)
+        {
+#pragma warning disable CS0618
+            if (Font.ContainsGlyph(codepoint))
+                continue;
+#pragma warning restore CS0618
+
+            var matched = SKFontManager.Default.MatchCharacter(codepoint);
+            if (matched != null && !ReferenceEquals(matched, Font))
+            {
+                grapheme = char.ConvertFromUtf32(codepoint);
+                typeface = matched;
+                return true;
+            }
+        }
+
+        grapheme = string.Empty;
+        typeface = Font;
+        return false;
+    }
+
     private static bool RegionHasCoverage(GlyphAtlas atlas, GlyphInfo info)
     {
         var bitmap = atlas.AtlasBitmap; // shared; caller must NOT dispose
@@ -142,6 +166,49 @@ public sealed class GlyphAtlasTests
         Assert.True(wide.Advance > narrow.Advance * 1.4f,
             $"wide advance ({wide.Advance}) should exceed narrow ({narrow.Advance})");
         Assert.True(wide.Width > narrow.Width, "wide glyph bounds should be wider");
+    }
+
+    [Fact]
+    public void FallbackGlyph_NormalizesToPrimaryCell_AndKeepsBaseline()
+    {
+        if (!TryFindMissingGlyph(out var grapheme, out var fallbackTypeface))
+        {
+            Assert.Skip("No deterministic fallback-capable symbol font installed");
+        }
+
+        using var chain = new FontFallbackChain(Font, new[] { fallbackTypeface });
+        using var atlas = new GlyphAtlas(Font, 16f, fallbackChain: chain);
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var primary));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, false), out var fallback));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, false), out var cached));
+        Assert.Equal(fallback, cached);
+        Assert.True(RegionHasCoverage(atlas, fallback));
+
+        // Fallback ink fills the primary line box without becoming a
+        // materially smaller glyph, and both paths share the same baseline.
+        Assert.True(fallback.Height >= Math.Max(1, (int)MathF.Floor(primary.Height * 0.75f)),
+            $"fallback height {fallback.Height} should track primary height {primary.Height}");
+        Assert.Equal(primary.BaselineOffset, fallback.BaselineOffset);
+        int cellWidth = grapheme.Length > 1 || grapheme[0] > '\u2E7F' ? 32 : 16;
+        Assert.InRange(fallback.Advance, 0f, cellWidth);
+        Assert.InRange(fallback.Width, 1, cellWidth);
+        Assert.InRange(fallback.Height, 1, 32);
+    }
+
+    [Fact]
+    public void FallbackNormalization_DoesNotChangePrimaryGlyphSizing()
+    {
+        if (!TryFindMissingGlyph(out _, out var fallbackTypeface))
+        {
+            Assert.Skip("No deterministic fallback-capable symbol font installed");
+        }
+
+        using var chain = new FontFallbackChain(Font, new[] { fallbackTypeface });
+        using var plainAtlas = new GlyphAtlas(Font, 16f);
+        using var fallbackAtlas = new GlyphAtlas(Font, 16f, fallbackChain: chain);
+        Assert.True(plainAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var plain));
+        Assert.True(fallbackAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var withFallback));
+        Assert.Equal(plain, withFallback);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Dotty.Runtime.Panes;
 using Dotty.Runtime.Sessions;
 using Xunit;
@@ -48,6 +49,82 @@ public class SplitPaneTests
         Assert.Same(second, split.Second);
         Assert.Same(split, initial.Parent);
         Assert.Same(split, second.Parent);
+    }
+
+    [Fact]
+    public void PaneTree_Events_ReportTopologyAndActiveChangesOnce()
+    {
+        using var tree = new PaneTree(rows: 24, columns: 80);
+        var first = tree.ActivePane;
+        var activeChanges = new List<(LeafPane OldPane, LeafPane NewPane)>();
+        var eventOrder = new List<string>();
+        var topologyChanges = 0;
+
+        tree.TopologyChanged += () =>
+        {
+            topologyChanges++;
+            eventOrder.Add("topology");
+        };
+        tree.ActivePaneChanged += (oldPane, newPane) =>
+        {
+            activeChanges.Add((oldPane, newPane));
+            eventOrder.Add("active");
+        };
+
+        var second = tree.Split(first, SplitDirection.Vertical);
+
+        Assert.Equal(new[] { "topology", "active" }, eventOrder);
+        Assert.Equal(1, topologyChanges);
+        Assert.Single(activeChanges);
+        Assert.Same(first, activeChanges[0].OldPane);
+        Assert.Same(second, activeChanges[0].NewPane);
+
+        eventOrder.Clear();
+        tree.ActivePane = first;
+        Assert.Equal(new[] { "active" }, eventOrder);
+        Assert.Equal(2, activeChanges.Count);
+
+        eventOrder.Clear();
+        tree.ActivePane = first;
+        Assert.Empty(eventOrder);
+        Assert.Equal(2, activeChanges.Count);
+
+        Assert.True(tree.Close(second));
+        Assert.Equal(new[] { "topology" }, eventOrder);
+        Assert.Equal(2, topologyChanges);
+        Assert.Equal(2, activeChanges.Count);
+
+        eventOrder.Clear();
+        var third = tree.Split(first, SplitDirection.Horizontal);
+        Assert.Equal(new[] { "topology", "active" }, eventOrder);
+        Assert.Equal(3, topologyChanges);
+
+        eventOrder.Clear();
+        Assert.True(tree.Close(third));
+        Assert.Equal(new[] { "topology", "active" }, eventOrder);
+        Assert.Equal(4, topologyChanges);
+        Assert.Equal(4, activeChanges.Count);
+        Assert.Same(third, activeChanges[3].OldPane);
+        Assert.Same(first, activeChanges[3].NewPane);
+    }
+
+    [Fact]
+    public void PaneTree_PublicOperations_RejectUseAfterDispose()
+    {
+        var tree = new PaneTree(rows: 24, columns: 80);
+        var pane = tree.ActivePane;
+        tree.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => _ = tree.Root);
+        Assert.Throws<ObjectDisposedException>(() => _ = tree.ActivePane);
+        Assert.Throws<ObjectDisposedException>(() => _ = tree.Leaves);
+        Assert.Throws<ObjectDisposedException>(() => tree.ActivePane = pane);
+        Assert.Throws<ObjectDisposedException>(() => tree.Split(pane, SplitDirection.Vertical));
+        Assert.Throws<ObjectDisposedException>(() => tree.Close(pane));
+        Assert.Throws<ObjectDisposedException>(() => tree.Layout(800, 600, 10, 20));
+        Assert.Throws<ObjectDisposedException>(() => tree.FindPaneAt(0, 0));
+        Assert.Throws<ObjectDisposedException>(() => tree.HitTestDivider(0, 0));
+        Assert.Throws<ObjectDisposedException>(() => tree.NavigateFocus(pane, PaneDirection.Left));
     }
 
     [Fact]

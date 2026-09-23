@@ -51,6 +51,15 @@ for display initialization, font/atlas setup, actual input, and shutdown.
 Do not add a fixed Linux RID to a test project to make a local test pass; that
 breaks Windows and macOS native asset resolution.
 
+`tests/Dotty.App.Tests` sets `DOTTY_SHELL` to a silent, long-lived program in a
+module initializer (`TestShellEnvironment.cs`). Tabs created by tests therefore
+never receive prompt, title, or terminal-mode output from the developer's shell.
+Tests that need a real shell must pass one explicitly.
+
+Allocation tests measure `GC.GetAllocatedBytesForCurrentThread()` on the thread
+doing the work, never process-wide counters, so concurrent test classes cannot
+contaminate them.
+
 ## Desktop smoke
 
 Linux X11:

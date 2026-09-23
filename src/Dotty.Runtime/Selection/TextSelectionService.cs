@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Text;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Adapter.Buffer;
@@ -30,6 +31,49 @@ public sealed class TextSelectionService
         _mode = mode;
         _hasSelection = mode != SelectionMode.None;
     }
+
+    public void SelectWord(TerminalBuffer buffer, int row, int col)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        try
+        {
+            buffer.WithSyncRoot(() =>
+            {
+                if (row < 0)
+                {
+                    string[] cells = GetScrollbackCells(buffer.GetScrollbackLine(-row - 1).Text ?? string.Empty);
+                    SelectCellRun(row, col, cells);
+                }
+                else if (row < buffer.Rows && buffer.Columns > 0)
+                {
+                    int selectedColumn = Math.Clamp(col, 0, buffer.Columns - 1);
+                    WordClass kind = GetVisibleWordClass(buffer, row, selectedColumn);
+                    int start = selectedColumn;
+                    int end = selectedColumn;
+                    while (start > 0 && GetVisibleWordClass(buffer, row, start - 1) == kind)
+                        start--;
+
+                    int rowEnd = GetVisibleRowEnd(buffer, row);
+                    int scanEnd = kind == WordClass.Whitespace
+                        ? Math.Max(selectedColumn, rowEnd)
+                        : buffer.Columns - 1;
+                    while (end < scanEnd && GetVisibleWordClass(buffer, row, end + 1) == kind)
+                        end++;
+                    StartSelection(row, start, SelectionMode.Word);
+                    UpdateSelection(row, end);
+                }
+                else
+                {
+                    ClearSelection();
+                }
+            });
+        }
+        catch (TimeoutException)
+        {
+            ClearSelection();
+        }
+    }
+
     public void SelectLine(int row, int totalColumns)
     {
         _anchorRow = row;
@@ -61,14 +105,11 @@ public sealed class TextSelectionService
 
     public void UpdateSelection(int row, int col)
     {
-        if (!HasSelection)
-        {
-            return;
-        }
-
+        if (!HasSelection) return;
         _activeRow = row;
         _activeColumn = col;
     }
+
     public void ClearSelection()
     {
         _mode = SelectionMode.None;
@@ -81,52 +122,36 @@ public sealed class TextSelectionService
 
     public TerminalSelectionRange GetNormalizedRange()
     {
-        if (!HasSelection)
-        {
-            return TerminalSelectionRange.Empty;
-        }
-
+        if (!HasSelection) return TerminalSelectionRange.Empty;
         if (_mode == SelectionMode.Block)
         {
-            int minRow = Math.Min(_anchorRow, _activeRow);
-            int maxRow = Math.Max(_anchorRow, _activeRow);
-            int minCol = Math.Min(_anchorColumn, _activeColumn);
-            int maxCol = Math.Max(_anchorColumn, _activeColumn);
-            return new TerminalSelectionRange(minRow, minCol, maxRow, maxCol);
+            return new TerminalSelectionRange(
+                Math.Min(_anchorRow, _activeRow),
+                Math.Min(_anchorColumn, _activeColumn),
+                Math.Max(_anchorRow, _activeRow),
+                Math.Max(_anchorColumn, _activeColumn));
         }
-
         return TerminalSelectionRange.From(_anchorRow, _anchorColumn, _activeRow, _activeColumn);
     }
 
     public bool IsCellSelected(int row, int col)
     {
-        if (!HasSelection)
-        {
-            return false;
-        }
-
+        if (!HasSelection) return false;
         if (_mode == SelectionMode.Block)
         {
             int minRow = Math.Min(_anchorRow, _activeRow);
             int maxRow = Math.Max(_anchorRow, _activeRow);
             int minCol = Math.Min(_anchorColumn, _activeColumn);
             int maxCol = Math.Max(_anchorColumn, _activeColumn);
-
             return row >= minRow && row <= maxRow && col >= minCol && col <= maxCol;
         }
-
-        var range = GetNormalizedRange();
-        return range.Contains(row, col);
+        return GetNormalizedRange().Contains(row, col);
     }
 
     public string GetSelectedText(TerminalBuffer buffer)
     {
         ArgumentNullException.ThrowIfNull(buffer);
-
-        if (!HasSelection)
-        {
-            return string.Empty;
-        }
+        if (!HasSelection) return string.Empty;
 
         string result = string.Empty;
         try
@@ -137,34 +162,22 @@ public sealed class TextSelectionService
         {
             return string.Empty;
         }
-
         return result;
     }
 
     private string ExtractTextCore(TerminalBuffer buffer)
     {
         var range = GetNormalizedRange();
-        if (range.IsEmpty)
-        {
-            return string.Empty;
-        }
+        if (range.IsEmpty) return string.Empty;
 
         var sb = new StringBuilder();
-
         if (_mode == SelectionMode.Block)
         {
-            int minCol = range.StartColumn;
-            int maxCol = range.EndColumn;
-
             for (int row = range.StartRow; row <= range.EndRow; row++)
             {
-                ExtractRowSegment(buffer, row, minCol, maxCol, sb);
-                if (row < range.EndRow)
-                {
-                    sb.AppendLine();
-                }
+                ExtractBlockRow(buffer, row, range.StartColumn, range.EndColumn, sb);
+                if (row < range.EndRow) sb.AppendLine();
             }
-
             return sb.ToString();
         }
 
@@ -172,63 +185,158 @@ public sealed class TextSelectionService
         {
             int startCol = row == range.StartRow ? range.StartColumn : 0;
             int endCol = row == range.EndRow ? range.EndColumn : buffer.Columns - 1;
+            var rowText = new StringBuilder();
+            ExtractCharacterRow(buffer, row, startCol, endCol, rowText);
+            TrimTrailingSpaces(rowText);
+            sb.Append(rowText);
 
-            ExtractRowSegment(buffer, row, startCol, endCol, sb);
-
-            if (row < range.EndRow)
-            {
+            if (row < range.EndRow && !ContinuesPreviousVisibleRow(buffer, row + 1))
                 sb.AppendLine();
-            }
         }
-
         return sb.ToString();
     }
 
-    private static void ExtractRowSegment(TerminalBuffer buffer, int row, int startCol, int endCol, StringBuilder sb)
+    private static void ExtractCharacterRow(
+        TerminalBuffer buffer, int row, int startCol, int endCol, StringBuilder destination)
     {
         if (row < 0)
         {
-            // Negative row indicates scrollback. Row -1 is the newest scrollback line.
-            int sbIdx = -row - 1;
-            if (sbIdx >= buffer.ScrollbackCount)
-            {
-                return;
-            }
-
-            string line = buffer.GetScrollbackLine(sbIdx).Text ?? string.Empty;
-            int s = Math.Clamp(startCol, 0, line.Length);
-            int e = Math.Clamp(endCol + 1, s, line.Length);
-            sb.Append(line.AsSpan(s, e - s));
+            string[] cells = GetScrollbackCells(buffer.GetScrollbackLine(-row - 1).Text ?? string.Empty);
+            int start = Math.Clamp(startCol, 0, cells.Length);
+            int end = Math.Clamp(endCol + 1, start, cells.Length);
+            for (int i = start; i < end; i++) destination.Append(cells[i]);
+            return;
         }
-        else
+
+        if (row >= buffer.Rows) return;
+        int rowEnd = GetVisibleRowEnd(buffer, row);
+        int startCell = Math.Max(0, startCol);
+        int endCell = Math.Min(Math.Min(buffer.Columns - 1, endCol), rowEnd);
+        if (startCell > endCell) return;
+        for (int col = startCell; col <= endCell; col++)
+            destination.Append(GetVisibleCellText(buffer, row, col));
+    }
+
+    private static void ExtractBlockRow(
+        TerminalBuffer buffer, int row, int startCol, int endCol, StringBuilder destination)
+    {
+        int min = Math.Max(0, startCol);
+        int max = Math.Max(min, endCol);
+        if (row < 0)
         {
-            if (row >= buffer.Rows)
-            {
-                return;
-            }
-
-            int clampedStart = Math.Max(0, startCol);
-            int clampedEnd = Math.Min(buffer.Columns - 1, endCol);
-
-            for (int col = clampedStart; col <= clampedEnd; col++)
-            {
-                var cell = buffer.GetCell(row, col);
-                if (cell.IsContinuation)
-                {
-                    continue;
-                }
-
-                var cold = buffer.GetColdCell(row, col);
-                var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
-                if (string.IsNullOrEmpty(grapheme))
-                {
-                    sb.Append(' ');
-                }
-                else
-                {
-                    sb.Append(grapheme);
-                }
-            }
+            string[] cells = GetScrollbackCells(buffer.GetScrollbackLine(-row - 1).Text ?? string.Empty);
+            for (int col = min; col <= max; col++)
+                destination.Append(col < cells.Length ? cells[col] : " ");
+            return;
         }
+
+        if (row >= buffer.Rows) return;
+        min = Math.Min(min, Math.Max(0, buffer.Columns - 1));
+        max = Math.Min(max, Math.Max(0, buffer.Columns - 1));
+        for (int col = min; col <= max; col++)
+        {
+            var cell = buffer.GetCell(row, col);
+            if (cell.IsContinuation)
+            {
+                // A continuation is already represented by its wide base glyph.
+                // If the selection starts in it, retain the selected column.
+                if (col == min) destination.Append(' ');
+                continue;
+            }
+            destination.Append(GetVisibleCellText(buffer, row, col));
+        }
+    }
+
+    private static bool ContinuesPreviousVisibleRow(TerminalBuffer buffer, int row) =>
+        row >= 0 && row < buffer.Rows && buffer.ActiveBuffer.GetRowContinuesPrevious(row);
+
+    private static int GetVisibleRowEnd(TerminalBuffer buffer, int row)
+    {
+        int end = buffer.ActiveBuffer.GetRowEndCol(row);
+        if (end < 0) end = buffer.ActiveBuffer.GetRowMaxCol(row);
+        return end;
+    }
+
+    private static string GetVisibleCellText(TerminalBuffer buffer, int row, int col)
+    {
+        var cell = buffer.GetCell(row, col);
+        if (cell.IsContinuation) return string.Empty;
+        var cold = buffer.GetColdCell(row, col);
+        return GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex) ?? " ";
+    }
+
+    private static void TrimTrailingSpaces(StringBuilder text)
+    {
+        while (text.Length > 0 && text[^1] == ' ')
+            text.Length--;
+    }
+
+    private static WordClass GetVisibleWordClass(TerminalBuffer buffer, int row, int col)
+    {
+        string text = GetVisibleCellText(buffer, row, col);
+        if (text.Length == 0 && col > 0)
+            text = GetVisibleCellText(buffer, row, col - 1);
+        return Classify(text);
+    }
+
+    private void SelectCellRun(int row, int col, string[] cells)
+    {
+        if (cells.Length == 0)
+        {
+            StartSelection(row, 0, SelectionMode.Word);
+            return;
+        }
+        int selected = Math.Clamp(col, 0, cells.Length - 1);
+        WordClass kind = Classify(cells[selected]);
+        int start = selected;
+        int end = selected;
+        while (start > 0 && Classify(cells[start - 1]) == kind) start--;
+        while (end + 1 < cells.Length && Classify(cells[end + 1]) == kind) end++;
+        StartSelection(row, start, SelectionMode.Word);
+        UpdateSelection(row, end);
+    }
+
+    private static string[] GetScrollbackCells(string text)
+    {
+        if (text.Length == 0) return Array.Empty<string>();
+        int[] starts = StringInfo.ParseCombiningCharacters(text);
+        var cells = new string[starts.Length];
+        for (int i = 0; i < starts.Length; i++)
+        {
+            int length = (i + 1 < starts.Length ? starts[i + 1] : text.Length) - starts[i];
+            cells[i] = text.Substring(starts[i], length);
+        }
+        return cells;
+    }
+
+    private static WordClass Classify(string text)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrWhiteSpace(text))
+            return WordClass.Whitespace;
+        int index = 0;
+        while (index < text.Length && char.IsWhiteSpace(text[index])) index++;
+        if (index >= text.Length) return WordClass.Whitespace;
+        UnicodeCategory category = CharUnicodeInfo.GetUnicodeCategory(text, index);
+        return category is UnicodeCategory.UppercaseLetter
+            or UnicodeCategory.LowercaseLetter
+            or UnicodeCategory.TitlecaseLetter
+            or UnicodeCategory.ModifierLetter
+            or UnicodeCategory.OtherLetter
+            or UnicodeCategory.NonSpacingMark
+            or UnicodeCategory.SpacingCombiningMark
+            or UnicodeCategory.EnclosingMark
+            or UnicodeCategory.DecimalDigitNumber
+            or UnicodeCategory.LetterNumber
+            or UnicodeCategory.OtherNumber
+            || text[index] == '_'
+            ? WordClass.Word
+            : WordClass.Punctuation;
+    }
+
+    private enum WordClass
+    {
+        Whitespace,
+        Word,
+        Punctuation
     }
 }

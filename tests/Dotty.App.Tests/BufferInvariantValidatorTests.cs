@@ -183,15 +183,13 @@ public class BufferInvariantValidatorTests
     [Fact]
     public void ReflowFallbackPreservesUnmarkedCells()
     {
-        var screen = new Screen(rows: 1, columns: 4, scrollbackCapacity: 0);
+        var tb = new TerminalBuffer(rows: 1, columns: 4, scrollbackCapacity: 0);
+        var screen = tb.ActiveScreenForTests;
         screen.GetCellRef(0, 0).SetAscii('A');
         screen.GetCellRef(0, 1).SetAscii('B');
 
-        var resized = screen.Reflow(
-            rows: 1,
-            columns: 2,
-            new ReflowCursorAnchor(0, 0),
-            out _);
+        tb.Resize(rows: 1, cols: 2);
+        var resized = tb.ActiveBuffer;
         Assert.Equal('A', (char)resized.GetCell(0, 0).Rune);
         Assert.Equal('B', (char)resized.GetCell(0, 1).Rune);
         screen.Dispose();

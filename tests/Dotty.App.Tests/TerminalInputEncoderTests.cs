@@ -1,4 +1,7 @@
+using SilkKey = Silk.NET.Input.Key;
+using System;
 using Dotty.Runtime.Input;
+using Dotty.Silk;
 using Dotty.Terminal.Adapter;
 using System.Text;
 using Xunit;
@@ -245,15 +248,210 @@ public class TerminalInputEncoderTests
             TerminalKeyModifiers.Meta,
             applicationCursorKeys: true);
 
-        Assert.Equal("\x1b[1;9:", Encoding.ASCII.GetString(bytes!));
+        Assert.Equal("\x1b[1;9A", Encoding.ASCII.GetString(bytes!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.Up, "\x1b[A")]
+    [InlineData(TerminalKey.Down, "\x1b[B")]
+    [InlineData(TerminalKey.Right, "\x1b[C")]
+    [InlineData(TerminalKey.Left, "\x1b[D")]
+    [InlineData(TerminalKey.Home, "\x1b[H")]
+    [InlineData(TerminalKey.End, "\x1b[F")]
+    [InlineData(TerminalKey.PageUp, "\x1b[5~")]
+    [InlineData(TerminalKey.PageDown, "\x1b[6~")]
+    [InlineData(TerminalKey.Insert, "\x1b[2~")]
+    [InlineData(TerminalKey.Delete, "\x1b[3~")]
+    public void Encode_KittyNavigation_UsesLegacyFunctionalSequences(TerminalKey key, string expected)
+    {
+        var encoder = new TerminalInputEncoder { KittyMode = 2 };
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, TerminalKeyModifiers.None)!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.F1, "\x1bOP")]
+    [InlineData(TerminalKey.F2, "\x1bOQ")]
+    [InlineData(TerminalKey.F3, "\x1bOR")]
+    [InlineData(TerminalKey.F4, "\x1bOS")]
+    [InlineData(TerminalKey.F5, "\x1b[15~")]
+    [InlineData(TerminalKey.F6, "\x1b[17~")]
+    [InlineData(TerminalKey.F7, "\x1b[18~")]
+    [InlineData(TerminalKey.F8, "\x1b[19~")]
+    [InlineData(TerminalKey.F9, "\x1b[20~")]
+    [InlineData(TerminalKey.F10, "\x1b[21~")]
+    [InlineData(TerminalKey.F11, "\x1b[23~")]
+    [InlineData(TerminalKey.F12, "\x1b[24~")]
+    public void Encode_KittyFunctionKeysF1ToF12_UseLegacyFunctionalSequences(TerminalKey key, string expected)
+    {
+        var encoder = new TerminalInputEncoder { KittyMode = 1 };
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, TerminalKeyModifiers.None)!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.Up, TerminalKeyModifiers.Shift, "\x1b[1;2A")]
+    [InlineData(TerminalKey.Left, TerminalKeyModifiers.Alt, "\x1b[1;3D")]
+    [InlineData(TerminalKey.Delete, TerminalKeyModifiers.Control, "\x1b[3;5~")]
+    public void Encode_KittyModifiedSpecialKeys_UsesModifierParameter(
+        TerminalKey key,
+        TerminalKeyModifiers modifiers,
+        string expected)
+    {
+        var encoder = new TerminalInputEncoder { KittyMode = 1 };
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, modifiers)!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.F13, "\x1b[57376u")]
+    [InlineData(TerminalKey.F14, "\x1b[57377u")]
+    [InlineData(TerminalKey.F15, "\x1b[57378u")]
+    [InlineData(TerminalKey.F16, "\x1b[57379u")]
+    [InlineData(TerminalKey.F17, "\x1b[57380u")]
+    [InlineData(TerminalKey.F18, "\x1b[57381u")]
+    [InlineData(TerminalKey.F19, "\x1b[57382u")]
+    [InlineData(TerminalKey.F20, "\x1b[57383u")]
+    [InlineData(TerminalKey.F21, "\x1b[57384u")]
+    [InlineData(TerminalKey.F22, "\x1b[57385u")]
+    [InlineData(TerminalKey.F23, "\x1b[57386u")]
+    [InlineData(TerminalKey.F24, "\x1b[57387u")]
+    public void Encode_KittyFunctionKeysF13ToF24_UsePrivateUseCodes(TerminalKey key, string expected)
+    {
+        var encoder = new TerminalInputEncoder { KittyMode = 1 };
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, TerminalKeyModifiers.None)!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.F1, TerminalKeyModifiers.Shift, "\x1b[1;2P")]
+    [InlineData(TerminalKey.F5, TerminalKeyModifiers.Alt, "\x1b[15;3~")]
+    [InlineData(TerminalKey.F12, TerminalKeyModifiers.Control, "\x1b[24;5~")]
+    [InlineData(TerminalKey.F21, TerminalKeyModifiers.Meta, "\x1b[57384;9u")]
+    public void Encode_KittyFunctionKeys_PreserveModifiers(
+        TerminalKey key,
+        TerminalKeyModifiers modifiers,
+        string expected)
+    {
+        var encoder = new TerminalInputEncoder { KittyMode = 1 };
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, modifiers)!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.Keypad0, "0")]
+    [InlineData(TerminalKey.Keypad5, "5")]
+    [InlineData(TerminalKey.Keypad9, "9")]
+    [InlineData(TerminalKey.KeypadDecimal, ".")]
+    [InlineData(TerminalKey.KeypadDivide, "/")]
+    [InlineData(TerminalKey.KeypadMultiply, "*")]
+    [InlineData(TerminalKey.KeypadSubtract, "-")]
+    [InlineData(TerminalKey.KeypadAdd, "+")]
+    [InlineData(TerminalKey.KeypadEnter, "\r")]
+    [InlineData(TerminalKey.KeypadEqual, "=")]
+    public void Encode_NumericKeypad_UsesTextBytesOutsideApplicationMode(TerminalKey key, string expected)
+    {
+        var encoder = new TerminalInputEncoder();
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, TerminalKeyModifiers.None)!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.Keypad0, "\x1bOp")]
+    [InlineData(TerminalKey.Keypad5, "\x1bOu")]
+    [InlineData(TerminalKey.Keypad9, "\x1bOy")]
+    [InlineData(TerminalKey.KeypadDecimal, "\x1bOn")]
+    [InlineData(TerminalKey.KeypadDivide, "\x1bOl")]
+    [InlineData(TerminalKey.KeypadMultiply, "\x1bOR")]
+    [InlineData(TerminalKey.KeypadSubtract, "\x1bOS")]
+    [InlineData(TerminalKey.KeypadAdd, "\x1bOm")]
+    [InlineData(TerminalKey.KeypadEnter, "\x1bOM")]
+    [InlineData(TerminalKey.KeypadEqual, "=")]
+    public void Encode_ApplicationKeypad_UsesCompleteSs3Sequences(TerminalKey key, string expected)
+    {
+        var encoder = new TerminalInputEncoder();
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(
+            key,
+            TerminalKeyModifiers.None,
+            keypadApplicationMode: true)!));
+    }
+
+    [Theory]
+    [InlineData(TerminalKey.F21, TerminalKeyModifiers.None, "\x1b[42~")]
+    [InlineData(TerminalKey.F22, TerminalKeyModifiers.None, "\x1b[43~")]
+    [InlineData(TerminalKey.F23, TerminalKeyModifiers.None, "\x1b[44~")]
+    [InlineData(TerminalKey.F24, TerminalKeyModifiers.None, "\x1b[45~")]
+    [InlineData(TerminalKey.F21, TerminalKeyModifiers.Shift, "\x1b[42;2~")]
+    [InlineData(TerminalKey.F22, TerminalKeyModifiers.Alt, "\x1b[43;3~")]
+    [InlineData(TerminalKey.F23, TerminalKeyModifiers.Control, "\x1b[44;5~")]
+    [InlineData(TerminalKey.F24, TerminalKeyModifiers.Meta, "\x1b[45;9~")]
+    public void Encode_FunctionKeysF21ToF24_UseXtermCodes(
+        TerminalKey key,
+        TerminalKeyModifiers modifiers,
+        string expected)
+    {
+        var encoder = new TerminalInputEncoder();
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, modifiers)!));
     }
 
     [Fact]
     public void Encode_UnsupportedKey_ReturnsNull()
     {
         var encoder = new TerminalInputEncoder();
-
         Assert.Null(encoder.Encode(TerminalKey.Unknown, TerminalKeyModifiers.None));
     }
 }
+
+internal static class TerminalInputEncoderTestExtensions
+{
+    internal static byte[]? Encode(
+        this TerminalInputEncoder encoder,
+        TerminalKey key,
+        TerminalKeyModifiers modifiers,
+        bool keypadApplicationMode = false,
+        bool applicationCursorKeys = false)
+    {
+        Span<byte> buffer = stackalloc byte[64];
+        int length = encoder.Encode(key, modifiers, buffer, keypadApplicationMode, applicationCursorKeys);
+        return length == 0 ? null : buffer[..length].ToArray();
+    }
+
+    internal static byte[]? EncodeMouseEvent(
+        this TerminalInputEncoder encoder,
+        TerminalAdapter.MouseMode mode,
+        TerminalAdapter.MouseEncoding encoding,
+        int button,
+        int row,
+        int column,
+        bool isPress,
+        bool isMove,
+        TerminalKeyModifiers modifiers)
+    {
+        Span<byte> buffer = stackalloc byte[64];
+        int length = encoder.EncodeMouseEvent(mode, encoding, button, row, column, isPress, isMove, modifiers, buffer);
+        return length == 0 ? null : buffer[..length].ToArray();
+    }
+}
+
+internal static class SilkKeyMapperTestEncoding
+{
+    internal static byte[]? Encode(
+        SilkKey key,
+        bool ctrl,
+        bool shift,
+        bool alt,
+        bool keypadAppMode,
+        int kittyMode = 0,
+        bool super = false,
+        bool applicationCursorKeys = false)
+    {
+        Span<byte> buffer = stackalloc byte[64];
+        int length = SilkKeyMapper.Encode(
+            key, ctrl, shift, alt, keypadAppMode, buffer, kittyMode, super, applicationCursorKeys);
+        return length == 0 ? null : buffer[..length].ToArray();
+    }
+}
+
 

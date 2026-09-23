@@ -116,9 +116,45 @@ Supported cursor shapes are `Block`, `Beam`, and `Underline`.
 | `keybindings` | object | built-in bindings |
 
 Keybinding keys are normalized chords containing `ctrl`, `shift`, `alt`, or
-`super` plus a key name. Values are action names such as `NewTab`, `CloseTab`,
-`NextTab`, `PreviousTab`, `Copy`, `Paste`, `Search`, and `Clear`. Unknown
-actions are ignored and built-in bindings remain active.
+`super` plus a key name. Values are `TerminalAction` names. The [configuration
+reference](../Configuration.md#keybindings) has the exact table of every
+action and built-in chord, including actions such as `CloseTab`, `Clear`,
+`DuplicateTab`, and `CloseOtherTabs` that have no default chord. A custom
+binding replaces the action for that chord; assigning `None` unbinds it, and
+unknown action names are ignored.
+
+#### Search
+
+Search is per tab and is opened or toggled closed with `Search` (the default
+chord is `ctrl+shift+f`). It searches the recorded source pane's scrollback
+and visible rows. Type to insert at the query cursor; use the arrow keys,
+`Home`, and `End` to move it, `Backspace`/`Delete` to edit, and `Ctrl` with
+either deletion key to remove a whitespace-delimited word. `Enter` advances to
+the next match and `Shift+Enter` goes to the previous one. `Escape` closes the
+overlay. Selecting a scrollback result scrolls its pane to reveal it; selecting
+a visible result returns the pane to the bottom.
+
+Search input is a case-insensitive literal query and does not go to the PTY.
+Right Alt (AltGr), even when the platform also reports an implicit Ctrl, is
+text composition rather than shortcut dispatch, so AltGr text can be entered.
+Ordinary Ctrl/Alt-modified text is not inserted into the query.
+
+#### Pointer controls
+
+Wheel, scrollbar, and selection handling is pane-targeted: the pane under the
+pointer becomes active. With terminal mouse reporting disabled, the wheel
+scrolls that pane's scrollback, and the rightmost scrollbar strip can be
+clicked or dragged to choose a scrollback position. Terminal mouse reporting
+takes precedence over local wheel, scrollbar, selection, middle-paste, and
+hyperlink handling. Holding `Shift` overrides reporting and restores the local
+controls.
+
+When local handling is active, left-drag selects characters, double-click
+selects a word, triple-click selects a line, and dragging outside the pane
+autoscrolls while extending the selection. Middle-click pastes into the
+target pane. `Ctrl`+left-click opens a hyperlink resolved from a fresh buffer
+snapshot at click time; a reporting pane receives the click as a terminal
+mouse event unless `Shift` is held.
 
 ## Theme Reference
 
@@ -136,9 +172,10 @@ mkdir -p /tmp/dotty-config
 DOTTY_CONFIG_HOME=/tmp/dotty-config dotnet run --project src/Dotty/Dotty.csproj
 ```
 
-Lua startup files are optional. `config.lua` is preferred when present, with
-`init.lua` used as a fallback. User themes are loaded from
-`<config-directory>/themes`.
+Lua startup scripts use `config.lua` (or `init.lua` as a fallback) from the
+configuration directory and can customize configuration, bindings, tabs, panes,
+and event hooks. See the [Lua scripting guide](Lua.md) for the API and reload
+lifecycle. User themes are loaded from `<config-directory>/themes`.
 
 ## Troubleshooting
 

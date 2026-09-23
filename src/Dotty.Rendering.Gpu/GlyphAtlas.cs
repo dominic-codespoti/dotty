@@ -109,10 +109,14 @@ public sealed class GlyphAtlas : IDisposable
     private const int DefaultInitialSize = 1024;
     private const int Padding = 2;          // gap between entries (sampling bleed)
     private const int MaxGlyphDimension = 512;
+    private const float MinFallbackScale = 0.5f;
+    private const float MaxFallbackScale = 1.5f;
     private const string FallbackGrapheme = "\uFFFD";
     private readonly object _lock = new();
     private readonly SKTypeface _typeface;
     private readonly float _textSize;
+    private readonly float _primaryBaseline;
+    private readonly float _primaryCellHeight;
     private FontFallbackChain? _fallbackChain;
     private GlyphMapSnapshot _publishedMap = GlyphMapSnapshot.Empty;
     private readonly Dictionary<GlyphKey, GlyphInfo> _map = new();
@@ -240,11 +244,18 @@ public sealed class GlyphAtlas : IDisposable
         public int Height;
         public int X;
     }
-
     public GlyphAtlas(SKTypeface typeface, float textSize, int initialSize = DefaultInitialSize, FontFallbackChain? fallbackChain = null)
     {
         _typeface = typeface ?? SKTypeface.Default;
         _textSize = textSize > 0 ? textSize : 12f;
+        using (var primaryFont = new SKFont(_typeface, _textSize))
+        {
+            var metrics = primaryFont.Metrics;
+            _primaryBaseline = -metrics.Ascent;
+            _primaryCellHeight = MathF.Max(1f,
+                MathF.Ceiling(-metrics.Ascent) + 1f +
+                MathF.Ceiling(metrics.Descent) + 1f);
+        }
         _fallbackChain = fallbackChain;
         int size = Math.Clamp(initialSize, 64, MaxAtlasSize);
         _bitmap = CreateAtlasBitmap(size);
@@ -304,7 +315,7 @@ public sealed class GlyphAtlas : IDisposable
         // Rasterization intentionally happens before taking the atlas lock.
         // A concurrent miss may rasterize the same glyph, but the commit
         // recheck below ensures only one copy is packed and published.
-        var raster = RasterizeTight(ResolveEffectiveKey(key));
+        var raster = RasterizeEffective(key);
         using (raster.Image)
         {
             return CommitRasterizedGlyph(key, raster, out info, out added);
@@ -415,21 +426,110 @@ public sealed class GlyphAtlas : IDisposable
     /// Placement contract: draw at (cellX + LeftBearing, baselineY + TopBearing)
     /// where baselineY = cellTop + BaselineOffset.
     /// </summary>
-    private GlyphKey ResolveEffectiveKey(GlyphKey key)
+    private GlyphRaster RasterizeEffective(GlyphKey key)
     {
         var fallbackChain = Volatile.Read(ref _fallbackChain);
         if (fallbackChain == null || string.IsNullOrEmpty(key.Grapheme))
         {
-            return key;
+            return RasterizeTight(key);
         }
 
-        var resolvedTypeface = fallbackChain.ResolveTypefaceForGrapheme(key.Grapheme, key.Bold);
-        if (resolvedTypeface != null && !ReferenceEquals(resolvedTypeface, key.Typeface))
+        var resolvedTypeface = fallbackChain.ResolveTypefaceForGrapheme(
+            key.Grapheme, key.Bold, out bool isFallback);
+        // The primary font, including its Nerd Font PUA glyphs, keeps the
+        // exact existing raster path. Normalization is only for a resolved
+        // fallback typeface.
+        if (!isFallback || resolvedTypeface == null ||
+            ReferenceEquals(resolvedTypeface, key.Typeface) ||
+            ReferenceEquals(resolvedTypeface, _typeface))
         {
-            return new GlyphKey(key.Grapheme, resolvedTypeface, key.TextSize, key.Bold);
+            return RasterizeTight(key);
         }
 
-        return key;
+        using var fallbackFont = new SKFont(resolvedTypeface, key.TextSize);
+        var fallbackMetrics = fallbackFont.Metrics;
+        float fallbackHeight = MathF.Max(1f,
+            MathF.Ceiling(-fallbackMetrics.Ascent) + 1f +
+            MathF.Ceiling(fallbackMetrics.Descent) + 1f);
+        float scale = _primaryCellHeight / fallbackHeight;
+        scale = Math.Clamp(scale, MinFallbackScale, MaxFallbackScale);
+        // A fallback's ink can overhang its advance. Reserve the complete
+        // one-cell or wide-cell allocation before rasterizing.
+        float cellWidth = GetCellWidth(key.Grapheme, key.TextSize);
+        float measuredAdvance = MathF.Max(1f, fallbackFont.MeasureText(key.Grapheme) + 1f);
+        scale = MathF.Min(scale, cellWidth / measuredAdvance);
+        scale = MathF.Max(0.05f, scale);
+
+        // Metrics are normally sufficient to fit the cell. Re-rasterize at a
+        // smaller scale when a particular glyph's ink or synthetic bold
+        // stroke still exceeds its hard allocation.
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            var effectiveKey = new GlyphKey(
+                key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Bold);
+            var raster = RasterizeTightCore(
+                effectiveKey, blob: null, baselineOverride: _primaryBaseline,
+                maxAdvance: cellWidth);
+            if (raster.Width <= MathF.Ceiling(cellWidth) &&
+                raster.Height <= MathF.Ceiling(_primaryCellHeight))
+            {
+                return raster;
+            }
+
+            float widthScale = raster.Width > 0 ? cellWidth / raster.Width : 1f;
+            float heightScale = raster.Height > 0 ? _primaryCellHeight / raster.Height : 1f;
+            float correction = MathF.Min(widthScale, heightScale) * 0.98f;
+            raster.Image.Dispose();
+            if (!(correction > 0f) || correction >= 1f)
+            {
+                scale *= 0.5f;
+            }
+            else
+            {
+                scale *= correction;
+            }
+            scale = MathF.Max(0.05f, scale);
+        }
+
+        // The final attempt is still a valid A8 raster. CommitRasterizedGlyph
+        var finalKey = new GlyphKey(key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Bold);
+        var finalRaster = RasterizeTightCore(finalKey, blob: null,
+            baselineOverride: _primaryBaseline, maxAdvance: cellWidth);
+        if (finalRaster.Width > MathF.Ceiling(cellWidth) ||
+            finalRaster.Height > MathF.Ceiling(_primaryCellHeight))
+        {
+            // Do not commit an entry whose tight bounds cannot fit its cell;
+            // the caller will use the reserved tofu glyph instead.
+            return new GlyphRaster(
+                finalRaster.Image, 0, 0, 0, 0,
+                MathF.Min(finalRaster.Advance, cellWidth),
+                _primaryBaseline, 0f, 0f);
+        }
+        return finalRaster;
+    }
+
+    private static float GetCellWidth(string grapheme, float textSize)
+        => textSize * (IsWideGrapheme(grapheme) ? 2f : 1f);
+
+    private static bool IsWideGrapheme(string grapheme)
+    {
+        if (string.IsNullOrEmpty(grapheme) ||
+            !System.Text.Rune.TryGetRuneAt(grapheme, 0, out var rune))
+        {
+            return false;
+        }
+
+        int cp = rune.Value;
+        return (cp >= 0x1100 && cp <= 0x115F) ||
+               cp == 0x2329 || cp == 0x232A ||
+               (cp >= 0x2E80 && cp <= 0xA4CF) ||
+               (cp >= 0xAC00 && cp <= 0xD7A3) ||
+               (cp >= 0xF900 && cp <= 0xFAFF) ||
+               (cp >= 0xFE10 && cp <= 0xFE6F) ||
+               (cp >= 0xFF00 && cp <= 0xFF60) ||
+               (cp >= 0xFFE0 && cp <= 0xFFE6) ||
+               (cp >= 0x1F300 && cp <= 0x1FAFF) ||
+               (cp >= 0x20000 && cp <= 0x3FFFD);
     }
 
     private GlyphRaster RasterizeTight(GlyphKey key)
@@ -447,7 +547,10 @@ public sealed class GlyphAtlas : IDisposable
         return RasterizeTightCore(key, blob);
     }
 
-    private GlyphRaster RasterizeTightCore(GlyphKey key, SKTextBlob? blob)
+    private GlyphRaster RasterizeTightCore(
+        GlyphKey key, SKTextBlob? blob,
+        float baselineOverride = float.NaN,
+        float maxAdvance = float.PositiveInfinity)
     {
         using var font = new SKFont(key.Typeface, key.TextSize)
         {
@@ -466,6 +569,8 @@ public sealed class GlyphAtlas : IDisposable
         };
 
         var fm = font.Metrics;
+        float drawBaseline = -fm.Ascent;
+        float reportedBaseline = float.IsNaN(baselineOverride) ? drawBaseline : baselineOverride;
         float ascent = MathF.Ceiling(-fm.Ascent) + 1f;
         float descent = MathF.Ceiling(fm.Descent) + 1f;
         float advance;
@@ -480,6 +585,7 @@ public sealed class GlyphAtlas : IDisposable
         {
             advance = MathF.Ceiling(font.MeasureText(key.Grapheme)) + 1f;
         }
+        float boundedAdvance = MathF.Min(advance, maxAdvance);
         int width = Math.Max(1, (int)advance);
         int height = Math.Max(1, (int)(ascent + descent));
 
@@ -487,15 +593,16 @@ public sealed class GlyphAtlas : IDisposable
         var canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
         if (blob != null)
-            canvas.DrawText(blob, 0f, -fm.Ascent, paint);
+            canvas.DrawText(blob, 0f, drawBaseline, paint);
         else
-            canvas.DrawText(key.Grapheme, 0f, -fm.Ascent, SKTextAlign.Left, font, paint);
+            canvas.DrawText(key.Grapheme, 0f, drawBaseline, SKTextAlign.Left, font, paint);
         canvas.Flush();
 
         using var pixmap = new SKPixmap();
         if (!surface.PeekPixels(pixmap))
         {
-            return new GlyphRaster(surface.Snapshot(), 0, 0, 0, 0, advance, -fm.Ascent, 0f, 0f);
+            return new GlyphRaster(surface.Snapshot(), 0, 0, 0, 0,
+                boundedAdvance, reportedBaseline, 0f, 0f);
         }
 
         // Tight bounds scan over the A8 coverage.
@@ -522,12 +629,13 @@ public sealed class GlyphAtlas : IDisposable
         int h = bottom - top + 1;
         if (w <= 0 || h <= 0)
         {
-            return new GlyphRaster(surface.Snapshot(), 0, 0, 0, 0, advance, -fm.Ascent, 0f, 0f);
+            return new GlyphRaster(surface.Snapshot(), 0, 0, 0, 0,
+                boundedAdvance, reportedBaseline, 0f, 0f);
         }
 
         return new GlyphRaster(
             surface.Snapshot(), left, top, w, h,
-            advance, -fm.Ascent, left, top - (-fm.Ascent));
+            boundedAdvance, reportedBaseline, left, top - drawBaseline);
     }
 
     private bool TryPlace(int width, int height, out int x, out int y)

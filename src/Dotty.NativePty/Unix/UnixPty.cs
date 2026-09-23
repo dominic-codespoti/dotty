@@ -1,4 +1,5 @@
 using System;
+using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -23,7 +24,7 @@ public sealed class UnixPty : IPty
     private string? _controlSocketPath;
     private Stream? _controlSocketStream;
     private (int Columns, int Rows)? _pendingResize;
-    private readonly SemaphoreSlim _controlWriteLock = new(1, 1);
+    private readonly object _controlWriteLock = new();
     private int _startupColumns = 80;
     private int _startupRows = 24;
     private bool _isDisposed;
@@ -255,7 +256,7 @@ public sealed class UnixPty : IPty
             }
         }
 
-        _ = SendResizeMessageAsync(columns, rows, controlSocket);
+        SendResizeMessage(columns, rows, controlSocket);
     }
 
     /// <inheritdoc />
@@ -390,14 +391,9 @@ public sealed class UnixPty : IPty
                 _pendingResize = null;
             }
 
-            await SendResizeMessageAsync(_startupColumns, _startupRows, stream).ConfigureAwait(false);
+            SendResizeMessage(_startupColumns, _startupRows, stream);
             if (pending.HasValue)
-            {
-                await SendResizeMessageAsync(
-                    pending.Value.Columns,
-                    pending.Value.Rows,
-                    stream).ConfigureAwait(false);
-            }
+                SendResizeMessage(pending.Value.Columns, pending.Value.Rows, stream);
         }
         catch (Exception ex)
         {
@@ -406,27 +402,35 @@ public sealed class UnixPty : IPty
         }
     }
 
-    private async Task SendResizeMessageAsync(int cols, int rows, Stream? controlSocket = null)
+    private void SendResizeMessage(int cols, int rows, Stream? controlSocket = null)
     {
         controlSocket ??= _controlSocketStream;
         if (controlSocket == null)
             return;
 
-        await _controlWriteLock.WaitAsync().ConfigureAwait(false);
-        try
+        lock (_controlWriteLock)
         {
-            var msg = $"{{\"type\":\"resize\",\"cols\":{cols},\"rows\":{rows}}}\n";
-            var bytes = Encoding.UTF8.GetBytes(msg);
-            await controlSocket.WriteAsync(bytes, 0, bytes.Length).ConfigureAwait(false);
-            await controlSocket.FlushAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            SetError(PtyErrorCode.ResizeFailed, ex.Message);
-        }
-        finally
-        {
-            _controlWriteLock.Release();
+            try
+            {
+                Span<byte> message = stackalloc byte[64];
+                int offset = 0;
+                "{\"type\":\"resize\",\"cols\":"u8.CopyTo(message);
+                offset += "{\"type\":\"resize\",\"cols\":"u8.Length;
+                Utf8Formatter.TryFormat(cols, message[offset..], out int written);
+                offset += written;
+                ",\"rows\":"u8.CopyTo(message[offset..]);
+                offset += ",\"rows\":"u8.Length;
+                Utf8Formatter.TryFormat(rows, message[offset..], out written);
+                offset += written;
+                "}\n"u8.CopyTo(message[offset..]);
+                offset += "}\n"u8.Length;
+                controlSocket.Write(message[..offset]);
+                controlSocket.Flush();
+            }
+            catch (Exception ex)
+            {
+                SetError(PtyErrorCode.ResizeFailed, ex.Message);
+            }
         }
     }
 

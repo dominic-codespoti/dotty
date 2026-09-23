@@ -377,6 +377,31 @@ project writes `regressions.txt`. CI does not run the detailed benchmark mode.
 4. **Struct types**: Use value types for hot paths
 5. **BufferTextWriter**: Optimized bulk cell write path — reduces per-cell overhead by batching writes and minimizing buffer flushes
 
+### Steady-state allocation policy
+
+Warmed interactive paths allocate no managed memory: idle frames, typing, PTY
+output, scrolling, hover, selection, tab switching, resizing between
+previously seen sizes, and Lua title/status/event hooks. Scratch storage grows
+to a high-water mark and is reused. First use, config/Lua reload, tab/pane
+creation, clipboard payloads, and changed title text may still allocate.
+
+Each area has thread-local zero-allocation regression tests
+(`*AllocationTests.cs` in `tests/Dotty.App.Tests` and `tests/Dotty.Terminal.Tests`).
+To measure the real app, run:
+
+```bash
+dotnet build src/Dotty/Dotty.csproj -c Release
+python3 scripts/perf/steady_state_alloc.py            # bytes per warmed scenario
+python3 scripts/perf/steady_state_alloc.py --only resize_8 \
+  --trace /tmp/alloc.nettrace --every-object         # per-object stacks (JIT build)
+```
+
+The harness runs Dotty under a private Xvfb display, drives it with `xdotool`,
+and reads `GC.GetTotalAllocatedBytes` through the `ALLOC` control command
+(available only with `DOTTY_TEST_PORT`). The control transport's own
+allocations are calibrated and subtracted; residues of a few hundred bytes that
+move between scenarios are transport noise.
+
 ### Cold-Start Optimization
 
 1. **Startup benchmarks**: `StartupBenchmarks` records host initialization
@@ -493,6 +518,7 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 | 2026-06-17 | Added BufferTextWriter optimization, cold-start benchmark guidance, and lazy glyph atlas population |
 | 2026-09-18 | Added consolidated evaluation commands, artifact/status semantics, and measured findings |
 | 2026-06-15 | Added cold-start benchmark guidance |
+| 2026-09-24 | Added the steady-state zero-allocation policy and measurement harness |
 
 ---
 
@@ -500,4 +526,4 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 - [Dotty Parsing Performance](Parsing.md)
 - [.NET Performance Best Practices](https://docs.microsoft.com/en-us/dotnet/framework/performance/)
 
-*Last updated: 2026-09-18*
+*Last updated: 2026-09-24*

@@ -38,14 +38,15 @@ public static class TabBarHitTester
         float windowWidth,
         int tabCount,
         int activeIndex,
-        float barHeight = TabBarLayout.DefaultBarHeight)
+        float barHeight = TabBarLayout.DefaultBarHeight,
+        float statusWidth = 0f)
     {
         if (y < 0 || y > barHeight || windowWidth <= 0 || tabCount < 0)
         {
             return new TabBarHitResult.None();
         }
 
-        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight);
+        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight, statusWidth);
 
         // Check new tab (+) button
         if (layout.NewTabButtonBounds.Contains(x, y))
@@ -54,9 +55,10 @@ public static class TabBarHitTester
         }
 
         // Check each tab and its close button
-        for (int i = 0; i < layout.Tabs.Length; i++)
+        ReadOnlySpan<TabLayoutItem> tabs = layout.AsSpan();
+        for (int i = 0; i < tabs.Length; i++)
         {
-            ref readonly var tab = ref layout.Tabs[i];
+            ref readonly var tab = ref tabs[i];
             if (!tab.TabBounds.Contains(x, y)) continue;
 
             // Check if clicking inside close button
@@ -81,7 +83,8 @@ public static class TabBarHitTester
         int tabCount,
         int activeIndex,
         out int tabIndex,
-        float barHeight = TabBarLayout.DefaultBarHeight)
+        float barHeight = TabBarLayout.DefaultBarHeight,
+        float statusWidth = 0f)
     {
         tabIndex = -1;
 
@@ -90,16 +93,17 @@ public static class TabBarHitTester
             return TabBarHitType.None;
         }
 
-        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight);
+        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight, statusWidth);
 
         if (layout.NewTabButtonBounds.Contains(x, y))
         {
             return TabBarHitType.NewTab;
         }
 
-        for (int i = 0; i < layout.Tabs.Length; i++)
+        ReadOnlySpan<TabLayoutItem> tabs = layout.AsSpan();
+        for (int i = 0; i < tabs.Length; i++)
         {
-            ref readonly var tab = ref layout.Tabs[i];
+            ref readonly var tab = ref tabs[i];
             if (!tab.TabBounds.Contains(x, y)) continue;
 
             tabIndex = i;

@@ -1,3 +1,5 @@
+using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Themes;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -14,8 +16,8 @@ using Dotty.Runtime.Input;
 using Dotty.Runtime.Panes;
 using Dotty.Runtime.Sessions;
 using Dotty.Runtime.Tabs;
+using Dotty.Runtime.Text;
 using Dotty.Runtime.Scripting;
-using Dotty.Runtime.Selection;
 using Dotty.Silk.Config;
 using Dotty.Silk.Input;
 using Dotty.Silk.Rendering;
@@ -35,13 +37,19 @@ internal static class DottyWindowHost
     private static GlyphAtlas _atlas = null!;
     private static SKTypeface _typeface = null!;
     private static float _cellWidth, _cellHeight, _scale = 1f;
+    private const float MinRuntimeFontSize = 6f;
+    private const float MaxRuntimeFontSize = 72f;
+    private static double? _runtimeFontSize;
+    private static double _configuredFontSize = 14d;
+    private static WindowState _previousNonFullscreenState = WindowState.Normal;
     private static int _cols = 80, _rows = 24;
     private static SilkTerminalRenderer _renderer = null!;
+    private static IColorScheme _activeTheme = null!;
     private static SgrColorArgb _themeForeground;
     private static SgrColorArgb _themeBackground;
+    private static SgrColorArgb _themeSelectionColor;
     private static TerminalTabManager _tabManager = null!;
-    private static readonly TextSelectionService _selectionService = new();
-    private static readonly LuaScriptHost _luaHost = new();
+    private static LuaScriptHost _luaHost = null!;
     private static readonly KeybindingManager _keybindings = new();
 
     private static IInputContext _input = null!;
@@ -56,15 +64,73 @@ internal static class DottyWindowHost
 
     private static bool _closed;
     private static bool? _lastWindowFocus;
-    private static bool _cursorBlinkVisible = true;
-    private static long _lastCursorBlinkTimestampMs;
-    private static readonly ConcurrentQueue<string> _pendingTitles = new();
-    private static readonly ConcurrentQueue<string> _pendingClipboards = new();
+    private static LeafPane? _focusedPane;
+    private static readonly Action<bool> _focusStateHandler = ApplyWindowFocusState;
+    private static readonly Queue<string> _pendingTitles = new(8);
+    private static readonly object _pendingTitlesLock = new();
+    private static int _pendingTitleCount;
+    private readonly record struct ClipboardWrite(TerminalSession Session, string Text);
+    private static readonly Queue<ClipboardWrite> _pendingClipboards = new(8);
+    private static int _pendingClipboardCount;
+    private static readonly object _pendingClipboardsLock = new();
+    private readonly record struct TabTitleChange(TerminalTab Tab);
+    private static readonly Queue<TabTitleChange> _pendingTabTitleChanges = new(8);
+    private static int _pendingTabTitleChangeCount;
+    private static readonly object _pendingTabTitleChangesLock = new();
+    private readonly record struct ProcessExit(TerminalTab Tab, LeafPane Leaf);
+    private static readonly Queue<ProcessExit> _pendingProcessExits = new(8);
+    private static int _pendingProcessExitCount;
+    private static readonly object _pendingProcessExitsLock = new();
     private static readonly ConcurrentQueue<ControlRequest> _pendingControlCommands = new();
     private static WindowLifecycleCoordinator _lifecycle = new();
     private static DesktopControlServer? _controlServer;
     private static readonly Dictionary<TerminalSession, Action> _renderSubscriptions = new();
+    private static readonly Dictionary<TerminalSession, Action> _renderCallbackCache = new();
+    private static readonly Dictionary<TerminalSession, Action<string>> _clipboardSubscriptions = new();
+    private static readonly Dictionary<TerminalTab, (Action TopologyChanged, Action<LeafPane, LeafPane> ActivePaneChanged)> _paneSubscriptions = new();
+    private sealed class TabTitleCache
+    {
+        public string RawTitle;
+        public int Index;
+        public bool IsActive;
+        public readonly ReusableTextBuffer FormattedTitle = new();
+        public bool HasFormattedTitle;
+        public TabTitleCache(string rawTitle, int index, bool isActive)
+        {
+            RawTitle = rawTitle;
+            Index = index;
+            IsActive = isActive;
+        }
+    }
+
+    private static readonly Dictionary<TerminalTab, TabTitleCache> _luaTabTitleCache = new();
+    private sealed class HostTabTitleSource : ITabTitleSource
+    {
+        public ReadOnlySpan<char> GetTitle(TerminalTab tab, int index)
+        {
+            var cache = GetOrRefreshTabTitle(tab, index);
+            return cache.HasFormattedTitle
+                ? cache.FormattedTitle.Span
+                : (tab.Title ?? "Terminal").AsSpan();
+        }
+    }
+
+    private static readonly ITabTitleSource _tabTitleSource = new HostTabTitleSource();
+    private static readonly ReusableTextBuffer _luaStatusText = new();
+    private static readonly ReusableTextBuffer _previousLuaStatusText = new();
+    private static readonly ReusableTextBuffer _luaStatusWarningText = new(128);
+    private static string? _lastLuaError;
+    private static bool _luaStatusWarning;
+    private static bool _cursorBlinkVisible = true;
+    private static long _lastCursorBlinkTimestampMs;
+    private static long _lastLuaStatusRefreshTimestampMs;
     private static LeafPane[] _visibleLeaves = Array.Empty<LeafPane>();
+    private static int _visibleLeafCount;
+    private static readonly HashSet<TerminalSession> _sessionScratch = new();
+    private static readonly HashSet<TerminalSession> _visibleSessionScratch = new();
+    private static readonly HashSet<LeafPane> _visibleLeafScratch = new();
+    private static readonly List<TerminalSession> _staleSessionScratch = new();
+    private static readonly List<LeafPane> _staleLeafScratch = new();
     private static readonly Dictionary<LeafPane, ulong> _committedGenerations = new();
     private static ulong[] _frameGenerations = Array.Empty<ulong>();
     private static bool[] _frameGenerationValid = Array.Empty<bool>();
@@ -72,41 +138,48 @@ internal static class DottyWindowHost
     private static int _committedFramebufferHeight = -1;
     private static int _committedAtlasVersion = int.MinValue;
     private static long _lastPresentTimestampMs;
+    private static readonly ReusableTextBuffer _lastWindowTitle = new(128);
+    private static char[] _windowTitleScratch = new char[128];
+    private static byte[] _windowTitleUtf8 = new byte[128];
+    private static global::Silk.NET.GLFW.Glfw? _glfwApi;
+    private static nint _glfwSetWindowTitleProc;
+    private static bool _glfwTitleProcResolved;
     /// <summary>
-    /// Idle-frame throttle (ms). The Silk render loop is unthrottled and VSync only
-    /// engages inside SwapBuffers, which clean frames skip — without this the loop
-    /// spins at 100% of one core when idle. Kept at 1ms: a larger sleep risks
-    /// pushing presents across vblank boundaries during interactive bursts
-    /// (observed as typing stutter at 4ms); 1ms holds idle near ~3% with no
-    /// visible hitch risk. Deliberately unconditional — gating the sleep on
-    /// recent-frame history adds pacing state to the hottest path for ~2pp
-    /// of idle CPU that buys nothing observable.
+    /// Idle-frame throttle (ms). The Silk render loop is unthrottled and clean
+    /// frames skip SwapBuffers — without this the loop spins at 100% of one core
+    /// when idle. Kept at 1ms: a larger sleep risks pushing presents across
+    /// vblank boundaries during interactive bursts (observed as typing stutter
+    /// at 4ms); 1ms holds idle near ~3% with no visible hitch risk. Deliberately
+    /// unconditional — gating the sleep on recent-frame history adds pacing
+    /// state to the hottest path for little observable benefit.
     /// </summary>
     private const int IdleFrameSleepMs = 1;
     /// <summary>
     /// While a PTY consumer has queued output, coalesce repaint requests to
     /// roughly 30 FPS. Interactive writes have no backlog by the time they
-    /// request a frame, so they retain normal VSync cadence and latency.
+    /// request a frame, so they retain normal latency.
     /// </summary>
     private const int BackloggedFrameIntervalMs = 30;
 
     private static bool _showTabBar = true;
     private static ContextMenuModel? _activeContextMenu;
     private sealed record ControlRequest(string Command, TaskCompletionSource<string> Completion);
-
     public static void Run()
     {
         _closed = false;
+        _lastWindowFocus = null;
+        _focusedPane = null;
         _lastPresentTimestampMs = 0;
         _lifecycle = new WindowLifecycleCoordinator();
-        global::Silk.NET.Windowing.Glfw.GlfwWindowing.RegisterPlatform();
+        // Select GLFW directly instead of Silk's reflection-based backend discovery.
+        global::Silk.NET.Windowing.Glfw.GlfwWindowing.Use();
+        InputWindowExtensions.ShouldLoadFirstPartyPlatforms(false);
         global::Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
 
         var options = WindowOptions.Default with
         {
-            Size = new Vector2D<int>(1000, 650),
             Title = "Dotty (Silk)",
-            VSync = true,
+            VSync = false,
             ShouldSwapAutomatically = false,
             API = new global::Silk.NET.Windowing.GraphicsAPI(
                 global::Silk.NET.Windowing.ContextAPI.OpenGL,
@@ -139,11 +212,33 @@ internal static class DottyWindowHost
 
     private static void OnLoadCore()
     {
+        _runtimeFontSize = null;
         WindowPresentationGate.Invalidate(WindowFrameReason.Initial);
         _lastCursorBlinkTimestampMs = GetClockMilliseconds();
         UserConfigService.CallbackDispatcher = action => _lifecycle.TryEnqueue(action);
         UserConfigService.ConfigChanged += OnConfigChanged;
         UserConfigService.Load();
+        _tabManager = new TerminalTabManager();
+        _tabManager.ProcessExited += OnTabProcessExited;
+        _tabManager.ActiveTabChanged += OnActiveTabChanged;
+        _tabManager.TabAdded += OnTabAdded;
+        _tabManager.TabClosed += OnTabClosed;
+        _tabManager.TabTitleChanged += OnTabTitleChanged;
+        var luaServices = new DottyLuaServices(
+            action => { _lifecycle.TryEnqueue(action); },
+            CreateLuaTab,
+            SplitLuaPane,
+            action => _keyboardDispatcher?.Actions.TryExecute(action) ?? false,
+            () => ApplyConfigOnly(UserConfigService.Current),
+            InvalidateLuaPresentation);
+        _luaHost = new LuaScriptHost(luaServices, _tabManager);
+        _luaHost.ScriptFileChanged += UserConfigService.RequestReload;
+        _luaHost.Evaluate(UserConfigService.Current, LuaScriptHost.GetConfigLuaPath());
+        InvalidateLuaPresentation();
+        _showTabBar = UserConfigService.Current.TabBar.Show;
+        _activeTheme = SilkConfig.LoadActiveTheme();
+        (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme();
+        _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
 
         _gl = _window.CreateOpenGL();
         string openGlVersion = _gl.GetStringS(StringName.Version);
@@ -154,21 +249,7 @@ internal static class DottyWindowHost
         _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
         GlyphAtlasService.AcquireAtlas(_atlas);
         _renderer = new SilkTerminalRenderer(_gl, _atlas);
-        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx(), _selectionService);
-        (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme();
-
-        _tabManager = new TerminalTabManager();
-        _tabManager.ActiveTabChanged += OnActiveTabChanged;
-        _tabManager.TabAdded += OnTabAdded;
-        _tabManager.TabClosed += OnTabClosed;
-        _tabManager.TabTitleChanged += (tab, title) =>
-        {
-            if (tab == _tabManager.ActiveTab)
-            {
-                WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
-                _pendingTitles.Enqueue(title);
-            }
-        };
+        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx());
 
         _mouseHost = new MouseHost();
         _keyboardDispatcher = new TerminalKeyboardDispatcher(_mouseHost);
@@ -198,53 +279,206 @@ internal static class DottyWindowHost
         }
 
         _tabManager.CreateTab(cols: _cols, rows: _rows);
-        _luaHost.Initialize(UserConfigService.Current, _tabManager);
-        string luaConfigPath = LuaScriptHost.GetConfigLuaPath();
-        if (File.Exists(luaConfigPath))
-        {
-            _luaHost.LoadScript(luaConfigPath);
-        }
-        _luaHost.ConfigReloaded += () => OnConfigChanged(UserConfigService.Current);
         _keybindings.RegisterDefaults();
         _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
         int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
         float topOffset = barRows * _cellHeight * _scale;
         _window.Size = new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale));
         StartControlServer();
+        _luaHost.NotifyGuiStartup();
     }
 
     private static void OnActiveTabChanged(TerminalTab? tab)
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
-        RefreshVisibleSessionSubscriptions();
+        if (_lastWindowFocus == true)
+        {
+            _focusedPane?.Session.SendFocusReport(focused: false);
+            _focusedPane = tab?.ActivePane;
+            _focusedPane?.Session.SendFocusReport(focused: true);
+        }
+        else
+        {
+            _focusedPane = null;
+        }
+
+        RefreshSessionSubscriptions();
+        RefreshLuaTabTitles();
+        RefreshLuaStatus();
         if (tab == null)
         {
             if (!_closed) _window.Close();
             return;
         }
+        EnqueuePendingTitle(tab.Title);
+    }
 
-        _pendingTitles.Enqueue(tab.Title);
-        tab.Session.ClipboardWriteRequested += text => _pendingClipboards.Enqueue(text);
+    private static void OnTabProcessExited(TerminalTab tab, LeafPane leaf, int exitCode)
+    {
+        lock (_pendingProcessExitsLock)
+        {
+            if (_closed)
+                return;
+            _pendingProcessExits.Enqueue(new ProcessExit(tab, leaf));
+            Volatile.Write(ref _pendingProcessExitCount, _pendingProcessExits.Count);
+        }
+    }
+
+    private static void OnTabTitleChanged(TerminalTab tab, string title)
+    {
+        lock (_pendingTabTitleChangesLock)
+        {
+            if (_closed)
+                return;
+            _pendingTabTitleChanges.Enqueue(new TabTitleChange(tab));
+            Volatile.Write(ref _pendingTabTitleChangeCount, _pendingTabTitleChanges.Count);
+        }
+
+        if (tab == _tabManager?.ActiveTab)
+            EnqueuePendingTitle(title);
+    }
+
+    private static void EnqueuePendingTitle(string title)
+    {
+        lock (_pendingTitlesLock)
+        {
+            if (_closed)
+                return;
+            _pendingTitles.Enqueue(title);
+            Volatile.Write(ref _pendingTitleCount, _pendingTitles.Count);
+        }
     }
 
     private static void OnTabAdded(TerminalTab tab)
     {
+        SubscribePaneTree(tab);
         WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
-        RefreshVisibleSessionSubscriptions();
+        RefreshSessionSubscriptions();
+        RefreshLuaTabTitles();
+        RefreshLuaStatus();
     }
 
     private static void OnTabClosed(TerminalTab tab)
     {
+        UnsubscribePaneTree(tab);
+        _luaTabTitleCache.Remove(tab);
         WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
+        RefreshSessionSubscriptions();
+        RefreshLuaTabTitles();
+        RefreshLuaStatus();
+        if (_tabManager?.ActiveTab is { } activeTab)
+            EnqueuePendingTitle(activeTab.Title);
+    }
+
+    private static void OnPaneTopologyChanged()
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
+        RefreshSessionSubscriptions();
+    }
+
+    private static void OnActivePaneChanged(LeafPane oldPane, LeafPane newPane)
+    {
+        WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
+        var activeTab = _tabManager?.ActiveTab;
+        if (!_closed && _lastWindowFocus == true &&
+            activeTab != null && ReferenceEquals(activeTab.ActivePane, newPane))
+        {
+            oldPane.Session.SendFocusReport(focused: false);
+            newPane.Session.SendFocusReport(focused: true);
+            _focusedPane = newPane;
+        }
+    }
+
+    private static void SubscribePaneTree(TerminalTab tab)
+    {
+        if (_paneSubscriptions.ContainsKey(tab))
+            return;
+
+        var handlers = (TopologyChanged: (Action)OnPaneTopologyChanged,
+            ActivePaneChanged: (Action<LeafPane, LeafPane>)OnActivePaneChanged);
+        tab.PaneTree.TopologyChanged += handlers.TopologyChanged;
+        tab.PaneTree.ActivePaneChanged += handlers.ActivePaneChanged;
+        _paneSubscriptions.Add(tab, handlers);
+    }
+
+    private static void UnsubscribePaneTree(TerminalTab tab)
+    {
+        if (!_paneSubscriptions.Remove(tab, out var handlers))
+            return;
+
+        tab.PaneTree.TopologyChanged -= handlers.TopologyChanged;
+        tab.PaneTree.ActivePaneChanged -= handlers.ActivePaneChanged;
+    }
+
+    private static void RefreshSessionSubscriptions()
+    {
+        RefreshClipboardSubscriptions();
         RefreshVisibleSessionSubscriptions();
     }
 
+    private static void RefreshClipboardSubscriptions()
+    {
+        _sessionScratch.Clear();
+        var tabs = _tabManager?.Tabs;
+        if (tabs != null)
+        {
+            for (int tabIndex = 0; tabIndex < tabs.Count; tabIndex++)
+            {
+                var leaves = tabs[tabIndex].PaneTree.Leaves;
+                for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
+                    _sessionScratch.Add(leaves[leafIndex].Session);
+            }
+        }
+
+        foreach (var session in _sessionScratch)
+        {
+            if (_clipboardSubscriptions.ContainsKey(session))
+                continue;
+
+            Action<string> callback = CreateClipboardHandler(session);
+            session.ClipboardWriteRequested += callback;
+            _clipboardSubscriptions.Add(session, callback);
+        }
+
+        _staleSessionScratch.Clear();
+        foreach (var pair in _clipboardSubscriptions)
+        {
+            if (!_sessionScratch.Contains(pair.Key))
+                _staleSessionScratch.Add(pair.Key);
+        }
+        for (int i = 0; i < _staleSessionScratch.Count; i++)
+        {
+            var session = _staleSessionScratch[i];
+            session.ClipboardWriteRequested -= _clipboardSubscriptions[session];
+            _clipboardSubscriptions.Remove(session);
+            _renderCallbackCache.Remove(session);
+        }
+    }
+
+    private static Action<string> CreateClipboardHandler(TerminalSession session) =>
+        text => EnqueueClipboardWrite(session, text);
+
+    private static void EnqueueClipboardWrite(TerminalSession session, string text)
+    {
+        lock (_pendingClipboardsLock)
+        {
+            if (_closed)
+                return;
+            _pendingClipboards.Enqueue(new ClipboardWrite(session, text));
+            Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
+        }
+
+    }
     private static void RefreshVisibleSessionSubscriptions()
     {
         var leaves = _tabManager?.ActiveTab?.PaneTree.Leaves;
         if (leaves == null)
         {
-            _visibleLeaves = Array.Empty<LeafPane>();
+            Array.Clear(_visibleLeaves, 0, _visibleLeafCount);
+            Array.Clear(_frameGenerationValid, 0, _visibleLeafCount);
+            _visibleSessionScratch.Clear();
+            _visibleLeafScratch.Clear();
+            _visibleLeafCount = 0;
             foreach (var pair in _renderSubscriptions)
                 pair.Key.RenderScheduled -= pair.Value;
             _renderSubscriptions.Clear();
@@ -252,77 +486,343 @@ internal static class DottyWindowHost
             return;
         }
 
-        var visibleSessions = new HashSet<TerminalSession>();
-        var visibleLeafSet = new HashSet<LeafPane>();
-        var nextLeaves = new LeafPane[leaves.Count];
+        int previousLeafCount = _visibleLeafCount;
+        _visibleSessionScratch.Clear();
+        _visibleLeafScratch.Clear();
+        if (_visibleLeaves.Length < leaves.Count)
+            Array.Resize(ref _visibleLeaves, leaves.Count);
+        if (previousLeafCount > leaves.Count)
+        {
+            Array.Clear(_visibleLeaves, leaves.Count, previousLeafCount - leaves.Count);
+            Array.Clear(_frameGenerationValid, leaves.Count, previousLeafCount - leaves.Count);
+        }
+
         for (int i = 0; i < leaves.Count; i++)
         {
             var leaf = leaves[i];
-            nextLeaves[i] = leaf;
-            visibleLeafSet.Add(leaf);
-            if (visibleSessions.Add(leaf.Session) && !_renderSubscriptions.ContainsKey(leaf.Session))
+            _visibleLeaves[i] = leaf;
+            _visibleLeafScratch.Add(leaf);
+            if (_visibleSessionScratch.Add(leaf.Session) && !_renderSubscriptions.ContainsKey(leaf.Session))
             {
-                Action callback = () => WindowPresentationGate.Invalidate(WindowFrameReason.Content);
+                if (!_renderCallbackCache.TryGetValue(leaf.Session, out var callback))
+                {
+                    callback = OnSessionRenderScheduled;
+                    _renderCallbackCache.Add(leaf.Session, callback);
+                }
                 leaf.Session.RenderScheduled += callback;
                 _renderSubscriptions.Add(leaf.Session, callback);
             }
         }
+        _visibleLeafCount = leaves.Count;
 
-        var staleSessions = new List<TerminalSession>();
+        _staleSessionScratch.Clear();
         foreach (var pair in _renderSubscriptions)
         {
-            if (!visibleSessions.Contains(pair.Key))
-                staleSessions.Add(pair.Key);
+            if (!_visibleSessionScratch.Contains(pair.Key))
+                _staleSessionScratch.Add(pair.Key);
         }
-        foreach (var session in staleSessions)
+        for (int i = 0; i < _staleSessionScratch.Count; i++)
         {
+            var session = _staleSessionScratch[i];
             session.RenderScheduled -= _renderSubscriptions[session];
             _renderSubscriptions.Remove(session);
         }
 
-        var staleLeaves = new List<LeafPane>();
+        _staleLeafScratch.Clear();
         foreach (var pair in _committedGenerations)
         {
-            if (!visibleLeafSet.Contains(pair.Key))
-                staleLeaves.Add(pair.Key);
+            if (!_visibleLeafScratch.Contains(pair.Key))
+                _staleLeafScratch.Add(pair.Key);
         }
-        foreach (var leaf in staleLeaves)
-            _committedGenerations.Remove(leaf);
-        if (_frameGenerations.Length < nextLeaves.Length)
-        {
-            Array.Resize(ref _frameGenerations, nextLeaves.Length);
-            Array.Resize(ref _frameGenerationValid, nextLeaves.Length);
-        }
+        for (int i = 0; i < _staleLeafScratch.Count; i++)
+            _committedGenerations.Remove(_staleLeafScratch[i]);
 
-        _visibleLeaves = nextLeaves;
+        if (_frameGenerations.Length < _visibleLeafCount)
+        {
+            Array.Resize(ref _frameGenerations, _visibleLeafCount);
+            Array.Resize(ref _frameGenerationValid, _visibleLeafCount);
+        }
     }
 
+    private static void OnSessionRenderScheduled() =>
+        WindowPresentationGate.Invalidate(WindowFrameReason.Content);
     private static float _cellFontSizePx()
     {
-        float size = (float)UserConfigService.Current.Font.Size;
-        size = float.IsFinite(size) ? Math.Clamp(size, 1f, 512f) : 14f;
+        float size = EffectiveFontSize();
         float scale = float.IsFinite(_scale) ? Math.Clamp(_scale, 0.1f, 16f) : 1f;
         return size * scale;
     }
 
+    private static float EffectiveFontSize()
+    {
+        double configured = double.IsFinite(_configuredFontSize)
+            ? _configuredFontSize
+            : UserConfigService.Current.Font.Size;
+        double size = _runtimeFontSize ?? configured;
+        return float.IsFinite((float)size) ? Math.Clamp((float)size, 1f, 512f) : 14f;
+    }
+
     private static void OnConfigChanged(DottyUserConfig config)
     {
+        if (_closed)
+            return;
+
+        _luaHost.Evaluate(config, LuaScriptHost.GetConfigLuaPath());
+        InvalidateLuaPresentation();
+        ApplyConfigOnly(config);
+    }
+    private static void InvalidateLuaPresentation()
+    {
+        _luaTabTitleCache.Clear();
+        _lastLuaStatusRefreshTimestampMs = 0;
+        _lastLuaError = null;
+        _previousLuaStatusText.Clear();
+        _luaStatusWarning = false;
+        RefreshLuaTabTitles();
+        RefreshLuaStatus();
+        WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
+    }
+
+    private static void RefreshLuaTabTitles()
+    {
+        if (_tabManager == null)
+            return;
+
+        var tabs = _tabManager.Tabs;
+        for (int i = 0; i < tabs.Count; i++)
+            GetOrRefreshTabTitle(tabs[i], i);
+    }
+
+    private static TabTitleCache GetOrRefreshTabTitle(TerminalTab tab, int index)
+    {
+        string rawTitle = tab.Title ?? "Terminal";
+        if (_luaTabTitleCache.TryGetValue(tab, out var cached))
+        {
+            bool contentChanged = cached.Index != index ||
+                !string.Equals(cached.RawTitle, rawTitle, StringComparison.Ordinal);
+            if (!contentChanged && cached.IsActive == tab.IsActive)
+                return cached;
+
+            cached.RawTitle = rawTitle;
+            cached.Index = index;
+            cached.IsActive = tab.IsActive;
+        }
+        else
+        {
+            cached = new TabTitleCache(rawTitle, index, tab.IsActive);
+            _luaTabTitleCache.Add(tab, cached);
+        }
+
+        cached.HasFormattedTitle =
+            _luaHost.Hooks.TryFormatTabTitle(tab, index, cached.FormattedTitle);
+        return cached;
+    }
+
+    private static ReadOnlySpan<char> GetLuaStatusText() =>
+        _luaStatusWarning ? _luaStatusWarningText.Span : _luaStatusText.Span;
+
+    private static void RefreshLuaStatus()
+    {
+        if (_luaHost == null)
+            return;
+
+        _previousLuaStatusText.Set(GetLuaStatusText());
+        bool warning = false;
+        string? error = _luaHost.LastError;
+        if (error == null)
+        {
+            if (!_luaHost.Hooks.TryFormatStatus(_luaStatusText))
+                _luaStatusText.Clear();
+            error = _luaHost.LastError;
+        }
+
+        if (error != null)
+        {
+            UpdateLuaStatusWarning(error);
+            warning = true;
+        }
+        else
+        {
+            _lastLuaError = null;
+        }
+
+        bool changed = _luaStatusWarning != warning ||
+            !_previousLuaStatusText.Span.SequenceEqual(
+                warning ? _luaStatusWarningText.Span : _luaStatusText.Span);
+        _luaStatusWarning = warning;
+        _lastLuaStatusRefreshTimestampMs = GetClockMilliseconds();
+        if (changed)
+            WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
+    }
+
+    private static void UpdateLuaStatusWarning(string error)
+    {
+        if (string.Equals(_lastLuaError, error, StringComparison.Ordinal))
+            return;
+
+        _lastLuaError = error;
+        ReadOnlySpan<char> firstLine = error.AsSpan();
+        int lineEnd = firstLine.IndexOfAny('\r', '\n');
+        if (lineEnd >= 0)
+            firstLine = firstLine[..lineEnd];
+        const int maxWarningLength = 120;
+        bool truncated = firstLine.Length > maxWarningLength;
+        if (truncated)
+            firstLine = firstLine[..(maxWarningLength - 1)];
+
+        ReadOnlySpan<char> prefix = "⚠ Lua: ";
+        Span<char> warning = stackalloc char[127];
+        prefix.CopyTo(warning);
+        firstLine.CopyTo(warning[prefix.Length..]);
+        int warningLength = prefix.Length + firstLine.Length;
+        if (truncated)
+            warning[warningLength++] = '…';
+        _luaStatusWarningText.Set(warning[..warningLength]);
+    }
+
+    private static void UpdateWindowTitle(string fallbackTitle)
+    {
+        int tabCount = _tabManager?.Count ?? 1;
+        int activeIndex = _tabManager?.ActiveIndex ?? -1;
+        var activeTab = _tabManager?.ActiveTab;
+        if (activeTab == null)
+        {
+            AssignWindowTitle(BuildWindowTitle(fallbackTitle.AsSpan(), activeIndex, tabCount));
+            return;
+        }
+
+        var cache = GetOrRefreshTabTitle(activeTab, activeIndex);
+        ReadOnlySpan<char> title = cache.HasFormattedTitle
+            ? cache.FormattedTitle.Span
+            : (activeTab.Title ?? "Terminal").AsSpan();
+        AssignWindowTitle(BuildWindowTitle(title, activeIndex, tabCount));
+    }
+
+    private static ReadOnlySpan<char> BuildWindowTitle(ReadOnlySpan<char> title, int activeIndex, int tabCount)
+    {
+        Span<char> prefix = stackalloc char[32];
+        int prefixLength = 0;
+        if (tabCount > 1)
+        {
+            prefix[prefixLength++] = '[';
+            if ((activeIndex + 1).TryFormat(prefix[prefixLength..], out int indexLength))
+                prefixLength += indexLength;
+            prefix[prefixLength++] = '/';
+            if (tabCount.TryFormat(prefix[prefixLength..], out int countLength))
+                prefixLength += countLength;
+            prefix[prefixLength++] = ']';
+            prefix[prefixLength++] = ' ';
+        }
+
+        int titleLength = prefixLength + title.Length;
+        if (_windowTitleScratch.Length < titleLength)
+            Array.Resize(ref _windowTitleScratch, titleLength);
+        prefix[..prefixLength].CopyTo(_windowTitleScratch);
+        title.CopyTo(_windowTitleScratch.AsSpan(prefixLength));
+        return _windowTitleScratch.AsSpan(0, titleLength);
+    }
+
+    private static unsafe void AssignWindowTitle(ReadOnlySpan<char> title)
+    {
+        if (title.SequenceEqual(_lastWindowTitle.Span))
+            return;
+
+        var nativeGlfwHandle = _window.Native?.Glfw;
+        if (nativeGlfwHandle.HasValue && nativeGlfwHandle.Value != 0)
+        {
+            if (!_glfwTitleProcResolved)
+            {
+                _glfwTitleProcResolved = true;
+                _glfwApi = global::Silk.NET.GLFW.Glfw.GetApi();
+                _glfwSetWindowTitleProc = _glfwApi.GetProcAddress("glfwSetWindowTitle");
+            }
+
+            if (_glfwSetWindowTitleProc != 0)
+            {
+                int byteLength = Encoding.UTF8.GetByteCount(title);
+                int requiredLength = byteLength + 1;
+                if (_windowTitleUtf8.Length < requiredLength)
+                    Array.Resize(ref _windowTitleUtf8, requiredLength);
+                int written = Encoding.UTF8.GetBytes(title, _windowTitleUtf8.AsSpan(0, byteLength));
+                _windowTitleUtf8[written] = 0;
+                fixed (byte* utf8Title = _windowTitleUtf8)
+                {
+                    var setWindowTitle = (delegate* unmanaged[Cdecl]<global::Silk.NET.GLFW.WindowHandle*, byte*, void>)_glfwSetWindowTitleProc;
+                    setWindowTitle((global::Silk.NET.GLFW.WindowHandle*)nativeGlfwHandle.Value, utf8Title);
+                }
+                _lastWindowTitle.Set(title);
+                return;
+            }
+        }
+
+        _window.Title = new string(title);
+        _lastWindowTitle.Set(title);
+    }
+
+    private static bool TryFindOwningPane(TerminalSession session, out TerminalTab tab, out LeafPane pane)
+    {
+        var tabs = _tabManager.Tabs;
+        for (int tabIndex = 0; tabIndex < tabs.Count; tabIndex++)
+        {
+            var candidateTab = tabs[tabIndex];
+            var leaves = candidateTab.PaneTree.Leaves;
+            for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
+            {
+                var candidatePane = leaves[leafIndex];
+                if (!ReferenceEquals(candidatePane.Session, session))
+                    continue;
+
+                tab = candidateTab;
+                pane = candidatePane;
+                return true;
+            }
+        }
+
+        tab = null!;
+        pane = null!;
+        return false;
+    }
+    private static void ApplyConfigOnly(DottyUserConfig config)
+    {
+        if (_closed) return;
+        _runtimeFontSize = null;
+        _showTabBar = config.TabBar.Show;
         WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
         _keybindings.RegisterDefaults();
         _keybindings.ApplyCustomBindings(config.Keybindings);
         ResolveFontAndMetrics();
         RefreshFontResources();
+        var size = _window.FramebufferSize;
+        if (size.X > 0 && size.Y > 0) ApplyFramebufferLayout(size);
+        _activeTheme = SilkConfig.LoadActiveTheme();
         (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme();
+        _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
     }
+    private static TerminalTab CreateLuaTab(string? workingDirectory, string? shell)
+    {
+        var tab = _tabManager.CreateTab(cols: _cols, rows: _rows, workingDirectory: workingDirectory, shell: shell);
+        SilkConfig.ApplyThemeToAdapter(tab.Session.Adapter);
+        return tab;
+    }
+
+    private static LeafPane SplitLuaPane(TerminalTab tab, LeafPane target, SplitDirection direction, string? workingDirectory, string? shell)
+    {
+        var pane = tab.PaneTree.Split(target, direction, workingDirectory, shell);
+        SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter);
+        return pane;
+    }
+
+
     private static void ResolveFontAndMetrics()
     {
         var config = UserConfigService.Current;
+        _configuredFontSize = double.IsFinite(config.Font.Size) ? config.Font.Size : 14d;
         float rawScale = _window.FramebufferSize.X / (float)MathF.Max(1, _window.Size.X);
         _scale = float.IsFinite(rawScale) ? Math.Clamp(rawScale, 0.1f, 16f) : 1f;
         _typeface = FontMetricsService.ResolveTypeface(config.Font.Family);
         (_cellWidth, _cellHeight) = FontMetricsService.MeasureCell(
             _typeface,
-            (float)config.Font.Size,
+            EffectiveFontSize(),
             config.Font.LineHeight,
             _scale);
     }
@@ -349,6 +849,9 @@ internal static class DottyWindowHost
 
     private static void OnFramebufferResize(Vector2D<int> size)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Resize);
         if (size.X <= 0 || size.Y <= 0) return;
 
@@ -357,6 +860,11 @@ internal static class DottyWindowHost
         if (MathF.Abs(previousScale - _scale) > 0.01f)
             RefreshFontResources();
 
+        ApplyFramebufferLayout(size);
+    }
+
+    private static void ApplyFramebufferLayout(Vector2D<int> size)
+    {
         _gl.Viewport(size);
         var config = UserConfigService.Current;
         var pad = config.Window.Padding;
@@ -418,6 +926,13 @@ internal static class DottyWindowHost
             return BuildControlDump();
         if (string.Equals(command, "GET_STATE", StringComparison.OrdinalIgnoreCase))
             return BuildControlState();
+        if (string.Equals(command, "ALLOC", StringComparison.OrdinalIgnoreCase))
+        {
+            // Snapshot before formatting so the response string is not counted.
+            long total = GC.GetTotalAllocatedBytes(precise: true);
+            int gen0 = GC.CollectionCount(0);
+            return $"{{\"totalAllocatedBytes\":{total},\"gen0Collections\":{gen0}}}";
+        }
         if (string.Equals(command, "STATS", StringComparison.OrdinalIgnoreCase))
         {
             int tabCount = _tabManager?.Count ?? 0;
@@ -461,33 +976,51 @@ internal static class DottyWindowHost
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
         string normalized = keyName.Trim().ToLowerInvariant();
-        byte[]? bytes = normalized switch
+        Span<byte> bytes = stackalloc byte[64];
+        int byteCount;
+        switch (normalized)
         {
-            "ctrlc" or "control-c" => [0x03],
-            "enter" or "return" => [0x0d],
-            "tab" => [0x09],
-            "escape" or "esc" => [0x1b],
-            "backspace" => [0x7f],
-            _ => null,
-        };
-
-        if (bytes == null)
-        {
-            if (!Enum.TryParse<InputKey>(keyName, ignoreCase: true, out var key))
-                return "ERROR unknown key";
-            bytes = SilkKeyMapper.Encode(
-                key,
-                ctrl: false,
-                shift: false,
-                alt: false,
-                keypadAppMode: activeTab.Session.Adapter.KeypadApplicationMode,
-                kittyMode: activeTab.Session.Adapter.KittyKeyboardMode,
-                applicationCursorKeys: activeTab.Session.Adapter.ApplicationCursorKeysEnabled);
-            if (bytes == null)
-                return "ERROR unsupported key";
+            case "ctrlc":
+            case "control-c":
+                bytes[0] = 0x03;
+                byteCount = 1;
+                break;
+            case "enter":
+            case "return":
+                bytes[0] = 0x0d;
+                byteCount = 1;
+                break;
+            case "tab":
+                bytes[0] = 0x09;
+                byteCount = 1;
+                break;
+            case "escape":
+            case "esc":
+                bytes[0] = 0x1b;
+                byteCount = 1;
+                break;
+            case "backspace":
+                bytes[0] = 0x7f;
+                byteCount = 1;
+                break;
+            default:
+                if (!Enum.TryParse<InputKey>(keyName, ignoreCase: true, out var key))
+                    return "ERROR unknown key";
+                byteCount = SilkKeyMapper.Encode(
+                    key,
+                    ctrl: false,
+                    shift: false,
+                    alt: false,
+                    keypadAppMode: activeTab.Session.Adapter.KeypadApplicationMode,
+                    destination: bytes,
+                    kittyMode: activeTab.Session.Adapter.KittyKeyboardMode,
+                    applicationCursorKeys: activeTab.Session.Adapter.ApplicationCursorKeysEnabled);
+                if (byteCount == 0)
+                    return "ERROR unsupported key";
+                break;
         }
 
-        activeTab.Session.WriteInput(bytes);
+        activeTab.Session.WriteInput(bytes[..byteCount]);
         return "OK";
     }
 
@@ -571,35 +1104,153 @@ internal static class DottyWindowHost
     {
         DrainControlCommands();
         _lifecycle.Drain();
-        while (_pendingTitles.TryDequeue(out var title))
+
+        bool titlesChanged = false;
+        while (TryDequeueTabTitleChange(out var titleChange))
         {
-            if (!_closed)
-            {
-                var tabCount = _tabManager?.Count ?? 1;
-                var activeTab = _tabManager?.ActiveTab;
-                string customTitle = activeTab != null ? _luaHost.Hooks.FormatTabTitle(activeTab, _tabManager!.ActiveIndex) ?? title : title;
-                _window.Title = tabCount > 1 ? $"[{_tabManager!.ActiveIndex + 1}/{tabCount}] {customTitle}" : customTitle;
-            }
+            _luaTabTitleCache.Remove(titleChange.Tab);
+            titlesChanged = true;
+        }
+        if (titlesChanged && !_closed)
+        {
+            RefreshLuaTabTitles();
+            RefreshLuaStatus();
+            WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
         }
 
-        while (_pendingClipboards.TryDequeue(out var text))
+        while (TryDequeueProcessExit(out var processExit))
         {
-            if (!_closed && _keyboard is not null)
+            if (!_closed)
+                _tabManager?.CloseExitedPane(processExit.Tab, processExit.Leaf);
+        }
+
+        while (TryDequeuePendingTitle(out var title))
+        {
+            if (!_closed)
+                UpdateWindowTitle(title);
+        }
+
+        while (TryDequeueClipboardWrite(out var request))
+        {
+            if (_closed || _keyboard is null)
+                continue;
+
+            if (!TryFindOwningPane(request.Session, out var ownerTab, out var ownerPane))
+                continue;
+            if (!_luaHost.Hooks.AllowClipboardWrite(ownerPane, ownerTab, request.Text))
+                continue;
+
+            _clipboard?.SetText(request.Text);
+        }
+    }
+
+    private static bool TryDequeuePendingTitle(out string title)
+    {
+        if (Volatile.Read(ref _pendingTitleCount) == 0)
+        {
+            title = string.Empty;
+            return false;
+        }
+
+        lock (_pendingTitlesLock)
+        {
+            if (_pendingTitles.Count == 0)
             {
-                _clipboard?.SetText(text);
+                Volatile.Write(ref _pendingTitleCount, 0);
+                title = string.Empty;
+                return false;
             }
+
+            title = _pendingTitles.Dequeue();
+            Volatile.Write(ref _pendingTitleCount, _pendingTitles.Count);
+            return true;
+        }
+    }
+
+    private static bool TryDequeueTabTitleChange(out TabTitleChange change)
+    {
+        if (Volatile.Read(ref _pendingTabTitleChangeCount) == 0)
+        {
+            change = default;
+            return false;
+        }
+
+        lock (_pendingTabTitleChangesLock)
+        {
+            if (_pendingTabTitleChanges.Count == 0)
+            {
+                Volatile.Write(ref _pendingTabTitleChangeCount, 0);
+                change = default;
+                return false;
+            }
+
+            change = _pendingTabTitleChanges.Dequeue();
+            Volatile.Write(ref _pendingTabTitleChangeCount, _pendingTabTitleChanges.Count);
+            return true;
+        }
+    }
+
+    private static bool TryDequeueProcessExit(out ProcessExit processExit)
+    {
+        if (Volatile.Read(ref _pendingProcessExitCount) == 0)
+        {
+            processExit = default;
+            return false;
+        }
+
+        lock (_pendingProcessExitsLock)
+        {
+            if (_pendingProcessExits.Count == 0)
+            {
+                Volatile.Write(ref _pendingProcessExitCount, 0);
+                processExit = default;
+                return false;
+            }
+
+            processExit = _pendingProcessExits.Dequeue();
+            Volatile.Write(ref _pendingProcessExitCount, _pendingProcessExits.Count);
+            return true;
+        }
+    }
+
+    private static bool TryDequeueClipboardWrite(out ClipboardWrite request)
+    {
+        if (Volatile.Read(ref _pendingClipboardCount) == 0)
+        {
+            request = default;
+            return false;
+        }
+
+        lock (_pendingClipboardsLock)
+        {
+            if (_pendingClipboards.Count == 0)
+            {
+                Volatile.Write(ref _pendingClipboardCount, 0);
+                request = default;
+                return false;
+            }
+
+            request = _pendingClipboards.Dequeue();
+            Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
+            return true;
         }
     }
     private static void OnRender(double delta)
     {
+        if (_closed)
+            return;
+
         try
         {
             OnRenderCore(delta);
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));
-            _window.Close();
+            if (!_closed)
+            {
+                Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));
+                _window.Close();
+            }
         }
     }
 
@@ -607,9 +1258,15 @@ internal static class DottyWindowHost
     {
         _keyboardController?.Tick();
         DrainWindowEvents();
-
+        if (_closed)
+            return;
+        if (_mouseController?.TickSelectionAutoscroll() == true)
+            WindowPresentationGate.Invalidate(WindowFrameReason.Selection);
         var tabManager = _tabManager;
         var activeTab = tabManager.ActiveTab;
+        long now = GetClockMilliseconds();
+        if (now - _lastLuaStatusRefreshTimestampMs >= 1000)
+            RefreshLuaStatus();
         if (!WindowPresentationGate.ShouldPresent(activeTab?.Session.Adapter))
             return;
 
@@ -618,7 +1275,6 @@ internal static class DottyWindowHost
         if (framebufferWidth <= 0 || framebufferHeight <= 0)
             return;
 
-        long now = GetClockMilliseconds();
         UpdateCursorBlink(now, activeTab != null);
 
         WindowFrameReason pendingReasons = WindowPresentationGate.PendingReasons;
@@ -634,7 +1290,7 @@ internal static class DottyWindowHost
         LeafPane[] visibleLeaves = _visibleLeaves;
         if (activeTab != null)
         {
-            for (int i = 0; i < visibleLeaves.Length; i++)
+            for (int i = 0; i < _visibleLeafCount; i++)
             {
                 if (!TryReadGeneration(visibleLeaves[i].Session.Adapter.Buffer, out ulong generation))
                 {
@@ -654,7 +1310,7 @@ internal static class DottyWindowHost
         }
         else
         {
-            Array.Clear(_frameGenerationValid, 0, visibleLeaves.Length);
+            Array.Clear(_frameGenerationValid, 0, _visibleLeafCount);
         }
         bool dirty = pendingReasons != WindowFrameReason.None ||
             generationDirty ||
@@ -676,7 +1332,7 @@ internal static class DottyWindowHost
             _lastPresentTimestampMs != 0 &&
             now - _lastPresentTimestampMs < BackloggedFrameIntervalMs)
         {
-            for (int i = 0; i < visibleLeaves.Length; i++)
+            for (int i = 0; i < _visibleLeafCount; i++)
             {
                 if (visibleLeaves[i].Session.OutputBacklogged)
                 {
@@ -710,7 +1366,7 @@ internal static class DottyWindowHost
                 return;
             }
 
-            var theme = SilkConfig.LoadActiveTheme();
+            var theme = _activeTheme;
             var padding = UserConfigService.Current.Window.Padding;
             float padLeft = (float)padding.Left * _scale;
             float padTop = (float)padding.Top * _scale;
@@ -721,7 +1377,7 @@ internal static class DottyWindowHost
                 tabManager,
                 theme,
                 _themeForeground,
-                SilkConfig.ResolveSelectionColor(theme),
+                _themeSelectionColor,
                 framebufferWidth,
                 framebufferHeight,
                 _cellWidth,
@@ -738,10 +1394,14 @@ internal static class DottyWindowHost
                     _keyboardDispatcher?.SearchActive ?? false,
                     _keyboardDispatcher?.SearchQuery ?? string.Empty,
                     _keyboardDispatcher?.ActiveMatchIndex ?? -1,
-                    _keyboardDispatcher?.SearchMatches?.Count ?? 0),
+                    _keyboardDispatcher?.SearchMatches?.Count ?? 0,
+                    _keyboardDispatcher?.SearchMatches),
                 _activeContextMenu,
                 _mouseController?.HoveredTabIndex ?? -1,
-                _mouseController?.HoveredTabHitType ?? TabBarHitType.None);
+                _mouseController?.HoveredTabHitType ?? TabBarHitType.None,
+                _tabTitleSource,
+                GetLuaStatusText(),
+                _luaStatusWarning);
 
             if (frame.IsIncomplete)
             {
@@ -832,7 +1492,7 @@ internal static class DottyWindowHost
     {
         if (ReferenceEquals(visibleLeaves, _visibleLeaves))
         {
-            for (int i = 0; i < visibleLeaves.Length; i++)
+            for (int i = 0; i < _visibleLeafCount; i++)
             {
                 if (_frameGenerationValid[i] &&
                     TryReadGeneration(visibleLeaves[i].Session.Adapter.Buffer, out ulong after) &&
@@ -854,18 +1514,27 @@ internal static class DottyWindowHost
 
     private static void OnKeyboardDown(IKeyboard keyboard, InputKey key, int scancode)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
         _keyboardController.HandleKeyDown(key, scancode);
     }
 
     private static void OnKeyboardUp(IKeyboard keyboard, InputKey key, int scancode)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Input);
         _keyboardController.HandleKeyUp(key, scancode);
     }
 
     private static void OnKeyboardChar(IKeyboard keyboard, char character)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
         _keyboardController.HandleKeyChar(character);
     }
@@ -880,16 +1549,32 @@ internal static class DottyWindowHost
     private static void OnWindowFocusChanged(bool focused)
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Input);
+        _luaHost?.NotifyWindowFocusChanged(focused);
+        RefreshLuaStatus();
+        if (!focused)
+        {
+            _keyboardController?.ResetState();
+            _mouseController?.ResetState();
+        }
         WindowFocusRouter.Route(
             ref _lastWindowFocus,
             focused,
             _closed,
-            state =>
-            {
-                var activeTab = _tabManager?.ActiveTab;
-                if (activeTab != null)
-                    activeTab.Session.SendFocusReport(state);
-            });
+            _focusStateHandler);
+    }
+
+    private static void ApplyWindowFocusState(bool focused)
+    {
+        if (focused && _tabManager?.ActiveTab is { } activeTab)
+        {
+            _focusedPane = activeTab.ActivePane;
+            _focusedPane.Session.SendFocusReport(focused: true);
+        }
+        else
+        {
+            _focusedPane?.Session.SendFocusReport(focused: false);
+            _focusedPane = null;
+        }
     }
 
     private static long GetClockMilliseconds() =>
@@ -897,52 +1582,69 @@ internal static class DottyWindowHost
 
     private static void OnMouseDown(IMouse mouse, MouseButton button)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseDown(mouse, button);
     }
 
     private static void OnMouseMove(IMouse mouse, System.Numerics.Vector2 position)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseMove(mouse, position);
     }
 
     private static void OnMouseUp(IMouse mouse, MouseButton button)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseUp(mouse, button);
     }
 
     private static void OnMouseScroll(IMouse mouse, ScrollWheel wheel)
     {
+        if (_closed)
+            return;
+
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseScroll(mouse, wheel);
     }
 
-
     private static void CopySelectionToClipboard()
     {
-        var activeTab = _tabManager?.ActiveTab;
-        if (activeTab == null || !_selectionService.HasSelection) return;
+        var activePane = _tabManager?.ActiveTab?.ActivePane;
+        if (activePane == null || !activePane.Selection.HasSelection) return;
 
-        var text = _selectionService.GetSelectedText(activeTab.Session.Adapter.Buffer);
+        var text = activePane.Selection.GetSelectedText(activePane.Session.Adapter.Buffer);
         if (!string.IsNullOrEmpty(text) && _keyboard != null)
         {
             _clipboard?.SetText(text);
         }
-        _selectionService.ClearSelection();
+        activePane.Selection.ClearSelection();
     }
 
     private static void PasteClipboardToSession()
     {
-        var activeTab = _tabManager?.ActiveTab;
-        if (activeTab == null || _keyboard == null) return;
+        var activePane = _tabManager?.ActiveTab?.ActivePane;
+        if (activePane != null)
+            PasteClipboardToPane(activePane);
+    }
+
+    private static void PasteClipboardToPane(LeafPane targetPane)
+    {
+        if (_keyboard == null) return;
 
         var text = _clipboard?.GetText();
         if (!string.IsNullOrEmpty(text))
         {
-            var bytes = ClipboardPasteRouter.Encode(text, activeTab.Session.Adapter);
-            activeTab.Session.WriteInput(bytes);
+            var bytes = ClipboardPasteRouter.Encode(text, targetPane.Session.Adapter);
+            targetPane.Session.WriteInput(bytes);
         }
     }
 
@@ -957,13 +1659,56 @@ internal static class DottyWindowHost
             request.Completion.TrySetResult("ERROR host is closed");
         _window.FocusChanged -= OnWindowFocusChanged;
         UserConfigService.ConfigChanged -= OnConfigChanged;
+        if (_tabManager != null)
+        {
+            _tabManager.ProcessExited -= OnTabProcessExited;
+            _tabManager.ActiveTabChanged -= OnActiveTabChanged;
+            _tabManager.TabAdded -= OnTabAdded;
+            _tabManager.TabClosed -= OnTabClosed;
+            _tabManager.TabTitleChanged -= OnTabTitleChanged;
+            var tabs = _tabManager.Tabs;
+            for (int i = 0; i < tabs.Count; i++)
+                UnsubscribePaneTree(tabs[i]);
+        }
+        foreach (var pair in _clipboardSubscriptions)
+            pair.Key.ClipboardWriteRequested -= pair.Value;
+        _clipboardSubscriptions.Clear();
         foreach (var pair in _renderSubscriptions)
             pair.Key.RenderScheduled -= pair.Value;
         _renderSubscriptions.Clear();
-        _visibleLeaves = Array.Empty<LeafPane>();
+        _renderCallbackCache.Clear();
+        _paneSubscriptions.Clear();
+        _sessionScratch.Clear();
+        _staleSessionScratch.Clear();
+        _visibleSessionScratch.Clear();
+        _visibleLeafScratch.Clear();
+        _staleLeafScratch.Clear();
+        Array.Clear(_visibleLeaves, 0, _visibleLeafCount);
+        _visibleLeafCount = 0;
         _committedGenerations.Clear();
-        _frameGenerations = Array.Empty<ulong>();
-        _frameGenerationValid = Array.Empty<bool>();
+        lock (_pendingTitlesLock)
+        {
+            _pendingTitles.Clear();
+            Volatile.Write(ref _pendingTitleCount, 0);
+        }
+        lock (_pendingClipboardsLock)
+        {
+            _pendingClipboards.Clear();
+            Volatile.Write(ref _pendingClipboardCount, 0);
+        }
+        lock (_pendingTabTitleChangesLock)
+        {
+            _pendingTabTitleChanges.Clear();
+            Volatile.Write(ref _pendingTabTitleChangeCount, 0);
+        }
+        lock (_pendingProcessExitsLock)
+        {
+            _pendingProcessExits.Clear();
+            Volatile.Write(ref _pendingProcessExitCount, 0);
+        }
+        _luaTabTitleCache.Clear();
+        _keyboardDispatcher?.Dispose();
+        _keyboardDispatcher = null!;
         UserConfigService.Shutdown();
         _luaHost.Dispose();
 
@@ -993,7 +1738,6 @@ internal static class DottyWindowHost
     {
         public TerminalTabManager TabManager => _tabManager;
         public TerminalTab? ActiveTab => _tabManager?.ActiveTab;
-        public TextSelectionService SelectionService => _selectionService;
         public LuaScriptHost LuaHost => _luaHost;
         public KeybindingManager Keybindings => _keybindings;
         public int Rows => _rows;
@@ -1021,17 +1765,86 @@ internal static class DottyWindowHost
                     FramebufferHeight: size.Y,
                     Columns: _cols,
                     Rows: _rows,
-                    ShowTabBar: _showTabBar);
+                    ShowTabBar: _showTabBar,
+                    StatusReservedWidth: TabBarQuadBuilder.MeasureStatusWidth(
+                        GetLuaStatusText(),
+                        _cellWidth * _scale,
+                        _typeface,
+                        _cellFontSizePx(),
+                        _atlas,
+                        _luaStatusWarning));
             }
         }
-
         public bool Ctrl => _keyboardController?.Ctrl ?? false;
         public bool Shift => _keyboardController?.Shift ?? false;
         public bool Alt => _keyboardController?.Alt ?? false;
+        public bool AltGr => _keyboardController?.AltGr ?? false;
         public bool Super => _keyboardController?.Super ?? false;
 
         public void CopySelection() => CopySelectionToClipboard();
         public void PasteClipboard() => PasteClipboardToSession();
+        public void PasteClipboard(LeafPane targetPane) => PasteClipboardToPane(targetPane);
+        public bool TryExecuteAction(TerminalAction action) =>
+            _keyboardDispatcher?.Actions.TryExecute(action) ?? false;
+
+        public void ToggleFullscreen()
+        {
+            if (_window.WindowState == WindowState.Fullscreen)
+            {
+                _window.WindowState = _previousNonFullscreenState;
+            }
+            else
+            {
+                _previousNonFullscreenState = _window.WindowState;
+                _window.WindowState = WindowState.Fullscreen;
+            }
+        }
+
+        public void ZoomIn() => SetRuntimeZoom(EffectiveFontSize() + 1f);
+        public void ZoomOut() => SetRuntimeZoom(EffectiveFontSize() - 1f);
+        public void ResetZoom()
+        {
+            _runtimeFontSize = null;
+            RefreshZoomResources();
+        }
+
+        private static void SetRuntimeZoom(float size)
+        {
+            _runtimeFontSize = Math.Clamp(size, MinRuntimeFontSize, MaxRuntimeFontSize);
+            RefreshZoomResources();
+        }
+
+        private static void RefreshZoomResources()
+        {
+            ResolveFontAndMetrics();
+            RefreshFontResources();
+            var size = _window.FramebufferSize;
+            if (size.X > 0 && size.Y > 0)
+                ApplyFramebufferLayout(size);
+            WindowPresentationGate.Invalidate(WindowFrameReason.Resize | WindowFrameReason.Input);
+        }
+
+        public void DuplicateTab(TerminalTab activeTab)
+        {
+            var newTab = _tabManager.CreateTab(
+                cols: _cols,
+                rows: _rows,
+                workingDirectory: activeTab.WorkingDirectory);
+            SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
+        }
+
+        public void CloseOtherTabs(TerminalTab activeTab)
+        {
+            for (int i = _tabManager.Count - 1; i >= 0; i--)
+            {
+                var tab = _tabManager.Tabs[i];
+                if (!ReferenceEquals(tab, activeTab))
+                    _tabManager.CloseTab(tab);
+            }
+            _tabManager.SelectTab(activeTab);
+        }
+
+        public void Quit() => _window.Close();
 
         public void CreateTab(TerminalTab activeTab)
         {
@@ -1040,13 +1853,16 @@ internal static class DottyWindowHost
                 rows: _rows,
                 workingDirectory: activeTab.WorkingDirectory);
             SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
-            newTab.Session.ClipboardWriteRequested += text => _pendingClipboards.Enqueue(text);
         }
 
-        public void ClearTerminal(TerminalTab activeTab) =>
-            activeTab.Session.WriteInput(new byte[] { 0x0c });
+        public void ClearTerminal(TerminalTab activeTab)
+        {
+            Span<byte> clear = stackalloc byte[1];
+            clear[0] = 0x0c;
+            activeTab.Session.WriteInput(clear);
+        }
 
-        public void WriteInput(TerminalTab activeTab, byte[] bytes) =>
+        public void WriteInput(TerminalTab activeTab, ReadOnlySpan<byte> bytes) =>
             activeTab.Session.WriteInput(bytes);
 
         public void OpenHyperlink(string url)

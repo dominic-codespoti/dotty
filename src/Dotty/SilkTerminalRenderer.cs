@@ -292,7 +292,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         {
             if (_lastInstances.Length < instances.Length)
             {
-                _lastInstances = new CellInstance[instances.Length];
+                int capacity = Math.Max(instances.Length, _lastInstances.Length == 0 ? 4096 : _lastInstances.Length * 2);
+                _lastInstances = new CellInstance[capacity];
             }
 
             if (instances.Length > 0)
@@ -359,7 +360,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             int maxFloats = checked(maxInstances * FloatsPerInstance);
             if (_staging.Length < maxFloats)
             {
-                _staging = new float[maxFloats];
+                int capacity = Math.Max(maxFloats, _staging.Length == 0 ? 4096 : _staging.Length * 2);
+                _staging = new float[capacity];
             }
 
             float[] stagingArr = _staging;

@@ -9,8 +9,14 @@ public unsafe partial class Screen
     internal sealed class LogicalLine
     {
         internal LogicalLine(int identity) => Identity = identity;
-        internal int Identity { get; }
+        internal int Identity { get; private set; }
         internal List<ReflowCell> Cells { get; } = new();
+
+        internal void Reset(int identity)
+        {
+            Identity = identity;
+            Cells.Clear();
+        }
     }
 
     internal sealed class SourceRow
@@ -18,23 +24,178 @@ public unsafe partial class Screen
         internal int LogicalLine = -1;
         internal int UnitStart;
         internal List<SourceUnit> Units { get; } = new();
+
+        internal void Reset()
+        {
+            LogicalLine = -1;
+            UnitStart = 0;
+            Units.Clear();
+        }
     }
 
     internal readonly record struct SourceUnit(int Column, int Width, int Offset);
 
     internal sealed class SourceLayout
     {
+        private readonly List<LogicalLine> _linePool = new();
+        private readonly List<SourceRow> _rowPool = new();
+        private int _linesUsed;
+        private int _rowsUsed;
+
         internal List<LogicalLine> Lines { get; } = new();
         internal List<SourceRow> Rows { get; } = new();
+
+        internal void Begin()
+        {
+            Lines.Clear();
+            Rows.Clear();
+            _linesUsed = 0;
+            _rowsUsed = 0;
+        }
+
+        internal LogicalLine AddLine()
+        {
+            LogicalLine line;
+            if (_linesUsed < _linePool.Count)
+            {
+                line = _linePool[_linesUsed];
+                line.Reset(_linesUsed);
+            }
+            else
+            {
+                line = new LogicalLine(_linesUsed);
+                _linePool.Add(line);
+            }
+
+            _linesUsed++;
+            Lines.Add(line);
+            return line;
+        }
+
+        internal SourceRow AddRow()
+        {
+            SourceRow row;
+            if (_rowsUsed < _rowPool.Count)
+            {
+                row = _rowPool[_rowsUsed];
+                row.Reset();
+            }
+            else
+            {
+                row = new SourceRow();
+                _rowPool.Add(row);
+            }
+
+            _rowsUsed++;
+            Rows.Add(row);
+            return row;
+        }
     }
 
 
-    internal SourceLayout BuildSourceLayout(int scrollbackRows) =>
-        BuildSourceLayoutCore(NormalizeScrollbackRows(scrollbackRows));
-
-    private SourceLayout BuildSourceLayoutCore(int retainedScrollbackRows)
+    internal sealed class EmittedRow
     {
-        var layout = new SourceLayout();
+        public bool ContinuesPrevious { get; private set; }
+        public List<ReflowCell> Cells { get; } = new();
+
+        public void Reset(bool continuesPrevious)
+        {
+            ContinuesPrevious = continuesPrevious;
+            Cells.Clear();
+        }
+    }
+
+    internal sealed class ReflowWorkspace
+    {
+        private readonly List<EmittedRow> _emittedPool = new();
+        private int _emittedUsed;
+
+        internal List<EmittedRow> Emitted { get; } = new();
+
+        internal void BeginEmission(
+            int rows,
+            int columns,
+            SourceLayout layout,
+            int sourceColumns,
+            ReflowMapping mapping)
+        {
+            Emitted.Clear();
+            _emittedUsed = 0;
+            mapping.Reset(rows, columns);
+
+            long positionCount = 0;
+            long emittedRows = 0;
+            foreach (var line in layout.Lines)
+            {
+                if (line.Cells.Count == 0)
+                {
+                    positionCount += sourceColumns;
+                    emittedRows++;
+                    continue;
+                }
+
+                positionCount += line.Cells.Count + 1L;
+                int lineRows = 1;
+                int usedColumns = 0;
+                foreach (var cell in line.Cells)
+                {
+                    int width = cell.Width == 2 && columns >= 2 ? 2 : 1;
+                    if (usedColumns + width > columns)
+                    {
+                        lineRows++;
+                        usedColumns = 0;
+                    }
+                    usedColumns += width;
+                }
+                emittedRows += lineRows;
+            }
+
+            mapping.EnsureCapacity(
+                positionCount > int.MaxValue ? int.MaxValue : (int)positionCount,
+                layout.Lines.Count);
+            int requiredRows = emittedRows > int.MaxValue
+                ? int.MaxValue
+                : Math.Max(rows, (int)emittedRows);
+            EnsureEmittedCapacity(requiredRows);
+        }
+
+        private void EnsureEmittedCapacity(int requiredRows)
+        {
+            _emittedPool.EnsureCapacity(requiredRows);
+            Emitted.EnsureCapacity(requiredRows);
+            while (_emittedPool.Count < requiredRows)
+                _emittedPool.Add(new EmittedRow());
+        }
+
+
+        internal EmittedRow AddEmittedRow(bool continuesPrevious)
+        {
+            EmittedRow row;
+            if (_emittedUsed < _emittedPool.Count)
+            {
+                row = _emittedPool[_emittedUsed];
+                row.Reset(continuesPrevious);
+            }
+            else
+            {
+                row = new EmittedRow();
+                row.Reset(continuesPrevious);
+                _emittedPool.Add(row);
+            }
+
+            _emittedUsed++;
+            Emitted.Add(row);
+            return row;
+        }
+    }
+
+    internal SourceLayout BuildSourceLayout(int scrollbackRows, SourceLayout layout) =>
+        BuildSourceLayoutCore(NormalizeScrollbackRows(scrollbackRows), layout);
+
+    private SourceLayout BuildSourceLayoutCore(int retainedScrollbackRows, SourceLayout layout)
+    {
+        layout.Begin();
+
         LogicalLine? currentLine = null;
         SourceRow? previousSourceRow = null;
 
@@ -42,18 +203,16 @@ public unsafe partial class Screen
         {
             int logicalRow = index - retainedScrollbackRows;
             int physicalRow = GetPhysicalRow(logicalRow);
-            var sourceRow = new SourceRow();
+            var sourceRow = layout.AddRow();
             bool continuesPrevious = RowContinuesPrevious[physicalRow];
             if (!continuesPrevious)
             {
-                currentLine = new LogicalLine(layout.Lines.Count);
-                layout.Lines.Add(currentLine);
+                currentLine = layout.AddLine();
             }
             else if (currentLine is null || previousSourceRow is null)
             {
                 // Metadata can be introduced after a pre-existing ring state;
                 // an orphan continuation cannot be attached deterministically.
-                layout.Rows.Add(sourceRow);
                 previousSourceRow = sourceRow;
                 continue;
             }
@@ -104,29 +263,12 @@ public unsafe partial class Screen
                 }
             }
 
-            layout.Rows.Add(sourceRow);
             previousSourceRow = sourceRow;
         }
 
         return layout;
     }
 
-    private sealed class EmittedRow
-    {
-        public EmittedRow(bool continuesPrevious) => ContinuesPrevious = continuesPrevious;
-        public bool ContinuesPrevious { get; }
-        public List<ReflowCell> Cells { get; } = new();
-    }
-
-    internal ReflowCursorAnchor GetReflowAnchor(
-        int logicalRow,
-        int column,
-        bool wrapPending,
-        int scrollbackRows = -1)
-    {
-        var layout = BuildSourceLayout(scrollbackRows);
-        return GetReflowAnchor(logicalRow, column, wrapPending, scrollbackRows, layout);
-    }
 
     internal ReflowCursorAnchor GetReflowAnchor(
         int logicalRow,
@@ -164,63 +306,30 @@ public unsafe partial class Screen
         return new ReflowCursorAnchor(row.LogicalLine, offset, wrapPending);
     }
 
-    internal Screen Reflow(
-        int rows,
-        int columns,
-        ReflowCursorAnchor anchor,
-        out ReflowMapping mapping)
-    {
-        return ReflowWithOptions(
-            rows,
-            columns,
-            anchor,
-            out mapping,
-            scrollbackRows: -1,
-            includeScrollback: true);
-    }
+
 
     internal Screen ReflowWithOptions(
         int rows,
         int columns,
         ReflowCursorAnchor anchor,
-        out ReflowMapping mapping,
-        int scrollbackRows,
-        bool includeScrollback)
-    {
-        return ReflowWithOptions(
-            rows,
-            columns,
-            anchor,
-            out mapping,
-            BuildSourceLayout(scrollbackRows),
-            scrollbackRows,
-            includeScrollback);
-    }
-
-    internal Screen ReflowWithOptions(
-        int rows,
-        int columns,
-        ReflowCursorAnchor anchor,
-        out ReflowMapping mapping,
         SourceLayout layout,
+        ReflowWorkspace workspace,
+        ReflowMapping mapping,
         int scrollbackRows,
-        bool includeScrollback)
+        bool includeScrollback,
+        Screen? destination = null)
     {
         rows = Math.Max(1, rows);
         columns = Math.Max(1, columns);
         int retainedScrollbackRows = NormalizeScrollbackRows(scrollbackRows);
-        var emitted = new List<EmittedRow>(layout.Lines.Count);
-        mapping = new ReflowMapping
-        {
-            NewRows = rows,
-            NewColumns = columns,
-        };
+        workspace.BeginEmission(rows, columns, layout, Columns, mapping);
+        var emitted = workspace.Emitted;
 
         foreach (var line in layout.Lines)
         {
             int mappingLength = line.Cells.Count == 0 ? Columns : line.Cells.Count;
             mapping.SetLineLength(line.Identity, mappingLength);
-            EmitLogicalLine(line, columns, Columns, emitted, mapping);
+            EmitLogicalLine(line, columns, Columns, workspace, mapping);
         }
 
         // Blank rows at the end of a viewport are padding, not scrollback.
@@ -233,7 +342,7 @@ public unsafe partial class Screen
         }
 
         while (emitted.Count < rows)
-            emitted.Add(new EmittedRow(continuesPrevious: false));
+            workspace.AddEmittedRow(continuesPrevious: false);
 
         bool hasData = false;
         foreach (var emittedRow in emitted)
@@ -256,7 +365,17 @@ public unsafe partial class Screen
         mapping.RetainedStart = retainedStart;
         mapping.NewScrollbackRows = newScrollbackRows;
 
-        var resized = new Screen(rows, columns, _scrollbackCapacity);
+        Screen resized;
+        if (destination is null)
+        {
+            resized = new Screen(rows, columns, _scrollbackCapacity);
+        }
+        else
+        {
+            resized = destination;
+            resized.ResetForReflow(rows, columns);
+        }
+
         for (int index = 0; index < retainedCount; index++)
         {
             int destinationPhysicalRow = index < newScrollbackRows
@@ -304,13 +423,14 @@ public unsafe partial class Screen
         LogicalLine line,
         int columns,
         int sourceColumns,
-        List<EmittedRow> emitted,
+        ReflowWorkspace workspace,
         ReflowMapping mapping)
     {
+        var emitted = workspace.Emitted;
         if (line.Cells.Count == 0)
         {
             int emptyOutputIndex = emitted.Count;
-            emitted.Add(new EmittedRow(continuesPrevious: false));
+            workspace.AddEmittedRow(continuesPrevious: false);
             for (int offset = 0; offset < sourceColumns; offset++)
             {
                 mapping.Add(
@@ -326,8 +446,7 @@ public unsafe partial class Screen
             return;
         }
 
-        var row = new EmittedRow(continuesPrevious: false);
-        emitted.Add(row);
+        var row = workspace.AddEmittedRow(continuesPrevious: false);
         int outputIndex = emitted.Count - 1;
         int usedColumns = 0;
 
@@ -337,8 +456,7 @@ public unsafe partial class Screen
             int width = cell.Width == 2 && columns >= 2 ? 2 : 1;
             if (usedColumns + width > columns)
             {
-                row = new EmittedRow(continuesPrevious: true);
-                emitted.Add(row);
+                row = workspace.AddEmittedRow(continuesPrevious: true);
                 outputIndex = emitted.Count - 1;
                 usedColumns = 0;
             }
@@ -357,6 +475,7 @@ public unsafe partial class Screen
             line.Cells.Count,
             new ReflowPosition(-1, endColumn, false, false, outputIndex));
     }
+
 
     private static void CopyEmittedRow(
         Screen destination,

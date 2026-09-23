@@ -208,7 +208,15 @@ public sealed class GlyphAtlasTests
         using var fallbackAtlas = new GlyphAtlas(Font, 16f, fallbackChain: chain);
         Assert.True(plainAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var plain));
         Assert.True(fallbackAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var withFallback));
-        Assert.Equal(plain, withFallback);
+        // Atlas placement (X/Y) may differ: the reserved U+FFFD replacement glyph is
+        // itself fallback-rendered when the primary font lacks it (e.g. Helvetica on
+        // macOS), which shifts later shelf positions. Sizing must be identical.
+        Assert.Equal(plain.Width, withFallback.Width);
+        Assert.Equal(plain.Height, withFallback.Height);
+        Assert.Equal(plain.Advance, withFallback.Advance);
+        Assert.Equal(plain.BaselineOffset, withFallback.BaselineOffset);
+        Assert.Equal(plain.LeftBearing, withFallback.LeftBearing);
+        Assert.Equal(plain.TopBearing, withFallback.TopBearing);
     }
 
     [Fact]

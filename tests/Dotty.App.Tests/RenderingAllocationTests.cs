@@ -75,7 +75,7 @@ public sealed class RenderingAllocationTests
     public void TabBarBuild_WithStableTitleAndStatusAllocatesNothingAfterWarmup()
     {
         using var manager = new TerminalTabManager();
-        var tab = manager.CreateTab(cols: 20, rows: 4, shell: "/bin/true");
+        var tab = manager.CreateTab(cols: 20, rows: 4);
         tab.Title = "Stable title";
         var typeface = SKTypeface.Default;
         using var atlas = new GlyphAtlas(typeface, 14f, initialSize: 256);
@@ -112,12 +112,15 @@ public sealed class RenderingAllocationTests
     public void TabBarBuild_AlternatingActiveAndHoveredTabsAllocatesNothingAfterWarmup()
     {
         using var manager = new TerminalTabManager();
-        manager.CreateTab(cols: 20, rows: 4, shell: "/bin/true");
-        manager.CreateTab(cols: 20, rows: 4, shell: "/bin/true");
-        manager.CreateTab(cols: 20, rows: 4, shell: "/bin/true");
+        manager.CreateTab(cols: 20, rows: 4);
+        manager.CreateTab(cols: 20, rows: 4);
+        manager.CreateTab(cols: 20, rows: 4);
         var typeface = SKTypeface.Default;
         using var atlas = new GlyphAtlas(typeface, 14f, initialSize: 256);
         var theme = BuiltInThemes.DarkPlus;
+        // A fixed title source keeps the measurement independent of titles the
+        // platform PTY may set asynchronously (ConPTY emits one at startup).
+        var titles = new StableTitles("Tab");
         var instances = new CellInstance[256];
         var chrome = new ChromeQuadInstance[96];
 
@@ -152,7 +155,8 @@ public sealed class RenderingAllocationTests
                 chrome,
                 out _,
                 hoveredTabIndex: hoveredIndex,
-                hoveredHitType: TabBarHitType.SelectTab);
+                hoveredHitType: TabBarHitType.SelectTab,
+                titles: titles);
         }
     }
 

@@ -464,7 +464,8 @@ public class TextSelectionServiceTests
         service.StartSelection(0, 0, SelectionMode.Block);
         service.UpdateSelection(1, 3);
 
-        Assert.Equal("x   \ny   ", service.GetSelectedText(buffer));
+        // Copied text uses the platform line ending (CRLF on Windows clipboards).
+        Assert.Equal("x   " + Environment.NewLine + "y   ", service.GetSelectedText(buffer));
     }
 }
 

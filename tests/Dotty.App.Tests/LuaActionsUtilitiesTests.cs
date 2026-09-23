@@ -121,8 +121,11 @@ public sealed class LuaActionsUtilitiesTests : IDisposable
 
     private void DrainUntil(Func<bool> condition)
     {
+        // Liveness bound only: the loop exits as soon as the condition holds.
+        // Timer callbacks run on the thread pool, which can be slow to schedule
+        // on loaded CI runners.
         var stopwatch = Stopwatch.StartNew();
-        while (!condition() && stopwatch.Elapsed < TimeSpan.FromSeconds(1))
+        while (!condition() && stopwatch.Elapsed < TimeSpan.FromSeconds(10))
         {
             _services.Drain();
             Thread.Sleep(2);

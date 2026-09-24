@@ -124,6 +124,7 @@ public sealed class LuaPaneApiTests : IDisposable
     public void PaneTextReturnsVisibleAdapterTextWithoutTrailingBlankRows()
     {
         var tab = _tabManager.CreateTab(rows: 3, cols: 8);
+        TestShellEnvironment.WaitForStartupOutput(tab.Session);
         tab.Session.Parser.Feed(Encoding.UTF8.GetBytes("hello   \r\nworld  "));
 
         Assert.True(_host.ExecuteString(@"

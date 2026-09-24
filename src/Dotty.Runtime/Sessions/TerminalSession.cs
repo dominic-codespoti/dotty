@@ -289,8 +289,8 @@ public class TerminalSession : IDisposable
         try { if (_pty != null) _pty.ProcessExited -= OnPtyProcessExited; } catch { }
         try { _pty?.Dispose(); } catch { }
         JoinThread(_ptyInputWriterThread);
-        JoinThread(_ptyOutputConsumerThread);
-        JoinThread(_ptyOutputReaderThread);
+        JoinThread(_ptyOutputReaderThread, WorkerShutdownTimeoutMs);
+        JoinThread(_ptyOutputConsumerThread, WorkerShutdownTimeoutMs);
         try { _readCancellation?.Dispose(); } catch { }
 
         lock (_ptyInputQueueLock)
@@ -321,12 +321,17 @@ public class TerminalSession : IDisposable
         _readCancellation = null;
     }
 
-    private static void JoinThread(Thread? thread)
+    // Bounds joins on PTY workers during shutdown. A reader blocked on a stream
+    // that never reaches EOF must not hang Dispose; it is a background thread.
+    private const int WorkerShutdownTimeoutMs = 5000;
+
+    private static bool JoinThread(Thread? thread, int timeoutMs = Timeout.Infinite)
     {
-        if (thread != null
-            && thread != Thread.CurrentThread
-            && (thread.ThreadState & ThreadState.Unstarted) == 0)
-            thread.Join();
+        if (thread == null
+            || thread == Thread.CurrentThread
+            || (thread.ThreadState & ThreadState.Unstarted) != 0)
+            return true;
+        return thread.Join(timeoutMs);
     }
 
     private void DisposeInputWaitEvent()
@@ -676,8 +681,14 @@ public class TerminalSession : IDisposable
         long allocatedBeforeRead = 0;
         try
         {
-            while (!_ptyOutputCancellationToken.IsCancellationRequested)
+            while (true)
             {
+                if (_ptyOutputCancellationToken.IsCancellationRequested)
+                {
+                    DrainPtyOutputUntilClosed();
+                    break;
+                }
+
                 if (!measureRead)
                 {
                     measureRead = Volatile.Read(ref _allocationProbeEnabled) != 0;
@@ -704,8 +715,13 @@ public class TerminalSession : IDisposable
                 }
 
                 int bytesRead = _ptyOutputReader!.Read(chunk, 0, chunk.Length);
-                if (bytesRead <= 0 || _ptyOutputCancellationToken.IsCancellationRequested)
+                if (bytesRead <= 0)
                     break;
+                if (_ptyOutputCancellationToken.IsCancellationRequested)
+                {
+                    DrainPtyOutputUntilClosed();
+                    break;
+                }
 
                 lock (_ptyOutputQueueLock)
                 {
@@ -732,12 +748,38 @@ public class TerminalSession : IDisposable
         catch { }
         finally
         {
-            lock (_ptyOutputQueueLock)
+            // Shutdown may already have disposed the wait events if this thread
+            // outlived its bounded join; never let that escape the thread.
+            try
             {
-                _ptyOutputReaderCompleted = true;
-                _ptyOutputAvailable.Set();
-                _ptyOutputSpaceAvailable.Set();
+                lock (_ptyOutputQueueLock)
+                {
+                    _ptyOutputReaderCompleted = true;
+                    _ptyOutputAvailable.Set();
+                    _ptyOutputSpaceAvailable.Set();
+                }
             }
+            catch (ObjectDisposedException) { }
+        }
+    }
+
+    /// <summary>
+    /// Reads and discards PTY output until the stream ends. ConPTY's
+    /// ClosePseudoConsole can block until its final frame has been read, so the
+    /// output pipe must keep draining after cancellation until it breaks.
+    /// Runs only during shutdown, where allocation is allowed.
+    /// </summary>
+    private void DrainPtyOutputUntilClosed()
+    {
+        var discard = new byte[4096];
+        try
+        {
+            while (_ptyOutputReader!.Read(discard, 0, discard.Length) > 0)
+            {
+            }
+        }
+        catch
+        {
         }
     }
 
@@ -850,8 +892,8 @@ public class TerminalSession : IDisposable
         catch { }
         finally
         {
-            _ptyOutputSpaceAvailable.Set();
-            JoinThread(_ptyOutputReaderThread);
+            try { _ptyOutputSpaceAvailable.Set(); } catch (ObjectDisposedException) { }
+            bool readerExited = JoinThread(_ptyOutputReaderThread, WorkerShutdownTimeoutMs);
             int dropped;
             lock (_ptyOutputQueueLock)
             {
@@ -864,7 +906,7 @@ public class TerminalSession : IDisposable
             if (dropped != 0)
                 Interlocked.Add(ref _pendingOutputChunks, -dropped);
             _ptyPipelineCompletionSource?.TrySetResult(null);
-            if (_disposed)
+            if (_disposed && readerExited)
                 DisposeOutputWaitEvents();
         }
     }
@@ -897,10 +939,13 @@ public class TerminalSession : IDisposable
         try { _pty?.Dispose(); } catch { }
         if (!onInputThread)
             JoinThread(_ptyInputWriterThread);
+        bool outputWorkersExited = true;
         if (!onOutputThread)
         {
-            JoinThread(_ptyOutputConsumerThread);
-            JoinThread(_ptyOutputReaderThread);
+            // The reader drains until _pty.Dispose() above closes the stream.
+            bool readerExited = JoinThread(_ptyOutputReaderThread, WorkerShutdownTimeoutMs);
+            bool consumerExited = JoinThread(_ptyOutputConsumerThread, WorkerShutdownTimeoutMs);
+            outputWorkersExited = readerExited && consumerExited;
         }
         try { _readCancellation?.Dispose(); } catch { }
         TaskCompletionSource<object?>? completion = null;
@@ -920,7 +965,7 @@ public class TerminalSession : IDisposable
         _readCancellation = null;
         if (!onInputThread)
             DisposeInputWaitEvent();
-        if (!onOutputThread)
+        if (!onOutputThread && outputWorkersExited)
             DisposeOutputWaitEvents();
     }
 }

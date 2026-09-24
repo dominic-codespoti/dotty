@@ -115,12 +115,56 @@ public sealed class TerminalMouseControllerTests
 
     private static void EnableMouseMode(LeafPane pane, int mode)
     {
+        WaitForStartupOutput(pane);
         pane.Session.Parser.Feed(Encoding.ASCII.GetBytes($"\u001b[?{mode}h"));
     }
 
     private static void Feed(LeafPane pane, string text)
     {
+        WaitForStartupOutput(pane);
         pane.Session.Parser.Feed(Encoding.UTF8.GetBytes(text));
+    }
+
+    private static readonly HashSet<object> SettledSessions = new();
+
+    // The platform PTY writes startup sequences of its own (ConPTY clears the
+    // screen and resets modes regardless of the shell). Inject test state only
+    // after that output has settled, once per session.
+    private static void WaitForStartupOutput(LeafPane pane)
+    {
+        var session = pane.Session;
+        lock (SettledSessions)
+        {
+            if (!SettledSessions.Add(session))
+                return;
+        }
+
+        long lastOutput = Environment.TickCount64;
+        int sawOutput = 0;
+        void OnRender()
+        {
+            Volatile.Write(ref lastOutput, Environment.TickCount64);
+            Volatile.Write(ref sawOutput, 1);
+        }
+
+        session.RenderScheduled += OnRender;
+        try
+        {
+            long deadline = Environment.TickCount64 + 5000;
+            bool requireOutput = OperatingSystem.IsWindows();
+            while (Environment.TickCount64 < deadline)
+            {
+                bool quiet = Environment.TickCount64 - Volatile.Read(ref lastOutput) >= 250
+                    && !session.OutputBacklogged;
+                if (quiet && (!requireOutput || Volatile.Read(ref sawOutput) != 0))
+                    return;
+                Thread.Sleep(10);
+            }
+        }
+        finally
+        {
+            session.RenderScheduled -= OnRender;
+        }
     }
 
     [Fact]

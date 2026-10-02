@@ -48,6 +48,9 @@ public sealed class FontUserConfig
 
 public sealed class WindowUserConfig
 {
+    [JsonPropertyName("decorations")]
+    public string Decorations { get; set; } = "custom";
+
     [JsonPropertyName("padding")]
     public PaddingUserConfig Padding { get; set; } = new();
 

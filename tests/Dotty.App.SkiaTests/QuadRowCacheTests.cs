@@ -246,4 +246,42 @@ public sealed class QuadRowCacheTests
         Assert.Equal(4, entry2.GlyphCount);
         Assert.Equal(new SKPoint(5, 5), entry2.GlyphPos[0]);
     }
+
+    [Fact]
+    public void ApplyMappings_moves_cached_instance_runs_without_aliasing_storage()
+    {
+        var cache = new QuadRowCache();
+        cache.EnsureGeometry(rows: 3, columns: 10, cellW: 10f, cellH: 20f);
+
+        for (int row = 0; row < 3; row++)
+        {
+            ref var entry = ref cache.GetEntryRef(row);
+            entry.Valid = true;
+            entry.Generation = (ulong)(row + 1);
+            entry.ContentHash = (ulong)(row + 10);
+            entry.Instances = new[]
+            {
+                new CellInstance { Col = (ushort)row, Row = (ushort)row, GlyphX = (short)(row + 20) }
+            };
+            entry.InstanceCount = 1;
+        }
+
+        cache.BeginFrame();
+        Assert.True(cache.TryMapRow(destinationRow: 0, sourceRow: 1));
+        Assert.True(cache.TryMapRow(destinationRow: 1, sourceRow: 2));
+        cache.ApplyMappings();
+
+        ref var moved0 = ref cache.GetEntryRef(0);
+        ref var moved1 = ref cache.GetEntryRef(1);
+        ref var exposed = ref cache.GetEntryRef(2);
+        Assert.True(moved0.Valid);
+        Assert.True(moved1.Valid);
+        Assert.Equal((ushort)1, moved0.Instances[0].Col);
+        Assert.Equal((ushort)2, moved1.Instances[0].Col);
+        Assert.False(exposed.Valid);
+        Assert.Equal(0, exposed.InstanceCount);
+        Assert.NotSame(moved0.Instances, moved1.Instances);
+        Assert.NotSame(moved0.Instances, exposed.Instances);
+        Assert.NotSame(moved1.Instances, exposed.Instances);
+    }
 }

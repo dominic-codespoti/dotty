@@ -24,7 +24,8 @@ public readonly record struct TerminalMouseGeometry(
     int Columns,
     int Rows,
     bool ShowTabBar,
-    float StatusReservedWidth = 0f);
+    float StatusReservedWidth = 0f,
+    float CaptionButtonsWidth = 0f);
 
 public interface ITerminalMouseHost
 {
@@ -81,6 +82,15 @@ public sealed class TerminalMouseController
     public int HoveredTabIndex { get; private set; } = -1;
     public TabBarHitType HoveredTabHitType { get; private set; } = TabBarHitType.None;
 
+
+    public void SetCaptionButtonHover(TabBarHitType hitType)
+    {
+        HoveredTabIndex = -1;
+        HoveredTabHitType = hitType is
+            TabBarHitType.Minimize or TabBarHitType.Maximize or TabBarHitType.Close
+            ? hitType
+            : TabBarHitType.None;
+    }
     public TerminalMouseController(ITerminalMouseHost host, Func<long>? clockMilliseconds = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
@@ -231,7 +241,8 @@ public sealed class TerminalMouseController
         if (geom.ShowTabBar && physY < geom.TopOffset)
         {
             var tabHit = TabBarHitTester.HitTest(physX, physY, geom.FramebufferWidth,
-                _host.TabManager.Count, _host.TabManager.ActiveIndex, geom.TopOffset, geom.StatusReservedWidth);
+                _host.TabManager.Count, _host.TabManager.ActiveIndex, geom.TopOffset,
+                geom.StatusReservedWidth, geom.CaptionButtonsWidth);
             if (button == MouseButton.Right && tabHit is TabBarHitResult.SelectTab select)
             {
                 OpenTabContextMenu(select.Index, pos, geom);
@@ -446,11 +457,15 @@ public sealed class TerminalMouseController
         if (geom.ShowTabBar && physY < geom.TopOffset)
         {
             var tabHitType = TabBarHitTester.HitTest(physX, physY, geom.FramebufferWidth,
-                _host.TabManager.Count, _host.TabManager.ActiveIndex, out int tabIndex, geom.TopOffset, geom.StatusReservedWidth);
+                _host.TabManager.Count, _host.TabManager.ActiveIndex, out int tabIndex,
+                geom.TopOffset, geom.StatusReservedWidth, geom.CaptionButtonsWidth);
             HoveredTabIndex = tabIndex;
             HoveredTabHitType = tabHitType;
-            _host.SetPointerCursor(tabHitType is TabBarHitType.SelectTab or TabBarHitType.CloseTab or TabBarHitType.NewTab
-                ? StandardCursor.Hand : StandardCursor.Default);
+            _host.SetPointerCursor(tabHitType is
+                TabBarHitType.SelectTab or TabBarHitType.CloseTab or TabBarHitType.NewTab or
+                TabBarHitType.Minimize or TabBarHitType.Maximize or TabBarHitType.Close
+                ? StandardCursor.Hand
+                : StandardCursor.Default);
             return;
         }
 

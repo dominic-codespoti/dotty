@@ -22,13 +22,16 @@ class EvalSuiteTests(unittest.TestCase):
         self.app.write_text("app", encoding="utf-8")
         self.bench = self.root / "terminal_output_bench.py"
         self.profiler = self.root / "dotnet_profile.py"
+        self.nvim = self.root / "nvim_scroll_bench.py"
         self.bench.write_text("", encoding="utf-8")
         self.profiler.write_text("", encoding="utf-8")
+        self.nvim.write_text("", encoding="utf-8")
         self.output = self.root / "runs"
         self.patches = mock.patch.multiple(
             EVAL,
             TERMINAL_BENCH=self.bench,
             DOTNET_PROFILE=self.profiler,
+            NVIM_SCROLL_BENCH=self.nvim,
             ROOT=self.root,
             repository_root=mock.Mock(return_value=self.root),
             _host_metadata=mock.Mock(return_value={}),
@@ -105,6 +108,45 @@ class EvalSuiteTests(unittest.TestCase):
         report = (run_dir / "report.md").read_text(encoding="utf-8")
         self.assertIn("[cpu.nettrace](profile/cpu.nettrace)", report)
         self.assertIn('"cpu": 1', report)
+    def test_nvim_scroll_preserves_partial_evidence_and_needs_no_dotnet_app(self):
+        self.app.unlink()
+        args = self._args(["nvim-scroll", "--output-root", str(self.output), "--include", "kitty,ghostty"])
+
+        def fake(command, cwd, stdout, stderr, timeout, **kwargs):
+            stdout.write_text("", encoding="utf-8")
+            stderr.write_text("", encoding="utf-8")
+            json_path = Path(command[command.index("--json-out") + 1])
+            artifacts = Path(command[command.index("--output-dir") + 1])
+            image = artifacts / "frame.png"
+            image.write_bytes(b"evidence")
+            payload = self._payload(status="partial", artifacts=[], summary={
+                "kitty": {"status": "partial", "runs": 1, "traversal_ms_median": 200.0,
+                           "lines_per_second_median": 5000.0, "longest_visible_stall_ms_max": 1203.9,
+                           "eof_to_visible_ms_median": None, "process_tree_peak_rss_mb_max": 76.0},
+                "ghostty": {"status": "skipped", "runs": 0, "reasons": ["binary missing"]},
+            })
+            payload["runs"] = [{"status": "partial", "terminal": "kitty", "traversal_ms": 200.0,
+                                  "lines_per_second": 5000.0, "process_tree_peak_rss_mb": 76.0,
+                                  "visual": {"status": "partial", "longest_visible_stall_ms": 1203.9,
+                                              "eof_to_visible_ms": None,
+                                              "quality": {"reason": "capture cadence gaps censor stall intervals"},
+                                              "dropped_samples": 3, "late_samples": 2,
+                                              "final_screen_verified": False},
+                                  "artifacts": [str(image)]}]
+            json_path.write_text(json.dumps(payload), encoding="utf-8")
+            return {"command": command, "exit_code": 0, "timed_out": False, "duration_ms": 1.0}
+
+        with mock.patch.object(EVAL, "run_child", side_effect=fake):
+            code, run_dir, summary = EVAL.run(args)
+        self.assertEqual(code, 0)
+        component = summary["components"]["nvim-scroll"]
+        self.assertEqual(component["status"], "partial")
+        self.assertEqual(summary["status"], "partial")
+        self.assertEqual(component["native"]["summary"]["ghostty"]["status"], "skipped")
+        report = (run_dir / "report.md").read_text(encoding="utf-8")
+        self.assertIn("| kitty | 200.00 | 5000.00 | 1203.90 | — | 76.00 | 1 | partial |", report)
+        self.assertIn("| kitty | 1 | partial | 200.00 | 5000.00 | 1203.90 | — | 76.00 | visual partial; quality=capture cadence gaps censor stall intervals; dropped=3; late=2; final EOF verified=false | [frame.png](nvim-scroll/frame.png) |", report)
+
 
     def test_all_continues_after_failed_compare(self):
         calls = []

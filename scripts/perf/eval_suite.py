@@ -25,11 +25,11 @@ ROOT = Path(__file__).resolve().parents[2]
 PERF_DIR = ROOT / "scripts" / "perf"
 TERMINAL_BENCH = PERF_DIR / "terminal_output_bench.py"
 DOTNET_PROFILE = PERF_DIR / "dotnet_profile.py"
-
-
+NVIM_SCROLL_BENCH = PERF_DIR / "nvim_scroll_bench.py"
 def repository_root() -> Path:
     """Return the repository containing this script, rather than cwd."""
     return Path(__file__).resolve().parents[2]
+
 
 
 def default_app(root: Path | None = None) -> Path:
@@ -63,14 +63,14 @@ def create_run_dir(output_root: Path) -> Path:
     raise RuntimeError(f"could not create a unique run directory under {output_root}")
 
 
-def _terminate(proc: Any) -> None:
+def _terminate(proc: Any, grace: float = 2.0) -> None:
     """Terminate a child, escalating to kill when it does not cooperate."""
     poll = getattr(proc, "poll", None)
     if poll is not None and poll() is not None:
         return
     try:
         proc.terminate()
-        proc.wait(timeout=2)
+        proc.wait(timeout=grace)
     except (subprocess.TimeoutExpired, TimeoutError):
         try:
             proc.kill()
@@ -81,7 +81,7 @@ def _terminate(proc: Any) -> None:
         pass
 
 
-def run_child(command: list[str], cwd: Path, stdout_path: Path, stderr_path: Path, timeout: float) -> dict[str, Any]:
+def run_child(command: list[str], cwd: Path, stdout_path: Path, stderr_path: Path, timeout: float, termination_grace: float = 2.0) -> dict[str, Any]:
     """Run one child with argv-only execution and retained streams."""
     started = time.time_ns()
     proc = None
@@ -93,7 +93,7 @@ def run_child(command: list[str], cwd: Path, stdout_path: Path, stderr_path: Pat
                 timed_out = False
             except subprocess.TimeoutExpired:
                 timed_out = True
-                _terminate(proc)
+                _terminate(proc, termination_grace)
         return {
             "command": command,
             "exit_code": proc.returncode if proc is not None else None,
@@ -102,7 +102,7 @@ def run_child(command: list[str], cwd: Path, stdout_path: Path, stderr_path: Pat
         }
     except (OSError, ValueError) as exc:
         if proc is not None:
-            _terminate(proc)
+            _terminate(proc, termination_grace)
         return {
             "command": command,
             "exit_code": None,
@@ -223,10 +223,13 @@ def _normalize_payload(value: Any, run_dir: Path, key: str | None = None, artifa
     return value
 
 
-def _component(name: str, command: list[str], json_path: Path, run_dir: Path, timeout: float) -> dict[str, Any]:
+def _component(name: str, command: list[str], json_path: Path, run_dir: Path, timeout: float, termination_grace: float = 2.0) -> dict[str, Any]:
     stdout_path = run_dir / f"{name}.stdout.log"
     stderr_path = run_dir / f"{name}.stderr.log"
-    execution = run_child(command, ROOT, stdout_path, stderr_path, timeout)
+    if termination_grace == 2.0:
+        execution = run_child(command, ROOT, stdout_path, stderr_path, timeout)
+    else:
+        execution = run_child(command, ROOT, stdout_path, stderr_path, timeout, termination_grace=termination_grace)
     payload, parse_error = read_child_json(json_path, run_dir)
     errors: list[str] = []
     if execution.get("error"):
@@ -323,15 +326,34 @@ def parser_for(root: Path | None = None) -> argparse.ArgumentParser:
     all_parser.add_argument("--captures", default="cpu,counters,alloc,gcdump")
     all_parser.add_argument("--collector-start-delay", type=float, default=1.0)
     all_parser.add_argument("--hold-seconds", type=float, default=2.0)
+    nvim = subparsers.add_parser("nvim-scroll", help="measure visible top-to-bottom nvim scrolling")
+    _add_common(nvim, root)
+    nvim.add_argument("--lines", type=int, default=1_000_000)
+    nvim.add_argument("--cols", type=int, default=200)
+    nvim.add_argument("--rows", type=int, default=60)
+    nvim.add_argument("--runs", type=int, default=5)
+    nvim.add_argument("--include", default="dotty,ghostty,kitty")
+    nvim.add_argument("--profile", choices=("plain", "syntax"), default="plain")
+    nvim.add_argument("--startup-timeout", type=float, default=30.0)
+    nvim.add_argument("--sample-hz", type=float, default=60.0)
+    nvim.add_argument("--warmup-runs", type=int, default=1)
+    nvim.add_argument("--capture", choices=("auto", "none"), default="auto")
+    nvim.add_argument("--display-kind", choices=("real", "virtual"), default="real")
+    nvim.add_argument("--run-timeout", type=float, default=1800.0)
+    nvim.set_defaults(timeout=86400.0)
     return parser
 
 
 def _validate(args: argparse.Namespace, root: Path) -> list[str]:
     errors = []
-    for path, label in ((TERMINAL_BENCH, "terminal benchmark"), (DOTNET_PROFILE, ".NET profiler")):
-        if not path.exists():
-            errors.append(f"missing {label} script: {path}")
-    if not Path(args.app).exists():
+    if args.command in {"compare", "all"} and not TERMINAL_BENCH.exists():
+        errors.append(f"missing terminal benchmark script: {TERMINAL_BENCH}")
+    if args.command in {"profile", "all"} and not DOTNET_PROFILE.exists():
+        errors.append(f"missing .NET profiler script: {DOTNET_PROFILE}")
+    if args.command == "nvim-scroll" and not NVIM_SCROLL_BENCH.exists():
+        errors.append(f"missing nvim scroll benchmark script: {NVIM_SCROLL_BENCH}")
+    needs_dotty_app = args.command != "nvim-scroll" or any(name.strip().lower() == "dotty" for name in args.include.split(","))
+    if needs_dotty_app and not Path(args.app).exists():
         errors.append(f"missing Dotty app: {args.app}")
     if args.timeout <= 0:
         errors.append("--timeout must be positive")
@@ -351,6 +373,16 @@ def _compare_command(args: argparse.Namespace, json_path: Path) -> list[str]:
 
 def _profile_command(args: argparse.Namespace, output_dir: Path) -> list[str]:
     return [sys.executable, str(DOTNET_PROFILE), "--app", str(args.app), "--output-dir", str(output_dir), "--lines", _cli_number(args.profile_lines), "--captures", str(args.captures), "--collector-start-delay", _cli_number(args.collector_start_delay), "--hold-seconds", _cli_number(args.hold_seconds)]
+def _nvim_scroll_command(args: argparse.Namespace, json_path: Path, output_dir: Path) -> list[str]:
+    command = [sys.executable, str(NVIM_SCROLL_BENCH), "--json-out", str(json_path), "--output-dir", str(output_dir),
+               "--lines", _cli_number(args.lines), "--cols", _cli_number(args.cols), "--rows", _cli_number(args.rows),
+               "--runs", _cli_number(args.runs), "--include", str(args.include), "--profile", str(args.profile),
+               "--startup-timeout", _cli_number(args.startup_timeout), "--timeout", _cli_number(args.run_timeout),
+               "--sample-hz", _cli_number(args.sample_hz), "--warmup-runs", _cli_number(args.warmup_runs),
+               "--capture", str(args.capture), "--display-kind", str(args.display_kind)]
+    if any(name.strip().lower() == "dotty" for name in args.include.split(",")):
+        command.extend(["--app", str(args.app)])
+    return command
 
 
 def _config(args: argparse.Namespace) -> dict[str, Any]:
@@ -361,6 +393,11 @@ def _run_one(name: str, args: argparse.Namespace, run_dir: Path, root: Path) -> 
     if name == "compare":
         json_path = run_dir / "compare.json"
         return _component("compare", _compare_command(args, json_path), json_path, run_dir, args.timeout)
+    if name == "nvim-scroll":
+        output_dir = run_dir / "nvim-scroll"
+        output_dir.mkdir()
+        json_path = run_dir / "nvim-scroll.json"
+        return _component(name, _nvim_scroll_command(args, json_path, output_dir), json_path, run_dir, args.timeout, termination_grace=12.0)
     profile_dir = run_dir / "profile"
     profile_dir.mkdir()
     json_path = profile_dir / "profile.json"
@@ -477,6 +514,64 @@ def render_report(summary: dict[str, Any], path: Path) -> None:
     if not rows:
         lines.append("| — | — | — | — | — | — | — | — | unavailable | — |")
 
+    nvim_component = summary.get("components", {}).get("nvim-scroll", {})
+    nvim = nvim_component.get("native") or {}
+    nvim_summaries = nvim.get("summary", {})
+    nvim_runs = nvim.get("runs", [])
+    lines.extend(["", "## Nvim scroll", ""])
+    if nvim_component:
+        lines.append(f"Component status: **{nvim_component.get('status', 'unknown')}**.")
+        lines.append("")
+        lines.append("| Terminal | Traversal median (ms) | Lines/s median | Longest observed stall max (ms) | Presentation-tail median (ms) | Process-tree RSS max (MiB) | Runs | Status |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---|")
+        if isinstance(nvim_summaries, dict):
+            for terminal, values in nvim_summaries.items():
+                if not isinstance(values, dict):
+                    continue
+                lines.append("| {terminal} | {traversal} | {rate} | {stall} | {tail} | {rss} | {runs} | {status} |".format(
+                    terminal=terminal, traversal=_fmt(_num(values, "traversal_ms_median")),
+                    rate=_fmt(_num(values, "lines_per_second_median")),
+                    stall=_fmt(_num(values, "longest_visible_stall_ms_max")),
+                    tail=_fmt(_num(values, "eof_to_visible_ms_median")),
+                    rss=_fmt(_num(values, "process_tree_peak_rss_mb_max")),
+                    runs=_fmt(_num(values, "runs")), status=values.get("status", "ok")))
+        if not isinstance(nvim_summaries, dict) or not nvim_summaries:
+            lines.append("| — | — | — | — | — | — | — | unavailable |")
+        lines.extend(["", "### Per-run evidence", "", "| Terminal | Run | Status | Traversal (ms) | Lines/s | Longest observed stall (ms) | EOF-to-visible (ms) | Tree RSS peak (MiB) | Evidence | Artifacts |", "|---|---:|---|---:|---:|---:|---:|---:|---|---|"])
+        if isinstance(nvim_runs, list):
+            for index, item in enumerate(nvim_runs, 1):
+                if not isinstance(item, dict):
+                    continue
+                visual = item.get("visual")
+                if not isinstance(visual, dict):
+                    evidence = "visual capture unavailable"
+                else:
+                    details = [f"visual {visual.get('status', 'unknown')}"]
+                    if visual.get("backend"):
+                        details.append(f"backend={visual['backend']}")
+                    if visual.get("reason"):
+                        details.append(str(visual["reason"]))
+                    quality = visual.get("quality")
+                    if isinstance(quality, dict) and quality.get("reason"):
+                        details.append(f"quality={quality['reason']}")
+                    for field, label in (("dropped_samples", "dropped"), ("late_samples", "late")):
+                        if visual.get(field) is not None:
+                            details.append(f"{label}={visual[field]}")
+                    if visual.get("final_screen_verified") is not None:
+                        details.append(f"final EOF verified={str(visual['final_screen_verified']).lower()}")
+                    evidence = "; ".join(details)
+                links = _links(item.get("artifacts"), path.parent)
+                lines.append("| {terminal} | {run} | {status} | {traversal} | {rate} | {stall} | {tail} | {rss} | {evidence} | {links} |".format(
+                    terminal=item.get("terminal", "—"), run=index, status=item.get("status", "unknown"),
+                    traversal=_fmt(_num(item, "traversal_ms")), rate=_fmt(_num(item, "lines_per_second")),
+                    stall=_fmt(_num(visual, "longest_visible_stall_ms") if isinstance(visual, dict) else None),
+                    tail=_fmt(_num(visual, "eof_to_visible_ms") if isinstance(visual, dict) else None),
+                    rss=_fmt(_num(item, "process_tree_peak_rss_mb")), evidence=evidence, links=links))
+        if not nvim_runs:
+            lines.append("| — | — | unavailable | — | — | — | — | — | — | — |")
+    else:
+        lines.append("Nvim scroll was not requested.")
+
     lines.extend(["", "## .NET inspection artifacts", ""])
     if profile:
         artifacts = summary["components"]["profile"].get("artifacts", [])
@@ -544,6 +639,11 @@ def run(args: argparse.Namespace) -> tuple[int, Path, dict[str, Any]]:
                 components["profile"] = _run_one("profile", args, run_dir, root)
             except Exception as exc:
                 components["profile"] = {"status": "failed", "artifacts": [], "errors": [f"profile orchestration failed: {exc}"]}
+        if args.command == "nvim-scroll":
+            try:
+                components["nvim-scroll"] = _run_one("nvim-scroll", args, run_dir, root)
+            except Exception as exc:
+                components["nvim-scroll"] = {"status": "failed", "artifacts": [], "errors": [f"nvim-scroll orchestration failed: {exc}"]}
     summary: dict[str, Any] = {
         "schema_version": 1,
         "kind": "eval_suite",

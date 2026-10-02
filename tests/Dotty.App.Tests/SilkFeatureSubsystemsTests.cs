@@ -50,6 +50,80 @@ public class TabBarSubsystemTests
     }
 
     [Fact]
+    public void TabBarLayout_CustomCaptionButtons_ReserveRightSideOnlyWhenRequested()
+    {
+        const float windowWidth = 1000f;
+        const float captionWidth = TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount;
+        var nativeLayout = TabBarLayout.Calculate(windowWidth, tabCount: 2, activeIndex: 0);
+        float nativeMinimizeWidth = nativeLayout.MinimizeButtonBounds.Width;
+        float nativeNewTabRight = nativeLayout.NewTabButtonBounds.Right;
+        var customLayout = TabBarLayout.Calculate(
+            windowWidth, tabCount: 2, activeIndex: 0, captionButtonsWidth: captionWidth);
+
+        Assert.Equal(0f, nativeMinimizeWidth);
+        Assert.Equal(windowWidth, customLayout.CloseButtonBounds.Right);
+        Assert.True(customLayout.NewTabButtonBounds.Right < nativeNewTabRight);
+        Assert.Equal(captionWidth / TabBarLayout.CaptionButtonCount, customLayout.MinimizeButtonBounds.Width);
+        Assert.Equal(customLayout.MinimizeButtonBounds.Right, customLayout.MaximizeButtonBounds.Left);
+        Assert.Equal(customLayout.MaximizeButtonBounds.Right, customLayout.CloseButtonBounds.Left);
+        Assert.True(customLayout.Tabs[0].TabBounds.Right <= customLayout.MinimizeButtonBounds.Left);
+        Assert.True(customLayout.NewTabButtonBounds.Right <= customLayout.MinimizeButtonBounds.Left);
+    }
+
+    [Fact]
+    public void TabBarLayout_CustomCaptionButtons_CompressToNarrowWindow()
+    {
+        const float windowWidth = 40f;
+        const float requestedCaptionWidth = TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount;
+        var layout = TabBarLayout.Calculate(
+            windowWidth, tabCount: 1, activeIndex: 0, captionButtonsWidth: requestedCaptionWidth);
+        float closeRight = layout.CloseButtonBounds.Right;
+        float minimizeWidth = layout.MinimizeButtonBounds.Width;
+        float newTabWidth = layout.NewTabButtonBounds.Width;
+        TabBarHitType closeHit = TabBarHitTester.HitTest(
+            39f, 10f, windowWidth, tabCount: 1, activeIndex: 0, out _,
+            captionButtonsWidth: requestedCaptionWidth);
+
+        Assert.Equal(windowWidth, closeRight);
+        Assert.Equal(windowWidth / TabBarLayout.CaptionButtonCount, minimizeWidth);
+        Assert.Equal(0f, newTabWidth);
+        Assert.Equal(TabBarHitType.Close, closeHit);
+    }
+
+    [Fact]
+    public void TabBarHitTester_CustomCaptionArea_ReturnsCaptionAndWindowButtons()
+    {
+        const float windowWidth = 1000f;
+        const float captionWidth = TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount;
+        var layout = TabBarLayout.Calculate(
+            windowWidth, tabCount: 1, activeIndex: 0, captionButtonsWidth: captionWidth);
+
+        Assert.Equal(
+            TabBarHitType.Caption,
+            TabBarHitTester.HitTest(400f, 10f, windowWidth, 1, 0, out _,
+                captionButtonsWidth: captionWidth));
+        Assert.Equal(
+            TabBarHitType.Minimize,
+            HitCaptionButton(layout.MinimizeButtonBounds));
+        Assert.Equal(
+            TabBarHitType.Maximize,
+            HitCaptionButton(layout.MaximizeButtonBounds));
+        Assert.Equal(
+            TabBarHitType.Close,
+            HitCaptionButton(layout.CloseButtonBounds));
+
+        static TabBarHitType HitCaptionButton(TabRect bounds) =>
+            TabBarHitTester.HitTest(
+                bounds.Left + bounds.Width * 0.5f,
+                bounds.Top + bounds.Height * 0.5f,
+                1000f,
+                1,
+                0,
+                out _,
+                captionButtonsWidth: 138f);
+    }
+
+    [Fact]
     public void TabBarHitTester_ClickingTab_ReturnsSelectTab()
     {
         var result = TabBarHitTester.HitTest(x: 50f, y: 15f, windowWidth: 1000f, tabCount: 3, activeIndex: 0);

@@ -1,32 +1,38 @@
 using System;
+using System.Runtime.InteropServices;
+using Dotty.Terminal.Adapter;
 using SkiaSharp;
 
 namespace Dotty.Rendering.Gpu;
 
 /// <summary>
-/// Per-row quad cache for the GPU glyph path (WezTerm's line_quad_cache
-/// pattern, adapted to ring-scroll). One entry per visible grid row holding
-/// the row's emitted vertices in row-local coordinates (Y relative to the
-/// row top), validated by the row's identity generation.
-///
-/// Scroll reuse: a pure scroll moves content between logical rows and bumps
-/// every generation exactly once, so the composer shifts entries down by the
-/// scroll delta (see TerminalFrameComposer.TryShiftCachesOnScroll) and only
-/// the exposed bottom band rebuilds. Entries also reset on geometry changes
-/// (columns / cell size); rows containing slow-blink cells are never cached
-/// (wall-clock dependent visibility).
-///
-/// Render-thread confined: the lease-path draw operation serializes all
-/// access; no locking.
+/// Render-thread-confined cache of the composed instance run for each visible
+/// terminal row. Entries retain their storage across invalidation and scroll
+/// remapping so the cache reaches a stable high-water allocation.
 /// </summary>
 public sealed class QuadRowCache
 {
-    /// <summary>Per-row emitted vertices, Y relative to the row top.</summary>
     public struct Entry
     {
         public bool Valid;
+        public int RowIdentity;
         public ulong Generation;
         public ulong ContentHash;
+        public int SelectionStart;
+        public int SelectionEnd;
+        public int CursorColumn;
+        public byte CursorShape;
+        public ulong SearchHash;
+        public CellInstance[] Instances = Array.Empty<CellInstance>();
+        public int InstanceCount;
+        public CellInstance[] SelectionExtras = Array.Empty<CellInstance>();
+        public int SelectionExtraCount;
+        public CellHot[] SourceCells = Array.Empty<CellHot>();
+        public ColdCell[] SourceColdCells = Array.Empty<ColdCell>();
+        public CellInstance CursorExtra;
+        public bool HasCursorExtra;
+
+        // Kept for the existing row-local quad cache helpers and callers.
         public SKPoint[] GlyphPos = Array.Empty<SKPoint>();
         public SKPoint[] GlyphUv = Array.Empty<SKPoint>();
         public SKColor[] GlyphCol = Array.Empty<SKColor>();
@@ -39,74 +45,157 @@ public sealed class QuadRowCache
     }
 
     private Entry[] _entries = Array.Empty<Entry>();
+    private Entry[] _previousEntries = Array.Empty<Entry>();
+    private int[] _rowSources = Array.Empty<int>();
+    private bool[] _sourceUsed = Array.Empty<bool>();
     private int _rows;
     private int _columns;
     private float _cellW;
     private float _cellH;
 
-    // Diagnostics (test + telemetry surface).
     public long Hits;
     public long Misses;
     public long ShiftedRows;
 
+    public int Rows => _rows;
+    public int Columns => _columns;
+
     public void EnsureGeometry(int rows, int columns, float cellW, float cellH)
     {
-        if (_rows == rows && _columns == columns && _cellW.Equals(cellW) && _cellH.Equals(cellH)) return;
+        if (_rows == rows && _columns == columns && _cellW.Equals(cellW) && _cellH.Equals(cellH))
+            return;
+
+        bool changed = _rows != rows || _columns != columns || !_cellW.Equals(cellW) || !_cellH.Equals(cellH);
         _rows = rows;
         _columns = columns;
         _cellW = cellW;
         _cellH = cellH;
-        if (_entries.Length < rows) _entries = new Entry[rows];
-        Array.Clear(_entries, 0, rows);
+        if (_entries.Length < rows)
+            Array.Resize(ref _entries, rows);
+        EnsureMappingCapacity(rows);
+        if (changed)
+            InvalidateAll();
     }
 
     public void Reset()
     {
-        Array.Clear(_entries, 0, _entries.Length);
+        InvalidateAll();
         Hits = Misses = ShiftedRows = 0;
     }
 
-    /// <summary>Ref accessor for in-place entry mutation (render thread only).</summary>
     public ref Entry GetEntryRef(int row) => ref _entries[row];
 
-    /// <summary>Marks every entry invalid (generations are re-stamped on rebuild).</summary>
-    public void InvalidateAll() => Array.Clear(_entries, 0, _entries.Length);
+    public ref readonly Entry GetPreviousEntryRef(int row) => ref _previousEntries[row];
+
+    public void InvalidateAll()
+    {
+        for (int i = 0; i < _entries.Length; i++)
+            ClearEntry(ref _entries[i]);
+    }
 
     public void InvalidateRow(int row)
     {
-        if ((uint)row < (uint)_entries.Length) _entries[row].Valid = false;
+        if ((uint)row < (uint)_entries.Length)
+            ClearEntry(ref _entries[row]);
+    }
+
+    /// <summary>Snapshots the prior rows before the caller classifies the next frame.</summary>
+    public void BeginFrame()
+    {
+        EnsureMappingCapacity(_rows);
+        Array.Copy(_entries, _previousEntries, _rows);
+        Array.Fill(_rowSources, -1, 0, _rows);
+        Array.Clear(_sourceUsed, 0, _rows);
+    }
+
+    /// <summary>Maps a destination row to one unique reusable row from the previous frame.</summary>
+    public bool TryMapRow(int destinationRow, int sourceRow)
+    {
+        if ((uint)destinationRow >= (uint)_rows || (uint)sourceRow >= (uint)_rows
+            || _rowSources[destinationRow] >= 0 || _sourceUsed[sourceRow]
+            || !_previousEntries[sourceRow].Valid)
+        {
+            return false;
+        }
+
+        _rowSources[destinationRow] = sourceRow;
+        _sourceUsed[sourceRow] = true;
+        return true;
+    }
+
+    public int GetMappedSource(int destinationRow) =>
+        (uint)destinationRow < (uint)_rows ? _rowSources[destinationRow] : -1;
+
+    /// <summary>
+    /// Applies the row mapping without aliasing pooled storage. Unmatched rows
+    /// receive unused prior entries so their buffers can be rebuilt in place.
+    /// </summary>
+    public void ApplyMappings()
+    {
+        int nextUnused = 0;
+        for (int row = 0; row < _rows; row++)
+        {
+            int source = _rowSources[row];
+            if (source < 0)
+            {
+                while (nextUnused < _rows && _sourceUsed[nextUnused])
+                    nextUnused++;
+                if (nextUnused < _rows)
+                {
+                    source = nextUnused++;
+                    _sourceUsed[source] = true;
+                }
+            }
+
+            if (source >= 0)
+            {
+                _entries[row] = _previousEntries[source];
+                if (_rowSources[row] < 0)
+                    ClearEntry(ref _entries[row]);
+            }
+            else
+            {
+                ClearEntry(ref _entries[row]);
+            }
+        }
     }
 
     /// <summary>
-    /// Shifts entries to follow a scroll: content moved up, so new row r
-    /// shows what row r+delta showed (entry[r] = old entry[r+delta]). The
-    /// exposed bottom band is invalidated. Caller must have validated content
-    /// identity via generation relationships before calling.
-    /// <paramref name="generations"/> supplies the current per-row identity:
-    /// shifted entries are re-stamped so the next frame's equality check
-    /// (entry.Generation == row generation) hits — the scroll bumped every
-    /// generation, and the moved entry would otherwise be permanently one
-    /// bump behind.
+    /// Scroll helper retained for direct cache consumers. Content moves up, so
+    /// each surviving destination row takes the next row's cached entry.
     /// </summary>
     public void ShiftUp(int delta, ReadOnlySpan<ulong> generations)
     {
-        if (delta <= 0 || delta > _rows) return;
+        if (delta <= 0 || delta > _rows)
+            return;
+
+        BeginFrame();
         int survive = _rows - delta;
-        for (int r = 0; r < survive; r++)
+        for (int row = 0; row < survive; row++)
+            TryMapRow(row, row + delta);
+        ApplyMappings();
+
+        for (int row = 0; row < survive; row++)
         {
-            _entries[r] = _entries[r + delta];
-            if (r < generations.Length) _entries[r].Generation = generations[r];
+            _entries[row].Generation = row < generations.Length ? generations[row] : 0;
+            ShiftedRows++;
         }
-        Array.Clear(_entries, Math.Max(0, survive), delta);
-        ShiftedRows += survive;
+        for (int row = survive; row < _rows; row++)
+            ClearEntry(ref _entries[row]);
     }
 
     public static void Ensure<T>(ref T[] arr, int needed)
     {
-        // Entry arrays start null: `new Entry[rows]` yields default structs,
-        // struct field initializers do not run for array elements.
         if (arr == null || arr.Length < needed)
             arr = new T[Math.Max(needed, 16)];
+    }
+
+    public void EnsureEntryCapacity(ref Entry entry, int cells)
+    {
+        Ensure(ref entry.Instances, cells);
+        Ensure(ref entry.SelectionExtras, cells);
+        Ensure(ref entry.SourceCells, cells);
+        Ensure(ref entry.SourceColdCells, cells);
     }
 
     public void AddGlyphQuad(ref Entry e, float x, float yRel, float w, float h, SKRect uv, SKColor color)
@@ -149,5 +238,34 @@ public sealed class QuadRowCache
         e.SolidPos[i + 3] = new SKPoint(x, yRel + h);
         e.SolidCol[i + 3] = color;
         e.SolidCount += 4;
+    }
+
+    private void EnsureMappingCapacity(int rows)
+    {
+        if (_previousEntries.Length < rows)
+            Array.Resize(ref _previousEntries, rows);
+        if (_rowSources.Length < rows)
+            Array.Resize(ref _rowSources, rows);
+        if (_sourceUsed.Length < rows)
+            Array.Resize(ref _sourceUsed, rows);
+    }
+
+    private static void ClearEntry(ref Entry entry)
+    {
+        entry.Valid = false;
+        entry.Generation = 0;
+        entry.ContentHash = 0;
+        entry.SelectionStart = -1;
+        entry.SelectionEnd = -1;
+        entry.CursorColumn = -1;
+        entry.CursorShape = 0;
+        entry.SearchHash = 0;
+        entry.InstanceCount = 0;
+        entry.SelectionExtraCount = 0;
+        entry.CursorExtra = default;
+        entry.RowIdentity = 0;
+        entry.HasCursorExtra = false;
+        entry.GlyphCount = 0;
+        entry.SolidCount = 0;
     }
 }

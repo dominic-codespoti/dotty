@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Collections.Generic;
 using Dotty.Runtime.Config;
 using Dotty.Abstractions.Themes;
@@ -61,6 +62,210 @@ public sealed class TerminalSceneComposerTests
 
         Assert.True(frame.InstanceCount > 0);
         Assert.Contains(frame.Instances.AsSpan(0, frame.InstanceCount).ToArray(), instance => instance.Row == 0);
+    }
+
+    [Fact]
+    public void Compose_CachedRowsMatchFullRebuildAcrossWritesScrollsAndOverlays()
+    {
+        const int rows = 8;
+        const int columns = 24;
+        using var tab = new TerminalTab(rows: rows, columns: columns);
+        var pane = tab.ActivePane;
+        var buffer = pane.Session.Adapter.Buffer;
+        var line = new char[columns];
+        for (int row = 0; row < rows; row++)
+        {
+            for (int column = 0; column < columns; column++)
+                line[column] = (char)('A' + (row + column) % 26);
+            buffer.SetCursor(row, 0);
+            buffer.WriteText(line, CellAttributes.Default);
+        }
+
+        using var manager = new TerminalTabManager();
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 64);
+        var cachedComposer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var selectionColor = new SgrColorArgb(0x803385DB);
+        var noSearch = new SearchOverlayRenderState(false, string.Empty, -1, 0, null);
+
+        CellInstance[] Render(TerminalSceneComposer composer, bool showCursor, SearchOverlayRenderState search)
+        {
+            var frame = composer.Compose(
+                tab,
+                manager,
+                theme,
+                new SgrColorArgb(theme.Foreground),
+                selectionColor,
+                columns * 10,
+                rows * 20,
+                10,
+                20,
+                1,
+                rows,
+                columns,
+                NoPadding(),
+                showTabBar: false,
+                cursorVisible: showCursor,
+                scrollbarHovered: false,
+                scrollbarDragging: false,
+                searchOverlay: search,
+                activeContextMenu: null);
+            return frame.AsSpan().ToArray();
+        }
+
+        void Compare(bool showCursor = false, SearchOverlayRenderState? search = null)
+        {
+            var cached = Render(cachedComposer, showCursor, search ?? noSearch);
+            var rebuilt = Render(new TerminalSceneComposer(atlas, SKTypeface.Default, 14f), showCursor, search ?? noSearch);
+            Assert.True(cached.AsSpan().SequenceEqual(rebuilt),
+                "The row-cached composition must be byte-for-byte equal to a fresh full composition.");
+        }
+
+        Compare();
+        Compare();
+        Compare();
+
+        var random = new Random(0x5A17);
+        Span<char> cell = stackalloc char[1];
+        for (int update = 0; update < 24; update++)
+        {
+            int row = random.Next(rows);
+            int column = random.Next(columns);
+            buffer.SetCursor(row, column);
+            cell[0] = (char)('a' + random.Next(26));
+            buffer.WriteText(cell, CellAttributes.Default);
+            Compare();
+        }
+
+        pane.Session.Parser.Feed("\x1b[2;7r\x1b[5;1H\x1b[S"u8);
+        Compare();
+        pane.Session.Parser.Feed("\x1b[2;7r\x1b[4;1H\x1b[T"u8);
+        Compare();
+        pane.Session.Parser.Feed("\x1b[3;6r\x1b[4;1H\x1b[L"u8);
+        Compare();
+        pane.Session.Parser.Feed("\x1b[3;6r\x1b[4;1H\x1b[M"u8);
+        Compare();
+        pane.Session.Parser.Feed("\x1b[r\x1b[8;1H\x1b[S"u8);
+        Compare();
+        pane.Session.Parser.Feed("\x1b[r\x1b[1;1H\x1b[T"u8);
+        Compare();
+
+        pane.Selection.StartSelection(1, 2);
+        pane.Selection.UpdateSelection(4, 9);
+        buffer.SetCursor(2, 5);
+        var searchMatches = new[]
+        {
+            new RuntimeSearchMatch(1, 3, 8, IsActive: false),
+            new RuntimeSearchMatch(4, 6, 12, IsActive: true)
+        };
+        var search = new SearchOverlayRenderState(true, "needle", 1, searchMatches.Length, searchMatches);
+        Compare(showCursor: true, search: search);
+        pane.Selection.StartSelection(2, 4, Dotty.Runtime.Selection.SelectionMode.Block);
+        pane.Selection.UpdateSelection(6, 13);
+        buffer.SetCursor(6, 15);
+        Compare(showCursor: true, search: search);
+        pane.Selection.ClearSelection();
+        buffer.SetCursor(0, 0);
+        Compare(showCursor: true, search: search);
+
+        int widthBeforeAtlasGrowth = atlas.Width;
+        int heightBeforeAtlasGrowth = atlas.Height;
+        for (int i = 0; i < rows * columns; i++)
+        {
+            string glyph = char.ConvertFromUtf32(0x2800 + i);
+            buffer.SetCursor(i / columns, i % columns);
+            buffer.WriteText(glyph.AsSpan(), CellAttributes.Default);
+        }
+        Compare(showCursor: true, search: search);
+        Assert.True(atlas.Width > widthBeforeAtlasGrowth || atlas.Height > heightBeforeAtlasGrowth,
+            "The unique glyph batch must grow the deliberately tiny test atlas.");
+    }
+
+
+    [Fact]
+    public void Compose_OneLineScrollMeasuresRowReuseAgainstFullRebuild()
+    {
+        const int rows = 60;
+        const int columns = 200;
+        const int frames = 12;
+        using var tab = new TerminalTab(rows: rows, columns: columns);
+        var buffer = tab.ActivePane.Session.Adapter.Buffer;
+        var line = new char[columns];
+        for (int row = 0; row < rows; row++)
+        {
+            for (int column = 0; column < columns; column++)
+                line[column] = (char)('a' + (row + column) % 26);
+            buffer.SetCursor(row, 0);
+            buffer.WriteText(line, CellAttributes.Default);
+        }
+
+        using var manager = new TerminalTabManager();
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 1024);
+        var cachedComposer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var fullComposer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var padding = NoPadding();
+        var noSearch = new SearchOverlayRenderState(false, string.Empty, -1, 0, null);
+
+        TerminalSceneFrame Compose(TerminalSceneComposer composer, int height) =>
+            composer.Compose(
+                tab,
+                manager,
+                theme,
+                new SgrColorArgb(theme.Foreground),
+                new SgrColorArgb(0x803385DB),
+                columns * 10,
+                height,
+                10,
+                20,
+                1,
+                rows,
+                columns,
+                padding,
+                showTabBar: false,
+                cursorVisible: false,
+                scrollbarHovered: false,
+                scrollbarDragging: false,
+                searchOverlay: noSearch,
+                activeContextMenu: null);
+
+        for (int i = 0; i < 4; i++)
+        {
+            Compose(cachedComposer, rows * 20);
+            Compose(fullComposer, rows * 20 + (i & 1));
+        }
+
+        long cachedTicks = 0;
+        long rebuiltTicks = 0;
+        long hitsBefore = cachedComposer.CachedRowHits;
+        var watch = new Stopwatch();
+        for (int frameIndex = 0; frameIndex < frames; frameIndex++)
+        {
+            buffer.ScrollUpLines(1);
+            buffer.SetCursor(rows - 1, 0);
+            for (int column = 0; column < columns; column++)
+                line[column] = (char)('a' + (frameIndex + column) % 26);
+            buffer.WriteText(line, CellAttributes.Default);
+
+            watch.Restart();
+            var cached = Compose(cachedComposer, rows * 20);
+            watch.Stop();
+            cachedTicks += watch.ElapsedTicks;
+
+            // Alternating an unused framebuffer-height pixel invalidates the
+            // row cache while leaving the single pane's cell coordinates intact.
+            watch.Restart();
+            var rebuilt = Compose(fullComposer, rows * 20 + (frameIndex & 1));
+            watch.Stop();
+            rebuiltTicks += watch.ElapsedTicks;
+
+            Assert.True(cached.AsSpan().SequenceEqual(rebuilt.AsSpan()));
+        }
+
+        Assert.True(cachedComposer.CachedRowHits - hitsBefore >= (rows - 1) * frames);
+        double cachedMs = cachedTicks * 1000d / Stopwatch.Frequency / frames;
+        double rebuiltMs = rebuiltTicks * 1000d / Stopwatch.Frequency / frames;
+        Console.WriteLine($"200x60 one-line scroll: cached {cachedMs:F2} ms/frame; full rebuild {rebuiltMs:F2} ms/frame.");
     }
 
     [Fact]

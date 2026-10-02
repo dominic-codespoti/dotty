@@ -64,6 +64,7 @@ public sealed class FontFallbackChain : IDisposable
     private readonly List<SKTypeface> _typefaces = new();
     private readonly bool _ownsTypefaces;
     private readonly Dictionary<string, SKTypeface> _resolutionCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<int, SKTypeface> _singleRuneResolutionCache = new();
     private readonly object _lock = new();
     private bool _disposed;
 
@@ -203,6 +204,7 @@ public sealed class FontFallbackChain : IDisposable
             {
                 _typefaces.Add(typeface);
                 _resolutionCache.Clear();
+                _singleRuneResolutionCache.Clear();
             }
         }
     }
@@ -263,28 +265,46 @@ public sealed class FontFallbackChain : IDisposable
             }
         }
 
+        bool singleRune = IsSingleRune(grapheme);
+        if (singleRune && _singleRuneResolutionCache.TryGetValue(firstRune, out var cachedRune))
+        {
+            return cachedRune;
+        }
+
         // 3. Dynamic system fallback query for the rune if not found in explicit chain
         if (firstRune > 0)
         {
             try
             {
                 var systemMatch = SKFontManager.Default.MatchCharacter(firstRune);
-                if (systemMatch != null)
+                var resolved = systemMatch ?? PrimaryTypeface;
+                if (systemMatch != null && !ContainsTypeface(systemMatch))
                 {
-                    if (!ContainsTypeface(systemMatch))
-                    {
-                        _typefaces.Add(systemMatch);
-                    }
-                    return systemMatch;
+                    _typefaces.Add(systemMatch);
                 }
+                if (singleRune)
+                {
+                    _singleRuneResolutionCache[firstRune] = resolved;
+                }
+                return resolved;
             }
             catch
             {
-                // Fall back to primary if system match fails
+                // Fall back to primary if system match fails.
+                if (singleRune)
+                {
+                    _singleRuneResolutionCache[firstRune] = PrimaryTypeface;
+                }
             }
         }
 
         return PrimaryTypeface;
+    }
+
+    private static bool IsSingleRune(string grapheme)
+    {
+        return System.Text.Rune.TryGetRuneAt(grapheme, 0, out var rune)
+            && rune.Utf16SequenceLength == grapheme.Length;
     }
 
     private static int GetFirstCodepoint(string grapheme)
@@ -350,6 +370,7 @@ public sealed class FontFallbackChain : IDisposable
                 }
             }
             _typefaces.Clear();
+            _singleRuneResolutionCache.Clear();
         }
     }
 }

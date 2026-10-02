@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Dotty.Abstractions.Config;
 using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Panes;
 using Dotty.Runtime.Tabs;
+using Dotty.Runtime.Selection;
 using Dotty.Runtime.Scrollbar;
 using Dotty.Runtime.Search;
 using RuntimeSearchMatch = Dotty.Runtime.Search.SearchMatch;
@@ -107,9 +109,40 @@ public sealed class TerminalSceneComposer
     private float _cachedMenuCellHeight;
     private ContextMenuItem[] _cachedMenuItemSnapshot = Array.Empty<ContextMenuItem>();
     private int _cachedMenuItemCount = -1;
+    private sealed class LeafRowCache
+    {
+        public LeafPane? Owner;
+        public readonly QuadRowCache Cache = new();
+    }
+
+    private LeafRowCache[] _leafRowCaches = Array.Empty<LeafRowCache>();
+    private bool _hasRowCacheConfiguration;
+    private IColorScheme? _cachedRowCacheTheme;
+    private GlyphAtlas? _cachedRowCacheAtlas;
+    private SKTypeface? _cachedRowCacheTypeface;
+    private float _cachedRowCacheFontSize;
+    private int _cachedRowCacheAtlasVersion;
+    private int _cachedRowCacheFramebufferWidth;
+    private int _cachedRowCacheFramebufferHeight;
+    private int _cachedRowCacheRows;
+    private int _cachedRowCacheColumns;
+    private float _cachedRowCacheCellWidth;
+    private float _cachedRowCacheCellHeight;
+    private float _cachedRowCacheScale;
+    private double _cachedRowCachePadLeft;
+    private double _cachedRowCachePadTop;
+    private double _cachedRowCachePadRight;
+    private double _cachedRowCachePadBottom;
+    private SgrColorArgb _cachedRowCacheForeground;
+    private SgrColorArgb _cachedRowCacheBackground;
+    private SgrColorArgb _cachedRowCacheSelectionColor;
+    private long _cachedRowHits;
+    private long _cachedRowMisses;
     private long _skippedLeafFrames;
     /// <summary>Cumulative Compose calls in which at least one leaf was skipped on lock contention.</summary>
     public long SkippedLeafFrames => _skippedLeafFrames;
+    public long CachedRowHits => _cachedRowHits;
+    public long CachedRowMisses => _cachedRowMisses;
 
     public TerminalSceneComposer(
         GlyphAtlas atlas,
@@ -152,7 +185,9 @@ public sealed class TerminalSceneComposer
         TabBarHitType hoveredTabHitType = TabBarHitType.None,
         ITabTitleSource? titles = null,
         ReadOnlySpan<char> status = default,
-        bool statusWarning = false)
+        bool statusWarning = false,
+        float captionButtonsWidth = 0f,
+        bool isMaximized = false)
     {
         ArgumentNullException.ThrowIfNull(activeTab);
         ArgumentNullException.ThrowIfNull(tabManager);
@@ -179,6 +214,9 @@ public sealed class TerminalSceneComposer
         int menuChromeStart = -1;
         bool skippedLeaf = false;
         _dirtyAtlasRows.Clear();
+        int atlasVersionAtStart = _atlas.ContentVersion;
+        ConfigureRowCaches(theme, themeForeground, new SgrColorArgb(theme.Background), selectionColor,
+            framebufferWidth, framebufferHeight, rows, columns, cellWidth, cellHeight, scale, padding, leaves.Count, atlasVersionAtStart);
 
         float terminalWidth = Math.Max(10f, framebufferWidth - padX);
         float terminalHeight = Math.Max(10f, framebufferHeight - topOffset - padY);
@@ -227,18 +265,9 @@ public sealed class TerminalSceneComposer
                 int paneRows = leafSnapshot.Rows;
                 int paneColumns = leafSnapshot.Columns;
                 EnsureScratchCapacity(instanceCount + checked(paneRows * paneColumns * 2 + 1024));
-
-                int written = QuadFrameBuilder.Build(
-                    leafSnapshot,
-                    _atlas,
-                    _typeface,
-                    _fontSize,
-                    _frameScratch.AsSpan(startInstanceIndex),
-                    _dirtyAtlasRows,
-                    paneRows,
-                    paneColumns,
-                    themeForeground,
-                    new SgrColorArgb(theme.Background));
+                int written = AppendCachedLeafRows(
+                    leafIndex, leaf, leafSnapshot, _frameScratch.AsSpan(startInstanceIndex),
+                    paneRows, paneColumns, themeForeground, new SgrColorArgb(theme.Background));
                 int startColumnOffset = (int)Math.Round(leaf.Bounds.X / (cellWidth * scale));
                 int startRowOffset = (int)Math.Round(leaf.Bounds.Y / (cellHeight * scale)) + barRows;
                 for (int i = 0; i < written; i++)
@@ -408,6 +437,9 @@ public sealed class TerminalSceneComposer
                 }
             }
         }
+        _atlas.PublishPendingGlyphs();
+        if (_atlas.ContentVersion != atlasVersionAtStart)
+            InvalidateLeafRowCaches();
 
         if (showTabBar && tabManager.Count > 0)
         {
@@ -430,7 +462,9 @@ public sealed class TerminalSceneComposer
                 hoveredTabHitType,
                 titles,
                 status,
-                statusWarning);
+                statusWarning,
+                captionButtonsWidth,
+                isMaximized);
             instanceCount += tabQuads;
             chromeQuadCount += chromeQuadsWritten;
         }
@@ -517,6 +551,165 @@ public sealed class TerminalSceneComposer
         }
         return _cachedFrame;
     }
+    private void ConfigureRowCaches(
+        IColorScheme theme,
+        SgrColorArgb foreground,
+        SgrColorArgb background,
+        SgrColorArgb selection,
+        int framebufferWidth,
+        int framebufferHeight,
+        int rows,
+        int columns,
+        float cellWidth,
+        float cellHeight,
+        float scale,
+        PaddingUserConfig padding,
+        int leafCount,
+        int atlasVersion)
+    {
+        if (_leafRowCaches.Length < leafCount)
+            Array.Resize(ref _leafRowCaches, Math.Max(leafCount, Math.Max(2, _leafRowCaches.Length * 2)));
+
+        bool changed = !_hasRowCacheConfiguration
+            || !ReferenceEquals(_cachedRowCacheTheme, theme)
+            || !ReferenceEquals(_cachedRowCacheAtlas, _atlas)
+            || !ReferenceEquals(_cachedRowCacheTypeface, _typeface)
+            || !_cachedRowCacheFontSize.Equals(_fontSize)
+            || _cachedRowCacheAtlasVersion != atlasVersion
+            || _cachedRowCacheFramebufferWidth != framebufferWidth
+            || _cachedRowCacheFramebufferHeight != framebufferHeight
+            || _cachedRowCacheRows != rows
+            || _cachedRowCacheColumns != columns
+            || !_cachedRowCacheCellWidth.Equals(cellWidth)
+            || !_cachedRowCacheCellHeight.Equals(cellHeight)
+            || !_cachedRowCacheScale.Equals(scale)
+            || _cachedRowCachePadLeft != padding.Left
+            || _cachedRowCachePadTop != padding.Top
+            || _cachedRowCachePadRight != padding.Right
+            || _cachedRowCachePadBottom != padding.Bottom
+            || _cachedRowCacheForeground != foreground
+            || _cachedRowCacheBackground != background
+            || _cachedRowCacheSelectionColor != selection;
+        for (int i = 0; i < leafCount; i++)
+        {
+            LeafRowCache slot = _leafRowCaches[i] ??= new LeafRowCache();
+            if (changed)
+                slot.Cache.InvalidateAll();
+        }
+
+        _hasRowCacheConfiguration = true;
+        _cachedRowCacheTheme = theme;
+        _cachedRowCacheAtlas = _atlas;
+        _cachedRowCacheTypeface = _typeface;
+        _cachedRowCacheFontSize = _fontSize;
+        _cachedRowCacheAtlasVersion = atlasVersion;
+        _cachedRowCacheFramebufferWidth = framebufferWidth;
+        _cachedRowCacheFramebufferHeight = framebufferHeight;
+        _cachedRowCacheRows = rows;
+        _cachedRowCacheColumns = columns;
+        _cachedRowCacheCellWidth = cellWidth;
+        _cachedRowCacheCellHeight = cellHeight;
+        _cachedRowCacheScale = scale;
+        _cachedRowCachePadLeft = padding.Left;
+        _cachedRowCachePadTop = padding.Top;
+        _cachedRowCachePadRight = padding.Right;
+        _cachedRowCachePadBottom = padding.Bottom;
+        _cachedRowCacheForeground = foreground;
+        _cachedRowCacheBackground = background;
+        _cachedRowCacheSelectionColor = selection;
+    }
+
+    private int AppendCachedLeafRows(
+        int leafIndex,
+        LeafPane leaf,
+        RenderSnapshot snapshot,
+        Span<CellInstance> destination,
+        int rows,
+        int columns,
+        SgrColorArgb foreground,
+        SgrColorArgb background)
+    {
+        var slot = _leafRowCaches[leafIndex];
+        if (!ReferenceEquals(slot.Owner, leaf))
+        {
+            slot.Owner = leaf;
+            slot.Cache.InvalidateAll();
+        }
+
+        var cache = slot.Cache;
+        cache.EnsureGeometry(rows, columns, 0f, 0f);
+        cache.BeginFrame();
+
+        for (int row = 0; row < rows; row++)
+        {
+            ReadOnlySpan<CellHot> hot = snapshot.GetRowCells(row);
+            ReadOnlySpan<ColdCell> cold = snapshot.GetRowColdCells(row);
+            // Scrolls bump generations region-wide; physical row identity follows the content through ring rotation.
+            int rowIdentity = snapshot.RowMap[row];
+            for (int source = 0; source < rows; source++)
+            {
+                ref readonly var previous = ref cache.GetPreviousEntryRef(source);
+                if (!previous.Valid
+                    || previous.RowIdentity != rowIdentity
+                    || previous.SourceCells.Length < columns
+                    || previous.SourceColdCells.Length < columns
+                    || !hot.SequenceEqual(previous.SourceCells.AsSpan(0, columns))
+                    || !cold.SequenceEqual(previous.SourceColdCells.AsSpan(0, columns)))
+                    continue;
+
+                if (cache.TryMapRow(row, source))
+                    break;
+            }
+        }
+
+        cache.ApplyMappings();
+        for (int row = 0; row < rows; row++)
+        {
+            ref var entry = ref cache.GetEntryRef(row);
+            for (int i = 0; i < entry.InstanceCount; i++)
+                entry.Instances[i].Row = (ushort)row;
+            entry.RowIdentity = snapshot.RowMap[row];
+            entry.Generation = snapshot.RowGenerations[row];
+        }
+
+        int written = 0;
+        for (int row = 0; row < rows; row++)
+        {
+            ref var entry = ref cache.GetEntryRef(row);
+            if (!entry.Valid)
+            {
+                ReadOnlySpan<CellHot> hot = snapshot.GetRowCells(row);
+                ReadOnlySpan<ColdCell> cold = snapshot.GetRowColdCells(row);
+                cache.EnsureEntryCapacity(ref entry, columns);
+                int count = QuadFrameBuilder.BuildRow(
+                    snapshot, row, _atlas, _typeface, _fontSize,
+                    entry.Instances.AsSpan(), _dirtyAtlasRows, columns, foreground, background);
+                hot.CopyTo(entry.SourceCells);
+                cold.CopyTo(entry.SourceColdCells);
+                entry.InstanceCount = count;
+                entry.RowIdentity = snapshot.RowMap[row];
+                entry.Generation = snapshot.RowGenerations[row];
+                entry.Valid = true;
+                _cachedRowMisses++;
+            }
+            else
+            {
+                entry.RowIdentity = snapshot.RowMap[row];
+                entry.Generation = snapshot.RowGenerations[row];
+                _cachedRowHits++;
+            }
+            entry.Instances.AsSpan(0, entry.InstanceCount).CopyTo(destination[written..]);
+            written += entry.InstanceCount;
+        }
+        return written;
+    }
+
+    private void InvalidateLeafRowCaches()
+    {
+        for (int i = 0; i < _leafRowCaches.Length; i++)
+            _leafRowCaches[i]?.Cache.InvalidateAll();
+    }
+
     private ContextMenuLayout GetContextMenuLayout(
         ContextMenuModel model,
         float viewportWidth,

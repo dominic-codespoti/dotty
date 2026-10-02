@@ -32,6 +32,7 @@ active and records the parse error in `UserConfigService.LastError`.
   },
   "window": {
     "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 },
+    "decorations": "custom",
     "opacity": 1,
     "title": "Dotty"
   },
@@ -80,11 +81,12 @@ reports incomplete metrics.
 
 ### `window`
 
-| Property | Type | Default |
-|---|---|---|
-| `padding.left` / `top` / `right` / `bottom` | number | `14`, `8`, `14`, `8` |
-| `opacity` | number | `1` |
-| `title` | string | `Dotty` |
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `padding.left` / `top` / `right` / `bottom` | number | `14`, `8`, `14`, `8` | Inner window padding. |
+| `opacity` | number | `1` | |
+| `title` | string | `Dotty` | |
+| `decorations` | string | `custom` | Windows only: `custom` removes the native title bar and draws the tab-bar caption controls; `native` keeps native decorations. Other platforms retain native decorations regardless of this option. The custom caption strip remains visible when `tabBar.show` is false. |
 
 ### `tabBar`
 

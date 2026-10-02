@@ -7,6 +7,7 @@ public delegate void TerminalTextReceived(ReadOnlySpan<char> text);
 
 public sealed class TerminalKeyboardController
 {
+    private const int MaxKeyRepeatCatchUp = 3;
     private readonly TerminalTextReceived? _textReceived;
     private readonly Action<Key, int>? _keyPressed;
     private readonly Action<char>? _characterReceived;
@@ -219,8 +220,21 @@ public sealed class TerminalKeyboardController
             return;
         }
 
-        _nextKeyRepeatTimestampMs = now + _repeatIntervalMs;
+        int emitted = 0;
+        do
+        {
+            _nextKeyRepeatTimestampMs += _repeatIntervalMs;
+            EmitKeyRepeat();
+            emitted++;
+        }
+        while (_nextKeyRepeatTimestampMs <= now && emitted < MaxKeyRepeatCatchUp);
 
+        if (_nextKeyRepeatTimestampMs <= now)
+            _nextKeyRepeatTimestampMs = now + _repeatIntervalMs;
+    }
+
+    private void EmitKeyRepeat()
+    {
         if (_heldTextLength != 0 && !_leftAlt && (!Ctrl || _rightAlt))
         {
             Span<char> text = stackalloc char[2];
@@ -231,7 +245,7 @@ public sealed class TerminalKeyboardController
         else
         {
             _activity?.Invoke();
-            _keyPressed?.Invoke(_heldKey.Value, _heldScancode);
+            _keyPressed?.Invoke(_heldKey!.Value, _heldScancode);
         }
     }
 

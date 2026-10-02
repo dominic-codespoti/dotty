@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using Dotty.Runtime.Rendering;
 using Dotty.Abstractions.Config;
 using Dotty.Rendering.Gpu;
 using SkiaSharp;
@@ -41,7 +42,9 @@ public static class TabBarQuadBuilder
         TabBarHitType hoveredHitType = TabBarHitType.None,
         ITabTitleSource? titles = null,
         ReadOnlySpan<char> status = default,
-        bool statusWarning = false)
+        bool statusWarning = false,
+        float captionButtonsWidth = 0f,
+        bool isMaximized = false)
     {
         ArgumentNullException.ThrowIfNull(tabManager);
         ArgumentNullException.ThrowIfNull(atlas);
@@ -56,8 +59,8 @@ public static class TabBarQuadBuilder
         var palette = ResolvePalette(theme);
         var metrics = ResolveMetrics(cellHeight);
         float statusWidth = MeasureStatusWidth(status, cellWidth, typeface, fontSize, atlas, statusWarning);
-        var layout = TabBarLayout.Calculate(windowWidth, tabManager.Count, tabManager.ActiveIndex, barHeight, statusWidth);
-
+        var layout = TabBarLayout.Calculate(
+            windowWidth, tabManager.Count, tabManager.ActiveIndex, barHeight, statusWidth, captionButtonsWidth);
         // The rail and divider are deliberately pixel-precise. No cell-grid
         // background instances are emitted, avoiding seams when cell size and
         // the configured bar height do not line up exactly.
@@ -184,9 +187,111 @@ public static class TabBarQuadBuilder
                 isBold: statusWarning, cellWidth, typeface, fontSize, atlas,
                 statusOffsetY, statusBounds.Right);
         }
-
+        if (captionButtonsWidth > 0f)
+        {
+            DrawCaptionButton(destination, chromeDestination, ref written, ref chromeWritten,
+                layout.MinimizeButtonBounds, TabBarHitType.Minimize, hoveredHitType,
+                isMaximized, atlas, typeface, fontSize, cellWidth, cellHeight, metrics, palette);
+            DrawCaptionButton(destination, chromeDestination, ref written, ref chromeWritten,
+                layout.MaximizeButtonBounds, TabBarHitType.Maximize, hoveredHitType,
+                isMaximized, atlas, typeface, fontSize, cellWidth, cellHeight, metrics, palette);
+            DrawCaptionButton(destination, chromeDestination, ref written, ref chromeWritten,
+                layout.CloseButtonBounds, TabBarHitType.Close, hoveredHitType,
+                isMaximized, atlas, typeface, fontSize, cellWidth, cellHeight, metrics, palette);
+        }
 
         return written;
+    }
+
+    private static void DrawCaptionButton(
+        Span<CellInstance> destination,
+        Span<ChromeQuadInstance> chromeDestination,
+        ref int written,
+        ref int chromeWritten,
+        TabRect bounds,
+        TabBarHitType hitType,
+        TabBarHitType hoveredHitType,
+        bool isMaximized,
+        GlyphAtlas atlas,
+        SKTypeface typeface,
+        float fontSize,
+        float cellWidth,
+        float cellHeight,
+        ChromeMetrics metrics,
+        ChromePalette palette)
+    {
+        if (bounds.Width <= 0f || bounds.Height <= 0f)
+            return;
+
+        bool hovered = hitType == hoveredHitType;
+        if (hovered)
+        {
+            uint background = hitType == TabBarHitType.Close ? palette.Danger : palette.SurfaceHover;
+            EmitSolid(chromeDestination, ref chromeWritten,
+                bounds.Left, bounds.Top, bounds.Width, bounds.Height, 0f, background);
+        }
+
+        float scale = Math.Max(0.1f, metrics.Scale);
+        float iconSize = Math.Min(12f * scale, Math.Min(bounds.Width * 0.55f, bounds.Height * 0.4f));
+        float stroke = Math.Min(Math.Max(1f, scale), iconSize * 0.25f);
+        float centerX = bounds.Left + bounds.Width * 0.5f;
+        float centerY = bounds.Top + bounds.Height * 0.5f;
+        uint iconColor = hovered ? palette.TextPrimary : palette.TextSecondary;
+
+        if (hitType == TabBarHitType.Minimize)
+        {
+            EmitSolid(chromeDestination, ref chromeWritten,
+                centerX - iconSize * 0.5f, centerY - stroke * 0.5f,
+                iconSize, stroke, 0f, iconColor);
+            return;
+        }
+
+        if (hitType == TabBarHitType.Maximize)
+        {
+            if (isMaximized)
+            {
+                float offset = stroke * 1.5f;
+                DrawSquare(chromeDestination, ref chromeWritten,
+                    centerX - iconSize * 0.5f + offset,
+                    centerY - iconSize * 0.5f - offset,
+                    iconSize, stroke, iconColor);
+                DrawSquare(chromeDestination, ref chromeWritten,
+                    centerX - iconSize * 0.5f - offset,
+                    centerY - iconSize * 0.5f + offset,
+                    iconSize, stroke, iconColor);
+            }
+            else
+            {
+                DrawSquare(chromeDestination, ref chromeWritten,
+                    centerX - iconSize * 0.5f, centerY - iconSize * 0.5f,
+                    iconSize, stroke, iconColor);
+            }
+            return;
+        }
+
+        int row = (int)Math.Floor(bounds.Top / cellHeight);
+        float offsetY = ComputeCenteredOffsetY(
+            typeface, fontSize, row, cellHeight, bounds.Top, bounds.Height);
+        EmitString(destination, ref written, "×",
+            centerX - cellWidth * 0.5f, row,
+            iconColor, isBold: false, cellWidth, typeface, fontSize, atlas, offsetY,
+            bounds.Right);
+    }
+
+    private static void DrawSquare(
+        Span<ChromeQuadInstance> destination,
+        ref int written,
+        float x,
+        float y,
+        float size,
+        float stroke,
+        uint color)
+    {
+        EmitSolid(destination, ref written, x, y, size, stroke, 0f, color);
+        EmitSolid(destination, ref written, x, y + size - stroke, size, stroke, 0f, color);
+        EmitSolid(destination, ref written, x, y + stroke, stroke, size - stroke * 2f, 0f, color);
+        EmitSolid(destination, ref written, x + size - stroke, y + stroke,
+            stroke, size - stroke * 2f, 0f, color);
     }
 
     private static void EmitSolid(

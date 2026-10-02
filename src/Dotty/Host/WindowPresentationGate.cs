@@ -22,10 +22,19 @@ public enum WindowFrameReason
 
 public static class WindowPresentationGate
 {
+    public const int BackloggedFrameIntervalMs = 30;
+    public const int InteractiveWindowMs = 250;
+
     private static int _pendingReasons = (int)WindowFrameReason.Initial;
 
+    public static bool ShouldCoalesce(long now, long lastPresent, long lastInteraction, bool anyBacklogged) =>
+        anyBacklogged &&
+        lastPresent != 0 &&
+        now - lastPresent < BackloggedFrameIntervalMs &&
+        now - lastInteraction >= InteractiveWindowMs;
+
     public static bool ShouldPresent(TerminalAdapter? adapter) =>
-        adapter is null || !adapter.SynchronizedUpdateActive;
+        adapter is null || !adapter.SynchronizedUpdateHolding;
 
     public static WindowFrameReason PendingReasons =>
         (WindowFrameReason)Volatile.Read(ref _pendingReasons);

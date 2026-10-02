@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Dotty.Silk;
 using Dotty.Silk.Input;
 using Silk.NET.Input;
 using Xunit;
@@ -151,6 +152,71 @@ public class TerminalKeyboardControllerTests
         clock.Advance(33);
         controller.Tick();
         Assert.Equal(4, keyEvents.Count);
+    }
+
+    [Fact]
+    public void KeyRepeat_UsesScheduledDeadlinesAcrossTickJitter()
+    {
+        var clock = new FakeClock { CurrentTimeMs = 1000 };
+        var keyEvents = new List<(Key Key, int Scancode)>();
+        var controller = new TerminalKeyboardController(
+            keyPressed: (key, scancode) => keyEvents.Add((key, scancode)),
+            clockMilliseconds: () => clock.CurrentTimeMs);
+
+        controller.HandleKeyDown(Key.Up, 10);
+        clock.CurrentTimeMs = 1401;
+        controller.Tick();
+        Assert.Equal(2, keyEvents.Count);
+
+        clock.CurrentTimeMs = 1432;
+        controller.Tick();
+        Assert.Equal(2, keyEvents.Count);
+
+        clock.CurrentTimeMs = 1438;
+        controller.Tick();
+        Assert.Equal(3, keyEvents.Count);
+
+        clock.CurrentTimeMs = 1465;
+        controller.Tick();
+        Assert.Equal(3, keyEvents.Count);
+
+        clock.CurrentTimeMs = 1468;
+        controller.Tick();
+        Assert.Equal(4, keyEvents.Count);
+    }
+
+    [Fact]
+    public void KeyRepeat_LateTickCatchesUpAtMostThreeThenResynchronizes()
+    {
+        var clock = new FakeClock { CurrentTimeMs = 1000 };
+        var keyEvents = new List<(Key Key, int Scancode)>();
+        var controller = new TerminalKeyboardController(
+            keyPressed: (key, scancode) => keyEvents.Add((key, scancode)),
+            clockMilliseconds: () => clock.CurrentTimeMs);
+
+        controller.HandleKeyDown(Key.Up, 10);
+        clock.CurrentTimeMs = 1550;
+        controller.Tick();
+        Assert.Equal(4, keyEvents.Count);
+
+        clock.CurrentTimeMs = 1582;
+        controller.Tick();
+        Assert.Equal(4, keyEvents.Count);
+
+        clock.CurrentTimeMs = 1583;
+        controller.Tick();
+        Assert.Equal(5, keyEvents.Count);
+    }
+
+    [Fact]
+    public void BackloggedContentCoalescing_IsDisabledForRecentInteraction()
+    {
+        Assert.False(WindowPresentationGate.ShouldCoalesce(350, 340, 100, anyBacklogged: false));
+        Assert.False(WindowPresentationGate.ShouldCoalesce(110, 100, 0, anyBacklogged: true));
+        Assert.False(WindowPresentationGate.ShouldCoalesce(110, 100, 100, anyBacklogged: true));
+        Assert.True(WindowPresentationGate.ShouldCoalesce(350, 340, 100, anyBacklogged: true));
+        Assert.False(WindowPresentationGate.ShouldCoalesce(370, 340, 100, anyBacklogged: true));
+        Assert.False(WindowPresentationGate.ShouldCoalesce(350, 340, 101, anyBacklogged: true));
     }
 
     [Fact]

@@ -27,6 +27,42 @@ public sealed class WindowPresentationGateTests
     }
 
     [Fact]
+    public void Mode2026HoldExpiresFromFirstBeginAndRepeatedBeginDoesNotRenewIt()
+    {
+        var clock = new ManualTimeProvider();
+        var adapter = new TerminalAdapter(2, 8, timeProvider: clock);
+        var parser = new BasicAnsiParser { Handler = adapter };
+        int renders = 0;
+        adapter.RenderRequested += _ => renders++;
+
+        parser.Feed("\x1b[?2026h"u8);
+        clock.AdvanceMs(TerminalAdapter.SynchronizedUpdateMaxHoldMs - 400);
+        parser.Feed("\x1b[?2026hX"u8);
+        clock.AdvanceMs(399);
+        Assert.False(WindowPresentationGate.ShouldPresent(adapter));
+        Assert.Equal(0, renders);
+
+        clock.AdvanceMs(1);
+        Assert.True(WindowPresentationGate.ShouldPresent(adapter));
+        parser.Feed("Y"u8);
+        adapter.FlushRender();
+        Assert.Equal(1, renders);
+
+        // END then BEGIN opens a fresh hold with its own full deadline.
+        parser.Feed("\x1b[?2026l\x1b[?2026h"u8);
+        clock.AdvanceMs(TerminalAdapter.SynchronizedUpdateMaxHoldMs - 1);
+        Assert.False(WindowPresentationGate.ShouldPresent(adapter));
+    }
+
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _timestamp;
+        public override long TimestampFrequency => 1000;
+        public override long GetTimestamp() => _timestamp;
+        public void AdvanceMs(long milliseconds) => _timestamp += milliseconds;
+    }
+
+    [Fact]
     public void InvalidateCoalescesReasonsAndConsumeClearsPendingReasons()
     {
         WindowFrameReason previous = WindowPresentationGate.Consume();

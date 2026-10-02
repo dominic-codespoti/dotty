@@ -12,6 +12,7 @@ using Xunit;
 
 namespace Dotty.App.Tests;
 
+[Collection("Allocation-sensitive tests")]
 public sealed class InputAllocationTests
 {
     [Fact]
@@ -25,13 +26,14 @@ public sealed class InputAllocationTests
             bindings.TryGetAction(false, false, false, false, "Z", out _);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++)
+        AllocationAssert.NoAllocations(() =>
         {
-            bindings.TryGetAction(true, true, false, false, "K", out _);
-            bindings.TryGetAction(false, false, false, false, "Z", out _);
-        }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            for (int i = 0; i < 100; i++)
+            {
+                bindings.TryGetAction(true, true, false, false, "K", out _);
+                bindings.TryGetAction(false, false, false, false, "Z", out _);
+            }
+        }, measuredIterationsPerWindow: 1);
     }
 
     [Fact]
@@ -44,10 +46,9 @@ public sealed class InputAllocationTests
         for (int i = 0; i < 100; i++)
             host.Keybinds.TryExecute(false, false, false, false, "Z");
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++)
-            host.Keybinds.TryExecute(false, false, false, false, "Z");
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        AllocationAssert.NoAllocations(
+            () => host.Keybinds.TryExecute(false, false, false, false, "Z"),
+            measuredIterationsPerWindow: 100);
     }
 
 
@@ -56,16 +57,16 @@ public sealed class InputAllocationTests
     public void KeyAndMouseEncodingIntoSpansAllocatesNothingAfterWarmup()
     {
         var encoder = new TerminalInputEncoder();
-        Span<byte> bytes = stackalloc byte[64];
+        var bytes = new byte[64];
         int length = SilkKeyMapper.Encode(Key.Up, false, true, false, false, bytes);
-        Assert.Equal("\x1b[1;2A", System.Text.Encoding.ASCII.GetString(bytes[..length]));
+        Assert.Equal("\x1b[1;2A", System.Text.Encoding.ASCII.GetString(bytes.AsSpan(0, length)));
         length = encoder.Encode(TerminalKey.Delete, TerminalKeyModifiers.Control, bytes);
-        Assert.Equal("\x1b[3;5~", System.Text.Encoding.ASCII.GetString(bytes[..length]));
+        Assert.Equal("\x1b[3;5~", System.Text.Encoding.ASCII.GetString(bytes.AsSpan(0, length)));
         length = encoder.EncodeMouseEvent(
             Dotty.Terminal.Adapter.TerminalAdapter.MouseMode.Normal,
             Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGR,
             0, 3, 4, true, false, TerminalKeyModifiers.None, bytes);
-        Assert.Equal("\x1b[<0;5;4M", System.Text.Encoding.ASCII.GetString(bytes[..length]));
+        Assert.Equal("\x1b[<0;5;4M", System.Text.Encoding.ASCII.GetString(bytes.AsSpan(0, length)));
         for (int i = 0; i < 100; i++)
         {
             SilkKeyMapper.Encode(Key.Up, false, true, false, false, bytes);
@@ -76,17 +77,18 @@ public sealed class InputAllocationTests
                 0, 3, 4, true, false, TerminalKeyModifiers.None, bytes);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++)
+        AllocationAssert.NoAllocations(() =>
         {
-            SilkKeyMapper.Encode(Key.Up, false, true, false, false, bytes);
-            encoder.Encode(TerminalKey.Delete, TerminalKeyModifiers.Control, bytes);
-            encoder.EncodeMouseEvent(
-                Dotty.Terminal.Adapter.TerminalAdapter.MouseMode.Normal,
-                Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGR,
-                0, 3, 4, true, false, TerminalKeyModifiers.None, bytes);
-        }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            for (int i = 0; i < 100; i++)
+            {
+                SilkKeyMapper.Encode(Key.Up, false, true, false, false, bytes);
+                encoder.Encode(TerminalKey.Delete, TerminalKeyModifiers.Control, bytes);
+                encoder.EncodeMouseEvent(
+                    Dotty.Terminal.Adapter.TerminalAdapter.MouseMode.Normal,
+                    Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGR,
+                    0, 3, 4, true, false, TerminalKeyModifiers.None, bytes);
+            }
+        }, measuredIterationsPerWindow: 1);
     }
 
     [Fact]
@@ -104,13 +106,14 @@ public sealed class InputAllocationTests
         }
         host.InputBytes.Clear();
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++)
+        AllocationAssert.NoAllocations(() =>
         {
-            dispatcher.HandleKeyDown(Key.A, 0);
-            dispatcher.HandleText("a");
-        }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            for (int i = 0; i < 100; i++)
+            {
+                dispatcher.HandleKeyDown(Key.A, 0);
+                dispatcher.HandleText("a");
+            }
+        }, measuredIterationsPerWindow: 1);
     }
 
     [Fact]
@@ -130,12 +133,13 @@ public sealed class InputAllocationTests
             Assert.Equal(global::Silk.NET.Input.StandardCursor.Hand, host.CurrentCursor);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 100; i++)
+        AllocationAssert.NoAllocations(() =>
         {
-            controller.HandleMouseMove(null!, new Vector2(30, 5));
-            controller.HandleMouseMove(null!, new Vector2(30, 30));
-        }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            for (int i = 0; i < 100; i++)
+            {
+                controller.HandleMouseMove(null!, new Vector2(30, 5));
+                controller.HandleMouseMove(null!, new Vector2(30, 30));
+            }
+        }, measuredIterationsPerWindow: 1);
     }
 }

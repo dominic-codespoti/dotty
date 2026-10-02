@@ -38,6 +38,7 @@ Cross-terminal output only             scripts/perf/eval_suite.py compare
 .NET CPU/counters/alloc/heap only      scripts/perf/eval_suite.py profile
 Parser/buffer microbenchmarks          dotnet run --mode quick --filter bulk
 GUI tab/memory harness                 scripts/perf/gui_harness_bench.py
+Real Neovim scroll + compositor frames   scripts/perf/eval_suite.py nvim-scroll
 ```
 
 ## 1. Consolidated Evaluation Suite (Recommended)
@@ -95,6 +96,56 @@ interpret the file as valid counters data.
 
 The suite's direct child scripts are still useful when isolating a failure;
 see sections 2–4 for focused commands:
+### Real Neovim scrolling and visible-frame measurements
+
+This fourth suite command measures real Neovim scrolling and visible compositor
+frames; it is not part of `all` or the synthetic output-throughput comparison.
+Build the PTY helper and current Release apphost first. The explicit apphost
+avoids accidentally measuring an older published binary:
+
+```bash
+make -C src/Dotty.NativePty
+dotnet build src/Dotty/Dotty.csproj -c Release
+python3 scripts/perf/eval_suite.py nvim-scroll \
+  --app src/Dotty/bin/Release/net10.0/dotty \
+  --include dotty,ghostty,kitty --lines 1000000 --cols 200 --rows 60 \
+  --runs 5 --warmup-runs 1 --profile plain --capture auto --sample-hz 60 \
+  --startup-timeout 30 --run-timeout 1800 --timeout 86400
+```
+
+Requires Neovim 0.10+, .NET 10, Python 3, desired terminals, and Linux Hyprland
+with `hyprctl`/`grim` or X11 with `xdotool`. Each step calls experimental
+`nvim__redraw` with `valid=true`, `statusline=true`, and `flush=true`; record the
+Neovim version because API behavior may change. `--profile syntax` enables the
+built-in C syntax profile. Optional absent competitors are skipped; the result
+is partial. For virtual X11, explicitly use `--display-kind virtual` and unset
+`WAYLAND_DISPLAY` and `HYPRLAND_INSTANCE_SIGNATURE` (e.g. under Xvfb); this is
+not physical-compositor evidence.
+
+The deterministic ~95 MB fixture has one million lines; each of N-1 requested
+steps checks an exact one-line cursor advance and flushes redraw. Phase/parity
+markers correlate Neovim progress with visible pixels. The 300x100 stress grid
+needs an adequately sized display. Dotty uses DejaVu Sans Mono at 16px and
+competitors at 12pt; keep grid, font, display resolution/refresh/scale, and
+backend stable, and inspect recorded geometry and fixture/binary hashes. Keep
+windows visible; avoid other apps, workspaces, and image viewers that occlude
+benchmark windows.
+
+The default 60 Hz cadence is a target, not a guarantee; expensive `grim` capture
+may need `--sample-hz 20` or `10`. `--capture none`, missing/late markers, and
+cadence gaps make visual metrics partial/unknown, never zero. These sampled
+compositor observations are not GPU fences or proof of root cause. JSON records
+launch/file/geometry readiness, traversal, visual threshold counts, maximum
+visible-line jump, EOF tail, and RSS. Markdown summarizes traversal/lines per
+second, longest visible stall, EOF tail, RSS, status, and artifacts; opening
+timings, threshold counts, and max jump are JSON-only. Sampled process-tree
+RSS spans startup, traversal, and EOF presentation tail; it is a sampled maximum,
+not an exact peak, excludes the external observer, and excludes cleanup and
+stop-release memory. Artifacts include `nvim-scroll.json`, `report.md`, per-run
+logs, raw samples/events, and screenshots when available under
+`artifacts/perf/eval/<run-id>/`. Per-run timeout includes traversal and EOF tail;
+suite timeout includes all runs. Owned windows/descendants are cleaned up and
+the original Hyprland workspace restored; terminal user data is untouched.
 
 ## 2. Microbenchmarks (BenchmarkDotNet)
 

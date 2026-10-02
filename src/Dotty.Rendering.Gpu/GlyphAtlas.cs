@@ -131,8 +131,9 @@ public sealed class GlyphAtlas : IDisposable
     private GlyphInfo _fallbackGlyph;
     private bool _hasFallbackGlyph;
     private bool _fullUploadRequired;
+    private bool _glyphMapDirty;
+    private int _publishedMapCopyCount;
     private int _contentVersion;
-
     /// <summary>Recency stamp + refcount, maintained by <see cref="GlyphAtlasService"/> under its lock.</summary>
     internal long LastUsedStamp { get; set; }
     internal int RefCount { get; set; }
@@ -272,6 +273,7 @@ public sealed class GlyphAtlas : IDisposable
             _fallbackGlyph = fallbackGlyph;
             Volatile.Write(ref _hasFallbackGlyph, true);
         }
+        PublishPendingGlyphs();
     }
 
     private static SKBitmap CreateAtlasBitmap(int size)
@@ -283,10 +285,14 @@ public sealed class GlyphAtlas : IDisposable
 
     public bool TryGetGlyph(GlyphKey key, out GlyphInfo info)
     {
-        // Published snapshots are never mutated after publication. This is
-        // deliberately outside _lock: the render thread's hit path takes no
-        // monitor and never probes the writer-owned dictionary.
-        return Volatile.Read(ref _publishedMap).TryGetValue(key, out info);
+        // Published hits stay lock-free. On a miss, probe the working map so
+        // readers can observe entries committed in the current frame before
+        // its batched snapshot is published.
+        if (Volatile.Read(ref _publishedMap).TryGetValue(key, out info))
+            return true;
+
+        lock (_lock)
+            return _map.TryGetValue(key, out info);
     }
 
     /// <summary>
@@ -312,9 +318,17 @@ public sealed class GlyphAtlas : IDisposable
         if (string.IsNullOrEmpty(key.Grapheme))
             return false;
 
+        // A prior miss in this frame may already have placed the glyph in the
+        // writer map. Avoid rerasterizing it before the next snapshot publish.
+        lock (_lock)
+        {
+            if (_map.TryGetValue(key, out info))
+                return true;
+        }
+
         // Rasterization intentionally happens before taking the atlas lock.
         // A concurrent miss may rasterize the same glyph, but the commit
-        // recheck below ensures only one copy is packed and published.
+        // recheck below ensures only one copy is packed.
         var raster = RasterizeEffective(key);
         using (raster.Image)
         {
@@ -346,12 +360,39 @@ public sealed class GlyphAtlas : IDisposable
         if (string.IsNullOrEmpty(key.Grapheme) || blob == null)
             return false;
 
+        lock (_lock)
+        {
+            if (_map.TryGetValue(key, out info))
+                return true;
+        }
+
         var raster = RasterizeTightShaped(key, blob);
         using (raster.Image)
         {
             return CommitRasterizedGlyph(key, raster, out info, out _);
         }
     }
+
+    /// <summary>
+    /// Publishes all glyphs committed since the previous publication in one
+    /// copy-on-write snapshot. Call after a frame/batch has ensured its glyphs.
+    /// Published dictionaries are never mutated, preserving lock-free hits.
+    /// </summary>
+    public void PublishPendingGlyphs()
+    {
+        lock (_lock)
+        {
+            if (!_glyphMapDirty)
+                return;
+
+            Volatile.Write(ref _publishedMap,
+                new GlyphMapSnapshot(new Dictionary<GlyphKey, GlyphInfo>(_map)));
+            _glyphMapDirty = false;
+            _publishedMapCopyCount++;
+        }
+    }
+
+    internal int PublishedMapCopyCount => Volatile.Read(ref _publishedMapCopyCount);
 
     private bool CommitRasterizedGlyph(
         GlyphKey key,
@@ -387,12 +428,10 @@ public sealed class GlyphAtlas : IDisposable
                 x, y, raster.Width, raster.Height,
                 raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
             _map[key] = info;
-
             int nextVersion = unchecked(_contentVersion + 1);
             Volatile.Write(ref _contentVersion, nextVersion);
-            // Copy-on-write publication: this dictionary is never mutated
-            // after the volatile write.
-            Volatile.Write(ref _publishedMap, new GlyphMapSnapshot(new Dictionary<GlyphKey, GlyphInfo>(_map)));
+
+            _glyphMapDirty = true;
             _dirtyRegions.Add(new AtlasDirtyRegion(x, y, raster.Width, raster.Height));
             added = true;
             return true;
@@ -446,7 +485,12 @@ public sealed class GlyphAtlas : IDisposable
             return RasterizeTight(key);
         }
 
-        using var fallbackFont = new SKFont(resolvedTypeface, key.TextSize);
+        using var fallbackFont = new SKFont(resolvedTypeface, key.TextSize)
+        {
+            Edging = SKFontEdging.Antialias,
+            Subpixel = false,
+            Hinting = SKFontHinting.Full,
+        };
         var fallbackMetrics = fallbackFont.Metrics;
         float fallbackHeight = MathF.Max(1f,
             MathF.Ceiling(-fallbackMetrics.Ascent) + 1f +
@@ -467,9 +511,10 @@ public sealed class GlyphAtlas : IDisposable
         {
             var effectiveKey = new GlyphKey(
                 key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Bold);
+            fallbackFont.Size = key.TextSize * scale;
             var raster = RasterizeTightCore(
                 effectiveKey, blob: null, baselineOverride: _primaryBaseline,
-                maxAdvance: cellWidth);
+                maxAdvance: cellWidth, fontOverride: fallbackFont);
             if (raster.Width <= MathF.Ceiling(cellWidth) &&
                 raster.Height <= MathF.Ceiling(_primaryCellHeight))
             {
@@ -493,8 +538,10 @@ public sealed class GlyphAtlas : IDisposable
 
         // The final attempt is still a valid A8 raster. CommitRasterizedGlyph
         var finalKey = new GlyphKey(key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Bold);
+        fallbackFont.Size = key.TextSize * scale;
         var finalRaster = RasterizeTightCore(finalKey, blob: null,
-            baselineOverride: _primaryBaseline, maxAdvance: cellWidth);
+            baselineOverride: _primaryBaseline, maxAdvance: cellWidth,
+            fontOverride: fallbackFont);
         if (finalRaster.Width > MathF.Ceiling(cellWidth) ||
             finalRaster.Height > MathF.Ceiling(_primaryCellHeight))
         {
@@ -550,14 +597,18 @@ public sealed class GlyphAtlas : IDisposable
     private GlyphRaster RasterizeTightCore(
         GlyphKey key, SKTextBlob? blob,
         float baselineOverride = float.NaN,
-        float maxAdvance = float.PositiveInfinity)
+        float maxAdvance = float.PositiveInfinity,
+        SKFont? fontOverride = null)
     {
-        using var font = new SKFont(key.Typeface, key.TextSize)
-        {
-            Edging = SKFontEdging.Antialias,   // grayscale AA; subpixel needs RGB, not A8
-            Subpixel = false,
-            Hinting = SKFontHinting.Full,      // match the direct path's hinting
-        };
+        using var ownedFont = fontOverride == null
+            ? new SKFont(key.Typeface, key.TextSize)
+            {
+                Edging = SKFontEdging.Antialias,
+                Subpixel = false,
+                Hinting = SKFontHinting.Full,
+            }
+            : null;
+        var font = fontOverride ?? ownedFont!;
         using var paint = new SKPaint
         {
             Color = SKColors.White,

@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Dotty.App.Tests;
 
+[Collection("Allocation-sensitive tests")]
 public sealed class LuaAllocationTests : IDisposable
 {
     private readonly DottyUserConfig _config = new();
@@ -39,15 +40,16 @@ public sealed class LuaAllocationTests : IDisposable
         }
 
         string expected = buffer.Span.ToString();
-        long before = GC.GetAllocatedBytesForCurrentThread();
         bool available = true;
-        for (int i = 0; i < 20; i++)
-        {
-            available &= _host.Hooks.TryFormatStatus(buffer);
-        }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                for (int i = 0; i < 20; i++)
+                    available &= _host.Hooks.TryFormatStatus(buffer);
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 4);
 
-        Assert.Equal(0, allocated);
         Assert.True(available);
         Assert.Equal(expected, buffer.Span.ToString());
     }
@@ -64,15 +66,16 @@ public sealed class LuaAllocationTests : IDisposable
         }
 
         string expected = buffer.Span.ToString();
-        long before = GC.GetAllocatedBytesForCurrentThread();
         bool available = true;
-        for (int i = 0; i < 20; i++)
-        {
-            available &= _host.Hooks.TryFormatTabTitle(tab, 0, buffer);
-        }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                for (int i = 0; i < 20; i++)
+                    available &= _host.Hooks.TryFormatTabTitle(tab, 0, buffer);
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 4);
 
-        Assert.Equal(0, allocated);
         Assert.True(available);
         Assert.Equal(expected, buffer.Span.ToString());
     }
@@ -92,12 +95,15 @@ public sealed class LuaAllocationTests : IDisposable
             _services.Drain();
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        tab.Title = first;
-        _services.Drain();
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
+        int titleChange = 0;
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                tab.Title = (titleChange++ & 1) == 0 ? first : second;
+                _services.Drain();
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 4);
     }
 
     [Fact]
@@ -114,12 +120,17 @@ public sealed class LuaAllocationTests : IDisposable
             _host.Hooks.HasHandlers("missing_event");
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        bool hasHandler = _host.Hooks.HasHandlers("tab_title_changed");
-        bool hasMissingHandler = _host.Hooks.HasHandlers("missing_event");
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        bool hasHandler = false;
+        bool hasMissingHandler = false;
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                hasHandler = _host.Hooks.HasHandlers("tab_title_changed");
+                hasMissingHandler = _host.Hooks.HasHandlers("missing_event");
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 4);
 
-        Assert.Equal(0, allocated);
         Assert.True(hasHandler);
         Assert.False(hasMissingHandler);
 
@@ -131,9 +142,10 @@ public sealed class LuaAllocationTests : IDisposable
             _services.Drain();
         }
 
-        long beforeNoHandler = GC.GetAllocatedBytesForCurrentThread();
-        tab.Title = "no handler A";
-        long noHandlerAllocated = GC.GetAllocatedBytesForCurrentThread() - beforeNoHandler;
-        Assert.Equal(0, noHandlerAllocated);
+        int noHandlerTitleChange = 0;
+        AllocationAssert.NoAllocations(
+            () => tab.Title = (noHandlerTitleChange++ & 1) == 0 ? "no handler A" : "no handler B",
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 4);
     }
 }

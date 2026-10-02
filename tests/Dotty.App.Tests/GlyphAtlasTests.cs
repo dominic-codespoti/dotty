@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Reflection;
 using Dotty.Rendering.Gpu;
 using SkiaSharp;
 using Xunit;
@@ -259,6 +260,7 @@ public sealed class GlyphAtlasTests
 
         Assert.True(atlas.Width > 64, "atlas should have grown past its initial size");
         Assert.Equal(glyphs.Length, atlas.EntryCount);
+        atlas.PublishPendingGlyphs();
         foreach (char c in glyphs)
         {
             Assert.True(atlas.TryGetGlyph(new GlyphKey(c.ToString(), Font, 16f, false), out var info));
@@ -278,6 +280,7 @@ public sealed class GlyphAtlasTests
             {
                 filled = true;
                 // Filled: subsequent requests must also fail, existing entries intact.
+                atlas.PublishPendingGlyphs();
                 Assert.False(atlas.EnsureGlyph(new GlyphKey("overflow", Font, 256f, false), out _));
                 Assert.True(atlas.TryGetGlyph(new GlyphKey("g0", Font, 256f, false), out _));
                 break;
@@ -335,6 +338,7 @@ public sealed class GlyphAtlasTests
             var key = new GlyphKey(((char)('a' + (i % 26))).ToString(), Font, 16f, (i % 3) == 0);
             Assert.True(atlas.EnsureGlyph(key, out _));
         });
+        atlas.PublishPendingGlyphs();
 
         Assert.Equal(26 * 2, atlas.EntryCount);
         // Spot-check a few placements for validity (bounds within the atlas).
@@ -344,5 +348,51 @@ public sealed class GlyphAtlasTests
             Assert.InRange(info.X, 0, atlas.Width - 1);
             Assert.InRange(info.Y, 0, atlas.Height - 1);
         }
+
     }
+
+    [Fact]
+    public async Task PublishPendingGlyphs_ExposesBatchToConcurrentReader()
+    {
+        using var atlas = new GlyphAtlas(Font, 16f);
+        var key = new GlyphKey("batch-visible", Font, 16f, false);
+        Assert.True(atlas.EnsureGlyph(key, out var expected));
+        Assert.True(atlas.TryGetGlyph(key, out var workingMapHit));
+        Assert.Equal(expected, workingMapHit);
+
+        using var started = new ManualResetEventSlim();
+        using var readAfterPublish = new ManualResetEventSlim();
+        var readTask = Task.Run(() =>
+        {
+            started.Set();
+            readAfterPublish.Wait(TestContext.Current.CancellationToken);
+            Assert.True(atlas.TryGetGlyph(key, out var actual));
+            return actual;
+        });
+        started.Wait(TestContext.Current.CancellationToken);
+        atlas.PublishPendingGlyphs();
+        readAfterPublish.Set();
+        Assert.Equal(expected, await readTask.WaitAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public void PublishPendingGlyphs_CopiesMapOnceForLargeMissBatch()
+    {
+        using var atlas = new GlyphAtlas(Font, 16f, initialSize: 4096);
+        var countProperty = typeof(GlyphAtlas).GetProperty(
+            "PublishedMapCopyCount", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        int copiesBefore = (int)countProperty.GetValue(atlas)!;
+
+        for (int i = 0; i < 500; i++)
+        {
+            var key = new GlyphKey($"A{i:X3}", Font, 16f, false);
+            Assert.True(atlas.EnsureGlyph(key, out _));
+        }
+
+        atlas.PublishPendingGlyphs();
+        int copiesAfter = (int)countProperty.GetValue(atlas)!;
+        Assert.Equal(copiesBefore + 1, copiesAfter);
+        Assert.True(atlas.TryGetGlyph(new GlyphKey("A1F3", Font, 16f, false), out _));
+    }
+
 }

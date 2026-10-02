@@ -61,6 +61,8 @@ public class TerminalSession : IDisposable
     private int _initialRows = 0;
     private int _isStarted;
     private int _pendingOutputChunks;
+    private long _ptyBytesRead;
+    private long _ptyBytesParsed;
     // Test-only checkpoints keep allocation measurements local to the PTY worker
     // threads instead of observing unrelated process-wide activity.
     private int _allocationProbeEnabled;
@@ -132,6 +134,9 @@ public class TerminalSession : IDisposable
     public TerminalAdapter Adapter { get; }
     public bool IsStarted => Volatile.Read(ref _isStarted) != 0;
     public bool OutputBacklogged => Volatile.Read(ref _pendingOutputChunks) != 0;
+    public int PendingOutputChunks => Volatile.Read(ref _pendingOutputChunks);
+    public long PtyBytesRead => Interlocked.Read(ref _ptyBytesRead);
+    public long PtyBytesParsed => Interlocked.Read(ref _ptyBytesParsed);
 
     public event Action<byte[]>? RawInputReceived;
     public event Action<string>? ClipboardWriteRequested;
@@ -731,6 +736,7 @@ public class TerminalSession : IDisposable
                         _ptyOutputWriteIndex = 0;
                     _ptyOutputCount++;
                     Interlocked.Increment(ref _pendingOutputChunks);
+                    Interlocked.Add(ref _ptyBytesRead, bytesRead);
                     if (wasEmpty)
                         _ptyOutputAvailable.Set();
                 }
@@ -877,6 +883,7 @@ public class TerminalSession : IDisposable
                             _ptyOutputSpaceAvailable.Set();
                     }
                     Interlocked.Decrement(ref _pendingOutputChunks);
+                    Interlocked.Add(ref _ptyBytesParsed, length);
                 }
                 try { Adapter.FlushRender(); } catch { }
                 if (measureChunk)

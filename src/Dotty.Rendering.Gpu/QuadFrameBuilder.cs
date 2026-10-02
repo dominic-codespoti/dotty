@@ -63,32 +63,18 @@ public static class QuadFrameBuilder
         int rows = Math.Min(source.Rows, geometry.Rows);
         int cols = Math.Min(source.Columns, geometry.Columns);
         if (rows <= 0 || cols <= 0)
-        {
             return new QuadFrameBuildResult(Array.Empty<CellInstance>(), 0, new HashSet<int>());
-        }
 
-        // Allocate maximum possible cells for the visible grid
         var instances = new CellInstance[rows * cols];
         var dirtyRows = new HashSet<int>();
-
-        int count = Build(
-            source,
-            atlas,
-            typeface,
-            textSize,
-            instances.AsSpan(),
-            dirtyRows,
-            rows,
-            cols,
-            defaultFg ?? DefaultForeground,
-            defaultBg ?? DefaultBackground);
-
+        int count = Build(source, atlas, typeface, textSize, instances.AsSpan(), dirtyRows,
+            rows, cols, defaultFg ?? DefaultForeground, defaultBg ?? DefaultBackground);
         return new QuadFrameBuildResult(instances, count, dirtyRows);
     }
 
     /// <summary>
-    /// Writes cell instances into the provided destination span.
-    /// Returns the number of instances written.
+    /// Writes cell instances into the provided destination span and publishes
+    /// glyphs once after the complete batch has been rasterized.
     /// </summary>
     public static int Build(
         IRenderSource source,
@@ -108,153 +94,142 @@ public static class QuadFrameBuilder
 
         int rows = maxRows >= 0 ? Math.Min(source.Rows, maxRows) : source.Rows;
         int cols = maxCols >= 0 ? Math.Min(source.Columns, maxCols) : source.Columns;
-        if (rows <= 0 || cols <= 0) return 0;
+        if (rows <= 0 || cols <= 0)
+            return 0;
+
+        var fg = defaultFg ?? DefaultForeground;
+        var bg = defaultBg ?? DefaultBackground;
+        int written = 0;
+        for (int row = 0; row < rows; row++)
+        {
+            written += BuildRow(source, row, atlas, typeface, textSize,
+                destination[written..], dirtyAtlasRows, cols, fg, bg);
+        }
+
+        atlas.PublishPendingGlyphs();
+        return written;
+    }
+
+    /// <summary>
+    /// Builds one logical row into caller-owned storage. The caller may cache
+    /// this run and should publish pending glyphs after its whole frame batch.
+    /// </summary>
+    public static int BuildRow(
+        IRenderSource source,
+        int row,
+        GlyphAtlas atlas,
+        SKTypeface typeface,
+        float textSize,
+        Span<CellInstance> destination,
+        HashSet<int>? dirtyAtlasRows = null,
+        int maxCols = -1,
+        SgrColorArgb? defaultFg = null,
+        SgrColorArgb? defaultBg = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(atlas);
+        ArgumentNullException.ThrowIfNull(typeface);
+        if ((uint)row >= (uint)source.Rows)
+            return 0;
+
+        int cols = maxCols >= 0 ? Math.Min(source.Columns, maxCols) : source.Columns;
+        if (cols <= 0)
+            return 0;
 
         var defFg = defaultFg ?? DefaultForeground;
         var defBg = defaultBg ?? DefaultBackground;
+        var cellHotSpan = source.GetRowCells(row);
+        var coldSpan = source.GetRowColdCells(row);
+        int rowLength = Math.Min(cols, cellHotSpan.Length);
         int written = 0;
-
-        for (int r = 0; r < rows; r++)
+        int column = 0;
+        while (column < rowLength)
         {
-            var cellHotSpan = source.GetRowCells(r);
-            var coldSpan = source.GetRowColdCells(r);
-            int rowLength = Math.Min(cols, cellHotSpan.Length);
-            int c = 0;
-            while (c < rowLength)
+            ref readonly var hot = ref cellHotSpan[column];
+
+            if (hot.IsContinuation)
             {
-                ref readonly var hot = ref cellHotSpan[c];
-
-                // Skip continuation cells. Empty cells emit only when they
-                // carry a custom background (pill/segment padding) — a
-                // zero-size glyph instance draws just the background quad.
-                if (hot.IsContinuation)
+                column++;
+                continue;
+            }
+            if (hot.Rune == 0)
+            {
+                ref readonly var emptyStyle = ref source.GetStyle(hot.StyleId);
+                bool emptyHasBg = !emptyStyle.Background.IsEmpty || emptyStyle.Inverse;
+                if (emptyHasBg && written < destination.Length)
                 {
-                    c++;
-                    continue;
-                }
-                if (hot.Rune == 0)
-                {
-                    ref readonly var emptyStyle = ref source.GetStyle(hot.StyleId);
-                    bool emptyHasBg = !emptyStyle.Background.IsEmpty || emptyStyle.Inverse;
-                    if (emptyHasBg && written < destination.Length)
+                    var emptyFg = !emptyStyle.Foreground.IsEmpty ? emptyStyle.Foreground : defFg;
+                    var emptyBg = !emptyStyle.Background.IsEmpty ? emptyStyle.Background : defBg;
+                    byte emptyFlags = 0;
+                    if (emptyStyle.Inverse)
                     {
-                        var emptyFg = !emptyStyle.Foreground.IsEmpty ? emptyStyle.Foreground : defFg;
-                        var emptyBg = !emptyStyle.Background.IsEmpty ? emptyStyle.Background : defBg;
-                        byte emptyFlags = 0;
-                        if (emptyStyle.Inverse)
-                        {
-                            (emptyFg, emptyBg) = (emptyBg, emptyFg);
-                            emptyFlags |= CellFlags.InverseVideo;
-                        }
-                        if (emptyStyle.Underline) emptyFlags |= CellFlags.Underline;
-                        if (emptyStyle.Strikethrough) emptyFlags |= CellFlags.Strikethrough;
-                        if (emptyStyle.Overline) emptyFlags |= CellFlags.Overline;
-                        destination[written] = new CellInstance
-                        {
-                            Col = (ushort)c,
-                            Row = (ushort)r,
-                            FgR = emptyFg.R,
-                            FgG = emptyFg.G,
-                            FgB = emptyFg.B,
-                            Flags = emptyFlags,
-                            BgR = emptyBg.R,
-                            BgG = emptyBg.G,
-                            BgB = emptyBg.B,
-                            BgA = 255,
-                        };
-                        written++;
+                        (emptyFg, emptyBg) = (emptyBg, emptyFg);
+                        emptyFlags |= CellFlags.InverseVideo;
                     }
-                    c++;
-                    continue;
-                }
-
-                // Resolve cold cell data if available
-                short graphemeIndex = -1;
-                if (c < coldSpan.Length)
-                {
-                    graphemeIndex = coldSpan[c].GraphemeIndex;
-                }
-
-                // Resolve grapheme string
-                string? grapheme = GraphemeHelper.Resolve(hot.Rune, graphemeIndex);
-                if (string.IsNullOrEmpty(grapheme))
-                {
-                    c++;
-                    continue;
-                }
-
-                // Resolve style attributes and colors before glyph lookup so
-                // background-only cells can still paint when the grapheme has
-                // no visible coverage (for example a styled space).
-                ref readonly var style = ref source.GetStyle(hot.StyleId);
-                var effectiveFg = !style.Foreground.IsEmpty ? style.Foreground : defFg;
-                var effectiveBg = !style.Background.IsEmpty ? style.Background : defBg;
-                if (style.Inverse)
-                {
-                    (effectiveFg, effectiveBg) = (effectiveBg, effectiveFg);
-                }
-
-                byte bgA = !style.Background.IsEmpty || style.Inverse ? (byte)255 : (byte)0;
-
-                byte flags = 0;
-                if (style.Bold) flags |= CellFlags.Bold;
-                if (hot.Width == 2) flags |= CellFlags.WideCell;
-                if (style.Inverse) flags |= CellFlags.InverseVideo;
-                if (style.Underline) flags |= CellFlags.Underline;
-                if (style.Strikethrough) flags |= CellFlags.Strikethrough;
-                if (style.Overline) flags |= CellFlags.Overline;
-
-                GlyphInfo glyphInfo = default;
-                bool glyphOk = false;
-                if (!(grapheme.Length == 1 && char.IsWhiteSpace(grapheme[0])))
-                {
-                    var key = new GlyphKey(grapheme, typeface, textSize, style.Bold);
-                    glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
-                    if (!glyphOk)
+                    if (emptyStyle.Underline) emptyFlags |= CellFlags.Underline;
+                    if (emptyStyle.Strikethrough) emptyFlags |= CellFlags.Strikethrough;
+                    if (emptyStyle.Overline) emptyFlags |= CellFlags.Overline;
+                    destination[written++] = new CellInstance
                     {
-                        glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-                    }
-                    if (glyphAdded)
-                    {
-                        dirtyAtlasRows?.Add(r);
-                    }
+                        Col = (ushort)column,
+                        Row = (ushort)row,
+                        FgR = emptyFg.R,
+                        FgG = emptyFg.G,
+                        FgB = emptyFg.B,
+                        Flags = emptyFlags,
+                        BgR = emptyBg.R,
+                        BgG = emptyBg.G,
+                        BgB = emptyBg.B,
+                        BgA = 255,
+                    };
                 }
+                column++;
+                continue;
+            }
+
+            short graphemeIndex = column < coldSpan.Length ? coldSpan[column].GraphemeIndex : (short)-1;
+            string? grapheme = GraphemeHelper.Resolve(hot.Rune, graphemeIndex);
+            if (string.IsNullOrEmpty(grapheme))
+            {
+                column++;
+                continue;
+            }
+
+            ref readonly var style = ref source.GetStyle(hot.StyleId);
+            var effectiveFg = !style.Foreground.IsEmpty ? style.Foreground : defFg;
+            var effectiveBg = !style.Background.IsEmpty ? style.Background : defBg;
+            if (style.Inverse)
+                (effectiveFg, effectiveBg) = (effectiveBg, effectiveFg);
+
+            byte bgA = !style.Background.IsEmpty || style.Inverse ? (byte)255 : (byte)0;
+            byte flags = 0;
+            if (style.Bold) flags |= CellFlags.Bold;
+            if (hot.Width == 2) flags |= CellFlags.WideCell;
+            if (style.Inverse) flags |= CellFlags.InverseVideo;
+            if (style.Underline) flags |= CellFlags.Underline;
+            if (style.Strikethrough) flags |= CellFlags.Strikethrough;
+            if (style.Overline) flags |= CellFlags.Overline;
+
+            GlyphInfo glyphInfo = default;
+            bool glyphOk = false;
+            if (!(grapheme.Length == 1 && char.IsWhiteSpace(grapheme[0])))
+            {
+                var key = new GlyphKey(grapheme, typeface, textSize, style.Bold);
+                glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
                 if (!glyphOk)
-                {
-                    if (bgA != 0 && written < destination.Length)
-                    {
-                        destination[written] = new CellInstance
-                        {
-                            Col = (ushort)c,
-                            Row = (ushort)r,
-                            FgR = effectiveFg.R,
-                            FgG = effectiveFg.G,
-                            FgB = effectiveFg.B,
-                            Flags = flags,
-                            BgR = effectiveBg.R,
-                            BgG = effectiveBg.G,
-                            BgB = effectiveBg.B,
-                            BgA = bgA
-                        };
-                        written++;
-                    }
+                    glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+                if (glyphAdded)
+                    dirtyAtlasRows?.Add(row);
+            }
 
-                    c += hot.Width > 1 ? hot.Width : 1;
-                    continue;
-                }
-
-                if (written < destination.Length)
+            if (!glyphOk)
+            {
+                if (bgA != 0 && written < destination.Length)
                 {
-                    destination[written] = new CellInstance
+                    destination[written++] = new CellInstance
                     {
-                        Col = (ushort)c,
-                        Row = (ushort)r,
-                        OffX = (short)glyphInfo.LeftBearing,
-                        OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
-                        GlyphX = (short)glyphInfo.X,
-                        GlyphY = (short)glyphInfo.Y,
-                        GlyphW = (short)glyphInfo.Width,
-                        GlyphH = (short)glyphInfo.Height,
+                        Col = (ushort)column,
+                        Row = (ushort)row,
                         FgR = effectiveFg.R,
                         FgG = effectiveFg.G,
                         FgB = effectiveFg.B,
@@ -264,12 +239,36 @@ public static class QuadFrameBuilder
                         BgB = effectiveBg.B,
                         BgA = bgA
                     };
-                    written++;
                 }
 
-                // If wide cell (Width == 2), skip next column
-                c += hot.Width > 1 ? hot.Width : 1;
+                column += hot.Width > 1 ? hot.Width : 1;
+                continue;
             }
+
+            if (written < destination.Length)
+            {
+                destination[written++] = new CellInstance
+                {
+                    Col = (ushort)column,
+                    Row = (ushort)row,
+                    OffX = (short)glyphInfo.LeftBearing,
+                    OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+                    GlyphX = (short)glyphInfo.X,
+                    GlyphY = (short)glyphInfo.Y,
+                    GlyphW = (short)glyphInfo.Width,
+                    GlyphH = (short)glyphInfo.Height,
+                    FgR = effectiveFg.R,
+                    FgG = effectiveFg.G,
+                    FgB = effectiveFg.B,
+                    Flags = flags,
+                    BgR = effectiveBg.R,
+                    BgG = effectiveBg.G,
+                    BgB = effectiveBg.B,
+                    BgA = bgA
+                };
+            }
+
+            column += hot.Width > 1 ? hot.Width : 1;
         }
 
         return written;

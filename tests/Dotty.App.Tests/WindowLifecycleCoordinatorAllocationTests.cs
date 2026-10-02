@@ -4,6 +4,7 @@ using Xunit;
 
 namespace Dotty.App.Tests;
 
+[Collection("Allocation-sensitive tests")]
 public sealed class WindowLifecycleCoordinatorAllocationTests
 {
     private static int _callbackCount;
@@ -20,15 +21,17 @@ public sealed class WindowLifecycleCoordinatorAllocationTests
             coordinator.Drain();
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        AllocationAssert.NoAllocations(
+            EnqueueAndDrain,
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 200);
+        Assert.Equal(initialCallbackCount + 1128, _callbackCount);
+
+        void EnqueueAndDrain()
         {
             coordinator.TryEnqueue(Callback);
             coordinator.Drain();
         }
-
-        Assert.Equal(0L, GC.GetAllocatedBytesForCurrentThread() - before);
-        Assert.Equal(initialCallbackCount + 1128, _callbackCount);
     }
 
     private static void IncrementCallback() => _callbackCount++;

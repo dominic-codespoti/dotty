@@ -11,6 +11,10 @@ public abstract record TabBarHitResult
     public sealed record SelectTab(int Index) : TabBarHitResult;
     public sealed record CloseTab(int Index) : TabBarHitResult;
     public sealed record NewTab : TabBarHitResult;
+    public sealed record Minimize : TabBarHitResult;
+    public sealed record Maximize : TabBarHitResult;
+    public sealed record Close : TabBarHitResult;
+    public sealed record Caption : TabBarHitResult;
 }
 
 /// <summary>
@@ -21,7 +25,11 @@ public enum TabBarHitType
     None = 0,
     SelectTab = 1,
     CloseTab = 2,
-    NewTab = 3
+    NewTab = 3,
+    Minimize = 4,
+    Maximize = 5,
+    Close = 6,
+    Caption = 7
 }
 
 /// <summary>
@@ -39,14 +47,23 @@ public static class TabBarHitTester
         int tabCount,
         int activeIndex,
         float barHeight = TabBarLayout.DefaultBarHeight,
-        float statusWidth = 0f)
+        float statusWidth = 0f,
+        float captionButtonsWidth = 0f)
     {
-        if (y < 0 || y > barHeight || windowWidth <= 0 || tabCount < 0)
+        if (x < 0 || x >= windowWidth || y < 0 || y > barHeight || windowWidth <= 0 || tabCount < 0)
         {
             return new TabBarHitResult.None();
         }
 
-        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight, statusWidth);
+        var layout = TabBarLayout.Calculate(
+            windowWidth, tabCount, activeIndex, barHeight, statusWidth, captionButtonsWidth);
+
+        if (layout.MinimizeButtonBounds.Width > 0f && layout.MinimizeButtonBounds.Contains(x, y))
+            return new TabBarHitResult.Minimize();
+        if (layout.MaximizeButtonBounds.Width > 0f && layout.MaximizeButtonBounds.Contains(x, y))
+            return new TabBarHitResult.Maximize();
+        if (layout.CloseButtonBounds.Width > 0f && layout.CloseButtonBounds.Contains(x, y))
+            return new TabBarHitResult.Close();
 
         // Check new tab (+) button
         if (layout.NewTabButtonBounds.Contains(x, y))
@@ -70,7 +87,12 @@ public static class TabBarHitTester
             return new TabBarHitResult.SelectTab(i);
         }
 
-        return new TabBarHitResult.None();
+        if (layout.StatusBounds.Contains(x, y))
+            return new TabBarHitResult.None();
+
+        return captionButtonsWidth > 0f
+            ? new TabBarHitResult.Caption()
+            : new TabBarHitResult.None();
     }
 
     /// <summary>
@@ -84,16 +106,25 @@ public static class TabBarHitTester
         int activeIndex,
         out int tabIndex,
         float barHeight = TabBarLayout.DefaultBarHeight,
-        float statusWidth = 0f)
+        float statusWidth = 0f,
+        float captionButtonsWidth = 0f)
     {
         tabIndex = -1;
 
-        if (y < 0 || y > barHeight || windowWidth <= 0 || tabCount < 0)
+        if (x < 0 || x >= windowWidth || y < 0 || y > barHeight || windowWidth <= 0 || tabCount < 0)
         {
             return TabBarHitType.None;
         }
 
-        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight, statusWidth);
+        var layout = TabBarLayout.Calculate(
+            windowWidth, tabCount, activeIndex, barHeight, statusWidth, captionButtonsWidth);
+
+        if (layout.MinimizeButtonBounds.Width > 0f && layout.MinimizeButtonBounds.Contains(x, y))
+            return TabBarHitType.Minimize;
+        if (layout.MaximizeButtonBounds.Width > 0f && layout.MaximizeButtonBounds.Contains(x, y))
+            return TabBarHitType.Maximize;
+        if (layout.CloseButtonBounds.Width > 0f && layout.CloseButtonBounds.Contains(x, y))
+            return TabBarHitType.Close;
 
         if (layout.NewTabButtonBounds.Contains(x, y))
         {
@@ -115,6 +146,11 @@ public static class TabBarHitTester
             return TabBarHitType.SelectTab;
         }
 
-        return TabBarHitType.None;
+        if (layout.StatusBounds.Contains(x, y))
+            return TabBarHitType.None;
+
+        return captionButtonsWidth > 0f
+            ? TabBarHitType.Caption
+            : TabBarHitType.None;
     }
 }

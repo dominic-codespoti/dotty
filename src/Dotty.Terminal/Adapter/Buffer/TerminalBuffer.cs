@@ -767,10 +767,7 @@ public partial class TerminalBuffer : IRenderSource
             ActiveBuffer.GetColdCellRef(row, c) = srcCold;
         }
         // Clear inserted region
-        for (int c = col; c < Math.Min(cols, col + count); c++)
-        {
-            ActiveBuffer.ClearCell(row, c);
-        }
+        ActiveBuffer.ClearColumns(row, col, col + count);
         // Clean orphaned continuations in the shifted range
         CleanRowContinuations(row, col + count, cols);
         MarkRowDirty(row);
@@ -792,10 +789,7 @@ public partial class TerminalBuffer : IRenderSource
             ActiveBuffer.GetColdCellRef(row, c) = srcCold;
         }
         // Clear trailing cells
-        for (int c = Math.Max(0, endShift); c < cols; c++)
-        {
-            ActiveBuffer.ClearCell(row, c);
-        }
+        ActiveBuffer.ClearColumns(row, Math.Max(0, endShift), cols);
         // Clean orphaned continuations in the copied range
         CleanRowContinuations(row, col, cols);
         MarkRowDirty(row);
@@ -832,10 +826,7 @@ public partial class TerminalBuffer : IRenderSource
         int start = Math.Clamp(_cursor.Col, 0, Columns - 1);
         int endExclusive = Math.Min(Columns, start + count);
 
-        for (int c = start; c < endExclusive; c++)
-        {
-            ActiveBuffer.ClearCell(row, c);
-        }
+        ActiveBuffer.ClearColumns(row, start, endExclusive);
 
         MarkRowDirty(row);
     }
@@ -856,28 +847,8 @@ public partial class TerminalBuffer : IRenderSource
             MarkRowRangeDirty(row, bottom - row + 1);
             return;
         }
-        // shift down
-        for (int r = bottom; r >= row + count; r--)
-        {
-            for (int c = 0; c < Columns; c++)
-            {
-                ref var dst = ref ActiveBuffer.GetCellRef(r, c);
-                var src = ActiveBuffer.GetCell(r - count, c);
-                dst = src;
-                var srcCold = ActiveBuffer.GetColdCell(r - count, c);
-                ActiveBuffer.GetColdCellRef(r, c) = srcCold;
-            }
-            // Row metadata travels with the content, not with the physical row.
-            int dstPhys = ActiveBuffer.GetPhysicalRow(r);
-            int srcPhys = ActiveBuffer.GetPhysicalRow(r - count);
-            ActiveBuffer.RowMaxCol[dstPhys] = ActiveBuffer.RowMaxCol[srcPhys];
-            ActiveBuffer.RowColdFlags[dstPhys] = ActiveBuffer.RowColdFlags[srcPhys];
-            ActiveBuffer.RowContinuesPrevious[dstPhys] = ActiveBuffer.RowContinuesPrevious[srcPhys];
-            ActiveBuffer.RowEndCol[dstPhys] = ActiveBuffer.RowEndCol[srcPhys];
-        }
-        // clear inserted lines
-        for (int r = row; r < row + count; r++)
-            ActiveBuffer.ClearRow(r);
+        // Row memmoves carry cell content and row metadata together.
+        ActiveBuffer.ShiftRegionDown(row, bottom, count);
         BumpIdentity(row, regionHeight);
     }
 
@@ -896,28 +867,9 @@ public partial class TerminalBuffer : IRenderSource
             MarkRowRangeDirty(row, bottom - row + 1);
             return;
         }
-        // shift up
-        for (int r = row; r <= bottom - count; r++)
-        {
-            for (int c = 0; c < Columns; c++)
-            {
-                ref var dst = ref ActiveBuffer.GetCellRef(r, c);
-                var src = ActiveBuffer.GetCell(r + count, c);
-                dst = src;
-                var srcCold = ActiveBuffer.GetColdCell(r + count, c);
-                ActiveBuffer.GetColdCellRef(r, c) = srcCold;
-            }
-            // Row metadata travels with the content, not with the physical row.
-            int dstPhys = ActiveBuffer.GetPhysicalRow(r);
-            int srcPhys = ActiveBuffer.GetPhysicalRow(r + count);
-            ActiveBuffer.RowMaxCol[dstPhys] = ActiveBuffer.RowMaxCol[srcPhys];
-            ActiveBuffer.RowColdFlags[dstPhys] = ActiveBuffer.RowColdFlags[srcPhys];
-            ActiveBuffer.RowContinuesPrevious[dstPhys] = ActiveBuffer.RowContinuesPrevious[srcPhys];
-            ActiveBuffer.RowEndCol[dstPhys] = ActiveBuffer.RowEndCol[srcPhys];
-        }
-        // clear trailing lines
-        for (int r = bottom - count + 1; r <= bottom; r++)
-            ActiveBuffer.ClearRow(r);
+        // Row memmoves carry cell content and row metadata together; deleted
+        // rows are discarded, never pushed into scrollback.
+        ActiveBuffer.ShiftRegionUp(row, bottom, count);
         BumpIdentity(row, regionHeight);
     }
 

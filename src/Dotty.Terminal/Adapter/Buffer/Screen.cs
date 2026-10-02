@@ -365,6 +365,23 @@ public unsafe partial class Screen : IDisposable
         RowEndCol[destinationPhysicalRow] = RowEndCol[sourcePhysicalRow];
     }
 
+    /// <summary>Copies one row's hot cells, cold cells, and metadata.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CopyPhysicalRow(int destinationPhysicalRow, int sourcePhysicalRow)
+    {
+        int rowBytes = Columns * Unsafe.SizeOf<CellHot>();
+        System.Buffer.MemoryCopy(
+            (void*)(_cellsPtr + sourcePhysicalRow * rowBytes),
+            (void*)(_cellsPtr + destinationPhysicalRow * rowBytes),
+            rowBytes, rowBytes);
+        int coldRowBytes = Columns * Unsafe.SizeOf<ColdCell>();
+        System.Buffer.MemoryCopy(
+            (void*)(_coldCellsPtr + sourcePhysicalRow * coldRowBytes),
+            (void*)(_coldCellsPtr + destinationPhysicalRow * coldRowBytes),
+            coldRowBytes, coldRowBytes);
+        CopyRowMetadata(destinationPhysicalRow, sourcePhysicalRow);
+    }
+
     public void ClearRow(int logicalRow)
     {
         if (logicalRow < 0 || logicalRow >= Rows) return;
@@ -520,47 +537,61 @@ public unsafe partial class Screen : IDisposable
     public void ClearCell(int logicalRow, int col)
     {
         if (logicalRow < 0 || logicalRow >= Rows || col < 0 || col >= Columns) return;
+        ClearColumns(logicalRow, col, col + 1);
+    }
+
+    /// <summary>
+    /// Clears columns <c>[startCol, endCol)</c> of a row. A wide glyph that
+    /// straddles either edge is cleared whole, exactly as clearing each cell in
+    /// turn would. Edge repair happens once per edge and row extents are
+    /// recalculated once, so EL/ED cost is linear in the cleared width rather
+    /// than quadratic.
+    /// </summary>
+    public void ClearColumns(int logicalRow, int startCol, int endCol)
+    {
+        if (logicalRow < 0 || logicalRow >= Rows) return;
+        startCol = Math.Max(0, startCol);
+        endCol = Math.Min(Columns, endCol);
+        if (startCol >= endCol) return;
 
         int pRow = GetPhysicalRow(logicalRow);
         int offset = pRow * Columns;
+        int start = GlyphStart(offset, startCol);
+        int end = endCol;
+        while (end < Columns && UnsafeAsRef<CellHot>(_cellsPtr, offset + end).IsContinuation)
+            end++;
 
-        int baseCol = col;
-        if (UnsafeAsRef<CellHot>(_cellsPtr, offset + baseCol).IsContinuation)
-        {
-            while (baseCol > 0 && UnsafeAsRef<CellHot>(_cellsPtr, offset + baseCol).IsContinuation)
-                baseCol--;
-        }
-        else
-        {
-            int scan = baseCol - 1;
-            while (scan >= 0)
-            {
-                ref var cand = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + scan);
-                int w = Math.Max(1, (int)cand.Width);
-                if (!cand.IsContinuation && w > 1 && scan + w > col)
-                {
-                    baseCol = scan;
-                    break;
-                }
-                scan--;
-            }
-        }
-
-        UnsafeAsRef<CellHot>(_cellsPtr, offset + baseCol).Reset();
-        UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + baseCol).Reset();
-        int c = baseCol + 1;
-        while (c < Columns)
-        {
-            ref var nxt = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + c);
-            if (!nxt.IsContinuation) break;
-            nxt.Reset();
-            UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + c).Reset();
-            c++;
-        }
+        int count = end - start;
+        new Span<CellHot>((void*)(_cellsPtr + (nint)(offset + start) * Unsafe.SizeOf<CellHot>()), count).Clear();
+        new Span<ColdCell>((void*)(_coldCellsPtr + (nint)(offset + start) * Unsafe.SizeOf<ColdCell>()), count)
+            .Fill(new ColdCell { GraphemeIndex = -1 });
 
         RecalculateRowMaxCol(logicalRow);
         RecalculateRowEndCol(logicalRow);
         RowContinuesPrevious[pRow] = false;
+    }
+
+    /// <summary>
+    /// Column of the glyph occupying <paramref name="col"/>: walks back over
+    /// continuation cells, or steps to the preceding cell when it is a wide base
+    /// covering <paramref name="col"/>. Width is at most 2, so no other cell can.
+    /// </summary>
+    private int GlyphStart(int rowOffset, int col)
+    {
+        if (UnsafeAsRef<CellHot>(_cellsPtr, rowOffset + col).IsContinuation)
+        {
+            while (col > 0 && UnsafeAsRef<CellHot>(_cellsPtr, rowOffset + col).IsContinuation)
+                col--;
+            return col;
+        }
+
+        if (col > 0)
+        {
+            ref var previous = ref UnsafeAsRef<CellHot>(_cellsPtr, rowOffset + col - 1);
+            if (!previous.IsContinuation && previous.Width > 1)
+                return col - 1;
+        }
+        return col;
     }
 
     public int ScrollUpRegion(int top, int bottom, int lines)
@@ -570,13 +601,11 @@ public unsafe partial class Screen : IDisposable
         if (bottom >= Rows) bottom = Rows - 1;
         if (top >= bottom) return 0;
 
-        int regionHeight = bottom - top + 1;
-        int total = _scrollbackCapacity + Rows;
-
         // Full-screen fast path: rotate ring-buffer head, works for any lines count
         if (top == 0 && bottom == Rows - 1)
         {
-            int clampedLines = Math.Min(lines, regionHeight);
+            int total = _scrollbackCapacity + Rows;
+            int clampedLines = Math.Min(lines, Rows);
             _head = (_head + clampedLines) % total;
             for (int i = 0; i < clampedLines; i++)
             {
@@ -586,6 +615,18 @@ public unsafe partial class Screen : IDisposable
             return clampedLines;
         }
 
+        return ShiftRegionUp(top, bottom, lines);
+    }
+
+    /// <summary>
+    /// Moves rows <c>[top+lines..bottom]</c> up by <paramref name="lines"/>,
+    /// discarding the rows shifted out (never into scrollback) and blanking the
+    /// exposed bottom band. Row memmoves, not per-cell copies: Neovim scrolls its
+    /// window this way (DECSTBM + DL) once per line moved.
+    /// </summary>
+    internal int ShiftRegionUp(int top, int bottom, int lines)
+    {
+        int regionHeight = bottom - top + 1;
         if (lines >= regionHeight)
         {
             for (int r = top; r <= bottom; r++)
@@ -593,49 +634,10 @@ public unsafe partial class Screen : IDisposable
             return regionHeight;
         }
 
-        // Non-full-screen single-line: memory copy
-        if (lines == 1)
-        {
-            for (int r = top; r < bottom; r++)
-            {
-                int srcPhys = GetPhysicalRow(r + 1);
-                int dstPhys = GetPhysicalRow(r);
-                int rowBytes = Columns * Unsafe.SizeOf<CellHot>();
-                System.Buffer.MemoryCopy(
-                    (void*)(_cellsPtr + srcPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                    (void*)(_cellsPtr + dstPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                    rowBytes, rowBytes);
-                int coldRowBytes = Columns * Unsafe.SizeOf<ColdCell>();
-                System.Buffer.MemoryCopy(
-                    (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                    (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                    coldRowBytes, coldRowBytes);
-                CopyRowMetadata(dstPhys, srcPhys);
-            }
-            ClearPhysicalRow(GetPhysicalRow(bottom));
-            return 1;
-        }
-
-
         for (int r = top + lines; r <= bottom; r++)
-        {
-            int srcPhys = GetPhysicalRow(r);
-            int dstPhys = GetPhysicalRow(r - lines);
-            int rowBytes = Columns * Unsafe.SizeOf<CellHot>();
-            System.Buffer.MemoryCopy(
-                (void*)(_cellsPtr + srcPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                (void*)(_cellsPtr + dstPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                rowBytes, rowBytes);
-            int coldRowBytes = Columns * Unsafe.SizeOf<ColdCell>();
-            System.Buffer.MemoryCopy(
-                (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                coldRowBytes, coldRowBytes);
-            CopyRowMetadata(dstPhys, srcPhys);
-        }
-
-        for (int l = 0; l < lines; l++)
-            ClearPhysicalRow(GetPhysicalRow(bottom - lines + 1 + l));
+            CopyPhysicalRow(GetPhysicalRow(r - lines), GetPhysicalRow(r));
+        for (int r = bottom - lines + 1; r <= bottom; r++)
+            ClearPhysicalRow(GetPhysicalRow(r));
         return lines;
     }
 
@@ -657,6 +659,18 @@ public unsafe partial class Screen : IDisposable
             return;
         }
 
+        ShiftRegionDown(top, bottom, lines);
+    }
+
+    /// <summary>
+    /// Moves rows <c>[top..bottom-lines]</c> down by <paramref name="lines"/>,
+    /// discarding rows shifted past <paramref name="bottom"/> and blanking the
+    /// exposed top band. Unlike the full-screen scroll path this never reveals
+    /// scrollback, as Insert Line requires.
+    /// </summary>
+    internal void ShiftRegionDown(int top, int bottom, int lines)
+    {
+        int regionHeight = bottom - top + 1;
         if (lines >= regionHeight)
         {
             for (int r = top; r <= bottom; r++)
@@ -664,41 +678,15 @@ public unsafe partial class Screen : IDisposable
             return;
         }
 
-        int rowSizeBytes = Columns * Unsafe.SizeOf<CellHot>();
-        int coldRowSizeBytes = Columns * Unsafe.SizeOf<ColdCell>();
-
         // Move rows in descending logical order so each source remains unread
         // until after it has been copied. GetPhysicalRow is injective across
         // the visible region (the ring has at least Rows slots), therefore
         // source and destination rows are disjoint even when the ring wraps.
         for (int r = bottom; r >= top + lines; r--)
-        {
-            int srcPhys = GetPhysicalRow(r - lines);
-            int dstPhys = GetPhysicalRow(r);
-            System.Buffer.MemoryCopy(
-                (void*)(_cellsPtr + srcPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                (void*)(_cellsPtr + dstPhys * Columns * Unsafe.SizeOf<CellHot>()),
-                rowSizeBytes,
-                rowSizeBytes);
-            System.Buffer.MemoryCopy(
-                (void*)(_coldCellsPtr + srcPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                (void*)(_coldCellsPtr + dstPhys * Columns * Unsafe.SizeOf<ColdCell>()),
-                coldRowSizeBytes,
-                coldRowSizeBytes);
-            CopyRowMetadata(dstPhys, srcPhys);
-        }
+            CopyPhysicalRow(GetPhysicalRow(r), GetPhysicalRow(r - lines));
 
         for (int r = top; r < top + lines; r++)
             ClearPhysicalRow(GetPhysicalRow(r));
-    }
-
-    public void ClearFromColumn(int logicalRow, int startCol)
-    {
-        if (logicalRow < 0 || logicalRow >= Rows) return;
-        if (startCol < 0) startCol = 0;
-        if (startCol >= Columns) return;
-        for (int c = startCol; c < Columns; c++)
-            ClearCell(logicalRow, c);
     }
 
     public Screen Resize(int rows, int columns)

@@ -14,6 +14,7 @@ using Xunit;
 
 namespace Dotty.App.Tests;
 
+[Collection("Allocation-sensitive tests")]
 public sealed class TerminalMouseControllerTests
 {
     private sealed class FakeMouse : IMouse
@@ -301,10 +302,7 @@ public sealed class TerminalMouseControllerTests
         for (int i = 0; i < 8; i++)
             Click();
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 20; i++)
-            Click();
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        AllocationAssert.NoAllocations(Click, measuredIterationsPerWindow: 4);
 
         void Click()
         {

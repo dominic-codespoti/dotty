@@ -8,17 +8,11 @@ internal sealed class BufferEraser
     public void EraseLine(Screen buffer, CursorController cursor, int columns, int mode)
     {
         if (mode == 2)
-        {
-            for (int j = 0; j < columns; j++) buffer.ClearCell(cursor.Row, j);
-        }
+            buffer.ClearColumns(cursor.Row, 0, columns);
         else if (mode == 0)
-        {
-            for (int j = cursor.Col; j < columns; j++) buffer.ClearCell(cursor.Row, j);
-        }
+            buffer.ClearColumns(cursor.Row, cursor.Col, columns);
         else if (mode == 1)
-        {
-            for (int j = 0; j <= cursor.Col; j++) buffer.ClearCell(cursor.Row, j);
-        }
+            buffer.ClearColumns(cursor.Row, 0, cursor.Col + 1);
     }
 
     /// <returns>True if the cursor should be reset to 0,0 (mode 2).</returns>
@@ -32,28 +26,20 @@ internal sealed class BufferEraser
 
         if (mode == 0)
         {
-            for (int j = cursor.Col; j < columns; j++) buffer.ClearCell(cursor.Row, j);
+            buffer.ClearColumns(cursor.Row, cursor.Col, columns);
             for (int r = cursor.Row + 1; r < rows; r++)
-                for (int c = 0; c < columns; c++) buffer.ClearCell(r, c);
+                buffer.ClearColumns(r, 0, columns);
             return false;
         }
 
         if (mode == 1)
         {
             for (int r = 0; r < cursor.Row; r++)
-                for (int c = 0; c < columns; c++) buffer.ClearCell(r, c);
-            for (int j = 0; j <= cursor.Col; j++) buffer.ClearCell(cursor.Row, j);
+                buffer.ClearColumns(r, 0, columns);
+            buffer.ClearColumns(cursor.Row, 0, cursor.Col + 1);
         }
 
         return false;
-    }
-
-    public void ClearLineFromCursor(Screen buffer, CursorController cursor, int columns)
-    {
-        for (int j = cursor.Col; j < columns; j++)
-        {
-            buffer.ClearCell(cursor.Row, j);
-        }
     }
 
     public void ErasePreviousGlyph(Screen buffer, CursorController cursor, int rows, int columns)

@@ -33,6 +33,7 @@ public sealed partial class LuaScriptHost
         ["font.size"] = new(ConfigValueKind.Number, c => c.Font.Size, (c, v) => c.Font.Size = (double)v!),
         ["font.line_height"] = new(ConfigValueKind.Number, c => c.Font.LineHeight, (c, v) => c.Font.LineHeight = (double)v!),
         ["window.opacity"] = new(ConfigValueKind.Number, c => c.Window.Opacity, (c, v) => c.Window.Opacity = (double)v!),
+        ["window.decorations"] = new(ConfigValueKind.String, c => c.Window.Decorations, (c, v) => c.Window.Decorations = (string)v!),
         ["window.title"] = new(ConfigValueKind.String, c => c.Window.Title, (c, v) => c.Window.Title = (string)v!),
         ["window.padding.left"] = new(ConfigValueKind.Number, c => c.Window.Padding.Left, (c, v) => c.Window.Padding.Left = (double)v!),
         ["window.padding.top"] = new(ConfigValueKind.Number, c => c.Window.Padding.Top, (c, v) => c.Window.Padding.Top = (double)v!),

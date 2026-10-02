@@ -38,6 +38,15 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private int _drawMenuCount;
     private int _instanceBufferCapacityBytes;
     private int _stagedMenuInstanceStart = -1;
+    private int[] _sourceOutputStarts = Array.Empty<int>();
+    private int[] _sourceOutputCounts = Array.Empty<int>();
+    private int[] _dirtyInstanceRanges = Array.Empty<int>();
+    private int _dirtyInstanceRangeCount;
+    private int _stagedOutputInstanceCount;
+    private bool _fullInstanceUpload = true;
+    private float _stagedPaddingLeft = float.NaN;
+    private float _stagedPaddingTop = float.NaN;
+    private int _stagedBarRows = -1;
     private int _menuAttribStart = -1;
 
     private const int ChromeFloatsPerInstance = 14;
@@ -289,30 +298,21 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         EnsureNotDisposed();
 
         if (frameCaptured)
-        {
-            if (_lastInstances.Length < instances.Length)
-            {
-                int capacity = Math.Max(instances.Length, _lastInstances.Length == 0 ? 4096 : _lastInstances.Length * 2);
-                _lastInstances = new CellInstance[capacity];
-            }
+            CaptureInstances(instances, cellW, cellH, paddingLeft, paddingTop, barRows, menuInstanceStart);
 
-            if (instances.Length > 0)
-            {
-                instances.CopyTo(_lastInstances);
-            }
-
-            _lastInstanceCount = instances.Length;
-            _instanceBufferDirty = true;
-        }
-
-        if (cellW != _stagedCellW || cellH != _stagedCellH)
+        if (cellW != _stagedCellW || cellH != _stagedCellH
+            || paddingLeft != _stagedPaddingLeft || paddingTop != _stagedPaddingTop
+            || barRows != _stagedBarRows)
         {
             _instanceBufferDirty = true;
+            _fullInstanceUpload = true;
         }
         if (menuInstanceStart != _stagedMenuInstanceStart)
         {
             _instanceBufferDirty = true;
+            _fullInstanceUpload = true;
         }
+
 
         _lastFramebufferWidth = framebufferWidth;
         _lastFramebufferHeight = framebufferHeight;
@@ -341,6 +341,150 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             menuInstanceStart,
             menuChromeStart);
     }
+    private void CaptureInstances(
+        ReadOnlySpan<CellInstance> instances,
+        float cellW,
+        float cellH,
+        float paddingLeft,
+        float paddingTop,
+        int barRows,
+        int menuInstanceStart)
+    {
+        bool compatible = !_instanceBufferDirty
+            && _lastInstanceCount == instances.Length
+            && _lastInstances.Length >= instances.Length
+            && cellW == _stagedCellW
+            && cellH == _stagedCellH
+            && paddingLeft == _stagedPaddingLeft
+            && paddingTop == _stagedPaddingTop
+            && barRows == _stagedBarRows
+            && menuInstanceStart == _stagedMenuInstanceStart;
+        EnsureLastInstanceCapacity(instances.Length);
+        if (!compatible)
+        {
+            instances.CopyTo(_lastInstances);
+            _lastInstanceCount = instances.Length;
+            _dirtyInstanceRangeCount = 0;
+            _instanceBufferDirty = true;
+            _fullInstanceUpload = true;
+            return;
+        }
+
+        EnsureOutputMapCapacity(instances.Length);
+        _dirtyInstanceRangeCount = 0;
+        int outputInstance = 0;
+        int dirtyStart = -1;
+        bool layoutChanged = false;
+        for (int i = 0; i < instances.Length; i++)
+        {
+            ref readonly var current = ref instances[i];
+            ref readonly var previous = ref _lastInstances[i];
+            bool hasDecoration = (current.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
+            bool hadDecoration = (previous.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
+            if (hasDecoration != hadDecoration)
+            {
+                layoutChanged = true;
+                break;
+            }
+
+            _sourceOutputStarts[i] = outputInstance;
+            int outputCount = hasDecoration ? 2 : 1;
+            _sourceOutputCounts[i] = outputCount;
+            outputInstance += outputCount;
+
+            if (!CellInstancesEqual(current, previous))
+            {
+                if (dirtyStart < 0)
+                    dirtyStart = i;
+            }
+            else if (dirtyStart >= 0)
+            {
+                AddDirtyInstanceRange(dirtyStart, i);
+                dirtyStart = -1;
+            }
+        }
+
+        if (layoutChanged)
+        {
+            instances.CopyTo(_lastInstances);
+            _lastInstanceCount = instances.Length;
+            _dirtyInstanceRangeCount = 0;
+            _instanceBufferDirty = true;
+            _fullInstanceUpload = true;
+            return;
+        }
+
+        if (dirtyStart >= 0)
+            AddDirtyInstanceRange(dirtyStart, instances.Length);
+
+        _stagedOutputInstanceCount = outputInstance;
+        _lastInstanceCount = instances.Length;
+        if (_dirtyInstanceRangeCount == 0)
+        {
+            _instanceBufferDirty = false;
+            _fullInstanceUpload = false;
+            return;
+        }
+
+        for (int range = 0; range < _dirtyInstanceRangeCount; range++)
+        {
+            int start = _dirtyInstanceRanges[range * 2];
+            int end = _dirtyInstanceRanges[range * 2 + 1];
+            instances.Slice(start, end - start).CopyTo(_lastInstances.AsSpan(start));
+        }
+        _instanceBufferDirty = true;
+        _fullInstanceUpload = false;
+    }
+
+    private void EnsureLastInstanceCapacity(int required)
+    {
+        if (_lastInstances.Length >= required)
+            return;
+        int capacity = Math.Max(required, _lastInstances.Length == 0 ? 4096 : _lastInstances.Length * 2);
+        _lastInstances = new CellInstance[capacity];
+    }
+
+    private void EnsureOutputMapCapacity(int required)
+    {
+        if (_sourceOutputStarts.Length < required)
+        {
+            int capacity = Math.Max(required, _sourceOutputStarts.Length == 0 ? 4096 : _sourceOutputStarts.Length * 2);
+            Array.Resize(ref _sourceOutputStarts, capacity);
+            Array.Resize(ref _sourceOutputCounts, capacity);
+        }
+    }
+
+    private void AddDirtyInstanceRange(int start, int end)
+    {
+        int needed = checked((_dirtyInstanceRangeCount + 1) * 2);
+        if (_dirtyInstanceRanges.Length < needed)
+        {
+            int capacity = Math.Max(needed, _dirtyInstanceRanges.Length == 0 ? 16 : _dirtyInstanceRanges.Length * 2);
+            Array.Resize(ref _dirtyInstanceRanges, capacity);
+        }
+        _dirtyInstanceRanges[_dirtyInstanceRangeCount * 2] = start;
+        _dirtyInstanceRanges[_dirtyInstanceRangeCount * 2 + 1] = end;
+        _dirtyInstanceRangeCount++;
+    }
+
+    private static bool CellInstancesEqual(in CellInstance left, in CellInstance right) =>
+        left.Col == right.Col
+        && left.Row == right.Row
+        && left.GlyphX == right.GlyphX
+        && left.GlyphY == right.GlyphY
+        && left.GlyphW == right.GlyphW
+        && left.GlyphH == right.GlyphH
+        && left.OffX == right.OffX
+        && left.OffY == right.OffY
+        && left.FgR == right.FgR
+        && left.FgG == right.FgG
+        && left.FgB == right.FgB
+        && left.Flags == right.Flags
+        && left.BgR == right.BgR
+        && left.BgG == right.BgG
+        && left.BgB == right.BgB
+        && left.BgA == right.BgA;
+
     private void UploadAndDraw(
         float cellW,
         float cellH,
@@ -355,7 +499,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         int cellCount = _lastInstanceCount;
         if (cellCount > 0 && _instanceBufferDirty)
         {
-            // Worst case: every cell has a decoration instance appended.
             int maxInstances = checked(cellCount * 2);
             int maxFloats = checked(maxInstances * FloatsPerInstance);
             if (_staging.Length < maxFloats)
@@ -364,112 +507,132 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 _staging = new float[capacity];
             }
 
-            float[] stagingArr = _staging;
-            int outputInstanceCount = 0;
-            int clampedMenuStart = menuInstanceStart < 0
-                ? -1
-                : Math.Clamp(menuInstanceStart, 0, cellCount);
-            int menuOutputStart = -1;
-
-            for (int i = 0; i < cellCount; i++)
+            int outputInstanceCount = _stagedOutputInstanceCount;
+            if (_fullInstanceUpload)
             {
-                if (i == clampedMenuStart)
+                EnsureOutputMapCapacity(cellCount);
+                outputInstanceCount = 0;
+                for (int i = 0; i < cellCount; i++)
                 {
-                    menuOutputStart = outputInstanceCount;
+                    _sourceOutputStarts[i] = outputInstanceCount;
+                    ref readonly var instance = ref _lastInstances[i];
+                    bool decorated = (instance.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
+                    _sourceOutputCounts[i] = decorated ? 2 : 1;
+                    outputInstanceCount += _sourceOutputCounts[i];
                 }
-
-                ref readonly var c = ref _lastInstances[i];
-                float x = (c.Row >= barRows) ? (paddingLeft + c.Col * cellW) : (c.Col * cellW);
-                float y = (c.Row >= barRows) ? (paddingTop + c.Row * cellH) : (c.Row * cellH);
-                int o = outputInstanceCount * FloatsPerInstance;
-                stagingArr[o] = x;
-                stagingArr[o + 1] = y;
-                stagingArr[o + 2] = c.GlyphX;
-                stagingArr[o + 3] = c.GlyphY;
-                stagingArr[o + 4] = c.GlyphW;
-                stagingArr[o + 5] = c.GlyphH;
-                stagingArr[o + 6] = 0f;
-                stagingArr[o + 7] = c.OffY;
-                stagingArr[o + 8] = c.OffX;
-                stagingArr[o + 9] = 0f;
-                stagingArr[o + 10] = c.FgR / 255f;
-                stagingArr[o + 11] = c.FgG / 255f;
-                stagingArr[o + 12] = c.FgB / 255f;
-                stagingArr[o + 13] = 1f; // FgA
-                stagingArr[o + 14] = c.BgR / 255f;
-                stagingArr[o + 15] = c.BgG / 255f;
-                stagingArr[o + 16] = c.BgB / 255f;
-                stagingArr[o + 17] = c.BgA / 255f;
-                stagingArr[o + 18] = BitConverter.UInt32BitsToSingle(c.Flags);
-                outputInstanceCount++;
-
-                // Decorated cell: extra decor-only instance (bar quad over the full cell)
-                if ((c.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0)
-                {
-                    int d = outputInstanceCount * FloatsPerInstance;
-                    float decorWidth = (c.Flags & CellFlags.WideCell) != 0 ? cellW * 2f : cellW;
-                    stagingArr[d] = x;
-                    stagingArr[d + 1] = y;
-                    stagingArr[d + 2] = 0f;
-                    stagingArr[d + 3] = 0f;
-                    stagingArr[d + 4] = decorWidth;
-                    stagingArr[d + 5] = cellH;
-                    stagingArr[d + 6] = 0f;
-                    stagingArr[d + 7] = 0f;
-                    stagingArr[d + 8] = 0f;
-                    stagingArr[d + 9] = 0f;
-                    stagingArr[d + 10] = c.FgR / 255f;
-                    stagingArr[d + 11] = c.FgG / 255f;
-                    stagingArr[d + 12] = c.FgB / 255f;
-                    stagingArr[d + 13] = 1f;
-                    stagingArr[d + 14] = 0f;
-                    stagingArr[d + 15] = 0f;
-                    stagingArr[d + 16] = 0f;
-                    stagingArr[d + 17] = 0f;
-                    stagingArr[d + 18] = BitConverter.UInt32BitsToSingle((uint)(c.Flags | CellFlags.DecorOnly));
-                    outputInstanceCount++;
-                }
-            }
-
-            if (clampedMenuStart == cellCount)
-            {
-                menuOutputStart = outputInstanceCount;
             }
 
             int uploadBytes = checked(outputInstanceCount * FloatsPerInstance * sizeof(float));
+            if (!_fullInstanceUpload && uploadBytes > _instanceBufferCapacityBytes)
+                _fullInstanceUpload = true;
+
+            float[] stagingArr = _staging;
+            if (_fullInstanceUpload)
+            {
+                for (int i = 0; i < cellCount; i++)
+                {
+                    ref readonly var instance = ref _lastInstances[i];
+                    WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
+                        cellW, cellH, paddingLeft, paddingTop, barRows);
+                }
+            }
+            else
+            {
+                for (int range = 0; range < _dirtyInstanceRangeCount; range++)
+                {
+                    int sourceStart = _dirtyInstanceRanges[range * 2];
+                    int sourceEnd = _dirtyInstanceRanges[range * 2 + 1];
+                    for (int i = sourceStart; i < sourceEnd; i++)
+                    {
+                        ref readonly var instance = ref _lastInstances[i];
+                        WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
+                            cellW, cellH, paddingLeft, paddingTop, barRows);
+                    }
+                }
+            }
+
+            int clampedMenuStart = menuInstanceStart < 0
+                ? -1
+                : Math.Clamp(menuInstanceStart, 0, cellCount);
+            int menuOutputStart = clampedMenuStart < 0
+                ? -1
+                : clampedMenuStart == cellCount
+                    ? outputInstanceCount
+                    : _sourceOutputStarts[clampedMenuStart];
+
             BindVertexArray(_vao);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instanceVbo);
             EnsureBufferCapacity(ref _instanceBufferCapacityBytes, uploadBytes);
             fixed (float* fp = stagingArr)
             {
-                // Orphan the retained allocation, then transfer only the used
-                // range. This avoids reallocating/copying unused capacity.
-                _gl.BufferData(
-                    BufferTargetARB.ArrayBuffer,
-                    (nuint)_instanceBufferCapacityBytes,
-                    (void*)0,
-                    BufferUsageARB.DynamicDraw);
-                if (uploadBytes > 0)
+                if (_fullInstanceUpload)
                 {
-                    _gl.BufferSubData(
+                    // Orphaning is only valid with a complete replacement upload.
+                    _gl.BufferData(
                         BufferTargetARB.ArrayBuffer,
-                        0,
-                        (nuint)uploadBytes,
-                        fp);
+                        (nuint)_instanceBufferCapacityBytes,
+                        (void*)0,
+                        BufferUsageARB.DynamicDraw);
+                    if (uploadBytes > 0)
+                    {
+                        _gl.BufferSubData(
+                            BufferTargetARB.ArrayBuffer,
+                            0,
+                            (nuint)uploadBytes,
+                            fp);
+                    }
+                }
+                else
+                {
+                    for (int range = 0; range < _dirtyInstanceRangeCount; range++)
+                    {
+                        int sourceStart = _dirtyInstanceRanges[range * 2];
+                        int sourceEnd = _dirtyInstanceRanges[range * 2 + 1];
+                        int outputStart = _sourceOutputStarts[sourceStart];
+                        int outputEnd = _sourceOutputStarts[sourceEnd - 1] + _sourceOutputCounts[sourceEnd - 1];
+                        int outputCount = outputEnd - outputStart;
+                        int floatOffset = checked(outputStart * FloatsPerInstance);
+                        int byteCount = checked(outputCount * FloatsPerInstance * sizeof(float));
+                        _gl.BufferSubData(
+                            BufferTargetARB.ArrayBuffer,
+                            checked(floatOffset * sizeof(float)),
+                            (nuint)byteCount,
+                            fp + floatOffset);
+                    }
                 }
             }
 
+            _stagedOutputInstanceCount = outputInstanceCount;
             _drawInstanceCount = outputInstanceCount;
             _drawMenuStart = menuOutputStart;
             _drawMenuCount = menuOutputStart >= 0 ? outputInstanceCount - menuOutputStart : 0;
             if (_drawMenuStart >= 0)
-            {
                 EnsureMenuInstanceAttribs(_drawMenuStart);
-            }
             _stagedMenuInstanceStart = menuInstanceStart;
             _stagedCellW = cellW;
             _stagedCellH = cellH;
+            _stagedPaddingLeft = paddingLeft;
+            _stagedPaddingTop = paddingTop;
+            _stagedBarRows = barRows;
             _instanceBufferDirty = false;
+            _fullInstanceUpload = false;
+            _dirtyInstanceRangeCount = 0;
+        }
+        else if (cellCount == 0 && _instanceBufferDirty)
+        {
+            _drawInstanceCount = 0;
+            _drawMenuStart = menuInstanceStart < 0 ? -1 : 0;
+            _drawMenuCount = 0;
+            _stagedOutputInstanceCount = 0;
+            _stagedMenuInstanceStart = menuInstanceStart;
+            _stagedCellW = cellW;
+            _stagedCellH = cellH;
+            _stagedPaddingLeft = paddingLeft;
+            _stagedPaddingTop = paddingTop;
+            _stagedBarRows = barRows;
+            _instanceBufferDirty = false;
+            _fullInstanceUpload = true;
+            _dirtyInstanceRangeCount = 0;
         }
 
         bool hasMenuOverlay = menuInstanceStart >= 0
@@ -515,6 +678,65 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         {
             DrawCellRange(_drawMenuStart, _drawMenuCount, pass: 1, menuVao: true);
         }
+    }
+
+    private static void WriteCellInstance(
+        float[] staging,
+        int outputIndex,
+        in CellInstance cell,
+        float cellW,
+        float cellH,
+        float paddingLeft,
+        float paddingTop,
+        int barRows)
+    {
+        float x = cell.Row >= barRows ? paddingLeft + cell.Col * cellW : cell.Col * cellW;
+        float y = cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH;
+        int offset = outputIndex * FloatsPerInstance;
+        staging[offset] = x;
+        staging[offset + 1] = y;
+        staging[offset + 2] = cell.GlyphX;
+        staging[offset + 3] = cell.GlyphY;
+        staging[offset + 4] = cell.GlyphW;
+        staging[offset + 5] = cell.GlyphH;
+        staging[offset + 6] = 0f;
+        staging[offset + 7] = cell.OffY;
+        staging[offset + 8] = cell.OffX;
+        staging[offset + 9] = 0f;
+        staging[offset + 10] = cell.FgR / 255f;
+        staging[offset + 11] = cell.FgG / 255f;
+        staging[offset + 12] = cell.FgB / 255f;
+        staging[offset + 13] = 1f;
+        staging[offset + 14] = cell.BgR / 255f;
+        staging[offset + 15] = cell.BgG / 255f;
+        staging[offset + 16] = cell.BgB / 255f;
+        staging[offset + 17] = cell.BgA / 255f;
+        staging[offset + 18] = BitConverter.UInt32BitsToSingle(cell.Flags);
+
+        if ((cell.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) == 0)
+            return;
+
+        int decoration = (outputIndex + 1) * FloatsPerInstance;
+        float decorationWidth = (cell.Flags & CellFlags.WideCell) != 0 ? cellW * 2f : cellW;
+        staging[decoration] = x;
+        staging[decoration + 1] = y;
+        staging[decoration + 2] = 0f;
+        staging[decoration + 3] = 0f;
+        staging[decoration + 4] = decorationWidth;
+        staging[decoration + 5] = cellH;
+        staging[decoration + 6] = 0f;
+        staging[decoration + 7] = 0f;
+        staging[decoration + 8] = 0f;
+        staging[decoration + 9] = 0f;
+        staging[decoration + 10] = cell.FgR / 255f;
+        staging[decoration + 11] = cell.FgG / 255f;
+        staging[decoration + 12] = cell.FgB / 255f;
+        staging[decoration + 13] = 1f;
+        staging[decoration + 14] = 0f;
+        staging[decoration + 15] = 0f;
+        staging[decoration + 16] = 0f;
+        staging[decoration + 17] = 0f;
+        staging[decoration + 18] = BitConverter.UInt32BitsToSingle((uint)(cell.Flags | CellFlags.DecorOnly));
     }
 
     private void DrawCellRange(int firstInstance, int instanceCount, int pass, bool menuVao)

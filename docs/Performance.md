@@ -181,6 +181,84 @@ above: it exercises sustained terminal output and external-process diagnostics,
 so its throughput and memory numbers should not be merged with BenchmarkDotNet
 means.
 
+### Real Neovim scroll benchmark
+
+Use the separate `nvim-scroll` command for real Neovim/compositor scrolling; it is
+not part of `all` or synthetic output-throughput comparison. Build the current
+native PTY helper and Release apphost first. Pass `--app` explicitly to avoid an
+older published binary:
+
+```bash
+make -C src/Dotty.NativePty
+dotnet build src/Dotty/Dotty.csproj -c Release
+python3 scripts/perf/eval_suite.py nvim-scroll \
+  --app src/Dotty/bin/Release/net10.0/dotty \
+  --include dotty,ghostty,kitty --lines 1000000 --cols 200 --rows 60 \
+  --runs 5 --warmup-runs 1 --profile plain --capture auto --sample-hz 60 \
+  --startup-timeout 30 --run-timeout 1800 --timeout 86400
+```
+
+Requires Neovim 0.10+, .NET 10, Python 3, the desired terminals, and a Linux
+display: Hyprland with `hyprctl`/`grim`, or X11 with `xdotool`. Neovim's experimental
+`nvim__redraw` API is used per step with `valid=true`, `statusline=true`, and
+`flush=true`; record the Neovim version because behavior can change. Use
+`--profile syntax` for built-in C syntax highlighting. For virtual X11, explicitly
+use `--display-kind virtual` and unset `WAYLAND_DISPLAY` and
+`HYPRLAND_INSTANCE_SIGNATURE` (e.g. under Xvfb); this does not prove physical
+compositor presentation. The 300x100 stress grid needs a display large enough
+for the configured font. Dotty uses DejaVu Sans Mono at 16px, competitors at
+12pt; keep grid, fonts, resolution/refresh/scale, and backend stable, and
+inspect recorded metadata and fixture/binary hashes. Keep windows visible and
+avoid other applications, workspaces, or image viewers that can occlude them.
+
+The deterministic ~95 MB, one-million-line fixture checks exact one-line
+cursor advance for each of N-1 steps and flushes every redraw. Phase/parity
+markers correlate Neovim progress with visible pixels. `--capture none` makes
+visible metrics partial. The 60 Hz sample rate is a target, not a guarantee;
+expensive `grim` capture may need `--sample-hz 20` or `10`. Missing/late markers or
+cadence gaps censor visual data; preserve valid traversal data and report
+visual measures as partial/unknown, never zero. Samples are compositor
+observations, not GPU fences or proof of root cause.
+
+JSON records launch-to-ready, file-open-to-ready, geometry-ready, traversal,
+visual threshold counts, largest positive visible-line jump, EOF visibility
+tail, and RSS. Markdown reports traversal/lines per second, longest observed
+stall, EOF tail, RSS, status, and evidence/artifact links; threshold counts,
+opening timings, and maximum jump are JSON-only. RSS is a sampled process-tree
+maximum spanning startup, traversal, and EOF presentation tail; it is not an
+exact peak and excludes the external observer/supervisor. Cleanup and
+stop-release memory are outside the measurement. Artifacts under
+`artifacts/perf/eval/<run-id>/` include `nvim-scroll.json`, `report.md`, per-run logs,
+raw samples/events, and compositor screenshots when available. The per-run
+timeout includes traversal and EOF presentation tail; suite timeout covers the
+whole suite. The runner cleans up owned descendants/windows, restores the
+original Hyprland workspace, and leaves terminal user data untouched.
+
+### Neovim output processing and synchronized presentation
+
+Neovim's line-by-line redraw stream exercises bounded-region delete-line
+operations and erase-to-end-of-line on every move. These paths move contiguous
+hot/cold row storage together with row metadata, rather than copying normalized
+cells individually. Erasure clears a span, repairs wide-glyph boundaries, and
+recalculates row extents once per range instead of once per cell. This removes
+quadratic work from line erasure without changing the PTY queue or dropping
+intermediate terminal updates.
+
+CSI 2026 presentation holds expire after 1,000 ms from the first BEGIN. Repeated
+BEGIN does not renew the deadline; END releases the hold and a subsequent BEGIN
+starts a fresh deadline. Expiry permits presentation even if the application
+has not sent END. This is a stuck-producer failsafe, not normal frame pacing or
+a guarantee of one-second end-to-end display latency.
+
+With `DOTTY_TEST_PORT` enabled, `STATS` exposes cumulative `ptyBytesRead`,
+`ptyBytesParsed`, `pendingOutputChunks`, `modelGeneration`,
+`presentedGeneration`, and `presentCount`, alongside synchronization-hold
+counters. Sample these alongside workload events to distinguish input/parser
+backlog from presentation delay. Byte counters advance at read/chunk-completion
+boundaries, and generation observations are not an atomic pipeline snapshot or
+a GPU/compositor fence. A null model generation means the diagnostic lock
+attempt failed, not that the terminal model is empty.
+
 ### Focused CPU follow-up
 
 Use the direct profiler for a cheap, CPU-only workload matrix when the
@@ -292,6 +370,40 @@ retains the raw artifact. Profilers perturb throughput, and each capture uses
 a separate process, so profiled runs must not be combined with comparison
 means.
 
+
+### Neovim parser optimization findings (2026-10-03)
+
+Profiling a captured real Neovim 200x60 output stream localized expensive work
+to delete-line cell copying and repeated `ClearCell` boundary/row-extent scans.
+Before optimization, warm replay measured roughly 4.7 MB/s; after row memmoves
+and range clears it measured roughly 75 MB/s, retaining the same final visible
+screen hash. This isolated replay measures parser/buffer work, not GUI output
+throughput or full-state equivalence.
+
+A subsequent one-million-line, 200x60 real Hyprland run used the same ~95 MB
+fixture, Neovim 0.12.5, and 10 Hz compositor sampling. All three terminals
+completed exactly 999,999 moves and displayed the final EOF line:
+
+| Terminal | Traversal (s) | Observed EOF-to-visible tail (ms) | Sampled tree RSS (MiB) |
+|---|---:|---:|---:|
+| Dotty | 119.55 | 183.21 | 402.94 |
+| Ghostty | 121.83 | 179.88 | 209.92 |
+| Kitty | 115.22 | 102.56 | 315.36 |
+
+The earlier Dotty million-line run had a 4,756.21 ms EOF tail; the new observed
+tail is about 26 times shorter. These are separate runs, not a controlled
+population estimate. Each terminal has only one new measured run, and capture
+cadence gaps mark visual results partial (late samples: Dotty 1, Ghostty 19,
+Kitty 1). Do not infer a stable speed ranking or a guaranteed maximum stall.
+Raw results, samples, events, and compositor images are under the local artifact
+directory `artifacts/perf/nvim-parser-optimized/20261002T154701Z-e532f1/`.
+
+A separate diagnostic 100,000-line run reached identical final read/parsed byte
+counts at the first sampled point 61 ms after workload END, with zero pending
+chunks and matching model/presented generations. It is smaller, instrumented
+evidence, not the million-line comparison. A live virtual-X11 GUI smoke also
+verified that repeated CSI 2026 BEGIN commands cannot prevent the new screen
+from appearing at the 1,000 ms failsafe before END arrives.
 
 ## Performance Regression Testing
 
@@ -518,6 +630,7 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 | 2026-06-17 | Added BufferTextWriter optimization, cold-start benchmark guidance, and lazy glyph atlas population |
 | 2026-09-18 | Added consolidated evaluation commands, artifact/status semantics, and measured findings |
 | 2026-06-15 | Added cold-start benchmark guidance |
+| 2026-10-02 | Added real Neovim scrolling/compositor-visible benchmark guidance, measurement caveats, and artifact/cleanup details |
 | 2026-09-24 | Added the steady-state zero-allocation policy and measurement harness |
 
 ---
@@ -526,4 +639,4 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 - [Dotty Parsing Performance](Parsing.md)
 - [.NET Performance Best Practices](https://docs.microsoft.com/en-us/dotnet/framework/performance/)
 
-*Last updated: 2026-09-24*
+*Last updated: 2026-10-02*

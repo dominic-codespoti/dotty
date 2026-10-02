@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using Dotty.Abstractions.Adapter;
 using Dotty.Abstractions.Config;
 
@@ -48,9 +49,10 @@ public class TerminalAdapter : ITerminalHandler
     public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
     public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
 
-    public TerminalAdapter(int rows = 24, int columns = 80, int scrollbackCapacity = 10000)
+    public TerminalAdapter(int rows = 24, int columns = 80, int scrollbackCapacity = 10000, TimeProvider? timeProvider = null)
     {
         _buffer = new TerminalBuffer(rows, columns, scrollbackCapacity);
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public event Action<string>? RenderRequested;
@@ -690,20 +692,43 @@ public class TerminalAdapter : ITerminalHandler
         }
     }
 
+    /// <summary>
+    /// Longest a CSI 2026 hold may withhold presentation, measured from the
+    /// BEGIN that opened it. A repeated BEGIN does not extend it, so a producer
+    /// that never sends END (or re-sends BEGIN continuously) cannot freeze the
+    /// screen. Matches Ghostty's 1 s failsafe with kitty's non-renewing deadline.
+    /// </summary>
+    public const int SynchronizedUpdateMaxHoldMs = 1000;
+
+    private readonly TimeProvider _timeProvider;
     private bool _renderDirty;
-    private bool _synchronizedUpdateActive;
+    private volatile bool _synchronizedUpdateActive;
+    private long _synchronizedUpdateStartedTimestamp;
 
     public void OnSetSynchronizedUpdate(bool enabled)
     {
         if (_synchronizedUpdateActive == enabled)
             return;
 
+        // Publish the start before the flag so a reader that observes the
+        // flag never pairs it with a previous hold's start.
+        if (enabled)
+            Volatile.Write(ref _synchronizedUpdateStartedTimestamp, _timeProvider.GetTimestamp());
         _synchronizedUpdateActive = enabled;
         if (!enabled)
             FlushRender();
     }
 
     public bool SynchronizedUpdateActive => _synchronizedUpdateActive;
+
+    /// <summary>
+    /// True while a CSI 2026 hold is active and younger than
+    /// <see cref="SynchronizedUpdateMaxHoldMs"/>.
+    /// </summary>
+    public bool SynchronizedUpdateHolding =>
+        _synchronizedUpdateActive &&
+        _timeProvider.GetElapsedTime(Volatile.Read(ref _synchronizedUpdateStartedTimestamp)).TotalMilliseconds
+            < SynchronizedUpdateMaxHoldMs;
 
     private bool _focusReportingEnabled;
 
@@ -728,7 +753,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void FlushRender()
     {
-        if (_synchronizedUpdateActive) return;
+        if (SynchronizedUpdateHolding) return;
         if (_renderDirty)
         {
             _renderDirty = false;

@@ -138,6 +138,19 @@ internal static class DottyWindowHost
     private static int _committedFramebufferHeight = -1;
     private static int _committedAtlasVersion = int.MinValue;
     private static long _lastPresentTimestampMs;
+    private static long _lastInteractionTimestampMs;
+    // Synchronized-update (CSI 2026) hold telemetry. nvim wraps every redraw
+    // in a hold; while held, presents are withheld and the buffer advances
+    // underneath. A long hold surfaces as frozen-then-jump. These counters
+    // identify whether a reported freeze is a long producer hold (nvim-side
+    // slowness) or withheld presents after the hold released (renderer-side).
+    private static bool _syncHeld;
+    private static long _syncHoldStartTimestampMs;
+    private static long _syncHoldMaxDurationMs;
+    private static long _syncHoldCount;
+    private static long _syncHoldOver250MsCount;
+    private static long _presentCount;
+    private static ulong _presentedActiveGeneration;
     private static readonly ReusableTextBuffer _lastWindowTitle = new(128);
     private static char[] _windowTitleScratch = new char[128];
     private static byte[] _windowTitleUtf8 = new byte[128];
@@ -154,14 +167,18 @@ internal static class DottyWindowHost
     /// state to the hottest path for little observable benefit.
     /// </summary>
     private const int IdleFrameSleepMs = 1;
-    /// <summary>
-    /// While a PTY consumer has queued output, coalesce repaint requests to
-    /// roughly 30 FPS. Interactive writes have no backlog by the time they
-    /// request a frame, so they retain normal latency.
-    /// </summary>
-    private const int BackloggedFrameIntervalMs = 30;
 
     private static bool _showTabBar = true;
+    private static bool _customFrameActive;
+    private static int _customFrameHitTestWidth;
+    private static int _customFrameHitTestTabCount;
+    private static int _customFrameHitTestActiveIndex = -1;
+    private static float _customFrameHitTestBarHeight;
+    private static float _customFrameHitTestStatusWidth;
+    private static float _customFrameHitTestCaptionButtonsWidth;
+    private static bool _customFrameHitTestGeometryValid;
+    private static unsafe readonly delegate* managed<int, int, int> _customFrameHitTestCallback = &HitTestCustomFrame;
+    private static unsafe readonly delegate* managed<int, void> _customFrameHoverCallback = &OnCustomFrameButtonHover;
     private static ContextMenuModel? _activeContextMenu;
     private sealed record ControlRequest(string Command, TaskCompletionSource<string> Completion);
     public static void Run()
@@ -170,7 +187,13 @@ internal static class DottyWindowHost
         _lastWindowFocus = null;
         _focusedPane = null;
         _lastPresentTimestampMs = 0;
+        _lastInteractionTimestampMs = 0;
         _lifecycle = new WindowLifecycleCoordinator();
+        UserConfigService.CallbackDispatcher = action => _lifecycle.TryEnqueue(action);
+        UserConfigService.ConfigChanged += OnConfigChanged;
+        UserConfigService.Load();
+        SetCustomFrameMode(UserConfigService.Current.Window.Decorations);
+
         // Select GLFW directly instead of Silk's reflection-based backend discovery.
         global::Silk.NET.Windowing.Glfw.GlfwWindowing.Use();
         InputWindowExtensions.ShouldLoadFirstPartyPlatforms(false);
@@ -188,14 +211,98 @@ internal static class DottyWindowHost
                 new global::Silk.NET.Windowing.APIVersion(3, 3)),
         };
 
-        _window = Window.Create(options);
+        try
+        {
+            _window = Window.Create(options);
+        }
+        catch
+        {
+            UserConfigService.ConfigChanged -= OnConfigChanged;
+            UserConfigService.Shutdown();
+            throw;
+        }
         _window.Load += OnLoad;
         _window.Render += OnRender;
         _window.FramebufferResize += OnFramebufferResize;
         _window.FocusChanged += OnWindowFocusChanged;
         _window.Closing += OnClosing;
+        if (_customFrameActive)
+            InstallCustomFrame();
         _window.Run();
     }
+    private static bool IsTabBarVisible => _showTabBar || _customFrameActive;
+
+    private static void SetCustomFrameMode(string decorations)
+    {
+        bool enabled = OperatingSystem.IsWindows() &&
+            string.Equals(decorations, "custom", StringComparison.OrdinalIgnoreCase);
+        if (_customFrameActive == enabled)
+            return;
+
+        _customFrameActive = enabled;
+        _customFrameHitTestGeometryValid = false;
+        if (_window != null)
+        {
+            if (enabled)
+                InstallCustomFrame();
+            else
+                Win32WindowFrame.Uninstall();
+        }
+        WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
+    }
+
+    private static unsafe void InstallCustomFrame()
+    {
+        Win32WindowFrame.Install(
+            _window.Native!.Win32!.Value.Hwnd,
+            _customFrameHitTestCallback,
+            _customFrameHoverCallback);
+    }
+
+    private static void PublishCustomFrameHitTestGeometry(
+        int framebufferWidth,
+        float barHeight,
+        float statusWidth)
+    {
+        _customFrameHitTestWidth = framebufferWidth;
+        _customFrameHitTestBarHeight = barHeight;
+        _customFrameHitTestStatusWidth = statusWidth;
+        _customFrameHitTestCaptionButtonsWidth = _customFrameActive
+            ? Math.Min(framebufferWidth,
+                TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+            : 0f;
+        _customFrameHitTestTabCount = _tabManager?.Count ?? 0;
+        _customFrameHitTestActiveIndex = _tabManager?.ActiveIndex ?? -1;
+        _customFrameHitTestGeometryValid =
+            _customFrameActive && framebufferWidth > 0 && barHeight > 0f;
+    }
+
+    private static int HitTestCustomFrame(int x, int y)
+    {
+        if (!_customFrameHitTestGeometryValid)
+            return (int)TabBarHitType.None;
+
+        return (int)TabBarHitTester.HitTest(
+            x,
+            y,
+            _customFrameHitTestWidth,
+            _customFrameHitTestTabCount,
+            _customFrameHitTestActiveIndex,
+            out _,
+            _customFrameHitTestBarHeight,
+            _customFrameHitTestStatusWidth,
+            _customFrameHitTestCaptionButtonsWidth);
+    }
+
+    private static void OnCustomFrameButtonHover(int hitType)
+    {
+        if (_closed || _mouseController == null)
+            return;
+
+        _mouseController.SetCaptionButtonHover((TabBarHitType)hitType);
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
+    }
+
 
     private static void OnLoad()
     {
@@ -215,9 +322,6 @@ internal static class DottyWindowHost
         _runtimeFontSize = null;
         WindowPresentationGate.Invalidate(WindowFrameReason.Initial);
         _lastCursorBlinkTimestampMs = GetClockMilliseconds();
-        UserConfigService.CallbackDispatcher = action => _lifecycle.TryEnqueue(action);
-        UserConfigService.ConfigChanged += OnConfigChanged;
-        UserConfigService.Load();
         _tabManager = new TerminalTabManager();
         _tabManager.ProcessExited += OnTabProcessExited;
         _tabManager.ActiveTabChanged += OnActiveTabChanged;
@@ -281,7 +385,7 @@ internal static class DottyWindowHost
         _tabManager.CreateTab(cols: _cols, rows: _rows);
         _keybindings.RegisterDefaults();
         _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
-        int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
         float topOffset = barRows * _cellHeight * _scale;
         _window.Size = new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale));
         StartControlServer();
@@ -786,6 +890,7 @@ internal static class DottyWindowHost
     {
         if (_closed) return;
         _runtimeFontSize = null;
+        SetCustomFrameMode(config.Window.Decorations);
         _showTabBar = config.TabBar.Show;
         WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
         _keybindings.RegisterDefaults();
@@ -871,7 +976,7 @@ internal static class DottyWindowHost
         float padX = (float)(pad.Left + pad.Right) * _scale;
         float padY = (float)(pad.Top + pad.Bottom) * _scale;
 
-        int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
         float topOffset = barRows * _cellHeight * _scale;
 
         _cols = Math.Max(1, (int)((size.X - padX) / (_cellWidth * _scale)));
@@ -938,7 +1043,15 @@ internal static class DottyWindowHost
             int tabCount = _tabManager?.Count ?? 0;
             int activeIndex = _tabManager?.ActiveIndex ?? -1;
             long skipped = _sceneComposer?.SkippedLeafFrames ?? 0;
-            return $"{{\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped}}}";
+            var session = _tabManager?.ActiveTab?.Session;
+            long bytesRead = session?.PtyBytesRead ?? 0;
+            long bytesParsed = session?.PtyBytesParsed ?? 0;
+            int pendingChunks = session?.PendingOutputChunks ?? 0;
+            string modelGeneration = session != null && TryReadGeneration(session.Adapter.Buffer, out ulong generation)
+                ? generation.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : "null";
+            bool syncActive = session?.Adapter.SynchronizedUpdateActive ?? false;
+            return $"{{\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount}}}";
         }
         if (string.Equals(command, "SHUTDOWN", StringComparison.OrdinalIgnoreCase))
         {
@@ -1267,14 +1380,38 @@ internal static class DottyWindowHost
         long now = GetClockMilliseconds();
         if (now - _lastLuaStatusRefreshTimestampMs >= 1000)
             RefreshLuaStatus();
+        // While a synchronized update (CSI 2026, used by nvim for every
+        // redraw) is held, presents are withheld by design. Sleep instead of
+        // spinning: the gate below used to burn 100% of a core here, starving
+        // the PTY consumer and the producer itself and stretching the hold.
         if (!WindowPresentationGate.ShouldPresent(activeTab?.Session.Adapter))
+        {
+            if (!_syncHeld)
+            {
+                _syncHeld = true;
+                _syncHoldStartTimestampMs = now;
+            }
+            Thread.Sleep(IdleFrameSleepMs);
             return;
+        }
+        if (_syncHeld)
+        {
+            _syncHeld = false;
+            long holdDurationMs = now - _syncHoldStartTimestampMs;
+            _syncHoldCount++;
+            if (holdDurationMs > _syncHoldMaxDurationMs)
+                _syncHoldMaxDurationMs = holdDurationMs;
+            if (holdDurationMs >= 250)
+                _syncHoldOver250MsCount++;
+        }
 
         int framebufferWidth = _window.FramebufferSize.X;
         int framebufferHeight = _window.FramebufferSize.Y;
         if (framebufferWidth <= 0 || framebufferHeight <= 0)
+        {
+            Thread.Sleep(IdleFrameSleepMs);
             return;
-
+        }
         UpdateCursorBlink(now, activeTab != null);
 
         WindowFrameReason pendingReasons = WindowPresentationGate.PendingReasons;
@@ -1327,18 +1464,32 @@ internal static class DottyWindowHost
             Thread.Sleep(IdleFrameSleepMs);
             return;
         }
+        // Preserve bulk-output coalescing, but let content catch up immediately
+        // for a short window after interactive input.
         bool contentOnly = (pendingReasons & ~WindowFrameReason.Content) == WindowFrameReason.None;
         if (contentOnly &&
             _lastPresentTimestampMs != 0 &&
-            now - _lastPresentTimestampMs < BackloggedFrameIntervalMs)
+            now - _lastPresentTimestampMs < WindowPresentationGate.BackloggedFrameIntervalMs &&
+            now - _lastInteractionTimestampMs >= WindowPresentationGate.InteractiveWindowMs)
         {
+            bool anyBacklogged = false;
             for (int i = 0; i < _visibleLeafCount; i++)
             {
                 if (visibleLeaves[i].Session.OutputBacklogged)
                 {
-                    Thread.Sleep(IdleFrameSleepMs);
-                    return;
+                    anyBacklogged = true;
+                    break;
                 }
+            }
+
+            if (WindowPresentationGate.ShouldCoalesce(
+                now,
+                _lastPresentTimestampMs,
+                _lastInteractionTimestampMs,
+                anyBacklogged))
+            {
+                Thread.Sleep(IdleFrameSleepMs);
+                return;
             }
         }
         WindowFrameReason consumedReasons = WindowPresentationGate.Consume();
@@ -1370,7 +1521,18 @@ internal static class DottyWindowHost
             var padding = UserConfigService.Current.Window.Padding;
             float padLeft = (float)padding.Left * _scale;
             float padTop = (float)padding.Top * _scale;
-            int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+            int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+            float statusWidth = TabBarQuadBuilder.MeasureStatusWidth(
+                GetLuaStatusText(),
+                _cellWidth * _scale,
+                _typeface,
+                _cellFontSizePx(),
+                _atlas,
+                _luaStatusWarning);
+            PublishCustomFrameHitTestGeometry(
+                framebufferWidth,
+                barRows * _cellHeight * _scale,
+                statusWidth);
 
             var frame = _sceneComposer.Compose(
                 activeTab,
@@ -1386,7 +1548,7 @@ internal static class DottyWindowHost
                 _rows,
                 _cols,
                 padding,
-                _showTabBar,
+                IsTabBarVisible,
                 _cursorBlinkVisible,
                 _mouseController?.IsScrollbarHovered ?? false,
                 _mouseController?.IsDraggingScrollbar ?? false,
@@ -1401,15 +1563,22 @@ internal static class DottyWindowHost
                 _mouseController?.HoveredTabHitType ?? TabBarHitType.None,
                 _tabTitleSource,
                 GetLuaStatusText(),
-                _luaStatusWarning);
+                _luaStatusWarning,
+                captionButtonsWidth: _customFrameActive
+                    ? Math.Min(framebufferWidth, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                    : 0f,
+                isMaximized: _window.WindowState == WindowState.Maximized);
 
             if (frame.IsIncomplete)
             {
                 // A leaf lost the buffer-lock race mid-burst; its quads are missing.
                 // Presenting would flash background where live content belongs, so
                 // hold the previous front buffer and retry next frame. Requeue the
-                // consumed reasons so the retry still has work to do.
+                // consumed reasons so the retry still has work to do. Yield: the
+                // lock is held by the PTY consumer, so an immediate retry just
+                // burns a core re-composing a frame that will likely lose again.
                 WindowPresentationGate.Requeue(consumedReasons);
+                Thread.Sleep(IdleFrameSleepMs);
                 return;
             }
             _renderer.Render(
@@ -1434,6 +1603,7 @@ internal static class DottyWindowHost
                 frame.MenuChromeStart);
             _window.SwapBuffers();
             _lastPresentTimestampMs = GetClockMilliseconds();
+            _presentCount++;
             CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
         }
         catch
@@ -1499,6 +1669,8 @@ internal static class DottyWindowHost
                     _frameGenerations[i] == after)
                 {
                     _committedGenerations[visibleLeaves[i]] = after;
+                    if (ReferenceEquals(visibleLeaves[i].Session, _tabManager?.ActiveTab?.Session))
+                        _presentedActiveGeneration = after;
                 }
             }
         }
@@ -1518,6 +1690,7 @@ internal static class DottyWindowHost
             return;
 
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
+        RecordInteraction();
         _keyboardController.HandleKeyDown(key, scancode);
     }
 
@@ -1541,6 +1714,7 @@ internal static class DottyWindowHost
 
     private static void OnKeyboardActivity()
     {
+        RecordInteraction();
         _cursorBlinkVisible = true;
         _lastCursorBlinkTimestampMs = GetClockMilliseconds();
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.CursorBlink);
@@ -1579,12 +1753,15 @@ internal static class DottyWindowHost
 
     private static long GetClockMilliseconds() =>
         System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
+    private static void RecordInteraction() =>
+        _lastInteractionTimestampMs = GetClockMilliseconds();
 
     private static void OnMouseDown(IMouse mouse, MouseButton button)
     {
         if (_closed)
             return;
 
+        RecordInteraction();
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseDown(mouse, button);
     }
@@ -1603,6 +1780,7 @@ internal static class DottyWindowHost
         if (_closed)
             return;
 
+        RecordInteraction();
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseUp(mouse, button);
     }
@@ -1612,6 +1790,7 @@ internal static class DottyWindowHost
         if (_closed)
             return;
 
+        RecordInteraction();
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.Selection);
         _mouseController.HandleMouseScroll(mouse, wheel);
     }
@@ -1652,6 +1831,9 @@ internal static class DottyWindowHost
     {
         if (_closed) return;
         _closed = true;
+        Win32WindowFrame.Uninstall();
+        _customFrameActive = false;
+        _customFrameHitTestGeometryValid = false;
         _lifecycle.Close();
         _controlServer?.Dispose();
         _controlServer = null;
@@ -1753,7 +1935,17 @@ internal static class DottyWindowHost
             {
                 var size = _window.FramebufferSize;
                 var padding = UserConfigService.Current.Window.Padding;
-                int barRows = _showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+                int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+                float captionButtonsWidth = _customFrameActive
+                    ? Math.Min(size.X, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                    : 0f;
+                float statusWidth = TabBarQuadBuilder.MeasureStatusWidth(
+                    GetLuaStatusText(),
+                    _cellWidth * _scale,
+                    _typeface,
+                    _cellFontSizePx(),
+                    _atlas,
+                    _luaStatusWarning);
                 return new TerminalMouseGeometry(
                     Scale: _scale,
                     CellWidth: _cellWidth,
@@ -1765,14 +1957,9 @@ internal static class DottyWindowHost
                     FramebufferHeight: size.Y,
                     Columns: _cols,
                     Rows: _rows,
-                    ShowTabBar: _showTabBar,
-                    StatusReservedWidth: TabBarQuadBuilder.MeasureStatusWidth(
-                        GetLuaStatusText(),
-                        _cellWidth * _scale,
-                        _typeface,
-                        _cellFontSizePx(),
-                        _atlas,
-                        _luaStatusWarning));
+                    ShowTabBar: IsTabBarVisible,
+                    StatusReservedWidth: statusWidth,
+                    CaptionButtonsWidth: captionButtonsWidth);
             }
         }
         public bool Ctrl => _keyboardController?.Ctrl ?? false;

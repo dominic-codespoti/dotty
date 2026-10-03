@@ -11,7 +11,8 @@
          headless OpenGL initialization smoke test. -->
     <PublishAot>true</PublishAot>
     <IsTrimmable>true</IsTrimmable>
-    <IlcInstructionSet>native</IlcInstructionSet>
+    <!-- Use the portable NativeAOT CPU baseline. Local benchmarks may opt in
+         explicitly with -p:IlcInstructionSet=native. -->
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Silk.NET.Windowing" />

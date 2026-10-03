@@ -2,11 +2,9 @@
   <PropertyGroup>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
-    <!-- Centralized Version Info -->
-    <VersionPrefix>0.3.0</VersionPrefix>
-    <AssemblyVersion>0.3.0.0</AssemblyVersion>
-    <FileVersion>0.3.0.0</FileVersion>
-    <InformationalVersion>$(VersionPrefix)</InformationalVersion>
+    <!-- The single source of truth for development and tagged release versions.
+         The SDK derives assembly/file/informational versions from this value. -->
+    <Version>0.3.0</Version>
   </PropertyGroup>
 
   <!-- Performance: enable dynamic PGO (Profile-Guided Optimization) -->

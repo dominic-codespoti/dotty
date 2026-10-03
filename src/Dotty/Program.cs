@@ -1,3 +1,5 @@
+using System.Reflection;
+
 namespace Dotty.Silk;
 
 internal static class Program
@@ -14,7 +16,7 @@ internal static class Program
             }
             if (options.ShowVersion)
             {
-                Console.Out.WriteLine(typeof(Program).Assembly.GetName().Version?.ToString() ?? "unknown");
+                Console.Out.WriteLine(typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()!.InformationalVersion);
                 return 0;
             }
 

@@ -7,9 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v1.0.0)'
+        description: 'Exact release tag (e.g., v0.3.0 or v0.4.0-beta.1)'
         required: true
-        default: 'v1.0.0'
 
 env:
   DOTNET_VERSION: '10.0.x'
@@ -62,8 +61,15 @@ jobs:
             PRERELEASE=true
           fi
 
+          CENTRAL_VERSION=$(dotnet msbuild "${{ env.PROJECT_PATH }}" -getProperty:Version -nologo)
+          if [ "$VERSION" != "$CENTRAL_VERSION" ]; then
+            echo "Release tag version $VERSION does not match centrally evaluated MSBuild Version $CENTRAL_VERSION." >&2
+            exit 1
+          fi
+
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "central_version=$CENTRAL_VERSION" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Restore dependencies
@@ -130,6 +136,8 @@ jobs:
             -r linux-x64 \
             --self-contained true \
             -p:PublishSingleFile=true \
+            -p:Version=${{ needs.validate-release.outputs.version }} \
+            -p:IncludeSourceRevisionInInformationalVersion=false \
             -p:RequireUnixPtyHelper=true \
             -o ./publish/linux-x64
 
@@ -142,6 +150,12 @@ jobs:
           test -f ./publish/linux-x64/libSkiaSharp.so
           test -f ./publish/linux-x64/liblua54.so
           test -x ./publish/linux-x64/pty-helper
+          expected_version="${{ needs.validate-release.outputs.version }}"
+          actual_version=$(./publish/linux-x64/dotty --version)
+          if [ "$actual_version" != "$expected_version" ]; then
+            echo "Linux binary version '$actual_version' does not match requested '$expected_version'." >&2
+            exit 1
+          fi
 
       - name: Create tarball
         shell: bash
@@ -216,6 +230,8 @@ jobs:
             -r ${{ matrix.rid }} \
             --self-contained true \
             -p:PublishSingleFile=true \
+            -p:Version=${{ needs.validate-release.outputs.version }} \
+            -p:IncludeSourceRevisionInInformationalVersion=false \
             -p:RequireUnixPtyHelper=true \
             -o ./publish/${{ matrix.rid }}
 
@@ -228,6 +244,12 @@ jobs:
           test -f ./publish/${{ matrix.rid }}/libSkiaSharp.dylib
           test -f ./publish/${{ matrix.rid }}/liblua54.dylib
           test -x ./publish/${{ matrix.rid }}/pty-helper
+          expected_version="${{ needs.validate-release.outputs.version }}"
+          actual_version=$(./publish/${{ matrix.rid }}/dotty --version)
+          if [ "$actual_version" != "$expected_version" ]; then
+            echo "macOS binary version '$actual_version' does not match requested '$expected_version'." >&2
+            exit 1
+          fi
 
       - name: Create tarball
         shell: bash
@@ -285,6 +307,8 @@ jobs:
             -r win-x64 `
             --self-contained true `
             -p:PublishSingleFile=true `
+            -p:Version=${{ needs.validate-release.outputs.version }} `
+            -p:IncludeSourceRevisionInInformationalVersion=false `
             -o .\publish\win-x64
       - name: Verify Windows artifact
         shell: pwsh
@@ -297,6 +321,11 @@ jobs:
           }
           if (!(Test-Path "publish\win-x64\glfw3.dll")) {
             throw "Windows GLFW native asset is missing."
+          }
+          $expectedVersion = "${{ needs.validate-release.outputs.version }}"
+          $actualVersion = (& "publish\win-x64\dotty.exe" --version).Trim()
+          if ($actualVersion -ne $expectedVersion) {
+            throw "Windows binary version '$actualVersion' does not match requested '$expectedVersion'."
           }
 
       - name: Create zip archive

@@ -33,10 +33,11 @@ Dotty is a modern terminal emulator composed of:
 
 ## Install
 
-Prebuilt self-contained archives are available from the
-[nightly prerelease](https://github.com/dominic-codespoti/dotty/releases/tag/nightly).
-Nightly builds are unsigned prereleases, so Windows SmartScreen may warn on
-first launch. There is no stable release or installer yet.
+Prebuilt self-contained archives are published only for explicitly requested
+versioned releases. See the [release policy](docs/Releasing.md) for current
+version, release status, and the process for stable and prerelease tags. The
+legacy nightly prerelease may still exist on GitHub but is no longer updated.
+Release signing and a graphical installer are not currently provided.
 
 Linux x64:
 

@@ -36,6 +36,12 @@
 | [Performance Guide](Performance.md) | Benchmarks, allocation profiles, cold-start optimization |
 | [GUI Harness Benchmarking](GuiHarnessBenchmarking.md) | Visual benchmark harness for render quality verification |
 
+## Releases
+
+| Document | Description |
+|----------|-------------|
+| [Release Policy](Releasing.md) | Central version, explicit stable/prerelease release triggers, readiness gates, and bump advice |
+
 ## Platform
 
 | Document | Description |
@@ -53,4 +59,4 @@
 
 ---
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-03*

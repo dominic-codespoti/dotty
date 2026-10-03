@@ -476,9 +476,12 @@ compared, because before/after builds are expected to differ.
 #### Observed Dotty before/after comparison (2026-10-02)
 
 These captures compare frozen AOT apphosts before and after integration on the
-same Linux x86_64 host. The output-throughput workload ran five alternating
-5-million-line samples per build (275,000,000 bytes per sample). The Neovim
-workload used one million lines, Neovim 0.12.5, a real Hyprland/eDP-1 display
+same Linux x86_64 host. Public NativeAOT builds use the portable CPU baseline;
+local benchmark builds may explicitly opt into host-native instruction tuning
+with `-p:IlcInstructionSet=native`, which is not suitable for portable releases.
+The output-throughput workload ran five alternating 5-million-line samples per build
+(275,000,000 bytes per sample). The Neovim workload used one million lines,
+Neovim 0.12.5, a real Hyprland/eDP-1 display
 (2560x1600 at 120.001 Hz, scale 1), a 200x60 grid in a 2000x1140 window,
 DejaVu Sans Mono 16px, and the same 94,999,925-byte fixture
 (81d88047e249252f6f1d11a8394196a486be1c9fc26ad9ff7940fe08f431e31a). Every

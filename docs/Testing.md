@@ -100,8 +100,9 @@ The authoritative workflow is `.github/workflows/ci.yml`:
 
 The hosted macOS and Windows runners build and test native code but do not run
 desktop GUI smoke: they lack a usable OpenGL/GUI session. CI has no
-Wayland/Weston smoke. Nightly additionally validates Linux arm64 and Windows
-arm64 publish outputs.
+Wayland/Weston smoke. Linux arm64 and Windows arm64 remain local/manual
+candidates without an automated nightly or release-publishing lane; see the
+[Release Policy](Releasing.md).
 
 ## Release verification
 

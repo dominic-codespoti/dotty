@@ -12,9 +12,9 @@ is selected by `PtyFactory` and is reported by `PtyCapabilities`.
 | macOS | x64, arm64 | — | POSIX `pty-helper` | macOS desktop with OpenGL 3.3 |
 | Windows 10 build 17763+ / Windows 11 | x64 | arm64 | ConPTY | OpenGL 3.3 driver |
 
-Linux arm64 and Windows arm64 are built nightly as promotion candidates. They
-are not release targets until native PTY and desktop smoke runs complete on
-native arm64 hosts.
+Linux arm64 and Windows arm64 remain unpromoted local/manual candidates; there
+is no automated nightly or release-validation lane for them. Promotion requires
+native PTY and desktop smoke runs on native arm64 hosts. See [Release Policy](Releasing.md).
 
 ## Requirements
 
@@ -49,8 +49,8 @@ dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj -
 ```
 
 The CI matrix builds Linux x64, macOS Intel, macOS arm64, and Windows x64 on
-native runners. Nightly builds additionally validate Linux arm64 and Windows
-arm64 publish outputs.
+native runners. Linux arm64 and Windows arm64 have no automated nightly or
+release-publishing validation lane; work for those candidates is local/manual.
 
 ## Desktop presentation and native verification
 
@@ -205,8 +205,9 @@ Support promotion is staged:
    checksum/manifest generation. Release CI also starts the extracted Linux
    archive under Xvfb; macOS and Windows desktop startup is verified
    manually/local.
-2. **Architecture candidate tier:** Linux arm64 and Windows arm64 pass nightly
-   publish validation first. Promotion additionally requires native arm64 PTY,
+2. **Architecture candidate tier:** Linux arm64 and Windows arm64 remain
+   unpromoted local/manual candidates. There is no automated nightly or release
+   validation lane for these targets. Promotion requires native arm64 PTY,
    desktop, and extracted artifact smoke on native hosts; these GUI checks are
    manual/local rather than CI coverage.
 3. **Regression hold:** Any failed native matrix, missing native asset, OpenGL

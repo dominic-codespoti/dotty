@@ -92,6 +92,7 @@ dotnet build Dotty.slnx -c Release
 ```
 
 Build `pty-helper` before Unix host tests. Native PTY tests run on the host
-platform; tests do not carry a hardcoded runtime identifier. CI validates Linux
-x64, Windows x64, macOS Intel, and macOS arm64, with Linux arm64 and Windows
-arm64 publish validation in nightly builds.
+platform; tests do not carry a hardcoded runtime identifier. CI validates the
+four public release targets: Linux x64, Windows x64, macOS Intel, and macOS
+arm64. Linux arm64 and Windows arm64 remain local/manual candidates without an
+automated nightly or release-validation lane; see [Release Policy](Releasing.md).

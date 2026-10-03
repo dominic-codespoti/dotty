@@ -1,4 +1,6 @@
-# Dotty Terminal Emulator — Documentation
+# Dotty documentation
+
+Start here: [README and quick start](../Readme.md) for the application, [Contributing](../Contributing.md) for developer setup/build/tests, and this index for reference docs. Documentation describes implemented behavior unless a page is explicitly marked as a historical design/plan.
 
 ## Architecture & Design
 
@@ -6,7 +8,7 @@
 |----------|-------------|
 | [Architecture Overview](Architecture.md) | Layered architecture, component diagram, data flow, platform abstraction |
 | [Rendering Pipeline](Rendering.md) | GPU rendering via SkiaSharp, frame lifecycle, glyph atlas, performance optimizations |
-| [GPU Rendering Migration Plan](architecture/GPURenderingPlan.md) | Active: A8 glyph atlas + quad-batched renderer to replace the CPU raster path (branch `feat/gpu-rendering`) |
+| [GPU Rendering Migration Plan](architecture/GPURenderingPlan.md) | Historical proposal for the GPU renderer migration; consult [Rendering Pipeline](Rendering.md) for the current implementation |
 | [Incremental Scroll Rendering](architecture/IncrementalScrollRendering.md) | Scroll-aware dirty tracking + region-memmove rendering: reverted from the live path, primitives tested for a future re-attempt |
 | [State Coordination Hardening](architecture/StateCoordinationPlan.md) | Executed: library-owned buffer invariants, single-owner scroll state, dormant incremental machinery removed, alt-screen invalidation locked in |
 | [Lock-Free Snapshot Design](architecture/LockFreeSnapshotDesign.md) | Snapshot ownership and lock-free rendering considerations |
@@ -33,7 +35,7 @@
 |----------|-------------|
 | [Testing Guide](Testing.md) | Test architecture, unit/integration/render tests |
 | [E2E Testing](E2ETesting.md) | End-to-end testing via TCP command interface |
-| [Performance Guide](Performance.md) | Benchmarks, allocation profiles, cold-start optimization |
+| [Performance Guide](Performance.md) | Benchmark workloads, recorded machine-specific measurements, and limitations; results are not universal performance guarantees |
 | [GUI Harness Benchmarking](GuiHarnessBenchmarking.md) | Visual benchmark harness for render quality verification |
 
 ## Releases
@@ -47,7 +49,7 @@
 | Document | Description |
 |----------|-------------|
 | [Native PTY](NativePty.md) | Unix PTY implementation (posix_openpt, forkpty) |
-| [Native Desktop and IME Assessment](NativeDesktopAndIme.md) | Native verification lanes, committed Unicode, and the separate composition boundary |
+| [Native Desktop and IME Assessment](NativeDesktopAndIme.md) | Interactive native GUI verification, physical-input coverage boundaries, committed Unicode, and the separate composition boundary |
 | [Platform Support](PlatformSupport.md) | OS requirements, native assets, diagnostics, and promotion gates |
 | [Windows ConPTY](WindowsConPty.md) | Windows pseudo-console API integration |
 

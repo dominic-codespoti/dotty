@@ -2,7 +2,14 @@
 
 This report records a comparison made on 2026-06-17. The original comparison
 included the then-current Avalonia host; that architecture is historical. The
-current host is documented as Silk.NET/GLFW/OpenGL with SkiaSharp.
+
+> **Historical snapshot (2026-06-17), not current product guidance.** The
+> comparisons and recommendations below record the project state at that date.
+> For current host architecture, supported platforms, release targets, and
+> implemented configuration, use [Architecture](Architecture.md),
+> [Platform Support](PlatformSupport.md), [Release Policy](Releasing.md), and
+> [Configuration](Configuration.md). Preserve this report as comparison
+> provenance; do not read its dated platform statements as current support status.
 
 ## 1. Architectural & Language Differences
 

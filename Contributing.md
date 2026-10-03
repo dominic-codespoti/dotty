@@ -1,439 +1,85 @@
 # Contributing to Dotty
 
-Thank you for your interest in contributing to Dotty! This document provides comprehensive guidelines for setting up your development environment, building the project, running tests, and submitting contributions.
+Thanks for your interest in contributing. This guide covers local development; the [documentation index](docs/index.md) links to the detailed architecture, platform, testing, and release references.
 
-## Table of Contents
+## Prerequisites
 
-- [Development Environment Setup](#development-environment-setup)
-- [Build Requirements](#build-requirements)
-- [Building the Project](#building-the-project)
-- [Running Tests](#running-tests)
-- [Code Style Guidelines](#code-style-guidelines)
-- [Project Structure](#project-structure)
-- [Pull Request Process](#pull-request-process)
-- [Development Resources](#development-resources)
-- [Troubleshooting](#troubleshooting)
+- .NET SDK 10.0.100 or a later .NET 10 feature-band SDK. The repository's [global.json](global.json) pins 10.0.100 and allows roll-forward within .NET 10; .NET 9 is not sufficient for the net10.0 projects.
+- On Linux and macOS, a C compiler and `make` to build the POSIX PTY helper.
+- Git.
+- For running the desktop application, a supported desktop environment and OpenGL 3.3-capable driver. Headless builds and tests do not demonstrate physical GUI behavior; see [native desktop verification](docs/NativeDesktopAndIme.md).
 
-## Development Environment Setup
+Install .NET 10 from the [official download page](https://dotnet.microsoft.com/download/dotnet/10.0). On Windows, no separate PTY helper is needed; the app uses ConPTY.
 
-### Prerequisites
+## Build and run
 
-To build and run Dotty, you'll need the following tools installed:
+Run commands from the repository root. On Linux or macOS, build the native helper, then build the solution:
 
-#### Required
-
-| Tool | Version | Purpose |
-|------|---------|---------|
-| .NET SDK | 10.0.x (or 9.0+) | Primary build system |
-| make | any | Native PTY helper build |
-| gcc or clang | any | Compiling C code for POSIX PTY support |
-| git | any | Source control |
-
-#### Optional but Recommended
-
-- **Visual Studio 2022** (Windows) or **Rider** / **VS Code** (cross-platform)
-- **Docker** (for isolated build testing)
-
-### Platform-Specific Setup
-
-#### Linux (Ubuntu/Debian)
-
-```bash
-# Install .NET SDK
-wget https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb
-sudo dpkg -i packages-microsoft-prod.deb
-sudo apt-get update
-sudo apt-get install -y dotnet-sdk-10.0
-
-# Install build essentials
-sudo apt-get install -y build-essential
-
-# Clone repository
-git clone https://github.com/dominic-codespoti/dotty.git
-cd dotty
-```
-
-#### macOS
-
-```bash
-# Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install .NET SDK and build tools
-brew install dotnet
-brew install make
-
-# Clone repository
-git clone https://github.com/dominic-codespoti/dotty.git
-cd dotty
-```
-
-#### Windows
-
-1. Install [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-2. Install [Visual Studio 2022](https://visualstudio.microsoft.com/) with C++ workload (optional, for native development)
-3. Clone the repository:
-   ```powershell
-   git clone https://github.com/dominic-codespoti/dotty.git
-   cd dotty
-   ```
-
-## Build Requirements
-
-### .NET Version
-
-- **Target and minimum supported**: .NET 10.0
-
-### Native Dependencies
-
-On Linux and macOS, Dotty requires a native PTY helper (`pty-helper`) written in C. This is built automatically by the Makefile in `src/Dotty.NativePty/`.
-
-### Build Configurations
-
-| Configuration | Purpose | Native AOT |
-|--------------|---------|------------|
-| `Debug` | Development, debugging | Disabled |
-| `Release` | Production builds, CI | Enabled |
-
-### Solution Structure
-
-```
-Dotty.slnx
-├── src/
-│   ├── Dotty/                       # Silk.NET/GLFW GPU executable
-│   ├── Dotty.Runtime/               # Tabs, panes, input, scripting
-│   ├── Dotty.Rendering.Gpu/         # Shared atlas and GPU frame data
-│   ├── Dotty.Terminal/              # Terminal core engine
-│   ├── Dotty.NativePty/             # POSIX PTY helper (C + C# wrapper)
-│   └── Dotty.Abstractions/          # Shared interfaces
-└── tests/
-    └── Dotty.App.Tests/             # Host, input, and runtime tests
-```
-
-## Building the Project
-
-### Full Build (All Platforms)
-
-```bash
-# Build native PTY helper (Linux/macOS only)
-cd src/Dotty.NativePty && make && cd ../..
-
-# Restore dependencies
-dotnet restore Dotty.slnx
-
-# Build entire solution
+```sh
+make -C src/Dotty.NativePty
 dotnet build Dotty.slnx -c Release
 ```
 
-### Quick Build (Iterative Development)
+For iterative development, use `-c Debug`. To launch the app from source:
 
-```bash
-# Build without native helper (uses existing binary if present)
-dotnet build Dotty.slnx -c Debug
-
-# Run the application
-dotnet run --project src/Dotty
+```sh
+dotnet run --project src/Dotty/Dotty.csproj
 ```
 
-### Native AOT Publishing
+Pass application arguments after `--`, for example:
 
-For production releases with Native AOT:
-
-```bash
-# Linux x64
-dotnet publish src/Dotty/Dotty.csproj \
-  -c Release \
-  -r linux-x64 \
-  --self-contained true \
-  -p:PublishSingleFile=true \
-  -p:PublishAot=true
-
-# macOS x64
-# (similar command with -r osx-x64)
-
-# Windows x64
-# (similar command with -r win-x64)
+```sh
+dotnet run --project src/Dotty/Dotty.csproj -- -d "$PWD" -- nvim .
 ```
 
-## Running Tests
+Release configuration enables Native AOT for applicable targets. Publishing and supported release targets are described in the [release policy](docs/Releasing.md) and [platform support reference](docs/PlatformSupport.md); a successful build is not proof of physical desktop support.
 
-Dotty uses **xUnit** for unit and integration testing across its runtime, rendering, parser, and PTY layers.
+## Tests
 
-### Run All Tests
+The repository uses Microsoft.Testing.Platform via global.json. Run the suite with the .NET 10 SDK:
 
-```bash
-# Run all tests
-dotnet test --solution Dotty.slnx
+```sh
+# Run all solution test projects
+dotnet test --solution Dotty.slnx -c Release
 
-# Run with verbose output
-dotnet test --solution Dotty.slnx --verbosity normal
-
-# Run specific test project
-dotnet test --project tests/Dotty.App.Tests/Dotty.App.Tests.csproj
+# Run one project
+dotnet test --project tests/Dotty.App.Tests/Dotty.App.Tests.csproj -c Release
 ```
 
-### Platform-Specific Test Filtering
+CI runs test projects individually. For a CI-style TRX report, use a unique report filename:
 
-Tests can be filtered by platform requirements:
-
-```bash
-# Skip Unix-specific tests on Windows
-dotnet test --solution Dotty.slnx --filter "FullyQualifiedName!~Unix"
-
-# Run only parser tests
-dotnet test --solution Dotty.slnx --filter "FullyQualifiedName~Parser"
+```sh
+dotnet test --project tests/Dotty.App.Tests/Dotty.App.Tests.csproj -c Release --no-build --report-xunit-trx --report-xunit-trx-filename app-tests.trx
 ```
 
-### Test Categories
+If a test command reports zero tests, check whether dotnet on PATH is a wrapper injecting raw MSBuild switches into dotnet test; use the installed .NET SDK executable directly to diagnose. See the [testing guide](docs/Testing.md) for test scope and additional procedures. The performance test project is a benchmark executable, not one of the test projects. Benchmark results are workload- and machine-specific; see [Performance](docs/Performance.md) for recorded evidence and its limits.
 
-| Test Type | Description | Location |
-|-----------|-------------|----------|
-| Buffer tests | Terminal buffer correctness | `BasicAnsiParserTests.cs`, `SgrColorTests.cs`, `BufferWriterTests.cs` |
-| Rendering tests | Scene and pixel-state assertions | `AsciiArtRenderTests.cs`, `PermutationScrollRenderTests.cs`, `TerminalSceneComposerTests.cs` |
-| Scroll-region tests | DECSTBM and origin-mode behavior | `ScrollRegionTests.cs`, `ContinuationClearTests.cs` |
-| Fuzz/stress tests | Boundary and safety testing | `StressFuzzReproTests.cs`, `NeovimReplayTests.cs` |
-| Integration tests | End-to-end host scenarios | `EndToEndTests.cs` |
+## Code and review practices
 
-### Running Tests in CI Mode
+- Match existing conventions: four-space indentation, braces on control structures, PascalCase for public types/members, and camelCase for locals. Keep changes focused and preserve neighboring code style.
+- Treat allocations and copies in hot paths deliberately. Use spans or other allocation-conscious patterns only where appropriate; measure relevant workloads instead of assuming a change is faster.
+- Use unsafe code only when required for interop or measured performance, and keep pointer operations bounded by explicit lifetime and ownership guarantees.
+- Include tests for behavior changes where practical. Run the affected tests and build; report exact commands and platform limitations.
+- Update the relevant user or developer documentation when behavior or commands change. Do not describe unimplemented work as available.
 
-```bash
-# Generate TRX test results for CI
-dotnet test --solution Dotty.slnx --report-xunit-trx --results-directory ./TestResults
-```
+Before opening a pull request, inspect the diff, run relevant checks, and note any platform coverage limitations. CI is the authoritative cross-platform validation. Real-user checks—focus, physical keyboard/layout, pointer, clipboard, compositor/window-manager decoration, HiDPI, and sleep/resume—require native interactive desktop lanes and are not covered by ordinary headless tests; see [Native Desktop and IME](docs/NativeDesktopAndIme.md).
 
-## Code Style Guidelines
+## Project map
 
-### General Principles
+- `src/Dotty/` — desktop application host.
+- `src/Dotty.Terminal/` — terminal core.
+- `src/Dotty.Runtime/`, `src/Dotty.Rendering.Gpu/`, `src/Dotty.Abstractions/` — runtime, GPU rendering, and shared contracts.
+- `src/Dotty.NativePty/` — POSIX helper and native interop.
+- `tests/` — test projects and the separate performance benchmark executable.
+- `docs/` — user guides, technical references, design history, and benchmark documentation.
 
-Dotty prioritizes **performance** and **memory safety**. Follow these principles:
+See [Architecture](docs/Architecture.md) for system design and [docs/index.md](docs/index.md) for the documentation catalog.
 
-1. **Zero allocations in hot paths** - Use `Span<T>`, `Memory<T>`, and stackalloc where appropriate
-2. **Use `ref struct` for buffer manipulation** - Ensures stack-only semantics
-3. **Prefer value types over reference types** in performance-critical code
-4. **Avoid LINQ in tight loops** - Use explicit loops for performance-critical paths
+## Pull requests
 
-### C# Style Guidelines
+1. Keep each change focused and describe the problem and intended behavior.
+2. Include relevant tests and report the exact commands run.
+3. Identify platform and physical-GUI coverage limitations.
+4. Update relevant documentation and avoid claims beyond what was implemented and verified.
 
-#### Naming Conventions
-
-| Element | Convention | Example |
-|---------|------------|---------|
-| Classes, Structs | PascalCase | `TerminalBuffer`, `AnsiParser` |
-| Interfaces | PascalCase with `I` prefix | `ITerminalHandler`, `IConfigProvider` |
-| Methods | PascalCase | `ParseSequence()`, `RenderBuffer()` |
-| Properties | PascalCase | `public int Width { get; }` |
-| Private fields | `_camelCase` | `private readonly int _bufferSize;` |
-| Constants | `PascalCase` or `UPPER_SNAKE` | `DefaultScrollbackLines` |
-| Local variables | `camelCase` | `var currentLine = 0;` |
-
-#### Code Formatting
-
-- Use 4 spaces for indentation (no tabs)
-- Opening braces on the same line (K&R style)
-- Maximum line length: 120 characters
-- Always use braces for control structures, even for single-line blocks
-
-```csharp
-// Good
-if (condition) {
-    DoSomething();
-}
-
-// Avoid
-if (condition)
-    DoSomething();
-```
-
-#### Performance-Oriented Patterns
-
-```csharp
-// Use Span<T> for zero-copy string processing
-public void ProcessBuffer(ReadOnlySpan<byte> input) {
-    // Process without allocations
-}
-
-// Use ref struct for stack-only safety
-public ref struct BufferWriter {
-    private Span<byte> _buffer;
-    // ...
-}
-
-// Prefer Try-pattern for performance
-if (int.TryParse(input, out var value)) {
-    // Use value
-}
-```
-
-### Unsafe Code Guidelines
-
-Dotty uses unsafe code (`AllowUnsafeBlocks=true`) for native interop and performance:
-
-1. **Document unsafe blocks** with clear comments explaining the safety invariants
-2. **Minimize unsafe scope** - Keep unsafe code blocks as small as possible
-3. **Validate inputs** before entering unsafe code
-4. **Use `fixed` statements** properly with pinned references
-
-
-## Project Structure
-
-### Architecture Layers
-
-```text
-┌─────────────────────────────────────────────┐
-│             Dotty (GPU Host)                │
-│ Silk.NET/GLFW window and OpenGL submission  │
-├─────────────────────────────────────────────┤
-│    Dotty.Runtime + Dotty.Rendering.Gpu      │
-│   tabs, panes, input, scenes, A8 atlas      │
-├─────────────────────────────────────────────┤
-│         Dotty.Terminal (Core Layer)         │
-│   terminal engine, parsers, buffers         │
-├─────────────────────────────────────────────┤
-│        Dotty.NativePty (Native Layer)       │
-│    POSIX PTY helper (C + C# wrapper)        │
-├─────────────────────────────────────────────┤
-│      Dotty.Abstractions (Contracts)         │
-│    shared interfaces, zero dependencies     │
-└─────────────────────────────────────────────┘
-```
-
-### Key Directories
-
-| Directory | Purpose |
-|-----------|---------|
-| `src/Dotty/` | Silk.NET/GLFW GPU host and composition root |
-| `src/Dotty/Host/` | Window lifecycle and host services |
-| `src/Dotty/Input/` | Keyboard repeat/dispatch and mouse interaction controllers |
-| `src/Dotty/Rendering/` | Font metrics and terminal scene composition |
-| `src/Dotty.Terminal/` | Terminal buffer, ANSI parser, rendering contracts |
-| `src/Dotty.NativePty/` | C pty-helper and C# bindings |
-| `src/Dotty.Abstractions/` | Interfaces, config contracts, theme definitions |
-| `tests/Dotty.App.Tests/` | xUnit host, input, rendering, and integration tests |
-| `docs/` | Architecture documentation and guides |
-| `scripts/perf/` | Benchmark harnesses |
-
-## Pull Request Process
-
-### Before Submitting
-
-1. **Ensure tests pass**:
-   ```bash
-   dotnet test --solution Dotty.slnx
-   ```
-
-2. **Check code formatting**:
-   ```bash
-   dotnet format --verify-no-changes Dotty.slnx
-   ```
-
-3. **Update documentation** if your changes affect:
-   - Public APIs (update relevant docs in `docs/`)
-   - Configuration options
-   - Build/development process
-
-4. **Add tests** for new functionality or bug fixes
-
-### PR Checklist
-
-- [ ] Code builds without warnings (`dotnet build -c Release`)
-- [ ] All tests pass (`dotnet test --solution Dotty.slnx`)
-- [ ] Code follows style guidelines
-- [ ] Documentation updated (if applicable)
-- [ ] Commit messages are clear and descriptive
-- [ ] PR description explains the "why" and "what"
-
-### Commit Message Guidelines
-
-Follow conventional commit format:
-
-```
-type(scope): description
-
-[optional body]
-
-[optional footer]
-```
-
-**Types:**
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, semicolons, etc.)
-- `refactor`: Code refactoring
-- `perf`: Performance improvements
-- `test`: Adding or updating tests
-- `chore`: Build process, dependencies, etc.
-
-**Examples:**
-```
-feat(terminal): add support for bracketed paste mode
-
-fix(parser): handle malformed OSC sequences without crashing
-
-docs(readme): update build instructions for macOS
-```
-
-### Review Process
-
-1. All PRs must pass CI checks (build + tests on Ubuntu, Windows, macOS)
-2. At least one maintainer approval is required
-3. Address review feedback promptly
-4. Keep PRs focused - one logical change per PR
-
-## Development Resources
-
-### Documentation
-
-| Document | Description |
-|----------|-------------|
-| [docs/Architecture.md](docs/Architecture.md) | Architectural overview |
-| [docs/Rendering.md](docs/Rendering.md) | Rendering system details |
-| [docs/Parsing.md](docs/Parsing.md) | ANSI/VT parser implementation |
-| [docs/Testing.md](docs/Testing.md) | Testing strategy and patterns |
-| [docs/Configuration.md](docs/Configuration.md) | JSON configuration and hot reload |
-| [docs/PlatformSupport.md](docs/PlatformSupport.md) | OS setup, diagnostics, and release gates |
-
-### External References
-
-- [Silk.NET Documentation](https://dotnet.github.io/Silk.NET/)
-- [.NET Native AOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
-- [POSIX Pseudo-Terminals](https://pubs.opengroup.org/onlinepubs/9699919799/functions/openpty.html)
-- [XTerm Control Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
-
-## Troubleshooting
-
-### Common Build Issues
-
-#### OpenGL/GLFW cannot initialize
-
-**Solution**: Ensure a working display server is available. For headless runs, launch Dotty under Xvfb:
-```bash
-xvfb-run -a dotnet run --project src/Dotty/Dotty.csproj
-```
-
-#### Native PTY helper not found (Linux/macOS)
-
-**Solution**: Build the native helper:
-```bash
-cd src/Dotty.NativePty && make && cd ../..
-```
-
-#### Tests fail on Windows with Unix-specific tests
-
-**Solution**: This is expected. Use the filter:
-```bash
-dotnet test --solution Dotty.slnx --filter "FullyQualifiedName!~Unix"
-```
-
-### Getting Help
-
-- **GitHub Issues**: [github.com/dominic-codespoti/dotty/issues](https://github.com/dominic-codespoti/dotty/issues)
-- **Discussions**: Use GitHub Discussions for questions and ideas
-
----
-
-## License
-
-By contributing to Dotty, you agree that your contributions will be licensed under the MIT License. See [License.md](License.md) for details.
-
-Thank you for contributing to Dotty!
+All contributions are licensed under the MIT License; see [License.md](License.md). Report bugs or request changes via [GitHub Issues](https://github.com/dominic-codespoti/dotty/issues).

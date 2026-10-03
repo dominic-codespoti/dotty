@@ -10,7 +10,7 @@ notes. The current implementation is:
 - `src/Dotty/Host/DottyWindowHost.cs` — queues accepted changes on the desktop
   window thread and disposes the watcher during shutdown.
 
-Use [Configuration](Configuration.md) for the supported schema and
-Use [Platform Support](PlatformSupport.md) for OS setup and diagnostics. The
+Use [Configuration](Configuration.md) for the supported schema. Use
+[Platform Support](PlatformSupport.md) for OS setup and diagnostics. The
 current host accepts JSON configuration only; older UI configuration bridges
 are not actionable.

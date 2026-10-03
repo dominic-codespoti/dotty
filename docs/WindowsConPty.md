@@ -1,241 +1,59 @@
 # Windows ConPTY Support
 
-Dotty now supports Windows 10 version 1809 (build 17763) and later through the Windows Console Pseudo Terminal (ConPTY) API.
+Dotty integrates Windows Pseudo Console (ConPTY) through the WindowsPty backend
+in src/Dotty.NativePty/Windows/WindowsPty.cs. This is a current implementation
+overview; [Native PTY Integration](NativePty.md) and [Platform Support](PlatformSupport.md)
+are the canonical references for backend behavior and supported targets.
 
-## Overview
+## Requirements and support
 
-Windows ConPTY provides a pseudo-terminal implementation that allows Dotty to:
-- Spawn console applications (cmd.exe, PowerShell, pwsh.exe) with full terminal emulation
-- Handle ANSI escape sequences natively through Windows Terminal's infrastructure
-- Support resize operations, color output, and mouse events
-- Use standard .NET Streams for I/O operations
+ConPTY requires Windows 10 build 17763 (version 1809) or later. Dotty's promoted
+Windows release target is x64; Windows arm64 is a build-only candidate, not a
+promoted release target. Source builds use the .NET 10 SDK, and the desktop host
+requires a working OpenGL 3.3 driver. See the current [support matrix](PlatformSupport.md#support-matrix).
 
-## Requirements
+## Backend implementation
 
-- Windows 10 version 1809 (build 17763) or later
-- Windows 11 (all versions supported)
-- .NET 10.0 or later
+WindowsPty creates anonymous pipes and a pseudoconsole with CreatePseudoConsole,
+then starts the child process using the PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+attribute. ResizePseudoConsole propagates grid-size changes. The implementation
+wraps ConPTY's synchronous pipe handles in synchronous FileStream instances and
+cleans up the process and native handles during shutdown.
 
-## Architecture
+WindowsPty implements the shared [IPty contract](../src/Dotty.Abstractions/Pty/IPty.cs).
+The host selects it through PtyFactory; application output, including ANSI/VT
+sequences, is consumed by Dotty's terminal parser rather than a Windows Terminal
+parser. ConPTY supplies the pseudoterminal process and streams.
 
-```text
-Dotty host (Silk.NET/OpenGL)
-        │
-TerminalSession
-        │
-Dotty.NativePty
-        │
-WindowsPty → Windows ConPTY
-```
+## Build and verification
 
-## Key Components
-
-### 1. IPty Interface (`Dotty.Abstractions/Pty/IPty.cs`)
-
-Common interface for all PTY implementations:
-
-```csharp
-public interface IPty : IDisposable
-{
-    bool IsRunning { get; }
-    int ProcessId { get; }
-    Stream? OutputStream { get; }
-    Stream? InputStream { get; }
-    
-    void Start(string? shell, int columns, int rows, ...);
-    void Resize(int columns, int rows);
-    void Kill(bool force = false);
-    Task<int> WaitForExitAsync(CancellationToken token);
-}
-```
-
-### 2. WindowsPty Implementation (`Dotty.NativePty/Windows/WindowsPty.cs`)
-
-Uses Windows ConPTY APIs:
-- `CreatePseudoConsole` - Creates the pseudo console
-- `ResizePseudoConsole` - Handles terminal resize
-- `CreateProcess` with `EXTENDED_STARTUPINFO_PRESENT` and `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` - Attaches process to PTY
-
-### 3. UnixPty Implementation (`Dotty.NativePty/Unix/UnixPty.cs`)
-
-Wraps the existing C-based pty-helper process for Linux/macOS.
-
-### 4. PtyFactory (`Dotty.NativePty/PtyFactory.cs`)
-
-Factory pattern for creating platform-appropriate PTY instances:
-
-```csharp
-var pty = PtyFactory.Create();  // Returns WindowsPty on Windows, UnixPty on Unix
-```
-
-## Building on Windows
-
-### Prerequisites
-
-1. Windows 10 build 17763 or Windows 11
-2. .NET 10 SDK
-3. Windows SDK and a desktop OpenGL 3.3 driver
-
-### Build Steps
+Build the solution on Windows with the .NET 10 SDK:
 
 ```powershell
-git clone https://github.com/dominic-codespoti/dotty.git
-cd dotty
-dotnet build Dotty.slnx -c Release
-dotnet run --project src/Dotty/Dotty.csproj
+dotnet build Dotty.slnx -c Release --nologo
+dotnet run --project src\Dotty\Dotty.csproj -c Release
 ```
 
-## Testing
+The CI Windows job exercises WindowsPty and ConPTY smoke coverage. Consult the
+[Testing guide](Testing.md) for current test-runner commands and native coverage;
+consult [E2E Testing](E2ETesting.md) for the host control smoke scope.
+Manual desktop checks still require an interactive Windows session with a usable
+OpenGL 3.3 driver; hosted build/test success is not desktop GUI evidence.
 
-### Manual Testing Checklist
+## Historical integration notes
 
-1. **Basic Shell Launch**
-   - [ ] cmd.exe launches successfully
-   - [ ] Windows PowerShell (powershell.exe) launches successfully
-   - [ ] PowerShell Core (pwsh.exe) launches successfully
+Earlier development notes recorded failures involving ConPTY attribute-list
+marshalling, treating synchronous pipe handles as asynchronous streams, empty
+shell environment values, and propagation of the initial terminal size. These
+are historical troubleshooting records, not current diagnostic instructions or
+an assertion that the old workarounds should be applied to this implementation.
+For a present-day failure, use the current source and test coverage, then inspect
+PtyFactory capability diagnostics and host logs. The earlier checklist also
+contained a DOTTY_DEBUG setting, but the Windows PTY implementation does not use
+that variable; do not rely on it for diagnostics.
 
-2. **Input/Output**
-   - [ ] Keyboard input appears correctly
-   - [ ] Command output displays correctly
-   - [ ] Special characters render properly
+## External references
 
-3. **Resize**
-   - [ ] Window resize triggers PTY resize
-   - [ ] Running commands like `top` or `vim` adapt to new size
-   - [ ] No visual artifacts after resize
-
-4. **Color Output**
-   - [ ] ANSI color codes render correctly
-   - [ ] 256 colors work
-   - [ ] True color (24-bit) works
-   - [ ] Bold, italic, underline attributes work
-
-5. **Interactive Applications**
-   - [ ] `vim` or `nano` editors work
-   - [ ] `htop` or `top` system monitors work
-   - [ ] `less` pager works
-   - [ ] Mouse events in supported applications
-
-6. **Process Management**
-   - [ ] Shell exit is detected
-   - [ ] Process cleanup on window close
-   - [ ] Force kill works for hung processes
-
-### Automated Testing
-
-Run the host-native PTY and platform tests from the repository root:
-
-```powershell
-dotnet test --project tests\Dotty.NativePty.Tests\Dotty.NativePty.Tests.csproj `
-  -c Release --filter "FullyQualifiedName~WindowsPtyTests|FullyQualifiedName~PtyPlatformTests"
-dotnet test --solution Dotty.slnx -c Release
-```
-
-The Windows matrix must execute `WindowsPtyTests`; it must not filter them out.
-
-## Debugging
-
-Set environment variable before launching:
-
-```powershell
-$env:DOTTY_DEBUG = "1"
-dotnet run --project src/Dotty/Dotty.csproj
-```
-
-### Common Issues
-
-#### Issue: "ConPTY is not supported on this Windows version"
-
-**Cause**: Windows version is too old (pre-1809).
-
-**Solution**: Upgrade to Windows 10 version 1809 or later, or use Windows 11.
-
-#### Issue: "Failed to create pseudo console"
-
-**Cause**: Usually indicates Windows corruption or missing system files.
-
-**Solution**: 
-1. Run Windows Update
-2. Run `sfc /scannow` and `DISM` repair commands
-3. Check Windows Console/Terminal Services are running
-
-#### Issue: App exits immediately with code `0xC0000005`
-
-**Cause**: Older ConPTY interop code can crash during `UpdateProcThreadAttribute`
-if the pseudo console handle attribute is marshaled incorrectly.
-
-**Solution**:
-1. Update to a build that includes the ConPTY attribute list fix in `WindowsPty`
-2. Rebuild `Dotty.NativePty` on Windows so `WINDOWS`-guarded ConPTY code is compiled
-
-#### Issue: "Handle does not support asynchronous operations" on startup
-
-**Cause**: Windows `CreatePipe` returns synchronous handles. Wrapping those handles
-as async `FileStream` instances throws this exception.
-
-**Solution**:
-1. Use synchronous `FileStream` wrappers for ConPTY pipe handles
-2. Rebuild and rerun Dotty
-
-#### Issue: Terminal opens but shows no prompt and ignores input
-
-**Cause**: Usually one of these ConPTY integration issues:
-1. Incorrect `CreatePipe` interop signature (security attributes not passed by reference)
-2. Incorrect `UpdateProcThreadAttribute` payload for `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
-3. Empty `DOTTY_SHELL`/`SHELL` environment values being treated as a valid shell command
-
-**Solution**:
-1. Ensure `CreatePipe` passes `SECURITY_ATTRIBUTES` by reference.
-2. Pass `HPCON` directly to `UpdateProcThreadAttribute` with `cbSize = IntPtr.Size`.
-3. Treat empty or whitespace shell environment values as unset.
-4. Verify that `powershell.exe` (or the chosen shell) is a child of `dotty.exe`.
-
-#### Issue: Prompt text appears in old output rows until window is maximized
-
-**Cause**: The PTY can start at default dimensions (for example 80x24), while the
-actual first UI size is different. If that first resize is not propagated to ConPTY,
-PowerShell cursor math (PSReadLine) can drift and write input on stale rows.
-
-**Solution**:
-1. Ensure the first UI resize is sent to PTY when it differs from startup size
-2. Ensure terminal replies to cursor position queries (`CSI 6n` / `CSI ? 6n`) are
-   routed back to PTY input so the shell can track cursor location correctly
-
-#### Issue: Shell doesn't start or crashes immediately
-
-**Cause**: The specified shell executable might not exist or have permission issues.
-
-**Solution**:
-1. Check shell path exists: `Test-Path "C:\Windows\System32\cmd.exe"`
-2. Try different shells to isolate the issue
-3. Check Windows Event Viewer for crash details
-
-#### Issue: Resize doesn't work
-
-**Cause**: Some legacy console applications don't handle resize signals.
-
-**Solution**: This is expected behavior for some older Windows console applications. Modern shells (PowerShell, Windows Terminal) handle resize correctly.
-
-## Performance Considerations
-
-1. **Buffer Sizes**: WindowsPty uses 4KB-128KB buffers for I/O, optimized for interactive use
-2. **Async I/O**: All operations use async/await to prevent UI blocking
-3. **Memory Pooling**: Uses `ArrayPool<byte>` to reduce GC pressure during high-volume output
-
-## Security Considerations
-
-1. **Process Isolation**: Each terminal tab runs in a separate process
-2. **Handle Security**: Pipe handles are properly secured with inheritance flags
-3. **No Elevation Required**: Standard user privileges work for most shells
-
-## Future improvements
-
-1. Windows Terminal integration for shared settings.
-2. Acrylic/Mica background effects on Windows 11.
-3. Tab tear-out to new windows.
-
-## References
-
-- [Windows ConPTY Documentation](https://docs.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session)
-- [Microsoft Terminal ConPTY Sample](https://github.com/microsoft/terminal/tree/main/samples/ConPTY)
-- [Windows Console API](https://docs.microsoft.com/en-us/windows/console/console-functions)
+- [Microsoft ConPTY documentation](https://learn.microsoft.com/en-us/windows/console/creating-a-pseudoconsole-session)
+- [Native PTY Integration](NativePty.md)
+- [Platform Support](PlatformSupport.md)

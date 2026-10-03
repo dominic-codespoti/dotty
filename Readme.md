@@ -8,7 +8,7 @@ and a cell-preserving terminal core.
 
 ## Overview
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-03*
 
 Dotty is a modern terminal emulator composed of:
 - **Dotty** — Silk.NET/OpenGL desktop host.
@@ -69,7 +69,7 @@ self-contained; no .NET installation is needed. Windows requires build 17763+
 
 ### Prerequisites
 
-- .NET 10 SDK or runtime
+- .NET SDK 10.0.100+; [global.json](global.json) allows .NET 10 feature-band roll-forward. A runtime alone is not enough to build.
 - Desktop OpenGL 3.3 core support
 - Linux/macOS source builds additionally require `make` and `gcc` or `clang`
 
@@ -83,6 +83,8 @@ self-contained; no .NET installation is needed. Windows requires build 17763+
 
 Linux arm64 and Windows arm64 are build targets until native runtime smoke
 coverage promotes them to supported release targets.
+
+A green build or headless test run does not establish native desktop behavior: CI's Xvfb smoke is X11-only; Wayland, macOS, Windows, and physical-input checks require native interactive sessions. See [native desktop verification](docs/NativeDesktopAndIme.md).
 
 ### Build
 
@@ -119,9 +121,13 @@ override a global denial. See the [clipboard policy](docs/Configuration.md#clipb
 
 ### Test
 
+The repository uses Microsoft.Testing.Platform. Run the solution tests with the .NET 10 SDK:
+
 ```bash
 dotnet test --solution Dotty.slnx -c Release
 ```
+
+See the [testing guide](docs/Testing.md) for scope and procedures, and [Contributing](Contributing.md#tests) for setup and a note about diagnosing zero-test results. Test and benchmark results depend on workload and machine; see [Performance](docs/Performance.md) for recorded evidence and its limits.
 
 ## Configuration
 
@@ -183,21 +189,16 @@ chord/action table, search editing rules, and pointer ergonomics, or the
 
 ## Documentation
 
-- [Architecture Overview](docs/Architecture.md)
-- [Rendering System](docs/Rendering.md)
-- [Parser Implementation](docs/Parsing.md)
+Start with the [documentation index](docs/index.md) for the current catalog. Common starting points:
+
+- [Contributing and developer setup](Contributing.md)
 - [Platform support and setup](docs/PlatformSupport.md)
 - [Configuration Guide](docs/Configuration.md)
-- [Advanced Configuration](docs/ConfigurationAdvanced.md)
-- [Custom Themes](docs/CustomThemeArchitecture.md)
-- [Themes](docs/Themes.md)
-- [Native PTY](docs/NativePty.md)
-- [Windows ConPTY guide](docs/WindowsConPty.md)
-- [Testing](docs/Testing.md)
-- [End-to-end smoke testing](docs/E2ETesting.md)
-- [GUI Harness Benchmarking](docs/GuiHarnessBenchmarking.md)
-- [Performance Guide](docs/Performance.md)
-- [Comparison Report](docs/ComparisonReport.md)
+- [Command-line usage](docs/CommandLine.md)
+- [Architecture Overview](docs/Architecture.md)
+- [Testing](docs/Testing.md) and [performance evidence](docs/Performance.md)
+- [Native desktop and IME verification](docs/NativeDesktopAndIme.md)
+- [Release policy](docs/Releasing.md)
 
 ## Repository Structure
 

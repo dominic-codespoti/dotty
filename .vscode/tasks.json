@@ -7,7 +7,7 @@
 			"command": "dotnet",
 			"args": [
 				"build",
-				"Dotty.sln",
+				"Dotty.slnx",
 				"-c",
 				"Release"
 			],
@@ -18,20 +18,19 @@
 			"group": "build"
 		},
 		{
-			"label": "Build all",
+			"label": "Test all",
 			"type": "shell",
 			"command": "dotnet",
 			"args": [
-				"build",
-				"Dotty.sln",
-				"-c",
-				"Release"
+				"test",
+				"--solution",
+				"Dotty.slnx"
 			],
 			"isBackground": false,
 			"problemMatcher": [
 				"$msCompile"
 			],
-			"group": "build"
+			"group": "test"
 		}
 	]
 }

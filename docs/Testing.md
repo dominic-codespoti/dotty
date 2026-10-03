@@ -36,6 +36,16 @@ dotnet test --project tests/Dotty.App.Tests/Dotty.App.Tests.csproj \
   -c Release --filter 'FullyQualifiedName~GraphicsCapabilitiesTests'
 ```
 
+
+### Troubleshooting zero tests
+
+If a test command exits after reporting zero tests across all projects, check
+which dotnet your shell resolves (`command -v dotnet`, or `type -a dotnet`) and
+inspect its `--info` output. A local shell wrapper that injects raw MSBuild
+switches into arbitrary `dotnet` subcommands can interfere with test-runner
+argument parsing. Compare with the installed SDK executable directly, without
+hard-coding a machine-specific SDK path in project scripts or documentation.
+
 Windows builds define `WINDOWS` for both `Dotty.NativePty` and
 `Dotty.NativePty.Tests`, so `WindowsPtyTests` compile and run on the Windows
 runner. Unix builds compile `pty-helper` before native tests.

@@ -4,11 +4,11 @@ Overview
 This helper allocates a PTY, forks, attaches the slave to the child process's
 stdio, and proxies the master file descriptor to stdin/stdout. It accepts an
 optional Unix-domain control socket (`DOTTY_CONTROL_SOCKET`) for resize JSON:
-
   {"type":"resize","cols":100,"rows":30}\n
 Build
 -----
-Requires gcc on Linux/macOS.
+Requires a C compiler and make on Linux/macOS. The Makefile uses cc by default;
+set CC to select another compiler.
 
 From the repo root:
 
@@ -41,5 +41,7 @@ Integration
 ConPTY on Windows. The host resolves a packaged Unix helper beside the
 application before checking development paths or `PATH`.
 
+For the full backend contract, current platform matrix, and capability
+diagnostics, see [Native PTY Integration](../../docs/NativePty.md).
 For diagnostics, launch the actual host project:
 `dotnet run --project src/Dotty/Dotty.csproj`.

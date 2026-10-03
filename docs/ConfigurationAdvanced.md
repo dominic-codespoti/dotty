@@ -1,5 +1,9 @@
 # Advanced Configuration
 
+This is a short implementation-oriented companion, not a second option
+reference. [Configuration](Configuration.md) is the canonical source for the
+current JSON schema, defaults, supported actions, and user-facing behavior.
+
 The current host uses the JSON schema documented in
 [Configuration](Configuration.md). Platform-specific paths are resolved by
 `Dotty.Runtime.Config.PlatformPaths`; do not hard-code `~/.config` when writing

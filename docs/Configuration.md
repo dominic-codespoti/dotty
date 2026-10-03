@@ -21,6 +21,13 @@ missing. Writes are atomic: a temporary file is written and moved over the
 previous file. A malformed replacement leaves the last valid in-memory config
 active and records the parse error in `UserConfigService.LastError`.
 
+## Session launch context
+
+New tabs and split panes inherit the selected interactive shell and the active
+terminal's working directory when available. A command and its argument vector
+passed directly to Dotty apply only to the initial session; they are not replayed
+when creating later tabs or panes.
+
 ## Example
 
 ```json
@@ -51,6 +58,9 @@ active and records the parse error in `UserConfigService.LastError`.
   "panes": {
     "dividerThickness": 2,
     "activeBorder": true
+  },
+  "clipboard": {
+    "allowOsc52Write": false
   },
   "keybindings": {
     "ctrl+shift+t": "NewTab",
@@ -116,6 +126,18 @@ the split-pane divider and `panes.activeBorder` controls the active-pane border.
 
 User theme JSON files are loaded from `<config-directory>/themes`. See
 [Themes](Themes.md) for the schema and validation rules.
+
+### `clipboard`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `allowOsc52Write` | boolean | `false` | Permit terminal applications to write to the system clipboard using OSC 52. A Lua clipboard-write hook can veto a write but cannot grant permission when this global setting is false. |
+
+Lua scripts may register a `clipboard_write` hook to veto an OSC 52 write by
+returning `false`. With global permission enabled, no hook or a non-vetoing
+hook allows the write; an explicit `false` or a hook invocation error denies
+it. Hook errors are still reported through the normal Lua diagnostics. This
+hook cannot override the global `allowOsc52Write: false` setting.
 
 ### `keybindings`
 

@@ -52,6 +52,9 @@ public sealed class KeybindingManager
         Bind("alt+right", TerminalAction.FocusPaneRight);
         Bind("alt+up", TerminalAction.FocusPaneUp);
         Bind("alt+down", TerminalAction.FocusPaneDown);
+        Bind("ctrl+shift+pageup", TerminalAction.PreviousPrompt);
+        Bind("ctrl+shift+pagedown", TerminalAction.NextPrompt);
+        Bind("ctrl+alt+o", TerminalAction.CopyCommandOutput);
         // Window, zoom, and application controls
         Bind("f11", TerminalAction.ToggleFullscreen);
         Bind("ctrl+equal", TerminalAction.ZoomIn);

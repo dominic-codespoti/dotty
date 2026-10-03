@@ -390,7 +390,12 @@ public sealed class TerminalMouseController
                     else
                         activeTab.PaneTree.Split(contextPane, SplitDirection.Horizontal);
                 },
-                onClear: () => _host.TryExecuteAction(TerminalAction.Clear)));
+                onClear: () => _host.TryExecuteAction(TerminalAction.Clear),
+                hasCommandOutput: contextPane.Session.Adapter.Buffer.TryGetLatestCommandOutputRange(out _, out _, out _, out _),
+                onCopyCommandOutput: () => _host.TryExecuteAction(TerminalAction.CopyCommandOutput),
+                hasShellPrompts: contextPane.Session.Adapter.Buffer.GetPromptMarks().Count > 0,
+                onPreviousPrompt: () => _host.TryExecuteAction(TerminalAction.PreviousPrompt),
+                onNextPrompt: () => _host.TryExecuteAction(TerminalAction.NextPrompt)));
     }
 
     private Vector2 ContentVector(Vector2 position)

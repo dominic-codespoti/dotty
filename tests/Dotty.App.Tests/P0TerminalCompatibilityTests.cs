@@ -34,85 +34,88 @@ public sealed class P0TerminalCompatibilityTests
     {
         var adapter = new TerminalAdapter(rows: 2, columns: 8);
         var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
-
         parser.Feed("\x1b[?1h"u8);
         parser.Feed("\x1b="u8);
-        parser.Feed("\x1b[?1u"u8);
+        parser.Feed("\x1b[=8u"u8);
 
         parser.Feed("\u001bc"u8);
 
         Assert.False(adapter.ApplicationCursorKeysEnabled);
         Assert.False(adapter.KeypadApplicationMode);
-        Assert.Equal(0, adapter.KittyKeyboardMode);
-
-        var bytes = SilkKeyMapperTestEncoding.Encode(
-            SilkKey.Up,
-            ctrl: false,
-            shift: false,
-            alt: false,
-            keypadAppMode: adapter.KeypadApplicationMode,
-            kittyMode: adapter.KittyKeyboardMode,
-            super: false,
-            applicationCursorKeys: adapter.ApplicationCursorKeysEnabled);
-
-        Assert.Equal("\x1b[A", Encoding.ASCII.GetString(bytes!));
+        Assert.Equal(0, adapter.KittyKeyboardFlags);
+        Assert.Equal("\x1b[A", EncodeLegacy(SilkKey.Up));
     }
 
     [Fact]
-    public void KittyMode_SetAndQuery_UsesExactReply()
+    public void KittyKeyboardModes_ApplyReplaceOrClearAndQueryExactFlags()
     {
         var adapter = new TerminalAdapter(rows: 2, columns: 8);
         var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
         var replies = new List<string>();
         adapter.ReplyRequested += reply => replies.Add(reply.ToString());
 
-        parser.Feed("\x1b[?1u"u8);
+        parser.Feed("\x1b[=1;1u"u8);
+        parser.Feed("\x1b[=2;2u"u8);
+        Assert.Equal(3, adapter.KittyKeyboardFlags);
+        parser.Feed("\x1b[=1;3u"u8);
+        Assert.Equal(2, adapter.KittyKeyboardFlags);
+        parser.Feed("\x1b[=8u"u8);
+        parser.Feed("\x1b[=3;4u"u8);
         parser.Feed("\x1b[?u"u8);
 
-        Assert.Equal(1, adapter.KittyKeyboardMode);
-        Assert.Equal(new[] { "\x1b[1u" }, replies);
+        Assert.Equal(8, adapter.KittyKeyboardFlags);
+        Assert.Equal(new[] { "\x1b[?8u" }, replies);
     }
 
     [Fact]
-    public void KittyMode_PropagatesToSpecialKeyMapper()
+    public void KittyKeyboardStackAndAlternateScreenKeepIndependentState()
     {
         var adapter = new TerminalAdapter(rows: 2, columns: 8);
         var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
-        parser.Feed("\x1b[?1u"u8);
 
-        var bytes = SilkKeyMapperTestEncoding.Encode(
-            SilkKey.Up,
-            ctrl: false,
-            shift: false,
-            alt: false,
-            keypadAppMode: false,
-            kittyMode: adapter.KittyKeyboardMode,
-            super: false,
-            applicationCursorKeys: adapter.ApplicationCursorKeysEnabled);
+        parser.Feed("\x1b[=8u"u8);
+        parser.Feed("\x1b[>1;1u"u8);
+        Assert.Equal(1, adapter.KittyKeyboardFlags);
+        parser.Feed("\x1b[<u"u8);
+        Assert.Equal(8, adapter.KittyKeyboardFlags);
 
-        Assert.Equal("\x1b[A", Encoding.ASCII.GetString(bytes!));
+        parser.Feed("\x1b[?1049h"u8);
+        Assert.Equal(0, adapter.KittyKeyboardFlags);
+        parser.Feed("\x1b[=2;1u"u8);
+        parser.Feed("\x1b[?1049l"u8);
+        Assert.Equal(8, adapter.KittyKeyboardFlags);
+        parser.Feed("\x1b[?1049h"u8);
+        Assert.Equal(2, adapter.KittyKeyboardFlags);
     }
 
     [Fact]
-    public void SuperModifier_UsesMetaModifierAndUnknownKeyIsUnsupported()
+    public void DeviceAttributeRequestIdentityDistinguishesDa1Da2AndUnsupportedDa3()
     {
-        var bytes = SilkKeyMapperTestEncoding.Encode(
-            SilkKey.Up,
-            ctrl: false,
-            shift: false,
-            alt: false,
-            keypadAppMode: false,
-            kittyMode: 0,
-            super: true,
-            applicationCursorKeys: false);
+        var adapter = new TerminalAdapter(rows: 2, columns: 8);
+        var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
+        var replies = new List<string>();
+        adapter.ReplyRequested += reply => replies.Add(reply.ToString());
 
-        Assert.Equal("\x1b[1;9A", Encoding.ASCII.GetString(bytes!));
-        Assert.Null(SilkKeyMapperTestEncoding.Encode(
-            SilkKey.Unknown,
-            ctrl: false,
-            shift: false,
-            alt: false,
-            keypadAppMode: false));
+        parser.Feed("\x1b[c"u8);
+        parser.Feed("\x1b[?c"u8);
+        parser.Feed("\x1b[>c"u8);
+        parser.Feed("\x1b[=c"u8);
+
+        Assert.Equal(new[] { "\x1b[?1;0c", "\x1b[?1;0c", "\x1b[>1;0;0c" }, replies);
+    }
+
+    [Fact]
+    public void SuperModifierUsesMetaModifierAndUnknownKeyIsUnsupported()
+    {
+        Assert.Equal("\x1b[1;9A", EncodeLegacy(SilkKey.Up, super: true));
+        Assert.Equal(string.Empty, EncodeLegacy(SilkKey.Unknown));
+    }
+
+    private static string EncodeLegacy(SilkKey key, bool ctrl = false, bool shift = false, bool alt = false, bool super = false)
+    {
+        Span<byte> bytes = stackalloc byte[64];
+        int length = SilkKeyMapper.Encode(key, ctrl, shift, alt, keypadAppMode: false, bytes, super: super);
+        return Encoding.ASCII.GetString(bytes[..length]);
     }
 
     [Theory]
@@ -286,7 +289,9 @@ public sealed class P0TerminalCompatibilityTests
 
         public void Start(string? shell = null, int columns = 80, int rows = 24,
             string? workingDirectory = null,
-            IDictionary<string, string>? environmentVariables = null) => IsRunning = true;
+            IDictionary<string, string>? environmentVariables = null,
+            IReadOnlyList<string>? command = null,
+            bool shellIsExecutable = false) => IsRunning = true;
 
         public void Resize(int columns, int rows) { }
         public void Kill(bool force = false) => IsRunning = false;

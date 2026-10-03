@@ -14,6 +14,7 @@ public sealed class TextSelectionService
     private int _activeColumn;
     private SelectionMode _mode = SelectionMode.None;
     private bool _hasSelection;
+    private bool _preserveTrailingSpaces;
 
     public SelectionMode Mode => _mode;
     public bool HasSelection => _hasSelection && _mode != SelectionMode.None;
@@ -30,6 +31,29 @@ public sealed class TextSelectionService
         _activeColumn = col;
         _mode = mode;
         _hasSelection = mode != SelectionMode.None;
+        _preserveTrailingSpaces = false;
+    }
+
+    /// <summary>Selects a half-open, reflow-aware buffer range while retaining exact trailing spaces.</summary>
+    public bool StartRangeExclusive(TerminalBuffer buffer, int startRow, int startColumn, int endRow, int endColumn)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        if (endRow < startRow || (endRow == startRow && endColumn <= startColumn))
+        {
+            ClearSelection();
+            return false;
+        }
+        if (endColumn > 0)
+            endColumn--;
+        else
+        {
+            endRow--;
+            endColumn = buffer.Columns - 1;
+        }
+        StartSelection(startRow, startColumn);
+        UpdateSelection(endRow, endColumn);
+        _preserveTrailingSpaces = true;
+        return true;
     }
 
     public void SelectWord(TerminalBuffer buffer, int row, int col)
@@ -187,7 +211,7 @@ public sealed class TextSelectionService
             int endCol = row == range.EndRow ? range.EndColumn : buffer.Columns - 1;
             var rowText = new StringBuilder();
             ExtractCharacterRow(buffer, row, startCol, endCol, rowText);
-            TrimTrailingSpaces(rowText);
+            if (!_preserveTrailingSpaces) TrimTrailingSpaces(rowText);
             sb.Append(rowText);
 
             if (row < range.EndRow && !ContinuesPreviousVisibleRow(buffer, row + 1))

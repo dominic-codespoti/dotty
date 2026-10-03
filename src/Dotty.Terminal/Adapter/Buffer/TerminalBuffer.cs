@@ -315,7 +315,7 @@ public partial class TerminalBuffer : IRenderSource
     public void AddPromptMark(PromptKind kind)
     {
         int absoluteRow = _totalScrolled + _cursor.Row;
-        _promptMarks.Add(new PromptMark(absoluteRow, kind));
+        _promptMarks.Add(new PromptMark(absoluteRow, kind, CursorCol));
         if (_promptMarks.Count > 5000)
             _promptMarks.RemoveRange(0, _promptMarks.Count - 5000);
     }
@@ -352,7 +352,50 @@ public partial class TerminalBuffer : IRenderSource
     {
         return mark.AbsoluteRow - _totalScrolled;
     }
+    public int GetPromptVisibleColumn(PromptMark mark) => mark.AbsoluteColumn;
+    public bool HasPromptMarks(PromptKind kind)
+    {
+        foreach (var mark in _promptMarks)
+            if (mark.Kind == kind) return true;
+        return false;
+    }
 
+
+    public PromptMark? FindNearestPrompt(PromptKind kind, int fromVisibleRow, bool searchForward)
+    {
+        int targetAbsolute = _totalScrolled + fromVisibleRow;
+        if (searchForward)
+        {
+            foreach (var mark in _promptMarks)
+                if (mark.Kind == kind && mark.AbsoluteRow > targetAbsolute) return mark;
+        }
+        else
+        {
+            for (int i = _promptMarks.Count - 1; i >= 0; i--)
+                if (_promptMarks[i].Kind == kind && _promptMarks[i].AbsoluteRow < targetAbsolute) return _promptMarks[i];
+        }
+        return null;
+    }
+
+    public bool TryGetLatestCommandOutputRange(out int startRow, out int startColumn, out int endRow, out int endColumn)
+    {
+        startRow = startColumn = endRow = endColumn = 0;
+        int end = -1;
+        for (int i = _promptMarks.Count - 1; i >= 0; i--)
+            if (_promptMarks[i].Kind == PromptKind.CommandEnd) { end = i; break; }
+        if (end < 0) return false;
+        int start = -1;
+        for (int i = end - 1; i >= 0; i--)
+            if (_promptMarks[i].Kind == PromptKind.Output) { start = i; break; }
+        if (start < 0) return false;
+        var output = _promptMarks[start];
+        var commandEnd = _promptMarks[end];
+        startRow = output.AbsoluteRow - _totalScrolled;
+        startColumn = output.AbsoluteColumn;
+        endRow = commandEnd.AbsoluteRow - _totalScrolled;
+        endColumn = commandEnd.AbsoluteColumn;
+        return true;
+    }
     public void ClearScrollback()
     {
         _totalScrolled = 0;

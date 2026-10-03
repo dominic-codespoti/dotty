@@ -75,6 +75,23 @@ public class UnixPtyTests : IDisposable
 
     #endregion
 
+    [ConditionalFacts.UnixOnlyFact]
+    public async Task UnixPty_CommandPreservesEmptyAndOptionLikeArguments()
+    {
+        _pty = new Unix.UnixPty();
+        _pty.Start(
+            workingDirectory: Path.GetTempPath(),
+            command: ["/bin/sh", "-c", "printf '<%s><%s><%s>' \"$0\" \"$1\" \"$2\"", "tag", "", "-n"]);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var reader = new StreamReader(_pty.OutputStream!);
+        Task<string> outputTask = reader.ReadToEndAsync(timeout.Token);
+        int exitCode = await _pty.WaitForExitAsync(timeout.Token);
+        string output = await outputTask;
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("<tag><><-n>", output);
+    }
     #region Start() Tests
 
     /// <summary>

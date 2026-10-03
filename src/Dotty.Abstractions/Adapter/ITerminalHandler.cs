@@ -89,8 +89,7 @@ namespace Dotty.Abstractions.Adapter
         void OnSetSynchronizedUpdate(bool enabled);
 
         // Kitty Keyboard Protocol
-        void OnSetKittyKeyboardMode(int mode);
-        void OnQueryKittyKeyboard();
+        void OnKittyKeyboardCommand(char introducer, int flags, int argument);
 
         // Focus reporting (DEC 1004)
         void OnSetFocusReporting(bool enabled);

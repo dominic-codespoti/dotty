@@ -92,7 +92,7 @@ public sealed class InputAllocationTests
     }
 
     [Fact]
-    public void DispatcherKeyDownAndTextInputAllocateNothingAfterWarmup()
+    public void DispatcherKeyEventsAndTextAllocateNothingAfterWarmup()
     {
         using var host = new TerminalKeyboardDispatcherTests.FakeHost
         {
@@ -101,8 +101,8 @@ public sealed class InputAllocationTests
         using var dispatcher = new TerminalKeyboardDispatcher(host);
         for (int i = 0; i < 300; i++)
         {
-            dispatcher.HandleKeyDown(Key.A, 0);
-            dispatcher.HandleText("a");
+            dispatcher.HandleKeyEvent(Key.A, 0, 'a', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+            dispatcher.HandleKeyEvent(Key.A, 0, 'a', TerminalKeyEventType.Press, "a".AsSpan());
         }
         host.InputBytes.Clear();
 
@@ -110,8 +110,8 @@ public sealed class InputAllocationTests
         {
             for (int i = 0; i < 100; i++)
             {
-                dispatcher.HandleKeyDown(Key.A, 0);
-                dispatcher.HandleText("a");
+                dispatcher.HandleKeyEvent(Key.A, 0, 'a', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+                dispatcher.HandleKeyEvent(Key.A, 0, 'a', TerminalKeyEventType.Press, "a".AsSpan());
             }
         }, measuredIterationsPerWindow: 1);
     }

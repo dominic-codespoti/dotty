@@ -1,0 +1,94 @@
+name: Native desktop smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Native session to exercise
+        type: choice
+        required: true
+        options:
+          - linux-x11
+          - linux-wayland
+          - windows-interactive
+          - macos-windowserver
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x11:
+    if: inputs.lane == 'linux-x11'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Install X11 and software OpenGL prerequisites
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0
+      - name: Build native PTY helper and publish host
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C src/Dotty.NativePty
+          dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained false -p:PublishAot=false -o .native-smoke
+      - name: Verify live X11 window, rendered frame, PTY output, resize, and Unicode
+        shell: bash
+        run: LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' python3 scripts/native/desktop-smoke.py --backend x11 --executable .native-smoke/dotty
+
+  linux-wayland:
+    if: inputs.lane == 'linux-wayland'
+    runs-on: [self-hosted, Linux, X64, dotty-wayland]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build native PTY helper and publish host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${WAYLAND_DISPLAY:-}" && test -n "${XDG_RUNTIME_DIR:-}"
+          make -C src/Dotty.NativePty
+          dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained false -p:PublishAot=false -o .native-smoke
+      - name: Verify live Wayland window, rendered frame, PTY output, resize, and Unicode
+        shell: bash
+        run: python3 scripts/native/desktop-smoke.py --backend wayland --executable .native-smoke/dotty
+
+  windows-interactive:
+    if: inputs.lane == 'windows-interactive'
+    runs-on: [self-hosted, Windows, X64, dotty-interactive]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Publish Windows host
+        shell: pwsh
+        run: dotnet publish src/Dotty/Dotty.csproj -c Release -r win-x64 --self-contained false -p:PublishAot=false -o .native-smoke
+      - name: Verify live Win32 window, rendered frame, ConPTY output, resize, and Unicode
+        shell: pwsh
+        run: python scripts/native/desktop-smoke.py --backend windows --executable .native-smoke/dotty.exe
+
+  macos-windowserver:
+    if: inputs.lane == 'macos-windowserver'
+    runs-on: [self-hosted, macOS, ARM64, dotty-windowserver]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build native PTY helper and publish macOS host
+        shell: bash
+        run: |
+          set -euo pipefail
+          make -C src/Dotty.NativePty
+          dotnet publish src/Dotty/Dotty.csproj -c Release -r osx-arm64 --self-contained false -p:PublishAot=false -o .native-smoke
+      - name: Verify live Cocoa window, rendered frame, PTY output, resize, and Unicode
+        shell: bash
+        run: python3 scripts/native/desktop-smoke.py --backend macos --executable .native-smoke/dotty

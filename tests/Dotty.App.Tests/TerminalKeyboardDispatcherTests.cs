@@ -27,6 +27,7 @@ public sealed class TerminalKeyboardDispatcherTests
         public bool Alt { get; set; }
         public bool AltGr { get; set; }
         public bool Super { get; set; }
+        public TerminalKeyModifiers LockModifiers { get; set; }
         public int CopyCount { get; private set; }
         public int PasteCount { get; private set; }
         public int CreateTabCount { get; private set; }
@@ -88,23 +89,23 @@ public sealed class TerminalKeyboardDispatcherTests
 
 
     [Fact]
-    public void HandleKeyDown_DefaultWindowActions_DispatchExactlyOnce()
+    public void HandleKeyEvent_DefaultWindowActions_DispatchExactlyOnce()
     {
         using var host = CreateHost();
         using var dispatcher = new TerminalKeyboardDispatcher(host);
 
         host.Ctrl = true;
-        dispatcher.HandleKeyDown(SilkKey.Equal, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Equal, 0, '=', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         host.Shift = true;
-        dispatcher.HandleKeyDown(SilkKey.Equal, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Equal, 0, '+', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         host.Shift = false;
-        dispatcher.HandleKeyDown(SilkKey.Minus, 0);
-        dispatcher.HandleKeyDown(SilkKey.Number0, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Minus, 0, '-', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.Number0, 0, '0', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         host.Ctrl = false;
-        dispatcher.HandleKeyDown(SilkKey.F11, 0);
+        dispatcher.HandleKeyEvent(SilkKey.F11, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         host.Ctrl = true;
         host.Shift = true;
-        dispatcher.HandleKeyDown(SilkKey.Q, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Q, 0, 'Q', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal(1, host.FullscreenCount);
         Assert.Equal(2, host.ZoomInCount);
@@ -114,23 +115,23 @@ public sealed class TerminalKeyboardDispatcherTests
     }
 
     [Fact]
-    public void HandleText_AltGrIsAccepted_WhileCtrlAndAltAreRejected()
+    public void HandleKeyEvent_AltGrTextIsAccepted_WhileCtrlAndAltAreRejected()
     {
         using var host = CreateHost();
         using var dispatcher = new TerminalKeyboardDispatcher(host);
         host.Ctrl = true;
         host.Shift = true;
-        dispatcher.HandleKeyDown(SilkKey.F, 0);
+        dispatcher.HandleKeyEvent(SilkKey.F, 0, 'F', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         host.Shift = false;
 
         host.Ctrl = false;
         host.Alt = true;
-        dispatcher.HandleText("ordinary-alt");
+        dispatcher.HandleKeyEvent(SilkKey.O, 0, 'o', TerminalKeyEventType.Press, "ordinary-alt".AsSpan());
         host.Ctrl = true;
         host.AltGr = false;
-        dispatcher.HandleText("ordinary-ctrl-alt");
+        dispatcher.HandleKeyEvent(SilkKey.O, 0, 'o', TerminalKeyEventType.Press, "ordinary-ctrl-alt".AsSpan());
         host.AltGr = true;
-        dispatcher.HandleText("altgr");
+        dispatcher.HandleKeyEvent(SilkKey.A, 0, 'a', TerminalKeyEventType.Press, "altgr".AsSpan());
 
         Assert.Equal("altgr", dispatcher.SearchQuery);
         Assert.Empty(host.InputBytes);
@@ -143,76 +144,239 @@ public sealed class TerminalKeyboardDispatcherTests
         using var dispatcher = new TerminalKeyboardDispatcher(host);
         host.Ctrl = true;
         host.Shift = true;
-        dispatcher.HandleKeyDown(SilkKey.F, 0);
+        dispatcher.HandleKeyEvent(SilkKey.F, 0, 'F', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         host.Ctrl = false;
         host.Shift = false;
-        dispatcher.HandleText("abc def");
+        dispatcher.HandleKeyEvent(SilkKey.A, 0, 'a', TerminalKeyEventType.Press, "abc def".AsSpan());
 
-        dispatcher.HandleKeyDown(SilkKey.Home, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Home, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         for (int i = 0; i < 4; i++)
-            dispatcher.HandleKeyDown(SilkKey.Right, 0);
-        dispatcher.HandleText("X");
+            dispatcher.HandleKeyEvent(SilkKey.Right, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.X, 0, 'X', TerminalKeyEventType.Press, "X".AsSpan());
         Assert.Equal("abc Xdef", dispatcher.SearchQuery);
         Assert.Equal(5, dispatcher.SearchCursor);
 
-        dispatcher.HandleKeyDown(SilkKey.Home, 0);
-        dispatcher.HandleKeyDown(SilkKey.Delete, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Home, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.Delete, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         Assert.Equal("bc Xdef", dispatcher.SearchQuery);
-        dispatcher.HandleKeyDown(SilkKey.End, 0);
-        dispatcher.HandleKeyDown(SilkKey.Backspace, 0);
+        dispatcher.HandleKeyEvent(SilkKey.End, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.Backspace, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         Assert.Equal("bc Xde", dispatcher.SearchQuery);
 
         host.Ctrl = true;
-        dispatcher.HandleKeyDown(SilkKey.Backspace, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Backspace, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         Assert.Equal("bc ", dispatcher.SearchQuery);
-        dispatcher.HandleKeyDown(SilkKey.Home, 0);
-        dispatcher.HandleKeyDown(SilkKey.Delete, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Home, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.Delete, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         Assert.Equal(" ", dispatcher.SearchQuery);
-        dispatcher.HandleKeyDown(SilkKey.Delete, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Delete, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         Assert.Equal(string.Empty, dispatcher.SearchQuery);
     }
 
     [Fact]
-    public void HandleKeyDown_SearchAction_TogglesSearchState()
+    public void HandleKeyEvent_SearchAction_TogglesSearchState()
     {
         using var host = CreateHost();
         host.Ctrl = true;
         host.Shift = true;
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.F, 0);
+        dispatcher.HandleKeyEvent(SilkKey.F, 0, 'F', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.True(dispatcher.SearchActive);
         Assert.Equal(string.Empty, dispatcher.SearchQuery);
         Assert.Equal(-1, dispatcher.ActiveMatchIndex);
     }
+    [Fact]
+    public void ConsumedPress_RepeatAndReleaseDoNotRepeatAction_AndNextPressWorks()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.Ctrl = true;
+        host.Shift = true;
+
+        dispatcher.HandleKeyEvent(SilkKey.F, 44, 'F', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.F, 44, 'F', TerminalKeyEventType.Repeat, ReadOnlySpan<char>.Empty);
+        Assert.True(dispatcher.SearchActive);
+        dispatcher.HandleKeyEvent(SilkKey.F, 44, 'F', TerminalKeyEventType.Release, ReadOnlySpan<char>.Empty);
+        Assert.True(dispatcher.SearchActive);
+
+        dispatcher.HandleKeyEvent(SilkKey.F, 44, 'F', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.False(dispatcher.SearchActive);
+    }
 
     [Fact]
-    public void HandleKeyDown_CopyAction_UsesHostCallback()
+    public void ReleaseOfConsumedKeyAfterAnotherKeyPress_DoesNotLeakKittyRelease()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.Ctrl = true;
+        host.Shift = true;
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>31u"u8);
+
+        dispatcher.HandleKeyEvent(SilkKey.C, 46, 'C', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.F3, 32, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        Assert.NotEmpty(host.InputBytes);
+        int bytesAfterF3 = host.InputBytes.Count;
+        dispatcher.HandleKeyEvent(SilkKey.C, 46, 'C', TerminalKeyEventType.Release, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal(1, host.CopyCount);
+        Assert.Equal(bytesAfterF3, host.InputBytes.Count);
+    }
+    [Fact]
+    public void NativeKeyPhasesKeepKittyTextInOneValidSequenceAndIncludeLockState()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.LockModifiers = TerminalKeyModifiers.CapsLock | TerminalKeyModifiers.NumLock;
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>31u"u8);
+
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Press, "a".AsSpan());
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Repeat, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Repeat, "a".AsSpan());
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Release, "a".AsSpan());
+
+        Assert.Equal("\x1b[97;193:1;97u\x1b[97;193:2;97u\x1b[97;193:3u", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Fact]
+    public void HandleCommittedText_UsesKittyKeyZeroWhenAssociatedTextIsNegotiated()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>31u"u8);
+
+        dispatcher.HandleCommittedText("å".AsSpan());
+
+        Assert.Equal("\x1b[0;;229u", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Fact]
+    public void KittyAlternateBaseLayoutIsReportedWithoutShiftForNonUsLayout()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>12u"u8);
+
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'q', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal("\x1b[113::97;1u", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+
+    [Fact]
+    public void KittyNativeF25UsesOfficialProtocolCodepoint()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>8u"u8);
+
+        dispatcher.HandleKeyEvent(SilkKey.F25, 100, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal("\x1b[57388;1u", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Fact]
+    public void LegacyTypingUsesCommittedLayoutTextInsteadOfPhysicalEscapeToken()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+
+        dispatcher.HandleKeyEvent(SilkKey.Escape, 1, 'a', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.Escape, 1, 'a', TerminalKeyEventType.Press, "a".AsSpan());
+
+        Assert.Equal("a", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Fact]
+    public void LegacyCtrlTypingUsesCurrentLayoutPrimaryCodepoint()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.Ctrl = true;
+
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'q', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal(new byte[] { 0x11 }, host.InputBytes.ToArray());
+    }
+
+
+    [Theory]
+    [InlineData(true, false, "\x1b[97;5:1u")]
+    [InlineData(false, true, "\x1b[97;3:1u")]
+    public void KittyPrintableCtrlAndAltPressesAreEncodedImmediately(bool ctrl, bool alt, string expected)
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.Ctrl = ctrl;
+        host.Alt = alt;
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>31u"u8);
+
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Fact]
+    public void DeferredKittyPressRetainsModifierSnapshotWhenTextArrivesAfterModifierRelease()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.Shift = true;
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>31u"u8);
+
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'A', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        host.Shift = false;
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'A', TerminalKeyEventType.Press, "A".AsSpan());
+
+        Assert.Equal("\x1b[65::97;2:1;65u", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+    [Fact]
+    public void KittyPressPreservesAdditionalCommittedScalarsThroughKeyZeroEvents()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.ActiveTab!.Session.Parser.Feed("\x1b[>24u"u8);
+
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Press, "a".AsSpan());
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Press, "\u0308".AsSpan());
+
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Repeat, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Repeat, "a".AsSpan());
+        dispatcher.HandleKeyEvent(SilkKey.A, 30, 'a', TerminalKeyEventType.Repeat, "\u0308".AsSpan());
+
+        Assert.Equal("\x1b[97;1;97u\x1b[0;;776u\x1b[97;1;97u\x1b[0;;776u", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Fact]
+    public void HandleKeyEvent_CopyAction_UsesHostCallback()
     {
         using var host = CreateHost();
         host.Ctrl = true;
         host.Shift = true;
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.C, 0);
+        dispatcher.HandleKeyEvent(SilkKey.C, 0, 'C', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal(1, host.CopyCount);
     }
 
     [Fact]
-    public void HandleKeyDown_Escape_ClosesContextMenuBeforeTerminalInput()
+    public void HandleKeyEvent_Escape_ClosesContextMenuBeforeTerminalInput()
     {
         using var host = CreateHost();
         host.ActiveContextMenu = new ContextMenuModel(0, 0, new[] { ContextMenuItem.Item("item", "Item", () => { }) });
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.Escape, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Escape, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
     }
 
     [Fact]
-    public void HandleKeyDown_ShiftNavigation_ScrollsWhenMouseReportingDisabled()
+    public void HandleKeyEvent_ShiftNavigation_ScrollsWhenMouseReportingDisabled()
     {
         using var host = CreateHost();
         host.Shift = true;
@@ -222,7 +386,7 @@ public sealed class TerminalKeyboardDispatcherTests
         pane.ScrollToBottom();
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.Up, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Up, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal(1, pane.ScrollOffset);
     }
@@ -230,7 +394,7 @@ public sealed class TerminalKeyboardDispatcherTests
     [Theory]
     [InlineData(1, 1)]
     [InlineData(5, 2)]
-    public void HandleKeyDown_ShiftPageUp_UsesActivePaneHeightWithMinimumStep(int paneRows, int expectedStep)
+    public void HandleKeyEvent_ShiftPageUp_UsesActivePaneHeightWithMinimumStep(int paneRows, int expectedStep)
     {
         using var host = new FakeHost
         {
@@ -244,7 +408,7 @@ public sealed class TerminalKeyboardDispatcherTests
         Assert.True(pane.Session.Adapter.Buffer.ScrollbackCount > 0);
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.PageUp, 0);
+        dispatcher.HandleKeyEvent(SilkKey.PageUp, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal(expectedStep, pane.ScrollOffset);
     }
@@ -273,7 +437,7 @@ public sealed class TerminalKeyboardDispatcherTests
     }
 
     [Fact]
-    public void HandleKeyChar_ClearsActivePaneSelectionAndReturnsToBottom()
+    public void HandleKeyEvent_ClearsActivePaneSelectionAndReturnsToBottom()
     {
         using var host = CreateHost();
         var pane = host.ActiveTab!.ActivePane;
@@ -281,14 +445,14 @@ public sealed class TerminalKeyboardDispatcherTests
         pane.ScrollUp(3, 10);
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyChar('x');
+        dispatcher.HandleKeyEvent(SilkKey.X, 0, 'x', TerminalKeyEventType.Press, "x".AsSpan());
 
         Assert.False(pane.Selection.HasSelection);
         Assert.Equal(0, pane.ScrollOffset);
     }
 
     [Fact]
-    public void HandleKeyChar_ClearsOnlyActivePaneSelection()
+    public void HandleKeyEvent_ClearsOnlyActivePaneSelection()
     {
         using var host = CreateHost();
         var tab = host.ActiveTab!;
@@ -299,61 +463,61 @@ public sealed class TerminalKeyboardDispatcherTests
         tab.PaneTree.ActivePane = second;
         using var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyChar('x');
+        dispatcher.HandleKeyEvent(SilkKey.X, 0, 'x', TerminalKeyEventType.Press, "x".AsSpan());
 
         Assert.True(first.Selection.HasSelection);
         Assert.False(second.Selection.HasSelection);
     }
 
     [Fact]
-    public void HandleKeyChar_WhenSearchActive_AppendsQueryWithoutTerminalInput()
+    public void HandleKeyEvent_WhenSearchActive_AppendsQueryWithoutTerminalInput()
     {
         using var host = CreateHost();
         var dispatcher = new TerminalKeyboardDispatcher(host);
         host.Ctrl = true;
         host.Shift = true;
-        dispatcher.HandleKeyDown(SilkKey.F, 0);
+        dispatcher.HandleKeyEvent(SilkKey.F, 0, 'F', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
         host.Ctrl = false;
         host.Shift = false;
 
-        dispatcher.HandleKeyChar('s');
-        dispatcher.HandleKeyChar('h');
+        dispatcher.HandleKeyEvent(SilkKey.S, 0, 's', TerminalKeyEventType.Press, "s".AsSpan());
+        dispatcher.HandleKeyEvent(SilkKey.H, 0, 'h', TerminalKeyEventType.Press, "h".AsSpan());
 
         Assert.Equal("sh", dispatcher.SearchQuery);
     }
 
     [Fact]
-    public void HandleKeyDown_ApplicationCursorMode_WritesApplicationArrow()
+    public void HandleKeyEvent_ApplicationCursorMode_WritesApplicationArrow()
     {
         using var host = CreateHost();
         host.ActiveTab!.Session.Parser.Feed("\x1b[?1h"u8);
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.Up, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Up, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal("\x1bOA", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
     }
 
     [Fact]
-    public void HandleKeyDown_KittyMode_WritesKittyArrow()
+    public void HandleKeyEvent_KittyMode_WritesKittyArrow()
     {
         using var host = CreateHost();
         host.ActiveTab!.Session.Parser.Feed("\x1b[?1u"u8);
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.Up, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Up, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal("\x1b[A", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
     }
 
     [Fact]
-    public void HandleKeyDown_SuperModifier_UsesMetaModifier()
+    public void HandleKeyEvent_SuperModifier_UsesMetaModifier()
     {
         using var host = CreateHost();
         host.Super = true;
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyDown(SilkKey.Up, 0);
+        dispatcher.HandleKeyEvent(SilkKey.Up, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal("\x1b[1;9A", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
     }

@@ -223,8 +223,7 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) { }
         void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) => PrivateModeCalls.Add((mode, enabled));
         void ITerminalHandler.OnSetSynchronizedUpdate(bool enabled) { }
-        void ITerminalHandler.OnSetKittyKeyboardMode(int mode) { }
-        void ITerminalHandler.OnQueryKittyKeyboard() { }
+        void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) { }
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) => PrivateModeCalls.Add((1004, enabled));
         void ITerminalHandler.OnWindowReport(int command) { }

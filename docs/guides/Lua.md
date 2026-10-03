@@ -120,7 +120,7 @@ Register callbacks with `dotty.on(name, function(...) ... end)`. Event callbacks
 | `format_tab_title` | `tab` | Value hook: the first non-empty string sets the title used in the window title and tab bar; otherwise the terminal title is used. |
 | `open_url` | `url` (string) | Value hook: return `true` to mark the URL as handled. |
 | `update_status` | none | Value hook: the first non-empty string is shown in the tab bar status area. Refreshed about once per second and when tabs are added, closed, or activated, the active tab title changes, window focus changes, or configuration changes. |
-| `clipboard_write` | `pane`, `text` (string) | Value hook for OSC 52 clipboard writes: only an explicit `false` denies the write; other results allow it. |
+| `clipboard_write` | `pane`, `text` (string) | Value hook for OSC 52 clipboard writes: the global `allowOsc52Write` setting must be enabled; with permission enabled, no hook or a non-vetoing result allows the write, while an explicit `false` or callback invocation error denies it. Hook errors remain logged through normal Lua diagnostics. |
 
 Lua errors from script evaluation, API calls, and callbacks are logged and stored as the latest Lua error. While an error is stored, it takes precedence over `update_status` and appears in the tab bar as `⚠ Lua: ` followed by the first error line (truncated to 120 characters). A successful config evaluation clears the stored error; a successful callback does not.
 

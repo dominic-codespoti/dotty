@@ -223,7 +223,9 @@ public sealed class SessionAllocationTests
             int columns = 80,
             int rows = 24,
             string? workingDirectory = null,
-            IDictionary<string, string>? environmentVariables = null) => IsRunning = true;
+            IDictionary<string, string>? environmentVariables = null,
+            IReadOnlyList<string>? command = null,
+            bool shellIsExecutable = false) => IsRunning = true;
 
         public void Resize(int columns, int rows) { }
         public void Kill(bool force = false) => IsRunning = false;

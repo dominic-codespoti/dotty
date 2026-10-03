@@ -72,15 +72,28 @@ through its retained scrollback, its cursor is not drawn.
 
 Keep these verification targets separate:
 
-- The automated GUI smoke is Linux X11 under Xvfb. It checks host startup and
-  does not provide a Wayland compositor or native macOS/Windows desktop.
-- Native Wayland verification must run inside a real Wayland compositor.
+- The CI Xvfb startup check is Linux X11-only and is not native desktop
+  evidence. The opt-in [native desktop smoke workflow](NativeDesktopAndIme.md)
+  uses the loopback control protocol to prove window/context creation, a
+  presented frame, PTY shell output including Unicode, and terminal resize.
+- Its hosted X11 lane uses Xvfb and software Mesa. Native Wayland verification
+  must run inside a real Wayland compositor.
   Exercise startup, focus loss/return during a held key or mouse drag,
   scrolling and selection autoscroll, pane/tab changes, resize, and cursor
   suppression while scrolled.
-- macOS and Windows desktop verification likewise requires native sessions.
-  Passing X11/Xvfb startup does not establish native Wayland, macOS, or
-  Windows rendering, input, OpenGL, or presentation behavior.
+- Local native smoke runs have passed on Linux/Hyprland through both the native
+  Wayland backend and X11/XWayland. Each passed the requested 91x31 resize,
+  two-tab/two-pane checks, and Unicode child-shell output in a new tab and split
+  pane. The X11/XWayland run reported an active floating Dotty window at
+  756x610. These control-driven results do not establish physical keyboard or
+  focus behavior.
+- Native desktop lanes for macOS and Windows have not been run in this Linux
+  session; their rendering, input, OpenGL, and presentation behavior remains
+  unverified here. Workflow execution on native WindowServer/interactive runners
+  is still required. Passing Linux X11/XWayland does not establish these paths.
+- The control-driven smoke does not verify physical focus/input, clipboard,
+  window-manager behavior, HiDPI, or IME composition. See the linked native
+  verification and IME assessment for lane prerequisites and manual checks.
 
 ## Configuration and user data
 

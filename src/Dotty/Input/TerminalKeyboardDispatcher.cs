@@ -30,6 +30,7 @@ public interface ITerminalKeyboardHost
     bool Alt { get; }
     bool AltGr { get; }
     bool Super { get; }
+    TerminalKeyModifiers LockModifiers { get; }
     void CopySelection();
     void PasteClipboard();
     void ToggleFullscreen();
@@ -46,9 +47,9 @@ public interface ITerminalKeyboardHost
 
 /// <summary>
 /// Routes keyboard events to terminal actions, search, Lua bindings, and PTY input.
-/// Repeat timing and modifier state are owned by <see cref="TerminalKeyboardController"/>.
+/// Native key actions drive phases; the controller tracks held keys and shortcut modifiers.
 /// </summary>
-public sealed class TerminalKeyboardDispatcher : IDisposable
+public sealed partial class TerminalKeyboardDispatcher : IDisposable
 {
     private sealed class SearchState
     {
@@ -63,7 +64,39 @@ public sealed class TerminalKeyboardDispatcher : IDisposable
     private readonly ITerminalKeyboardHost _host;
     private readonly Dictionary<TerminalTab, SearchState> _searchStates = new();
     private readonly Dictionary<TerminalTab, Action<LeafPane, LeafPane>> _paneHandlers = new();
+    private readonly TerminalInputEncoder _inputEncoder = new();
+    private readonly byte[] _keyEventScratch = new byte[256];
     private byte[] _textInputScratch = new byte[512];
+    private struct PhysicalKeyState
+    {
+        public Key Key;
+        public int Scancode;
+        public bool Active;
+        public bool Encoded;
+        public bool Consumed;
+        public bool Deferred;
+        public TerminalKeyModifiers PressModifiers;
+        public TerminalKeyEventType DeferredPhase;
+        public int DeferredCodepoint;
+    }
+
+    private PhysicalKeyState[] _physicalKeyStates = new PhysicalKeyState[16];
+    private int _currentPhysicalKeyIndex = -1;
+    private bool _lastPhysicalPressEncoded
+    {
+        get => _currentPhysicalKeyIndex >= 0 && _physicalKeyStates[_currentPhysicalKeyIndex].Encoded;
+        set { if (_currentPhysicalKeyIndex >= 0) _physicalKeyStates[_currentPhysicalKeyIndex].Encoded = value; }
+    }
+    private bool _lastPhysicalPressConsumed
+    {
+        get => _currentPhysicalKeyIndex >= 0 && _physicalKeyStates[_currentPhysicalKeyIndex].Consumed;
+        set { if (_currentPhysicalKeyIndex >= 0) _physicalKeyStates[_currentPhysicalKeyIndex].Consumed = value; }
+    }
+    private bool _lastPhysicalPressDeferred
+    {
+        get => _currentPhysicalKeyIndex >= 0 && _physicalKeyStates[_currentPhysicalKeyIndex].Deferred;
+        set { if (_currentPhysicalKeyIndex >= 0) _physicalKeyStates[_currentPhysicalKeyIndex].Deferred = value; }
+    }
     private bool _isDisposed;
 
     public bool SearchActive =>
@@ -114,32 +147,69 @@ public sealed class TerminalKeyboardDispatcher : IDisposable
             SubscribeTab(_host.ActiveTab);
     }
 
-    public void HandleKeyDown(Key key, int scancode)
+    private int FindPhysicalKeyState(Key key, int scancode, bool create)
     {
+        for (int i = 0; i < _physicalKeyStates.Length; i++)
+        {
+            ref PhysicalKeyState state = ref _physicalKeyStates[i];
+            if (state.Active && state.Key == key && state.Scancode == scancode)
+                return i;
+        }
+        if (!create)
+            return -1;
+        for (int i = 0; i < _physicalKeyStates.Length; i++)
+        {
+            if (_physicalKeyStates[i].Active)
+                continue;
+            _physicalKeyStates[i] = new PhysicalKeyState { Key = key, Scancode = scancode, Active = true };
+            return i;
+        }
+        int oldLength = _physicalKeyStates.Length;
+        Array.Resize(ref _physicalKeyStates, oldLength * 2);
+        _physicalKeyStates[oldLength] = new PhysicalKeyState { Key = key, Scancode = scancode, Active = true };
+        return oldLength;
+    }
+
+    private void ProcessKeyPress(Key key, int scancode, int primaryCodepoint)
+    {
+        ref PhysicalKeyState state = ref _physicalKeyStates[_currentPhysicalKeyIndex];
+        state.PressModifiers = SilkKeyMapper.Map(key, _host.Ctrl, _host.Shift, _host.Alt, _host.Super).Modifiers | _host.LockModifiers;
+        state.Key = key;
+        state.Scancode = scancode;
+        state.Active = true;
+        state.Consumed = false;
+        state.Deferred = false;
+        state.Encoded = false;
+        _lastPhysicalPressConsumed = false;
+        _lastPhysicalPressDeferred = false;
+        _lastPhysicalPressEncoded = false;
+
         if (HandleContextMenuKey(key))
+        {
+            _lastPhysicalPressConsumed = true;
             return;
+        }
 
         var activeTab = _host.ActiveTab;
-        if (_host.AltGr)
+        if (_host.AltGr || activeTab == null)
+        {
+            _lastPhysicalPressConsumed = true;
             return;
-        if (activeTab == null)
-            return;
+        }
         var searchState = EnsureState(activeTab);
 
-        if (_host.LuaHost.Keybinds.TryExecute(_host.Ctrl, _host.Shift, _host.Alt, _host.Super, SilkKeyMapper.GetKeyName(key)))
+        if (_host.LuaHost.Keybinds.TryExecute(_host.Ctrl, _host.Shift, _host.Alt, _host.Super, SilkKeyMapper.GetKeyName(key)) ||
+            (TryGetAction(key, out var action) && action != TerminalAction.None && Actions.TryExecute(action)) ||
+            (searchState.IsActive && HandleSearchKey(activeTab, searchState, key)))
+        {
+            _lastPhysicalPressConsumed = true;
             return;
-
-        if (TryGetAction(key, out var action) &&
-            action != TerminalAction.None &&
-            Actions.TryExecute(action))
-            return;
-
-        if (searchState.IsActive && HandleSearchKey(activeTab, searchState, key))
-            return;
+        }
 
         if (key == Key.Escape && _host.ActiveContextMenu != null)
         {
             _host.ActiveContextMenu = null;
+            _lastPhysicalPressConsumed = true;
             return;
         }
 
@@ -152,21 +222,27 @@ public sealed class TerminalKeyboardDispatcher : IDisposable
             {
                 case Key.PageUp:
                     activePane.ScrollUp(pageStep, buffer.ScrollbackCount);
+                    _lastPhysicalPressConsumed = true;
                     return;
                 case Key.PageDown:
                     activePane.ScrollDown(pageStep);
+                    _lastPhysicalPressConsumed = true;
                     return;
                 case Key.Up:
                     activePane.ScrollUp(1, buffer.ScrollbackCount);
+                    _lastPhysicalPressConsumed = true;
                     return;
                 case Key.Down:
                     activePane.ScrollDown(1);
+                    _lastPhysicalPressConsumed = true;
                     return;
                 case Key.Home:
                     activePane.ScrollUp(buffer.ScrollbackCount, buffer.ScrollbackCount);
+                    _lastPhysicalPressConsumed = true;
                     return;
                 case Key.End:
                     activePane.ScrollToBottom();
+                    _lastPhysicalPressConsumed = true;
                     return;
             }
         }
@@ -176,25 +252,109 @@ public sealed class TerminalKeyboardDispatcher : IDisposable
         if (activePane.ScrollOffset > 0 && !_host.Shift)
             activePane.ScrollToBottom();
 
-        Span<byte> keyBytes = stackalloc byte[64];
-        int keyLength = SilkKeyMapper.Encode(
-            key,
-            _host.Ctrl,
-            _host.Shift,
-            _host.Alt,
-            activeTab.Session.Adapter.KeypadApplicationMode,
-            destination: keyBytes,
-            kittyMode: activeTab.Session.Adapter.KittyKeyboardMode,
-            applicationCursorKeys: activeTab.Session.Adapter.ApplicationCursorKeysEnabled,
-            super: _host.Super);
-        if (keyLength != 0)
-            _host.WriteInput(activeTab, keyBytes[..keyLength]);
+        var adapter = activeTab.Session.Adapter;
+        if (adapter.KittyKeyboardFlags != 0)
+            return;
+        WriteLegacyKey(activeTab, key, primaryCodepoint);
     }
-    public void HandleKeyChar(char character)
+
+    private static int EncodeLegacyTextCodepoint(int codepoint, bool ctrl, bool alt, Span<byte> destination)
     {
-        Span<char> text = stackalloc char[1];
-        text[0] = character;
-        HandleText(text);
+        if (codepoint <= 0 || codepoint > 0x10FFFF || codepoint is >= 0xD800 and <= 0xDFFF)
+            return 0;
+
+        int offset = 0;
+        if (alt)
+            destination[offset++] = 0x1b;
+        if (ctrl)
+        {
+            int controlCodepoint = GetControlCodepoint(codepoint);
+            if (controlCodepoint < 0)
+                return 0;
+            destination[offset++] = (byte)controlCodepoint;
+            return offset;
+        }
+
+        Span<char> scalar = stackalloc char[2];
+        int charCount;
+        if (codepoint <= 0xFFFF)
+        {
+            scalar[0] = (char)codepoint;
+            charCount = 1;
+        }
+        else
+        {
+            int adjusted = codepoint - 0x10000;
+            scalar[0] = (char)(0xD800 + (adjusted >> 10));
+            scalar[1] = (char)(0xDC00 + (adjusted & 0x3FF));
+            charCount = 2;
+        }
+        return offset + Encoding.UTF8.GetBytes(scalar[..charCount], destination[offset..]);
+    }
+
+    private static int GetControlCodepoint(int codepoint)
+    {
+        if (codepoint is >= 'a' and <= 'z')
+            return codepoint - 'a' + 1;
+        if (codepoint is >= 'A' and <= 'Z')
+            return codepoint - 'A' + 1;
+        return codepoint switch
+        {
+            ' ' or '@' or '2' => 0,
+            '3' or '[' => 0x1B,
+            '4' or '\\' => 0x1C,
+            '5' or ']' => 0x1D,
+            '6' or '^' => 0x1E,
+            '7' or '_' or '-' or '/' => 0x1F,
+            '8' or '?' => 0x7F,
+            _ => -1
+        };
+    }
+
+    public void HandleCommittedText(ReadOnlySpan<char> text)
+    {
+        if (text.IsEmpty)
+            return;
+        if (_host.ActiveContextMenu is { IsVisible: true })
+        {
+            HandleText(text);
+            return;
+        }
+        var activeTab = _host.ActiveTab;
+        if (activeTab == null)
+            return;
+        if (_host.AltGr || (!_host.Ctrl && !_host.Alt))
+        {
+            var searchState = EnsureState(activeTab);
+            if (searchState.IsActive)
+            {
+                HandleText(text);
+                return;
+            }
+        }
+        else
+        {
+            return;
+        }
+
+        var adapter = activeTab.Session.Adapter;
+        int kittyFlags = adapter.KittyKeyboardFlags;
+        if ((kittyFlags & (8 | 16)) != (8 | 16))
+        {
+            HandleText(text);
+            return;
+        }
+
+        int length = _inputEncoder.EncodeKeyEvent(TerminalKey.Unknown, TerminalKeyModifiers.None, 0,
+            TerminalKeyEventType.Press, text, _keyEventScratch, kittyFlags);
+        if (length == 0)
+            return;
+        var activePane = activeTab.ActivePane;
+        if (activePane.ScrollOffset > 0)
+            activePane.ScrollToBottom();
+        if (activePane.Selection.HasSelection)
+            activePane.Selection.ClearSelection();
+        _host.WriteInput(activeTab, _keyEventScratch.AsSpan(0, length));
     }
 
     public void HandleText(string text) => HandleText(text.AsSpan());

@@ -10,10 +10,97 @@ namespace Dotty.Runtime.Input;
 /// </summary>
 public class TerminalInputEncoder
 {
-    /// <summary>
-    /// Kitty keyboard protocol mode: 0=disabled, 1=full, 2=partial.
-    /// </summary>
-    public int KittyMode { get; set; }
+    /// <summary>Encodes a negotiated Kitty keyboard key event, falling back to legacy encoding when unselected.</summary>
+    public int EncodeKeyEvent(
+        TerminalKey key,
+        TerminalKeyModifiers modifiers,
+        int primaryCodepoint,
+        TerminalKeyEventType eventType,
+        ReadOnlySpan<char> associatedText,
+        Span<byte> destination,
+        int kittyFlags,
+        bool keypadApplicationMode = false,
+        bool applicationCursorKeys = false,
+        int shiftedCodepoint = 0,
+        int baseCodepoint = 0)
+    {
+        int modifier = GetModifier(modifiers);
+        bool keypadMapped = TryGetKeypadCode(key, out int codepoint);
+        bool mapped = keypadMapped || TryGetKittyCodepoint(key, out codepoint);
+        bool reportText = (kittyFlags & 16) != 0 && eventType != TerminalKeyEventType.Release &&
+            ContainsReportableText(associatedText);
+        bool unknownTextEvent = key == TerminalKey.Unknown && primaryCodepoint == 0 &&
+            (kittyFlags & (8 | 16)) == (8 | 16) && eventType != TerminalKeyEventType.Release && reportText;
+        if (primaryCodepoint > 0 && !keypadMapped)
+            codepoint = primaryCodepoint;
+        else if (!mapped && !unknownTextEvent)
+            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys);
+
+        bool selected = unknownTextEvent || (kittyFlags & 8) != 0 ||
+            ((kittyFlags & 1) != 0 && (IsDisambiguationKey(key) || modifier != 1));
+        if (!selected)
+            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys);
+
+        int offset = WriteLiteral(destination, "\x1b[");
+        offset = WriteNumber(destination, offset, codepoint);
+        if (!unknownTextEvent && (kittyFlags & 4) != 0 && (shiftedCodepoint > 0 || baseCodepoint > 0))
+        {
+            destination[offset++] = (byte)':';
+            if (shiftedCodepoint > 0)
+                offset = WriteNumber(destination, offset, shiftedCodepoint);
+            if (baseCodepoint > 0)
+            {
+                destination[offset++] = (byte)':';
+                offset = WriteNumber(destination, offset, baseCodepoint);
+            }
+        }
+        destination[offset++] = (byte)';';
+        if (unknownTextEvent)
+        {
+            destination[offset++] = (byte)';';
+        }
+        else
+        {
+            offset = WriteNumber(destination, offset, modifier);
+            if ((kittyFlags & 2) != 0)
+            {
+                destination[offset++] = (byte)':';
+                offset = WriteNumber(destination, offset, (int)eventType);
+            }
+            if (reportText)
+                destination[offset++] = (byte)';';
+        }
+        if (reportText)
+        {
+            int index = 0;
+            bool wroteScalar = false;
+            while (index < associatedText.Length)
+            {
+                int scalar = ReadScalar(associatedText, ref index);
+                if (IsControlScalar(scalar))
+                    continue;
+                if (wroteScalar)
+                    destination[offset++] = (byte)':';
+                offset = WriteNumber(destination, offset, scalar);
+                wroteScalar = true;
+            }
+        }
+        destination[offset++] = (byte)'u';
+        return offset;
+    }
+
+    private static bool ContainsReportableText(ReadOnlySpan<char> text)
+    {
+        int index = 0;
+        while (index < text.Length)
+        {
+            if (!IsControlScalar(ReadScalar(text, ref index)))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsControlScalar(int scalar) => scalar <= 0x1F || scalar is >= 0x7F and <= 0x9F;
 
     /// <summary>Encodes a mouse event into caller-owned storage.</summary>
 
@@ -74,13 +161,11 @@ public class TerminalInputEncoder
     {
         if (TryEncodeKeypad(key, modifiers, keypadApplicationMode, destination, out int keypadLength))
             return keypadLength;
-        if (KittyMode > 0)
-            return EncodeKitty(key, modifiers, destination);
 
         bool ctrl = (modifiers & TerminalKeyModifiers.Control) != 0;
         bool alt = (modifiers & TerminalKeyModifiers.Alt) != 0;
         bool shift = (modifiers & TerminalKeyModifiers.Shift) != 0;
-        int mod = GetModifier(modifiers);
+        int mod = GetModifier(modifiers & (TerminalKeyModifiers.Shift | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Control | TerminalKeyModifiers.Meta));
 
         if (key == TerminalKey.Backspace)
         {
@@ -161,9 +246,9 @@ public class TerminalInputEncoder
             };
         }
 
-        if (key >= TerminalKey.F1 && key <= TerminalKey.F24)
+        if ((key >= TerminalKey.F1 && key <= TerminalKey.F24) || key == TerminalKey.F25)
         {
-            int fNum = (int)(key - TerminalKey.F1) + 1;
+            int fNum = key == TerminalKey.F25 ? 25 : (int)(key - TerminalKey.F1) + 1;
             if (fNum <= 4)
             {
                 if (mod > 1)
@@ -285,6 +370,71 @@ public class TerminalInputEncoder
         Encoding.ASCII.GetBytes(text, destination);
 
 
+    private static bool IsDisambiguationKey(TerminalKey key) => key is
+        TerminalKey.Escape or TerminalKey.Enter or TerminalKey.Tab or TerminalKey.Backspace or
+        TerminalKey.Delete or TerminalKey.Insert or TerminalKey.Home or TerminalKey.End or
+        TerminalKey.PageUp or TerminalKey.PageDown or TerminalKey.Up or TerminalKey.Down or
+        TerminalKey.Left or TerminalKey.Right or TerminalKey.F1 or TerminalKey.F2 or TerminalKey.F3 or TerminalKey.F4 or
+        TerminalKey.F5 or TerminalKey.F6 or TerminalKey.F7 or TerminalKey.F8 or TerminalKey.F9 or TerminalKey.F10 or
+        TerminalKey.F11 or TerminalKey.F12 or TerminalKey.F13 or TerminalKey.F14 or TerminalKey.F15 or TerminalKey.F16 or
+        TerminalKey.F17 or TerminalKey.F18 or TerminalKey.F19 or TerminalKey.F20 or TerminalKey.F21 or TerminalKey.F22 or
+        TerminalKey.F23 or TerminalKey.F24 or TerminalKey.Keypad0 or TerminalKey.Keypad1 or TerminalKey.Keypad2 or
+        TerminalKey.F25 or
+        TerminalKey.Keypad3 or TerminalKey.Keypad4 or TerminalKey.Keypad5 or TerminalKey.Keypad6 or TerminalKey.Keypad7 or
+        TerminalKey.Keypad8 or TerminalKey.Keypad9 or TerminalKey.KeypadDecimal or TerminalKey.KeypadDivide or
+        TerminalKey.KeypadMultiply or TerminalKey.KeypadSubtract or TerminalKey.KeypadAdd or TerminalKey.KeypadEnter or
+        TerminalKey.KeypadEqual or TerminalKey.ShiftLeft or TerminalKey.ShiftRight or TerminalKey.ControlLeft or
+        TerminalKey.ControlRight or TerminalKey.AltLeft or TerminalKey.AltRight or TerminalKey.SuperLeft or
+        TerminalKey.SuperRight or TerminalKey.CapsLock or TerminalKey.ScrollLock or TerminalKey.NumLock or
+        TerminalKey.PrintScreen or TerminalKey.Pause or TerminalKey.Menu;
+
+    private static bool TryGetKeypadCode(TerminalKey key, out int codepoint)
+    {
+        codepoint = key switch
+        {
+            TerminalKey.Keypad0 => 57399, TerminalKey.Keypad1 => 57400, TerminalKey.Keypad2 => 57401,
+            TerminalKey.Keypad3 => 57402, TerminalKey.Keypad4 => 57403, TerminalKey.Keypad5 => 57404,
+            TerminalKey.Keypad6 => 57405, TerminalKey.Keypad7 => 57406, TerminalKey.Keypad8 => 57407,
+            TerminalKey.Keypad9 => 57408, TerminalKey.KeypadDecimal => 57409, TerminalKey.KeypadDivide => 57410,
+            TerminalKey.KeypadMultiply => 57411, TerminalKey.KeypadSubtract => 57412, TerminalKey.KeypadAdd => 57413,
+            TerminalKey.KeypadEnter => 57414, TerminalKey.KeypadEqual => 57415, _ => 0
+        };
+        return codepoint != 0;
+    }
+
+    private static bool TryGetKittyCodepoint(TerminalKey key, out int codepoint)
+    {
+        codepoint = key switch
+        {
+            >= TerminalKey.A and <= TerminalKey.Z => 'a' + (key - TerminalKey.A),
+            >= TerminalKey.Number0 and <= TerminalKey.Number9 => '0' + (key - TerminalKey.Number0),
+            >= TerminalKey.F1 and <= TerminalKey.F24 => 57364 + (key - TerminalKey.F1),
+            TerminalKey.F25 => 57388,
+            TerminalKey.Space => 32,
+            TerminalKey.Minus => '-', TerminalKey.Equal => '=', TerminalKey.LeftBracket => '[',
+            TerminalKey.RightBracket => ']', TerminalKey.BackSlash => '\\', TerminalKey.Semicolon => ';',
+            TerminalKey.Quote => '\'', TerminalKey.GraveAccent => 96, TerminalKey.Comma => ',',
+            TerminalKey.Period => '.', TerminalKey.Slash => '/',
+            TerminalKey.Escape => 27, TerminalKey.Enter => 13, TerminalKey.Tab => 9, TerminalKey.Backspace => 127,
+            TerminalKey.Insert => 57348, TerminalKey.Delete => 57349, TerminalKey.Left => 57350,
+            TerminalKey.Down => 57351, TerminalKey.Up => 57352, TerminalKey.Right => 57353,
+            TerminalKey.PageUp => 57354, TerminalKey.PageDown => 57355, TerminalKey.Home => 57356, TerminalKey.End => 57357,
+            TerminalKey.CapsLock => 57358, TerminalKey.ScrollLock => 57359, TerminalKey.NumLock => 57360,
+            TerminalKey.PrintScreen => 57361, TerminalKey.Pause => 57362, TerminalKey.Menu => 57363,
+            TerminalKey.ShiftLeft => 57441, TerminalKey.ControlLeft => 57442, TerminalKey.AltLeft => 57443,
+            TerminalKey.SuperLeft => 57444, TerminalKey.ShiftRight => 57447, TerminalKey.ControlRight => 57448,
+            TerminalKey.AltRight => 57449, TerminalKey.SuperRight => 57450, _ => 0
+        };
+        return codepoint != 0;
+    }
+
+    private static int ReadScalar(ReadOnlySpan<char> text, ref int index)
+    {
+        char first = text[index++];
+        if (char.IsHighSurrogate(first) && index < text.Length && char.IsLowSurrogate(text[index]))
+            return char.ConvertToUtf32(first, text[index++]);
+        return char.IsSurrogate(first) ? 0xfffd : first;
+    }
     private static int FunctionCode(int function) => function switch
     {
         5 => 15,
@@ -307,6 +457,7 @@ public class TerminalInputEncoder
         22 => 43,
         23 => 44,
         24 => 45,
+        25 => 46,
         _ => 0
     };
 
@@ -391,115 +542,6 @@ public class TerminalInputEncoder
         return offset;
     }
 
-    private int EncodeKitty(TerminalKey key, TerminalKeyModifiers modifiers, Span<byte> destination)
-    {
-        int modifier = GetModifier(modifiers);
-        byte final = key switch
-        {
-            TerminalKey.Up => (byte)'A',
-            TerminalKey.Down => (byte)'B',
-            TerminalKey.Right => (byte)'C',
-            TerminalKey.Left => (byte)'D',
-            TerminalKey.Home => (byte)'H',
-            TerminalKey.End => (byte)'F',
-            TerminalKey.F1 => (byte)'P',
-            TerminalKey.F2 => (byte)'Q',
-            TerminalKey.F3 => (byte)'R',
-            TerminalKey.F4 => (byte)'S',
-            _ => 0
-        };
-        if (modifier == 1)
-        {
-            string? bare = key switch
-            {
-                TerminalKey.Up => "\x1b[A",
-                TerminalKey.Down => "\x1b[B",
-                TerminalKey.Right => "\x1b[C",
-                TerminalKey.Left => "\x1b[D",
-                TerminalKey.Home => "\x1b[H",
-                TerminalKey.End => "\x1b[F",
-                _ => null
-            };
-            if (bare is not null) return WriteLiteral(destination, bare);
-        }
-        if (final != 0)
-        {
-            if (modifier == 1 && key is >= TerminalKey.F1 and <= TerminalKey.F4)
-            {
-                destination[0] = 0x1b; destination[1] = (byte)'O'; destination[2] = final;
-                return 3;
-            }
-            int offset = WriteLiteral(destination, "\x1b[");
-            destination[offset++] = (byte)'1';
-            if (modifier > 1)
-            {
-                destination[offset++] = (byte)';';
-                offset = WriteNumber(destination, offset, modifier);
-            }
-            destination[offset++] = final;
-            return offset;
-        }
-
-        int tildeCode = key switch
-        {
-            TerminalKey.PageUp => 5,
-            TerminalKey.PageDown => 6,
-            TerminalKey.Insert => 2,
-            TerminalKey.Delete => 3,
-            TerminalKey.F5 => 15,
-            TerminalKey.F6 => 17,
-            TerminalKey.F7 => 18,
-            TerminalKey.F8 => 19,
-            TerminalKey.F9 => 20,
-            TerminalKey.F10 => 21,
-            TerminalKey.F11 => 23,
-            TerminalKey.F12 => 24,
-            _ => 0
-        };
-        if (tildeCode != 0)
-        {
-            int offset = WriteLiteral(destination, "\x1b[");
-            offset = WriteNumber(destination, offset, tildeCode);
-            if (modifier > 1)
-            {
-                destination[offset++] = (byte)';';
-                offset = WriteNumber(destination, offset, modifier);
-            }
-            destination[offset++] = (byte)'~';
-            return offset;
-        }
-
-        int privateCode = key switch
-        {
-            TerminalKey.F13 => 57376,
-            TerminalKey.F14 => 57377,
-            TerminalKey.F15 => 57378,
-            TerminalKey.F16 => 57379,
-            TerminalKey.F17 => 57380,
-            TerminalKey.F18 => 57381,
-            TerminalKey.F19 => 57382,
-            TerminalKey.F20 => 57383,
-            TerminalKey.F21 => 57384,
-            TerminalKey.F22 => 57385,
-            TerminalKey.F23 => 57386,
-            TerminalKey.F24 => 57387,
-            TerminalKey.Tab => 9,
-            TerminalKey.Enter => 13,
-            TerminalKey.Escape => 27,
-            TerminalKey.Backspace => 127,
-            _ => 0
-        };
-        if (privateCode == 0) return 0;
-        int result = WriteLiteral(destination, "\x1b[");
-        result = WriteNumber(destination, result, privateCode);
-        if (modifier > 1)
-        {
-            destination[result++] = (byte)';';
-            result = WriteNumber(destination, result, modifier);
-        }
-        destination[result++] = (byte)'u';
-        return result;
-    }
 
     private static int GetModifier(TerminalKeyModifiers modifiers)
     {
@@ -508,6 +550,8 @@ public class TerminalInputEncoder
         if ((modifiers & TerminalKeyModifiers.Alt) != 0) value += 2;
         if ((modifiers & TerminalKeyModifiers.Control) != 0) value += 4;
         if ((modifiers & TerminalKeyModifiers.Meta) != 0) value += 8;
+        if ((modifiers & TerminalKeyModifiers.CapsLock) != 0) value += 64;
+        if ((modifiers & TerminalKeyModifiers.NumLock) != 0) value += 128;
         return value;
     }
 

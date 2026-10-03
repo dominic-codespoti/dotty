@@ -85,4 +85,13 @@ public enum TerminalAction
 
     /// <summary>Close the focused pane.</summary>
     ClosePane,
+
+    /// <summary>Navigate to the previous shell prompt.</summary>
+    PreviousPrompt,
+
+    /// <summary>Navigate to the next shell prompt.</summary>
+    NextPrompt,
+
+    /// <summary>Select and copy the latest command's output.</summary>
+    CopyCommandOutput,
 }

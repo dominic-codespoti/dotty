@@ -111,20 +111,6 @@ public sealed class LuaHookManager
         return false;
     }
 
-    private bool TryInvokeFirst(string eventName, LuaValue arg0, LuaValue arg1, out LuaValue result)
-    {
-        LuaCallbackReference[] callbacks = Get(eventName);
-        for (int i = 0; i < callbacks.Length; i++)
-        {
-            if (callbacks[i].Invoke(arg0, arg1, out result) && !result.IsNil)
-            {
-                return true;
-            }
-        }
-
-        result = LuaValue.Nil;
-        return false;
-    }
 
     private LuaCallbackReference[] Get(string name)
     {
@@ -187,9 +173,19 @@ public sealed class LuaHookManager
 
     public bool AllowClipboardWrite(LeafPane pane, TerminalTab tab, string text)
     {
-        return !(Owner != null
-            && TryInvokeFirst("clipboard_write", LuaValue.FromPane(pane, tab), LuaValue.From(text), out LuaValue value)
-            && value.TryGetBoolean(out bool allow)
-            && !allow);
+        if (Owner == null)
+            return true;
+
+        LuaCallbackReference[] callbacks = Get("clipboard_write");
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            if (!callbacks[i].Invoke(LuaValue.FromPane(pane, tab), LuaValue.From(text), out LuaValue value))
+                return false;
+            if (value.IsNil)
+                continue;
+            return !value.TryGetBoolean(out bool allow) || allow;
+        }
+
+        return true;
     }
 }

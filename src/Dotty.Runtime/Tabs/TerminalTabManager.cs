@@ -28,7 +28,13 @@ public sealed class TerminalTabManager : IDisposable
     public event Action<TerminalTab, LeafPane, int>? ProcessExited;
     public event Action<TerminalTab, LeafPane>? BellRung;
 
-    public TerminalTab CreateTab(int cols = 80, int rows = 24, string? workingDirectory = null, string? shell = null)
+    public TerminalTab CreateTab(
+        int cols = 80,
+        int rows = 24,
+        string? workingDirectory = null,
+        string? shell = null,
+        System.Collections.Generic.IReadOnlyList<string>? command = null,
+        bool shellIsExecutable = false)
     {
         ThrowIfDisposed();
 
@@ -51,7 +57,8 @@ public sealed class TerminalTabManager : IDisposable
         TabAdded?.Invoke(tab);
 
         SelectTab(tab);
-        tab.Session.StartWithOptions(shell: shell, workingDirectory: workingDirectory);
+        tab.Session.StartWithOptions(shell: shell, workingDirectory: workingDirectory,
+            command: command, shellIsExecutable: shellIsExecutable);
         return tab;
     }
 

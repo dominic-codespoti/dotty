@@ -7,6 +7,8 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
@@ -77,7 +79,7 @@ internal static class DottyWindowHost
     private static readonly Queue<TabTitleChange> _pendingTabTitleChanges = new(8);
     private static int _pendingTabTitleChangeCount;
     private static readonly object _pendingTabTitleChangesLock = new();
-    private readonly record struct ProcessExit(TerminalTab Tab, LeafPane Leaf);
+    private readonly record struct ProcessExit(TerminalTab Tab, LeafPane Leaf, int ExitCode);
     private static readonly Queue<ProcessExit> _pendingProcessExits = new(8);
     private static int _pendingProcessExitCount;
     private static readonly object _pendingProcessExitsLock = new();
@@ -155,6 +157,8 @@ internal static class DottyWindowHost
     private static char[] _windowTitleScratch = new char[128];
     private static byte[] _windowTitleUtf8 = new byte[128];
     private static global::Silk.NET.GLFW.Glfw? _glfwApi;
+    private static string _windowBackend = "unknown";
+    private static TerminalKeyModifiers _nativeModifiers;
     private static nint _glfwSetWindowTitleProc;
     private static bool _glfwTitleProcResolved;
     /// <summary>
@@ -181,8 +185,15 @@ internal static class DottyWindowHost
     private static unsafe readonly delegate* managed<int, void> _customFrameHoverCallback = &OnCustomFrameButtonHover;
     private static ContextMenuModel? _activeContextMenu;
     private sealed record ControlRequest(string Command, TaskCompletionSource<string> Completion);
-    public static void Run()
+    private static DottyLaunchOptions _launchOptions = new();
+    private static TerminalSession? _initialCommandSession;
+    private static int _exitCode;
+
+    public static int Run(DottyLaunchOptions launchOptions)
     {
+        _launchOptions = launchOptions;
+        _initialCommandSession = null;
+        _exitCode = 0;
         _closed = false;
         _lastWindowFocus = null;
         _focusedPane = null;
@@ -229,6 +240,7 @@ internal static class DottyWindowHost
         if (_customFrameActive)
             InstallCustomFrame();
         _window.Run();
+        return _exitCode;
     }
     private static bool IsTabBarVisible => _showTabBar || _customFrameActive;
 
@@ -312,6 +324,7 @@ internal static class DottyWindowHost
         }
         catch (Exception exception)
         {
+            _exitCode = 1;
             Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));
             _window.Close();
         }
@@ -357,10 +370,23 @@ internal static class DottyWindowHost
 
         _mouseHost = new MouseHost();
         _keyboardDispatcher = new TerminalKeyboardDispatcher(_mouseHost);
+        _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
+        NativeGlfwMetadata.Initialize(_glfwApi);
+        _windowBackend = NativeGlfwMetadata.TryGetPlatform(out int platform) ? platform switch
+        {
+            0x00060001 => "windows",
+            0x00060002 => "macos",
+            0x00060003 => "wayland",
+            0x00060004 => "x11",
+            0x00060005 => "null",
+            _ => "unknown"
+        } : "unknown";
         _keyboardController = new TerminalKeyboardController(
-            keyPressed: _keyboardDispatcher.HandleKeyDown,
-            textReceived: _keyboardDispatcher.HandleText,
-            activity: OnKeyboardActivity);
+            keyEventReceived: _keyboardDispatcher.HandleKeyEvent,
+            textReceived: _keyboardDispatcher.HandleCommittedText,
+            activity: OnKeyboardActivity,
+            primaryCodepointProvider: static (key, scancode) =>
+                scancode >= 0 && NativeGlfwMetadata.TryGetPrimaryCodePoint((int)key, scancode, out uint scalar) ? (int)scalar : 0);
         _mouseController = new TerminalMouseController(_mouseHost);
 
         _input = _window.CreateInput();
@@ -368,10 +394,8 @@ internal static class DottyWindowHost
         {
             _keyboard = _input.Keyboards[0];
             _clipboard = new KeyboardClipboard(_keyboard);
-            _keyboard.KeyDown += OnKeyboardDown;
-            _keyboard.KeyUp += OnKeyboardUp;
-            _keyboard.KeyChar += OnKeyboardChar;
         }
+        InstallNativeKeyboardCallbacks();
 
         if (_input.Mice.Count > 0)
         {
@@ -382,7 +406,14 @@ internal static class DottyWindowHost
             _mouse.Scroll += OnMouseScroll;
         }
 
-        _tabManager.CreateTab(cols: _cols, rows: _rows);
+        var initialTab = _tabManager.CreateTab(
+            cols: _cols, rows: _rows,
+            workingDirectory: _launchOptions.WorkingDirectory,
+            shell: _launchOptions.Shell,
+            command: _launchOptions.Command,
+            shellIsExecutable: _launchOptions.Shell != null);
+        if (_launchOptions.Command != null)
+            _initialCommandSession = initialTab.Session;
         _keybindings.RegisterDefaults();
         _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
         int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
@@ -423,7 +454,7 @@ internal static class DottyWindowHost
         {
             if (_closed)
                 return;
-            _pendingProcessExits.Enqueue(new ProcessExit(tab, leaf));
+            _pendingProcessExits.Enqueue(new ProcessExit(tab, leaf, exitCode));
             Volatile.Write(ref _pendingProcessExitCount, _pendingProcessExits.Count);
         }
     }
@@ -564,9 +595,11 @@ internal static class DottyWindowHost
 
     private static void EnqueueClipboardWrite(TerminalSession session, string text)
     {
+        if (!UserConfigService.Current.Clipboard.AllowOsc52Write || text.Length > 65536)
+            return;
         lock (_pendingClipboardsLock)
         {
-            if (_closed)
+            if (_closed || _pendingClipboards.Count >= 32)
                 return;
             _pendingClipboards.Enqueue(new ClipboardWrite(session, text));
             Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
@@ -736,7 +769,7 @@ internal static class DottyWindowHost
         if (error == null)
         {
             if (!_luaHost.Hooks.TryFormatStatus(_luaStatusText))
-                _luaStatusText.Clear();
+                FormatShellCommandStatus();
             error = _luaHost.LastError;
         }
 
@@ -757,6 +790,33 @@ internal static class DottyWindowHost
         _lastLuaStatusRefreshTimestampMs = GetClockMilliseconds();
         if (changed)
             WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
+    }
+
+    private static void FormatShellCommandStatus()
+    {
+        var adapter = _tabManager?.ActiveTab?.Session.Adapter;
+        if (adapter == null)
+        {
+            _luaStatusText.Clear();
+            return;
+        }
+
+        var command = adapter.GetShellCommandSnapshot();
+        if (command.State == ShellCommandState.Running)
+        {
+            _luaStatusText.Set("running");
+        }
+        else if (command.State == ShellCommandState.Exited)
+        {
+            Span<char> text = stackalloc char[16];
+            "exit ".AsSpan().CopyTo(text);
+            command.ExitCode.TryFormat(text[5..], out int written);
+            _luaStatusText.Set(text[..(5 + written)]);
+        }
+        else
+        {
+            _luaStatusText.Clear();
+        }
     }
 
     private static void UpdateLuaStatusWarning(string error)
@@ -837,8 +897,8 @@ internal static class DottyWindowHost
             if (!_glfwTitleProcResolved)
             {
                 _glfwTitleProcResolved = true;
-                _glfwApi = global::Silk.NET.GLFW.Glfw.GetApi();
-                _glfwSetWindowTitleProc = _glfwApi.GetProcAddress("glfwSetWindowTitle");
+                _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
+                _glfwSetWindowTitleProc = _glfwApi.Context.GetProcAddress("glfwSetWindowTitle");
             }
 
             if (_glfwSetWindowTitleProc != 0)
@@ -905,14 +965,18 @@ internal static class DottyWindowHost
     }
     private static TerminalTab CreateLuaTab(string? workingDirectory, string? shell)
     {
-        var tab = _tabManager.CreateTab(cols: _cols, rows: _rows, workingDirectory: workingDirectory, shell: shell);
+        var activeSession = _tabManager.ActiveTab?.Session;
+        var tab = _tabManager.CreateTab(cols: _cols, rows: _rows,
+            workingDirectory: workingDirectory ?? activeSession?.CurrentWorkingDirectory,
+            shell: shell ?? activeSession?.LaunchShell ?? _launchOptions.Shell,
+            shellIsExecutable: shell is null && (activeSession?.LaunchShellIsExecutable ?? (_launchOptions.Shell is not null)));
         SilkConfig.ApplyThemeToAdapter(tab.Session.Adapter);
         return tab;
     }
 
     private static LeafPane SplitLuaPane(TerminalTab tab, LeafPane target, SplitDirection direction, string? workingDirectory, string? shell)
     {
-        var pane = tab.PaneTree.Split(target, direction, workingDirectory, shell);
+        var pane = tab.PaneTree.Split(target, direction, workingDirectory ?? target.Session.CurrentWorkingDirectory, shell);
         SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter);
         return pane;
     }
@@ -1051,7 +1115,7 @@ internal static class DottyWindowHost
                 ? generation.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : "null";
             bool syncActive = session?.Adapter.SynchronizedUpdateActive ?? false;
-            return $"{{\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount}}}";
+            return $"{{\"windowBackend\":{QuoteJson(_windowBackend)},\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount}}}";
         }
         if (string.Equals(command, "SHUTDOWN", StringComparison.OrdinalIgnoreCase))
         {
@@ -1072,10 +1136,20 @@ internal static class DottyWindowHost
         return name switch
         {
             "TYPE" => SendControlText(activeTab, payload),
-            "KEY" => SendControlKey(activeTab, payload),
+            "KEY" => SendControlKey(payload),
             "RESIZE" => ResizeFromControl(payload),
+            "ACTION" => ExecuteControlAction(payload),
             _ => "ERROR unknown command",
         };
+    }
+
+    private static string ExecuteControlAction(string name)
+    {
+        if (!Enum.TryParse<TerminalAction>(name, ignoreCase: true, out var action) ||
+            !Enum.IsDefined(action) || action == TerminalAction.None)
+            return "ERROR unknown action";
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
+        return _keyboardDispatcher.Actions.TryExecute(action) ? "OK" : "ERROR action unavailable";
     }
 
     private static string SendControlText(TerminalTab activeTab, string text)
@@ -1085,55 +1159,23 @@ internal static class DottyWindowHost
         return "OK";
     }
 
-    private static string SendControlKey(TerminalTab activeTab, string keyName)
+    private static string SendControlKey(string keyName)
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
         string normalized = keyName.Trim().ToLowerInvariant();
-        Span<byte> bytes = stackalloc byte[64];
-        int byteCount;
-        switch (normalized)
+        if (normalized is "ctrlc" or "control-c")
         {
-            case "ctrlc":
-            case "control-c":
-                bytes[0] = 0x03;
-                byteCount = 1;
-                break;
-            case "enter":
-            case "return":
-                bytes[0] = 0x0d;
-                byteCount = 1;
-                break;
-            case "tab":
-                bytes[0] = 0x09;
-                byteCount = 1;
-                break;
-            case "escape":
-            case "esc":
-                bytes[0] = 0x1b;
-                byteCount = 1;
-                break;
-            case "backspace":
-                bytes[0] = 0x7f;
-                byteCount = 1;
-                break;
-            default:
-                if (!Enum.TryParse<InputKey>(keyName, ignoreCase: true, out var key))
-                    return "ERROR unknown key";
-                byteCount = SilkKeyMapper.Encode(
-                    key,
-                    ctrl: false,
-                    shift: false,
-                    alt: false,
-                    keypadAppMode: activeTab.Session.Adapter.KeypadApplicationMode,
-                    destination: bytes,
-                    kittyMode: activeTab.Session.Adapter.KittyKeyboardMode,
-                    applicationCursorKeys: activeTab.Session.Adapter.ApplicationCursorKeysEnabled);
-                if (byteCount == 0)
-                    return "ERROR unsupported key";
-                break;
+            _keyboardController.HandleKeyDown(InputKey.ControlLeft, -1);
+            _keyboardController.HandleKeyDown(InputKey.C, -1);
+            _keyboardController.HandleKeyUp(InputKey.C, -1);
+            _keyboardController.HandleKeyUp(InputKey.ControlLeft, -1);
+            return "OK";
         }
-
-        activeTab.Session.WriteInput(bytes[..byteCount]);
+        normalized = normalized switch { "return" => "Enter", "esc" => "Escape", _ => normalized };
+        if (!Enum.TryParse<InputKey>(normalized, ignoreCase: true, out var key) || !Enum.IsDefined(key))
+            return "ERROR unknown key";
+        _keyboardController.HandleKeyDown(key, -1);
+        _keyboardController.HandleKeyUp(key, -1);
         return "OK";
     }
 
@@ -1150,9 +1192,13 @@ internal static class DottyWindowHost
             return "ERROR dimensions must be positive integers";
         }
 
-        _tabManager!.ResizeAll(columns, rows);
-        _cols = columns;
-        _rows = rows;
+        var config = UserConfigService.Current;
+        var padding = config.Window.Padding;
+        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(config.TabBar.Height, _cellHeight) : 0;
+        var target = new Vector2D<int>(
+            Math.Max(1, (int)MathF.Ceiling(columns * _cellWidth + (float)(padding.Left + padding.Right))),
+            Math.Max(1, (int)MathF.Ceiling((rows + barRows) * _cellHeight + (float)(padding.Top + padding.Bottom))));
+        _window.Size = target;
         return "OK";
     }
 
@@ -1184,9 +1230,13 @@ internal static class DottyWindowHost
             return "ERROR no active terminal";
 
         var buffer = activeTab.Session.Adapter.Buffer;
-        return $"{{\"rows\":{buffer.Rows},\"cols\":{buffer.Columns},\"cursorRow\":{buffer.CursorRow},\"cursorCol\":{buffer.CursorCol},\"scrollbackLines\":{buffer.ScrollbackCount},\"isAlternateScreen\":{(buffer.IsAlternateScreenActive ? "true" : "false")},\"title\":{QuoteJson(activeTab.Title)}}}";
+        var logicalSize = _window.Size;
+        var framebufferSize = _window.FramebufferSize;
+        var command = activeTab.Session.Adapter.GetShellCommandSnapshot();
+        string commandState = command.State switch { ShellCommandState.Running => "running", ShellCommandState.Exited => "exited", _ => "idle" };
+        return $"{{\"windowState\":{(int)_window.WindowState},\"logicalWidth\":{logicalSize.X},\"logicalHeight\":{logicalSize.Y},\"framebufferWidth\":{framebufferSize.X},\"framebufferHeight\":{framebufferSize.Y},\"rows\":{buffer.Rows},\"cols\":{buffer.Columns},\"cursorRow\":{buffer.CursorRow},\"cursorCol\":{buffer.CursorCol},\"scrollbackLines\":{buffer.ScrollbackCount},\"isAlternateScreen\":{(buffer.IsAlternateScreenActive ? "true" : "false")},\"paneCount\":{activeTab.PaneTree.Leaves.Count},\"workingDirectory\":{QuoteJson(activeTab.Session.CurrentWorkingDirectory ?? string.Empty)},\"title\":{QuoteJson(activeTab.Title)},\"shellCommandState\":{QuoteJson(commandState)},\"shellExitCode\":{command.ExitCode},\"statusText\":{QuoteJson(GetLuaStatusText())}}}";
     }
-    private static string QuoteJson(string value)
+    private static string QuoteJson(ReadOnlySpan<char> value)
     {
         var result = new StringBuilder(value.Length + 2);
         result.Append('"');
@@ -1234,7 +1284,11 @@ internal static class DottyWindowHost
         while (TryDequeueProcessExit(out var processExit))
         {
             if (!_closed)
+            {
+                if (ReferenceEquals(processExit.Leaf.Session, _initialCommandSession))
+                    _exitCode = processExit.ExitCode;
                 _tabManager?.CloseExitedPane(processExit.Tab, processExit.Leaf);
+            }
         }
 
         while (TryDequeuePendingTitle(out var title))
@@ -1245,7 +1299,7 @@ internal static class DottyWindowHost
 
         while (TryDequeueClipboardWrite(out var request))
         {
-            if (_closed || _keyboard is null)
+            if (_closed || _keyboard is null || !UserConfigService.Current.Clipboard.AllowOsc52Write)
                 continue;
 
             if (!TryFindOwningPane(request.Session, out var ownerTab, out var ownerPane))
@@ -1369,7 +1423,6 @@ internal static class DottyWindowHost
 
     private static void OnRenderCore(double delta)
     {
-        _keyboardController?.Tick();
         DrainWindowEvents();
         if (_closed)
             return;
@@ -1684,32 +1737,54 @@ internal static class DottyWindowHost
         _committedAtlasVersion = _atlas.ContentVersion;
     }
 
-    private static void OnKeyboardDown(IKeyboard keyboard, InputKey key, int scancode)
+    private static unsafe void InstallNativeKeyboardCallbacks()
+    {
+        nint handle = _window.Native?.Glfw ?? 0;
+        if (handle == 0)
+            throw new PlatformNotSupportedException("Native keyboard input requires the selected GLFW window handle.");
+
+        var context = _glfwApi!.Context;
+        var setInputMode = (delegate* unmanaged[Cdecl]<nint, int, int, void>)context.GetProcAddress("glfwSetInputMode");
+        var setKeyCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetKeyCallback");
+        var setCharCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetCharCallback");
+        // GLFW_LOCK_KEY_MODS includes the real Caps Lock/Num Lock state in each key event.
+        setInputMode(handle, 0x00033004, 1);
+        setKeyCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, int, int, int, int, void>)&OnNativeKeyboardKey);
+        setCharCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, uint, void>)&OnNativeKeyboardScalar);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void OnNativeKeyboardKey(nint window, int key, int scancode, int action, int modifiers)
     {
         if (_closed)
             return;
 
-        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
-        RecordInteraction();
-        _keyboardController.HandleKeyDown(key, scancode);
+        // GLFW reports the effective state even when modifiers arrive without physical key events.
+        _nativeModifiers = (TerminalKeyModifiers)((modifiers & 0x39) | ((modifiers & 2) << 1) | ((modifiers & 4) >> 1));
+        if (action == 0)
+        {
+            WindowPresentationGate.Invalidate(WindowFrameReason.Input);
+            _keyboardController.HandleKeyUp((InputKey)key, scancode);
+        }
+        else if (action is 1 or 2)
+        {
+            WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
+            RecordInteraction();
+            if (action == 1)
+                _keyboardController.HandleKeyDown((InputKey)key, scancode);
+            else
+                _keyboardController.HandleKeyRepeat((InputKey)key, scancode);
+        }
     }
 
-    private static void OnKeyboardUp(IKeyboard keyboard, InputKey key, int scancode)
-    {
-        if (_closed)
-            return;
-
-        WindowPresentationGate.Invalidate(WindowFrameReason.Input);
-        _keyboardController.HandleKeyUp(key, scancode);
-    }
-
-    private static void OnKeyboardChar(IKeyboard keyboard, char character)
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void OnNativeKeyboardScalar(nint window, uint codepoint)
     {
         if (_closed)
             return;
 
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
-        _keyboardController.HandleKeyChar(character);
+        _keyboardController.HandleUnicodeScalar(codepoint);
     }
 
     private static void OnKeyboardActivity()
@@ -1727,6 +1802,7 @@ internal static class DottyWindowHost
         RefreshLuaStatus();
         if (!focused)
         {
+            _nativeModifiers = TerminalKeyModifiers.None;
             _keyboardController?.ResetState();
             _mouseController?.ResetState();
         }
@@ -1962,11 +2038,12 @@ internal static class DottyWindowHost
                     CaptionButtonsWidth: captionButtonsWidth);
             }
         }
-        public bool Ctrl => _keyboardController?.Ctrl ?? false;
-        public bool Shift => _keyboardController?.Shift ?? false;
-        public bool Alt => _keyboardController?.Alt ?? false;
+        public bool Ctrl => (_keyboardController?.Ctrl ?? false) || (_nativeModifiers & TerminalKeyModifiers.Control) != 0;
+        public bool Shift => (_keyboardController?.Shift ?? false) || (_nativeModifiers & TerminalKeyModifiers.Shift) != 0;
+        public bool Alt => (_keyboardController?.Alt ?? false) || (_nativeModifiers & TerminalKeyModifiers.Alt) != 0;
         public bool AltGr => _keyboardController?.AltGr ?? false;
-        public bool Super => _keyboardController?.Super ?? false;
+        public bool Super => (_keyboardController?.Super ?? false) || (_nativeModifiers & TerminalKeyModifiers.Meta) != 0;
+        public TerminalKeyModifiers LockModifiers => _nativeModifiers & (TerminalKeyModifiers.CapsLock | TerminalKeyModifiers.NumLock);
 
         public void CopySelection() => CopySelectionToClipboard();
         public void PasteClipboard() => PasteClipboardToSession();
@@ -2016,7 +2093,9 @@ internal static class DottyWindowHost
             var newTab = _tabManager.CreateTab(
                 cols: _cols,
                 rows: _rows,
-                workingDirectory: activeTab.WorkingDirectory);
+                workingDirectory: activeTab.Session.CurrentWorkingDirectory ?? activeTab.WorkingDirectory,
+                shell: activeTab.Session.LaunchShell,
+                shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
             SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
         }
 
@@ -2038,7 +2117,9 @@ internal static class DottyWindowHost
             var newTab = _tabManager.CreateTab(
                 cols: _cols,
                 rows: _rows,
-                workingDirectory: activeTab.WorkingDirectory);
+                workingDirectory: activeTab.Session.CurrentWorkingDirectory ?? activeTab.WorkingDirectory,
+                shell: activeTab.Session.LaunchShell,
+                shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
             SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
         }
 

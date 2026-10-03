@@ -11,12 +11,15 @@
 | [State Coordination Hardening](architecture/StateCoordinationPlan.md) | Executed: library-owned buffer invariants, single-owner scroll state, dormant incremental machinery removed, alt-screen invalidation locked in |
 | [Lock-Free Snapshot Design](architecture/LockFreeSnapshotDesign.md) | Snapshot ownership and lock-free rendering considerations |
 | [Parsing Engine](Parsing.md) | ANSI/VT parser state machine, escape sequences, handler dispatch |
+| [Keyboard Protocol](KeyboardProtocol.md) | Kitty negotiation, native key phases, alternate identities, and committed Unicode |
 
 ## Configuration
 
 | Document | Description |
 |----------|-------------|
-| [Configuration Guide](Configuration.md) | User-facing config: fonts, colors, themes, key bindings, hot-reload |
+| [Configuration Guide](Configuration.md) | User-facing config: fonts, colors, themes, key bindings, hot-reload, clipboard authorization |
+| [Command-Line Usage](CommandLine.md) | Literal command arguments, launch directories, shell selection, and exit status |
+| [Shell Integration](ShellIntegration.md) | Opt-in shell hooks, live working directories, prompt navigation, and output copy |
 | [Advanced Configuration](ConfigurationAdvanced.md) | Platform-independent JSON details, themes, and safe reload |
 | [Implementation Summary](ConfigurationImplementationSummary.md) | Technical summary of the config system implementation |
 | [Configuration Roadmap](ConfigurationRoadmap.md) | Phased feature roadmap for the config system |
@@ -38,6 +41,7 @@
 | Document | Description |
 |----------|-------------|
 | [Native PTY](NativePty.md) | Unix PTY implementation (posix_openpt, forkpty) |
+| [Native Desktop and IME Assessment](NativeDesktopAndIme.md) | Native verification lanes, committed Unicode, and the separate composition boundary |
 | [Platform Support](PlatformSupport.md) | OS requirements, native assets, diagnostics, and promotion gates |
 | [Windows ConPTY](WindowsConPty.md) | Windows pseudo-console API integration |
 
@@ -49,4 +53,4 @@
 
 ---
 
-*Last updated: 2026-08-13*
+*Last updated: 2026-10-02*

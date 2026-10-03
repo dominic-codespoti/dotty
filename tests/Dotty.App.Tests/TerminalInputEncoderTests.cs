@@ -1,7 +1,5 @@
-using SilkKey = Silk.NET.Input.Key;
 using System;
 using Dotty.Runtime.Input;
-using Dotty.Silk;
 using Dotty.Terminal.Adapter;
 using System.Text;
 using Xunit;
@@ -239,103 +237,127 @@ public class TerminalInputEncoderTests
     }
 
     [Fact]
-    public void Encode_KittyAndSuperModesRemainSelected()
+    public void EncodeKeyEvent_FlagsSelectKittyAndPreserveLegacyFallback()
     {
-        var encoder = new TerminalInputEncoder { KittyMode = 1 };
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[128];
+        int kittyLength = encoder.EncodeKeyEvent(TerminalKey.A, TerminalKeyModifiers.None, 'a', TerminalKeyEventType.Press, "".AsSpan(), buffer, 8);
+        Assert.Equal("\x1b[97;1u", Encoding.ASCII.GetString(buffer[..kittyLength]));
+        int legacyLength = encoder.EncodeKeyEvent(TerminalKey.Up, TerminalKeyModifiers.None, 0, TerminalKeyEventType.Press, "".AsSpan(), buffer, 0);
+        Assert.Equal("\x1b[A", Encoding.ASCII.GetString(buffer[..legacyLength]));
+        int disambiguatedLength = encoder.EncodeKeyEvent(TerminalKey.Escape, TerminalKeyModifiers.None, 27, TerminalKeyEventType.Press, "".AsSpan(), buffer, 1);
+        Assert.Equal("\x1b[27;1u", Encoding.ASCII.GetString(buffer[..disambiguatedLength]));
+    }
 
-        var bytes = encoder.Encode(
-            TerminalKey.Up,
-            TerminalKeyModifiers.Meta,
-            applicationCursorKeys: true);
+    [Fact]
+    public void EncodeKeyEvent_EventAlternateAndAssociatedTextFieldsHonorFlags()
+    {
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[128];
+        int length = encoder.EncodeKeyEvent(TerminalKey.A, TerminalKeyModifiers.Shift, 'a', TerminalKeyEventType.Repeat, "a😀".AsSpan(), buffer, 8 | 2 | 4 | 16, shiftedCodepoint: 'A', baseCodepoint: 'a');
+        Assert.Equal("\x1b[97:65:97;2:2;97:128512u", Encoding.ASCII.GetString(buffer[..length]));
 
-        Assert.Equal("\x1b[1;9A", Encoding.ASCII.GetString(bytes!));
+        length = encoder.EncodeKeyEvent(TerminalKey.A, TerminalKeyModifiers.None, 'a', TerminalKeyEventType.Release, "a".AsSpan(), buffer, 8 | 2 | 16);
+        Assert.Equal("\x1b[97;1:3u", Encoding.ASCII.GetString(buffer[..length]));
+    }
+
+    [Fact]
+    public void EncodeKeyEvent_Flag16ReportsTextForNativeRemappedNumericKey()
+    {
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[64];
+        int length = encoder.EncodeKeyEvent(TerminalKey.Number1, TerminalKeyModifiers.None,
+            128578, TerminalKeyEventType.Press, "🙂".AsSpan(), buffer, 31);
+
+        Assert.Equal("\x1b[128578;1:1;128578u", Encoding.ASCII.GetString(buffer[..length]));
+    }
+
+    [Fact]
+    public void EncodeKeyEvent_ReportsUnknownCommittedTextAndOmitsC0C1Controls()
+    {
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[64];
+
+        int length = encoder.EncodeKeyEvent(TerminalKey.Unknown, TerminalKeyModifiers.None, 0,
+            TerminalKeyEventType.Press, "å".AsSpan(), buffer, 31);
+        Assert.Equal("\x1b[0;;229u", Encoding.ASCII.GetString(buffer[..length]));
+
+        length = encoder.EncodeKeyEvent(TerminalKey.A, TerminalKeyModifiers.None, 'a',
+            TerminalKeyEventType.Press, "\u0001\u007f\u0085A".AsSpan(), buffer, 31);
+        Assert.Equal("\x1b[97;1:1;65u", Encoding.ASCII.GetString(buffer[..length]));
+
+        length = encoder.EncodeKeyEvent(TerminalKey.Unknown, TerminalKeyModifiers.None, 0,
+            TerminalKeyEventType.Press, "\u0000\u001f\u007f\u0080\u009f".AsSpan(), buffer, 31);
+        Assert.Equal(0, length);
+    }
+
+    [Fact]
+    public void EncodeKeyEvent_KeypadUsesKittyPrivateIdentity()
+    {
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[32];
+        int length = encoder.EncodeKeyEvent(TerminalKey.Keypad5, TerminalKeyModifiers.None, 0, TerminalKeyEventType.Press, "".AsSpan(), buffer, 8);
+        Assert.Equal("\x1b[57404;1u", Encoding.ASCII.GetString(buffer[..length]));
+        length = encoder.EncodeKeyEvent(TerminalKey.Keypad1, TerminalKeyModifiers.None, '1',
+            TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty, buffer, 8);
+        Assert.Equal("\x1b[57400;1u", Encoding.ASCII.GetString(buffer[..length]));
     }
 
     [Theory]
-    [InlineData(TerminalKey.Up, "\x1b[A")]
-    [InlineData(TerminalKey.Down, "\x1b[B")]
-    [InlineData(TerminalKey.Right, "\x1b[C")]
-    [InlineData(TerminalKey.Left, "\x1b[D")]
-    [InlineData(TerminalKey.Home, "\x1b[H")]
-    [InlineData(TerminalKey.End, "\x1b[F")]
-    [InlineData(TerminalKey.PageUp, "\x1b[5~")]
-    [InlineData(TerminalKey.PageDown, "\x1b[6~")]
-    [InlineData(TerminalKey.Insert, "\x1b[2~")]
-    [InlineData(TerminalKey.Delete, "\x1b[3~")]
-    public void Encode_KittyNavigation_UsesLegacyFunctionalSequences(TerminalKey key, string expected)
-    {
-        var encoder = new TerminalInputEncoder { KittyMode = 2 };
+    [InlineData(TerminalKey.Menu, 57363)]
+    [InlineData(TerminalKey.F13, 57376)]
+    [InlineData(TerminalKey.F24, 57387)]
+    [InlineData(TerminalKey.F25, 57388)]
+    [InlineData(TerminalKey.NumLock, 57360)]
+    [InlineData(TerminalKey.Keypad1, 57400)]
+    [InlineData(TerminalKey.CapsLock, 57358)]
+    [InlineData(TerminalKey.ScrollLock, 57359)]
+    [InlineData(TerminalKey.PrintScreen, 57361)]
+    [InlineData(TerminalKey.Pause, 57362)]
+    [InlineData(TerminalKey.ShiftLeft, 57441)]
+    [InlineData(TerminalKey.ControlLeft, 57442)]
+    [InlineData(TerminalKey.AltLeft, 57443)]
+    [InlineData(TerminalKey.SuperLeft, 57444)]
+    [InlineData(TerminalKey.ShiftRight, 57447)]
+    [InlineData(TerminalKey.ControlRight, 57448)]
+    [InlineData(TerminalKey.AltRight, 57449)]
+    [InlineData(TerminalKey.SuperRight, 57450)]
+    public void EncodeKeyEvent_UsesOfficialKittyFunctionalKeyCodepoints(TerminalKey key, int codepoint)
 
-        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, TerminalKeyModifiers.None)!));
+    {
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[32];
+
+        int length = encoder.EncodeKeyEvent(key, TerminalKeyModifiers.None, 0,
+            TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty, buffer, 8);
+
+        Assert.Equal($"\x1b[{codepoint};1u", Encoding.ASCII.GetString(buffer[..length]));
     }
 
-    [Theory]
-    [InlineData(TerminalKey.F1, "\x1bOP")]
-    [InlineData(TerminalKey.F2, "\x1bOQ")]
-    [InlineData(TerminalKey.F3, "\x1bOR")]
-    [InlineData(TerminalKey.F4, "\x1bOS")]
-    [InlineData(TerminalKey.F5, "\x1b[15~")]
-    [InlineData(TerminalKey.F6, "\x1b[17~")]
-    [InlineData(TerminalKey.F7, "\x1b[18~")]
-    [InlineData(TerminalKey.F8, "\x1b[19~")]
-    [InlineData(TerminalKey.F9, "\x1b[20~")]
-    [InlineData(TerminalKey.F10, "\x1b[21~")]
-    [InlineData(TerminalKey.F11, "\x1b[23~")]
-    [InlineData(TerminalKey.F12, "\x1b[24~")]
-    public void Encode_KittyFunctionKeysF1ToF12_UseLegacyFunctionalSequences(TerminalKey key, string expected)
+    [Fact]
+    public void EncodeKeyEvent_AllowsShiftedOnlyAndBaseOnlyAlternateFields()
     {
-        var encoder = new TerminalInputEncoder { KittyMode = 1 };
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[64];
 
-        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, TerminalKeyModifiers.None)!));
+        int length = encoder.EncodeKeyEvent(TerminalKey.A, TerminalKeyModifiers.None, 113,
+            TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty, buffer, 8 | 4, baseCodepoint: 'a');
+        Assert.Equal("\x1b[113::97;1u", Encoding.ASCII.GetString(buffer[..length]));
+
+        length = encoder.EncodeKeyEvent(TerminalKey.A, TerminalKeyModifiers.Shift, 'a',
+            TerminalKeyEventType.Press, "A".AsSpan(), buffer, 8 | 4, shiftedCodepoint: 'A');
+        Assert.Equal("\x1b[97:65;2u", Encoding.ASCII.GetString(buffer[..length]));
     }
 
-    [Theory]
-    [InlineData(TerminalKey.Up, TerminalKeyModifiers.Shift, "\x1b[1;2A")]
-    [InlineData(TerminalKey.Left, TerminalKeyModifiers.Alt, "\x1b[1;3D")]
-    [InlineData(TerminalKey.Delete, TerminalKeyModifiers.Control, "\x1b[3;5~")]
-    public void Encode_KittyModifiedSpecialKeys_UsesModifierParameter(
-        TerminalKey key,
-        TerminalKeyModifiers modifiers,
-        string expected)
+
+    [Fact]
+    public void EncodeKeyEvent_IncludesNativeCapsAndNumLockBits()
     {
-        var encoder = new TerminalInputEncoder { KittyMode = 1 };
-
-        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, modifiers)!));
-    }
-
-    [Theory]
-    [InlineData(TerminalKey.F13, "\x1b[57376u")]
-    [InlineData(TerminalKey.F14, "\x1b[57377u")]
-    [InlineData(TerminalKey.F15, "\x1b[57378u")]
-    [InlineData(TerminalKey.F16, "\x1b[57379u")]
-    [InlineData(TerminalKey.F17, "\x1b[57380u")]
-    [InlineData(TerminalKey.F18, "\x1b[57381u")]
-    [InlineData(TerminalKey.F19, "\x1b[57382u")]
-    [InlineData(TerminalKey.F20, "\x1b[57383u")]
-    [InlineData(TerminalKey.F21, "\x1b[57384u")]
-    [InlineData(TerminalKey.F22, "\x1b[57385u")]
-    [InlineData(TerminalKey.F23, "\x1b[57386u")]
-    [InlineData(TerminalKey.F24, "\x1b[57387u")]
-    public void Encode_KittyFunctionKeysF13ToF24_UsePrivateUseCodes(TerminalKey key, string expected)
-    {
-        var encoder = new TerminalInputEncoder { KittyMode = 1 };
-
-        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, TerminalKeyModifiers.None)!));
-    }
-
-    [Theory]
-    [InlineData(TerminalKey.F1, TerminalKeyModifiers.Shift, "\x1b[1;2P")]
-    [InlineData(TerminalKey.F5, TerminalKeyModifiers.Alt, "\x1b[15;3~")]
-    [InlineData(TerminalKey.F12, TerminalKeyModifiers.Control, "\x1b[24;5~")]
-    [InlineData(TerminalKey.F21, TerminalKeyModifiers.Meta, "\x1b[57384;9u")]
-    public void Encode_KittyFunctionKeys_PreserveModifiers(
-        TerminalKey key,
-        TerminalKeyModifiers modifiers,
-        string expected)
-    {
-        var encoder = new TerminalInputEncoder { KittyMode = 1 };
-
-        Assert.Equal(expected, Encoding.ASCII.GetString(encoder.Encode(key, modifiers)!));
+        var encoder = new TerminalInputEncoder();
+        Span<byte> buffer = stackalloc byte[32];
+        int length = encoder.EncodeKeyEvent(TerminalKey.A, TerminalKeyModifiers.CapsLock | TerminalKeyModifiers.NumLock,
+            'a', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty, buffer, 8);
+        Assert.Equal("\x1b[97;193u", Encoding.ASCII.GetString(buffer[..length]));
     }
 
     [Theory]
@@ -382,11 +404,12 @@ public class TerminalInputEncoderTests
     [InlineData(TerminalKey.F22, TerminalKeyModifiers.None, "\x1b[43~")]
     [InlineData(TerminalKey.F23, TerminalKeyModifiers.None, "\x1b[44~")]
     [InlineData(TerminalKey.F24, TerminalKeyModifiers.None, "\x1b[45~")]
+    [InlineData(TerminalKey.F25, TerminalKeyModifiers.None, "\x1b[46~")]
     [InlineData(TerminalKey.F21, TerminalKeyModifiers.Shift, "\x1b[42;2~")]
     [InlineData(TerminalKey.F22, TerminalKeyModifiers.Alt, "\x1b[43;3~")]
     [InlineData(TerminalKey.F23, TerminalKeyModifiers.Control, "\x1b[44;5~")]
     [InlineData(TerminalKey.F24, TerminalKeyModifiers.Meta, "\x1b[45;9~")]
-    public void Encode_FunctionKeysF21ToF24_UseXtermCodes(
+    public void Encode_FunctionKeysF21ToF25_UseXtermCodes(
         TerminalKey key,
         TerminalKeyModifiers modifiers,
         string expected)
@@ -434,24 +457,3 @@ internal static class TerminalInputEncoderTestExtensions
         return length == 0 ? null : buffer[..length].ToArray();
     }
 }
-
-internal static class SilkKeyMapperTestEncoding
-{
-    internal static byte[]? Encode(
-        SilkKey key,
-        bool ctrl,
-        bool shift,
-        bool alt,
-        bool keypadAppMode,
-        int kittyMode = 0,
-        bool super = false,
-        bool applicationCursorKeys = false)
-    {
-        Span<byte> buffer = stackalloc byte[64];
-        int length = SilkKeyMapper.Encode(
-            key, ctrl, shift, alt, keypadAppMode, buffer, kittyMode, super, applicationCursorKeys);
-        return length == 0 ? null : buffer[..length].ToArray();
-    }
-}
-
-

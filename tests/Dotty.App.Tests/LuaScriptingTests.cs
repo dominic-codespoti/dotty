@@ -47,14 +47,15 @@ public class LuaScriptingTests : IDisposable
     public void LuaConfig_MutatesDottyUserConfig()
     {
         Assert.True(_host.ExecuteString(@"
-            local d=require('dotty'); d.config.theme='Dracula'
-            d.config.apply_table({font={family='Fira Code, monospace',size=16.0,line_height=1.3},window={padding={left=20,top=12,right=20,bottom=12}}})"));
+            local d=require('dotty'); d.config.theme='Dracula'; d.config.clipboard.allow_osc52_write=true
+            d.config.apply_table({font={family='Fira Code, monospace',size=16.0,line_height=1.3},window={padding={left=20,top=12,right=20,bottom=12}},clipboard={allow_osc52_write=false}})"));
         Assert.Equal("Dracula", _config.Theme);
         Assert.Equal("Fira Code, monospace", _config.Font.Family);
         Assert.Equal(16.0, _config.Font.Size);
         Assert.Equal(1.3, _config.Font.LineHeight);
         Assert.Equal(20.0, _config.Window.Padding.Left);
         Assert.Equal(12.0, _config.Window.Padding.Top);
+        Assert.False(_config.Clipboard.AllowOsc52Write);
     }
 
     /// <summary>Verifies Lua can create and select tabs.</summary>
@@ -133,6 +134,22 @@ public class LuaScriptingTests : IDisposable
             assert(tab.active_pane == tab:panes()[1])"));
     }
 
+    [Fact]
+    public void ClipboardHook_AllowsWhenAbsentAndDeniesFalseOrInvocationError()
+    {
+        using var tab = new TerminalTab();
+        Assert.True(_host.Hooks.AllowClipboardWrite(tab.ActivePane, tab, "payload"));
+
+        Assert.True(_host.ExecuteString("dotty.on('clipboard_write', function() return false end)"));
+        Assert.False(_host.Hooks.AllowClipboardWrite(tab.ActivePane, tab, "payload"));
+
+        _host.Hooks.Clear();
+        Assert.True(_host.Hooks.AllowClipboardWrite(tab.ActivePane, tab, "payload"));
+        Assert.True(_host.ExecuteString("dotty.on('clipboard_write', function() error('clipboard hook failed') end)"));
+        Assert.False(_host.Hooks.AllowClipboardWrite(tab.ActivePane, tab, "payload"));
+        Assert.Contains(_services.Messages, message =>
+            message.Level == LuaMessageLevel.Error && message.Message.Contains("clipboard hook failed", StringComparison.Ordinal));
+    }
     /// <summary>Verifies URL hooks handle only explicitly accepted URLs.</summary>
     [Fact]
     public void LuaHooks_HandlesOpenUrlOnlyWhenCallbackAcceptsIt()

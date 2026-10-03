@@ -33,15 +33,15 @@ public sealed class TerminalTab : IDisposable
     public event Action<string>? TitleChanged;
     public event Action<LeafPane, int>? ProcessExited;
 
-    public TerminalTab(string? title = null, string? workingDirectory = null, int rows = 24, int columns = 80, string? shell = null, bool deferStart = false)
+    public TerminalTab(string? title = null, string? workingDirectory = null, int rows = 24, int columns = 80, string? shell = null, bool deferStart = false, System.Collections.Generic.IReadOnlyList<string>? command = null, bool shellIsExecutable = false)
     {
         _title = string.IsNullOrWhiteSpace(title) ? "Terminal" : title;
         WorkingDirectory = workingDirectory;
         PaneTree = new PaneTree(rows: rows, columns: columns);
         Session.TitleChanged += OnSessionTitleChanged;
         PaneTree.ProcessExited += OnPaneProcessExited;
-        if (!deferStart && (!string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell)))
-            Session.StartWithOptions(shell: shell, workingDirectory: workingDirectory);
+        if (!deferStart && (!string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell) || command is not null))
+            Session.StartWithOptions(shell: shell, workingDirectory: workingDirectory, command: command, shellIsExecutable: shellIsExecutable);
     }
 
     private void OnSessionTitleChanged(string newTitle)

@@ -140,5 +140,8 @@ public enum TerminalKey
     NumLock,
     PrintScreen,
     Pause,
-    Menu
+    Menu,
+
+    // Host function-key range extends through F25; append to preserve existing enum values.
+    F25
 }

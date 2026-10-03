@@ -89,8 +89,7 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) => MouseEventCount++;
         void ITerminalHandler.OnSetSynchronizedUpdate(bool en) => Events.Add($"SYNC:{en}");
         void ITerminalHandler.OnSetMouseMode(int mode, bool en) => Events.Add($"MOUSE:{mode}:{en}");
-        void ITerminalHandler.OnSetKittyKeyboardMode(int mode) => Events.Add($"KITTY:{mode}");
-        void ITerminalHandler.OnQueryKittyKeyboard() => Events.Add("KITTY_QUERY");
+        void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) => Events.Add($"KITTY:{introducer}:{flags}:{argument}");
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) => FocusReports.Add(enabled ? "FOCUS:True" : "FOCUS:False");
         void ITerminalHandler.OnWindowReport(int command) { }

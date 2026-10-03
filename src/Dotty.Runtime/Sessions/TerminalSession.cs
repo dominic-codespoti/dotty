@@ -12,7 +12,7 @@ using Dotty.Terminal.Parser;
 
 namespace Dotty.Runtime.Sessions;
 
-public class TerminalSession : IDisposable
+public partial class TerminalSession : IDisposable
 {
     private const int InitialPtyOutputChunkCount = 2;
     private const int PtyOutputChunkCount = 32;
@@ -211,10 +211,12 @@ public class TerminalSession : IDisposable
             var shell = Environment.GetEnvironmentVariable("DOTTY_SHELL")
                         ?? Environment.GetEnvironmentVariable("SHELL");
             if (string.IsNullOrWhiteSpace(shell)) shell = null;
+            LaunchShell = shell;
+            LaunchShellIsExecutable = false;
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
             _hasReceivedInitialResize = false;
-            _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows);
+            _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows, workingDirectory: LaunchWorkingDirectory);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }
@@ -228,7 +230,9 @@ public class TerminalSession : IDisposable
     public void StartWithOptions(
         string? shell = null,
         string? workingDirectory = null,
-        IDictionary<string, string>? environmentVariables = null)
+        IDictionary<string, string>? environmentVariables = null,
+        IReadOnlyList<string>? command = null,
+        bool shellIsExecutable = false)
     {
         if (!BeginStart()) return;
         try
@@ -240,11 +244,15 @@ public class TerminalSession : IDisposable
             shell ??= Environment.GetEnvironmentVariable("DOTTY_SHELL")
                       ?? Environment.GetEnvironmentVariable("SHELL");
             if (string.IsNullOrWhiteSpace(shell)) shell = null;
+            LaunchShell = shell;
+            LaunchShellIsExecutable = shellIsExecutable;
+            LaunchWorkingDirectory = Path.GetFullPath(workingDirectory ?? GetDefaultLaunchWorkingDirectory());
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
             _hasReceivedInitialResize = false;
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows,
-                       workingDirectory: workingDirectory, environmentVariables: environmentVariables);
+                       workingDirectory: LaunchWorkingDirectory, environmentVariables: environmentVariables,
+                       command: command, shellIsExecutable: shellIsExecutable);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }

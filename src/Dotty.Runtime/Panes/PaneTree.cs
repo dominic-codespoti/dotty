@@ -100,12 +100,18 @@ public sealed class PaneTree : IDisposable
         if (!ContainsLeaf(target))
             throw new InvalidOperationException("Target pane does not belong to this pane tree.");
 
+        string? effectiveWorkingDirectory = workingDirectory ?? target.Session.CurrentWorkingDirectory;
+        string? effectiveShell = shell ?? target.Session.LaunchShell;
+        bool effectiveShellIsExecutable = shell is null && target.Session.LaunchShellIsExecutable;
         var session = new TerminalSession(rows: Math.Max(1, target.Rows), columns: Math.Max(1, target.Columns));
         var newPane = new LeafPane(session);
         Subscribe(newPane);
-        if (!string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell))
+        if (!string.IsNullOrEmpty(effectiveWorkingDirectory) || !string.IsNullOrEmpty(effectiveShell))
         {
-            session.StartWithOptions(shell: shell, workingDirectory: workingDirectory);
+            session.StartWithOptions(
+                shell: effectiveShell,
+                workingDirectory: effectiveWorkingDirectory,
+                shellIsExecutable: effectiveShellIsExecutable);
         }
         var parent = target.Parent;
 

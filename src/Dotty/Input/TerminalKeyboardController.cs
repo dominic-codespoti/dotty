@@ -1,28 +1,35 @@
 using System;
 using Silk.NET.Input;
+using Dotty.Runtime.Input;
 
 namespace Dotty.Silk.Input;
 
+public delegate void TerminalKeyboardEventReceived(Key key, int scancode, int primaryCodepoint, TerminalKeyEventType eventType, ReadOnlySpan<char> associatedText);
 public delegate void TerminalTextReceived(ReadOnlySpan<char> text);
 
 public sealed class TerminalKeyboardController
 {
-    private const int MaxKeyRepeatCatchUp = 3;
     private readonly TerminalTextReceived? _textReceived;
-    private readonly Action<Key, int>? _keyPressed;
-    private readonly Action<char>? _characterReceived;
+    private readonly TerminalKeyboardEventReceived? _keyEventReceived;
     private readonly Action? _activity;
-    private readonly Func<long> _clockMilliseconds;
-    private readonly long _initialDelayMs;
-    private readonly long _repeatIntervalMs;
+    private readonly Func<Key, int, int>? _primaryCodepointProvider;
 
-    private Key? _heldKey;
-    private int _heldScancode;
-    private char _heldTextFirst;
-    private char _heldTextSecond;
-    private int _heldTextLength;
-    private char _pendingHighSurrogate;
-    private long _nextKeyRepeatTimestampMs;
+    private struct HeldKeyState
+    {
+        public Key Key;
+        public int Scancode;
+        public int PrimaryCodepoint;
+        public char TextFirst;
+        public char TextSecond;
+        public int TextLength;
+        public long PressOrder;
+        public TerminalKeyEventType PendingTextPhase;
+        public bool Active;
+    }
+
+    private HeldKeyState[] _heldKeys = new HeldKeyState[16];
+    private int _activeTextIndex = -1;
+    private long _pressSequence;
 
     private bool _leftCtrl;
     private bool _rightCtrl;
@@ -48,205 +55,173 @@ public sealed class TerminalKeyboardController
     public bool Super => _leftSuper || _rightSuper;
 
     public TerminalKeyboardController(
-        Action<Key, int>? keyPressed = null,
-        Action<char>? characterReceived = null,
+        TerminalKeyboardEventReceived? keyEventReceived = null,
         Action? activity = null,
-        Func<long>? clockMilliseconds = null,
-        long initialDelayMs = 400,
-        long repeatIntervalMs = 33,
-        TerminalTextReceived? textReceived = null)
+        TerminalTextReceived? textReceived = null,
+        Func<Key, int, int>? primaryCodepointProvider = null)
     {
-        _keyPressed = keyPressed;
-        _characterReceived = characterReceived;
+        _keyEventReceived = keyEventReceived;
         _textReceived = textReceived;
         _activity = activity;
-        _clockMilliseconds = clockMilliseconds ?? GetDefaultClockMilliseconds;
-        _initialDelayMs = initialDelayMs;
-        _repeatIntervalMs = repeatIntervalMs;
-    }
-
-    private static long GetDefaultClockMilliseconds()
-    {
-        return System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
+        _primaryCodepointProvider = primaryCodepointProvider;
     }
 
     public void HandleKeyDown(Key key, int scancode)
     {
-        switch (key)
-        {
-            case Key.ControlLeft:
-                _leftCtrl = true;
-                return;
-            case Key.ControlRight:
-                _rightCtrl = true;
-                return;
-            case Key.ShiftLeft:
-                _leftShift = true;
-                return;
-            case Key.ShiftRight:
-                _rightShift = true;
-                return;
-            case Key.AltLeft:
-                _leftAlt = true;
-                return;
-            case Key.AltRight:
-                _rightAlt = true;
-                return;
-            case Key.SuperLeft:
-                _leftSuper = true;
-                return;
-            case Key.SuperRight:
-                _rightSuper = true;
-                return;
-        }
-
-        long now = _clockMilliseconds();
-        _heldKey = key;
-        _heldScancode = scancode;
-        _heldTextLength = 0;
-        _pendingHighSurrogate = '\0';
-        _nextKeyRepeatTimestampMs = now + _initialDelayMs;
-
+        UpdateModifierState(key, pressed: true);
+        StartOrUpdateHeldKey(key, scancode, TerminalKeyEventType.Press);
+        int index = FindHeldKey(key, scancode);
+        ref HeldKeyState state = ref _heldKeys[index];
         _activity?.Invoke();
-        _keyPressed?.Invoke(key, scancode);
+        _keyEventReceived?.Invoke(key, scancode, state.PrimaryCodepoint, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+    }
+
+    public void HandleKeyRepeat(Key key, int scancode)
+    {
+        int index = FindHeldKey(key, scancode);
+        if (index < 0)
+        {
+            StartOrUpdateHeldKey(key, scancode, TerminalKeyEventType.Repeat);
+            index = FindHeldKey(key, scancode);
+        }
+        ref HeldKeyState state = ref _heldKeys[index];
+        _activeTextIndex = index;
+        state.PendingTextPhase = TerminalKeyEventType.Repeat;
+        _activity?.Invoke();
+        _keyEventReceived?.Invoke(key, scancode, state.PrimaryCodepoint, TerminalKeyEventType.Repeat, ReadOnlySpan<char>.Empty);
     }
 
     public void HandleKeyUp(Key key, int scancode)
     {
-        switch (key)
-        {
-            case Key.ControlLeft:
-                _leftCtrl = false;
-                break;
-            case Key.ControlRight:
-                _rightCtrl = false;
-                break;
-            case Key.ShiftLeft:
-                _leftShift = false;
-                break;
-            case Key.ShiftRight:
-                _rightShift = false;
-                break;
-            case Key.AltLeft:
-                _leftAlt = false;
-                break;
-            case Key.AltRight:
-                _rightAlt = false;
-                break;
-            case Key.SuperLeft:
-                _leftSuper = false;
-                break;
-            case Key.SuperRight:
-                _rightSuper = false;
-                break;
-        }
+        UpdateModifierState(key, pressed: false);
+        int index = FindHeldKey(key, scancode);
+        if (index < 0)
+            return;
 
-        if (_heldKey == key)
-        {
-            _heldKey = null;
-            _heldTextLength = 0;
-        }
+        ref HeldKeyState state = ref _heldKeys[index];
+        Span<char> associated = stackalloc char[2];
+        associated[0] = state.TextFirst;
+        if (state.TextLength == 2) associated[1] = state.TextSecond;
+        _activity?.Invoke();
+        _keyEventReceived?.Invoke(key, scancode, state.PrimaryCodepoint, TerminalKeyEventType.Release, associated[..state.TextLength]);
+        state.Active = false;
+        state.TextLength = 0;
+        if (_activeTextIndex == index)
+            _activeTextIndex = FindMostRecentlyPressedHeldKey();
     }
 
-    public void HandleKeyChar(char c)
+    public void HandleUnicodeScalar(uint codepoint)
     {
-        // Right Alt is commonly reported with an implicit right Control key by
-        // the platform. It is an input composition modifier, not a shortcut
-        // modifier, so it must not suppress composed text.
+        if (codepoint == 0 || codepoint > 0x10FFFF || codepoint is >= 0xD800 and <= 0xDFFF)
+            return;
         if (_leftAlt || Ctrl && !_rightAlt)
-        {
-            _pendingHighSurrogate = '\0';
-            return;
-        }
-
-        if (char.IsHighSurrogate(c))
-        {
-            _pendingHighSurrogate = c;
-            return;
-        }
-
-        if (_pendingHighSurrogate != '\0')
-        {
-            char high = _pendingHighSurrogate;
-            _pendingHighSurrogate = '\0';
-            if (char.IsLowSurrogate(c))
-            {
-                _heldTextFirst = high;
-                _heldTextSecond = c;
-                _heldTextLength = 2;
-                Span<char> pair = stackalloc char[2] { high, c };
-                EmitText(pair);
-                return;
-            }
-        }
-
-        if (char.IsLowSurrogate(c))
             return;
 
-        _heldTextFirst = c;
-        _heldTextLength = 1;
-        Span<char> text = stackalloc char[1] { c };
-        EmitText(text);
-    }
-
-    private void EmitText(ReadOnlySpan<char> text)
-    {
-        if (_textReceived != null)
+        Span<char> text = stackalloc char[2];
+        int length;
+        if (codepoint <= 0xFFFF)
         {
-            _activity?.Invoke();
-            _textReceived(text);
-            return;
-        }
-
-        foreach (char character in text)
-        {
-            _activity?.Invoke();
-            _characterReceived?.Invoke(character);
-        }
-    }
-
-
-
-    public void Tick()
-    {
-        if (!_heldKey.HasValue)
-        {
-            return;
-        }
-
-        long now = _clockMilliseconds();
-        if (now < _nextKeyRepeatTimestampMs)
-        {
-            return;
-        }
-
-        int emitted = 0;
-        do
-        {
-            _nextKeyRepeatTimestampMs += _repeatIntervalMs;
-            EmitKeyRepeat();
-            emitted++;
-        }
-        while (_nextKeyRepeatTimestampMs <= now && emitted < MaxKeyRepeatCatchUp);
-
-        if (_nextKeyRepeatTimestampMs <= now)
-            _nextKeyRepeatTimestampMs = now + _repeatIntervalMs;
-    }
-
-    private void EmitKeyRepeat()
-    {
-        if (_heldTextLength != 0 && !_leftAlt && (!Ctrl || _rightAlt))
-        {
-            Span<char> text = stackalloc char[2];
-            text[0] = _heldTextFirst;
-            if (_heldTextLength == 2) text[1] = _heldTextSecond;
-            EmitText(text[.._heldTextLength]);
+            text[0] = (char)codepoint;
+            length = 1;
         }
         else
         {
-            _activity?.Invoke();
-            _keyPressed?.Invoke(_heldKey!.Value, _heldScancode);
+            uint adjusted = codepoint - 0x10000;
+            text[0] = (char)(0xD800 + (adjusted >> 10));
+            text[1] = (char)(0xDC00 + (adjusted & 0x3FF));
+            length = 2;
         }
+
+        if (_activeTextIndex >= 0 && _keyEventReceived != null)
+        {
+            ref HeldKeyState state = ref _heldKeys[_activeTextIndex];
+            if (state.Active)
+            {
+                state.TextFirst = text[0];
+                state.TextSecond = length == 2 ? text[1] : '\0';
+                state.TextLength = length;
+                _activity?.Invoke();
+                _keyEventReceived(state.Key, state.Scancode, state.PrimaryCodepoint, state.PendingTextPhase, text[..length]);
+                return;
+            }
+        }
+        if (_textReceived is null) return;
+        _activity?.Invoke();
+        _textReceived(text[..length]);
+    }
+
+    private void StartOrUpdateHeldKey(Key key, int scancode, TerminalKeyEventType phase)
+    {
+        int index = FindHeldKey(key, scancode);
+        if (index < 0)
+            index = FindFreeHeldKey();
+        ref HeldKeyState state = ref _heldKeys[index];
+        if (!state.Active)
+        {
+            int primaryCodepoint = _primaryCodepointProvider?.Invoke(key, scancode) ?? 0;
+            state.Key = key;
+            state.Scancode = scancode;
+            state.PrimaryCodepoint = IsUnicodeScalar(primaryCodepoint) ? primaryCodepoint : 0;
+            state.TextLength = 0;
+            state.PressOrder = ++_pressSequence;
+            state.Active = true;
+        }
+        state.PendingTextPhase = phase;
+        _activeTextIndex = index;
+    }
+
+    private void UpdateModifierState(Key key, bool pressed)
+    {
+        switch (key)
+        {
+            case Key.ControlLeft: _leftCtrl = pressed; break;
+            case Key.ControlRight: _rightCtrl = pressed; break;
+            case Key.ShiftLeft: _leftShift = pressed; break;
+            case Key.ShiftRight: _rightShift = pressed; break;
+            case Key.AltLeft: _leftAlt = pressed; break;
+            case Key.AltRight: _rightAlt = pressed; break;
+            case Key.SuperLeft: _leftSuper = pressed; break;
+            case Key.SuperRight: _rightSuper = pressed; break;
+        }
+    }
+
+    private int FindHeldKey(Key key, int scancode)
+    {
+        for (int i = 0; i < _heldKeys.Length; i++)
+        {
+            ref HeldKeyState state = ref _heldKeys[i];
+            if (state.Active && state.Key == key && state.Scancode == scancode)
+                return i;
+        }
+        return -1;
+    }
+
+    private int FindFreeHeldKey()
+    {
+        for (int i = 0; i < _heldKeys.Length; i++)
+        {
+            if (!_heldKeys[i].Active)
+                return i;
+        }
+        int oldLength = _heldKeys.Length;
+        Array.Resize(ref _heldKeys, oldLength * 2);
+        return oldLength;
+    }
+
+    private int FindMostRecentlyPressedHeldKey()
+    {
+        int index = -1;
+        long newest = long.MinValue;
+        for (int i = 0; i < _heldKeys.Length; i++)
+        {
+            ref HeldKeyState state = ref _heldKeys[i];
+            if (state.Active && state.PressOrder > newest)
+            {
+                newest = state.PressOrder;
+                index = i;
+            }
+        }
+        return index;
     }
 
     public void ResetState()
@@ -259,10 +234,15 @@ public sealed class TerminalKeyboardController
         _rightAlt = false;
         _leftSuper = false;
         _rightSuper = false;
-        _heldKey = null;
-        _heldScancode = 0;
-        _heldTextLength = 0;
-        _pendingHighSurrogate = '\0';
-        _nextKeyRepeatTimestampMs = 0;
+        for (int i = 0; i < _heldKeys.Length; i++)
+        {
+            _heldKeys[i].Active = false;
+            _heldKeys[i].TextLength = 0;
+        }
+        _activeTextIndex = -1;
+        _pressSequence = 0;
     }
+
+    private static bool IsUnicodeScalar(int value) =>
+        value > 0 && value <= 0x10FFFF && (value < 0xD800 || value > 0xDFFF);
 }

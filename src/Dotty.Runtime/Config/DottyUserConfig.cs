@@ -33,6 +33,8 @@ public sealed class DottyUserConfig
 
     [JsonPropertyName("keybindings")]
     public System.Collections.Generic.Dictionary<string, string> Keybindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    [JsonPropertyName("clipboard")]
+    public ClipboardUserConfig Clipboard { get; set; } = new();
 }
 public sealed class FontUserConfig
 {
@@ -98,6 +100,11 @@ public sealed class CursorUserConfig
 
     [JsonPropertyName("blinkIntervalMs")]
     public int BlinkIntervalMs { get; set; } = 500;
+}
+public sealed class ClipboardUserConfig
+{
+    [JsonPropertyName("allowOsc52Write")]
+    public bool AllowOsc52Write { get; set; }
 }
 public sealed class PanesUserConfig
 {
@@ -193,9 +200,12 @@ public static class UserConfigService
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
-        return JsonSerializer.Deserialize(
+        DottyUserConfig? config = JsonSerializer.Deserialize(
             stream,
             DottyUserConfigJsonContext.Default.DottyUserConfig);
+        if (config is not null)
+            config.Clipboard ??= new ClipboardUserConfig();
+        return config;
     }
 
     private static void CreateDefaultConfigFile(string path)

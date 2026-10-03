@@ -29,6 +29,12 @@
     <ProjectReference Include="..\Dotty.Rendering.Gpu\Dotty.Rendering.Gpu.csproj" />
     <ProjectReference Include="..\Dotty.Runtime\Dotty.Runtime.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../shell-integration/*"
+             Link="shell-integration/%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <Target Name="CopyUnixPtyHelperToPublish"
           AfterTargets="Publish"
           Condition="$([MSBuild]::IsOSPlatform('Linux')) Or $([MSBuild]::IsOSPlatform('OSX'))">

@@ -203,8 +203,7 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) { }
         void ITerminalHandler.OnSetSynchronizedUpdate(bool enabled) { }
         void ITerminalHandler.OnSetMouseMode(int mode, bool enabled) => SetMouseModeCalls.Add((mode, enabled));
-        void ITerminalHandler.OnSetKittyKeyboardMode(int mode) { }
-        void ITerminalHandler.OnQueryKittyKeyboard() { }
+        void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) { }
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) { }
         void ITerminalHandler.OnWindowReport(int command) { }
@@ -360,5 +359,19 @@ public class BasicAnsiParserTests
         parser.Feed(Encoding.UTF8.GetBytes("\u001b[c\u001b[>c"));
 
         Assert.Equal(new[] { 0, 2 }, handler.DeviceAttributeCalls);
+    }
+
+    [Fact]
+    public void UnsupportedDcsPayloadsAreDiscardedAcrossChunksAndCancelCleanly()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        parser.Feed(Encoding.UTF8.GetBytes("before\u001bP+q4D"));
+        parser.Feed(Encoding.UTF8.GetBytes("73\u001b[31mignored\u001b"));
+        parser.Feed(Encoding.UTF8.GetBytes("\\after\u001bPcancelled-by-can\u0018mid\u001bPcancelled-by-sub\u001aend"));
+
+        Assert.Equal("beforeaftermidend", string.Concat(handler.PrintCalls));
     }
 }

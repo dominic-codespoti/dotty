@@ -108,6 +108,7 @@ The parser handles all standard CSI sequences:
 | `u` | none | Restore Cursor (SCO) | `OnRestoreCursor()` |
 | `h`/`l` | `?<mode>` | Set/Reset Mode | `OnSetAlternateScreen()`, etc. |
 
+Kitty keyboard protocol CSI commands (`CSI =`, `>`, `<`, and `?` ending in `u`) are handled separately from legacy numeric CSI parameters; DA1, DA2, and unsupported DA3 requests are distinguished by the `CSI c` private introducer. See [Keyboard Protocol and Compatibility](KeyboardProtocol.md) for the negotiation stack, supported flags, screen scoping, and exact replies.
 Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather than `OnEraseDisplay(3)`.
 `CSI ? 6 n` (DEC private CPR query) is routed to `OnCursorPositionReport()` so shells like PSReadLine
 receive a private CPR response (`ESC[?row;colR`) instead of the standard DSR response format.

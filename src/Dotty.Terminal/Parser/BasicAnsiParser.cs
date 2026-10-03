@@ -25,6 +25,8 @@ namespace Dotty.Terminal.Parser
             Csi,
             Osc,
             OscEscape,
+            Dcs,
+            DcsEscape,
             DiscardCsi,
             DiscardOsc,
         }
@@ -232,6 +234,12 @@ namespace Dotty.Terminal.Parser
                 case SequenceState.OscEscape:
                     ProcessOscEscapeByte(b);
                     break;
+                case SequenceState.Dcs:
+                    ProcessDcsByte(b);
+                    break;
+                case SequenceState.DcsEscape:
+                    ProcessDcsEscapeByte(b);
+                    break;
                 case SequenceState.DiscardCsi:
                     if (b >= 0x40 && b <= 0x7E)
                     {
@@ -277,6 +285,9 @@ namespace Dotty.Terminal.Parser
                 case (byte)']':
                     _leftoverLen = 0;
                     _sequenceState = SequenceState.Osc;
+                    break;
+                case (byte)'P':
+                    _sequenceState = SequenceState.Dcs;
                     break;
                 case (byte)'c':
                     Handler?.OnFullReset();
@@ -400,6 +411,32 @@ namespace Dotty.Terminal.Parser
                 ProcessOscByte(b);
             }
         }
+        private void ProcessDcsByte(byte b)
+        {
+            if (b == ESC)
+            {
+                _sequenceState = SequenceState.DcsEscape;
+            }
+            else if (b == 0x9C || b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+        }
+
+        private void ProcessDcsEscapeByte(byte b)
+        {
+            if (b == (byte)'\\' || b == 0x9C || b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (b != ESC)
+            {
+                // A non-ST ESC is part of the discarded DCS payload. A second
+                // ESC remains pending in case it introduces the terminator.
+                _sequenceState = SequenceState.Dcs;
+            }
+        }
+
 
         private bool AppendSequenceByte(byte b, int cap)
         {
@@ -499,9 +536,16 @@ namespace Dotty.Terminal.Parser
         private void HandleCsi(char final, ReadOnlySpan<byte> paramBytes)
         {
             if (paramBytes.Length > MaxCsiParameterBytes)
+                return;
+
+            // Kitty keyboard negotiation and DA requests have distinct CSI private
+            // introducers. Handle them before the legacy numeric parser, which is
+            // intentionally limited to the other CSI families.
+            if (final == 'u' && TryHandleKittyKeyboard(paramBytes))
+                return;
+            if (final == 'c' && !paramBytes.IsEmpty && paramBytes[0] is (byte)'?' or (byte)'>' or (byte)'=')
             {
-                // Defensive guard for callers inside this class; Feed already
-                // discards an over-cap CSI before it reaches dispatch.
+                Handler?.OnSendDeviceAttributes(paramBytes[0] == '>' ? 2 : paramBytes[0] == '=' ? 3 : 1);
                 return;
             }
 
@@ -677,19 +721,7 @@ namespace Dotty.Terminal.Parser
                     Handler?.OnWindowReport(paramCount > 0 ? parsedParams[0] : 0);
                     break;
                 case 'u':
-                    if (isPrivate && paramCount > 0)
-                    {
-                        int mode = parsedParams[0];
-                        Handler?.OnSetKittyKeyboardMode(mode);
-                    }
-                    else if (isPrivate && paramCount == 0)
-                    {
-                        Handler?.OnQueryKittyKeyboard();
-                    }
-                    else
-                    {
-                        Handler?.OnRestoreCursor();
-                    }
+                    Handler?.OnRestoreCursor();
                     break;
                 case 'h':
                 case 'l':
@@ -720,6 +752,50 @@ namespace Dotty.Terminal.Parser
                 default:
                     break;
             }
+        }
+
+        private bool TryHandleKittyKeyboard(ReadOnlySpan<byte> parameters)
+        {
+            if (parameters.IsEmpty || parameters[0] is not ((byte)'?' or (byte)'=' or (byte)'>' or (byte)'<')) return false;
+            char introducer = (char)parameters[0];
+            ReadOnlySpan<byte> fields = parameters[1..];
+            int flags = 0, argument = 0;
+            if (introducer == '?')
+            {
+                if (!fields.IsEmpty) return true;
+            }
+            else if (introducer == '=')
+            {
+                if (!TryParseKittyFields(fields, out flags, out argument, out bool hasArgument)) return true;
+                if (!hasArgument) argument = 1;
+            }
+            else if (introducer == '>')
+            {
+                if (!fields.IsEmpty && !TryParseKittyFields(fields, out flags, out _, out _)) return true;
+            }
+            else
+            {
+                if (!fields.IsEmpty && !TryParseKittyFields(fields, out argument, out _, out _)) return true;
+                if (argument == 0) argument = 1;
+            }
+            Handler?.OnKittyKeyboardCommand(introducer, flags, argument);
+            return true;
+        }
+
+        private static bool TryParseKittyFields(ReadOnlySpan<byte> fields, out int first, out int second, out bool hasSecond)
+        {
+            first = second = 0;
+            hasSecond = false;
+            if (fields.IsEmpty) return false;
+            int separator = fields.IndexOf((byte)';');
+            ReadOnlySpan<byte> firstField = separator < 0 ? fields : fields[..separator];
+            if (!TryParseAsciiInt(firstField, out first)) return false;
+            if (separator < 0) return first >= 0;
+            if (fields[(separator + 1)..].IndexOf((byte)';') >= 0) return false;
+            ReadOnlySpan<byte> secondField = fields[(separator + 1)..];
+            if (!secondField.IsEmpty && !TryParseAsciiInt(secondField, out second)) return false;
+            hasSecond = true;
+            return first >= 0 && second >= 0;
         }
 
         private void HandlePrivateMode(int code, bool enabled)

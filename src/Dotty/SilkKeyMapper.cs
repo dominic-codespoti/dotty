@@ -11,7 +11,6 @@ using Dotty.Runtime.Input;
 public static class SilkKeyMapper
 {
     private static readonly TerminalInputEncoder s_encoder = new();
-    private static readonly TerminalInputEncoder s_kittyEncoder = new() { KittyMode = 1 };
     private static readonly System.Collections.Generic.Dictionary<SilkKey, string> s_keyNames = BuildKeyNames();
 
     private static System.Collections.Generic.Dictionary<SilkKey, string> BuildKeyNames()
@@ -108,6 +107,7 @@ public static class SilkKeyMapper
             SilkKey.F22 => TerminalKey.F22,
             SilkKey.F23 => TerminalKey.F23,
             SilkKey.F24 => TerminalKey.F24,
+            SilkKey.F25 => TerminalKey.F25,
 
             // Navigation
             SilkKey.Up => TerminalKey.Up,
@@ -194,15 +194,13 @@ public static class SilkKeyMapper
         bool alt,
         bool keypadAppMode,
         Span<byte> destination,
-        int kittyMode = 0,
         bool super = false,
         bool applicationCursorKeys = false)
     {
         var (terminalKey, modifiers) = Map(key, ctrl, shift, alt, super);
         if (terminalKey == TerminalKey.Unknown)
             return 0;
-        return (kittyMode == 0 ? s_encoder : s_kittyEncoder)
-            .Encode(terminalKey, modifiers, destination, keypadAppMode, applicationCursorKeys);
+        return s_encoder.Encode(terminalKey, modifiers, destination, keypadAppMode, applicationCursorKeys);
     }
 
 }

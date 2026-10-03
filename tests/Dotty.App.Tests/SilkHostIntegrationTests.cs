@@ -1,6 +1,5 @@
 using System;
 using System.IO;
-using System.Text;
 using System.Collections.Generic;
 using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Themes;
@@ -472,75 +471,34 @@ public class TextSelectionServiceTests
 public class SilkKeyMapperTests
 {
     [Fact]
-    public void Map_Letters_WithControl_EncodesControlBytes()
+    public void Map_TranslatesSilkKeyAndModifierFlags()
     {
-        // Ctrl+C -> 0x03 (ETX)
-        var ctrlC = SilkKeyMapperTestEncoding.Encode(SilkKey.C, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(ctrlC);
-        Assert.Equal(new byte[] { 0x03 }, ctrlC);
-
-        // Ctrl+A -> 0x01 (SOH)
-        var ctrlA = SilkKeyMapperTestEncoding.Encode(SilkKey.A, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(ctrlA);
-        Assert.Equal(new byte[] { 0x01 }, ctrlA);
-
-        // Ctrl+Z -> 0x1A (SUB)
-        var ctrlZ = SilkKeyMapperTestEncoding.Encode(SilkKey.Z, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(ctrlZ);
-        Assert.Equal(new byte[] { 0x1A }, ctrlZ);
+        Assert.Equal(
+            (TerminalKey.C, TerminalKeyModifiers.Control),
+            SilkKeyMapper.Map(SilkKey.C, ctrl: true, shift: false, alt: false));
+        Assert.Equal(
+            (TerminalKey.Up, TerminalKeyModifiers.Shift | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Meta),
+            SilkKeyMapper.Map(SilkKey.Up, ctrl: false, shift: true, alt: true, super: true));
+        Assert.Equal(
+            (TerminalKey.KeypadAdd, TerminalKeyModifiers.None),
+            SilkKeyMapper.Map(SilkKey.KeypadAdd, ctrl: false, shift: false, alt: false));
     }
 
     [Fact]
-    public void Map_Arrows_EncodesXtermSequences()
+    public void Encode_UnknownSilkKey_ReturnsZeroWithoutWritingDestination()
     {
-        // Plain Up -> \e[A
-        var up = SilkKeyMapperTestEncoding.Encode(SilkKey.Up, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(up);
-        Assert.Equal("\x1b[A", Encoding.UTF8.GetString(up!));
+        Span<byte> destination = stackalloc byte[] { 0xAA, 0xBB };
 
-        // Plain Down -> \e[B
-        var down = SilkKeyMapperTestEncoding.Encode(SilkKey.Down, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(down);
-        Assert.Equal("\x1b[B", Encoding.UTF8.GetString(down!));
+        var length = SilkKeyMapper.Encode(
+            (SilkKey)(-1),
+            ctrl: false,
+            shift: false,
+            alt: false,
+            keypadAppMode: false,
+            destination);
 
-        // Plain Right -> \e[C
-        var right = SilkKeyMapperTestEncoding.Encode(SilkKey.Right, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(right);
-        Assert.Equal("\x1b[C", Encoding.UTF8.GetString(right!));
-
-        // Plain Left -> \e[D
-        var left = SilkKeyMapperTestEncoding.Encode(SilkKey.Left, ctrl: false, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(left);
-        Assert.Equal("\x1b[D", Encoding.UTF8.GetString(left!));
-
-        // Shift+Up -> \e[1;2A
-        var shiftUp = SilkKeyMapperTestEncoding.Encode(SilkKey.Up, ctrl: false, shift: true, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(shiftUp);
-        Assert.Equal("\x1b[1;2A", Encoding.UTF8.GetString(shiftUp!));
-
-        // Ctrl+Up -> \e[1;5A
-        var ctrlUp = SilkKeyMapperTestEncoding.Encode(SilkKey.Up, ctrl: true, shift: false, alt: false, keypadAppMode: false, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(ctrlUp);
-        Assert.Equal("\x1b[1;5A", Encoding.UTF8.GetString(ctrlUp!));
-    }
-
-    [Fact]
-    public void Map_Keypad_EncodesApplicationSequences()
-    {
-        // Keypad 0 in application mode -> \eOp
-        var kp0 = SilkKeyMapperTestEncoding.Encode(SilkKey.Keypad0, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(kp0);
-        Assert.Equal("\x1bOp", Encoding.UTF8.GetString(kp0!));
-
-        // Keypad 5 in application mode -> \eOu
-        var kp5 = SilkKeyMapperTestEncoding.Encode(SilkKey.Keypad5, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(kp5);
-        Assert.Equal("\x1bOu", Encoding.UTF8.GetString(kp5!));
-
-        // Keypad Add in application mode -> \eOm
-        var kpAdd = SilkKeyMapperTestEncoding.Encode(SilkKey.KeypadAdd, ctrl: false, shift: false, alt: false, keypadAppMode: true, kittyMode: 0, super: false, applicationCursorKeys: false);
-        Assert.NotNull(kpAdd);
-        Assert.Equal("\x1bOm", Encoding.UTF8.GetString(kpAdd!));
+        Assert.Equal(0, length);
+        Assert.Equal(new byte[] { 0xAA, 0xBB }, destination.ToArray());
     }
 }
 

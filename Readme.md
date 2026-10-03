@@ -8,7 +8,7 @@ and a cell-preserving terminal core.
 
 ## Overview
 
-*Last updated: 2026-08-31*
+*Last updated: 2026-10-02*
 
 Dotty is a modern terminal emulator composed of:
 - **Dotty** — Silk.NET/OpenGL desktop host.
@@ -25,7 +25,11 @@ Dotty is a modern terminal emulator composed of:
 - Undercurl, dotted, and dashed underline rendering
 - Rounded rectangle clip regions for modern terminal aesthetics
 - Runtime JSON configuration hot-reload with platform-specific paths
-- PromptMark (OSC 1337) shell integration for prompt tracking
+- [Kitty keyboard negotiation](docs/KeyboardProtocol.md), native press/repeat/release, and committed Unicode scalars
+- [Direct command launches](docs/CommandLine.md) with literal arguments, working directories, and child exit status
+- Explicit OSC 52 clipboard-write authorization (denied by default)
+- Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy
+- [Performance regression snapshots](docs/Performance.md) and [native desktop verification lanes](docs/NativeDesktopAndIme.md)
 
 ## Install
 
@@ -98,7 +102,19 @@ dotnet build Dotty.slnx -c Release
 
 ```bash
 dotnet run --project src/Dotty/Dotty.csproj
+# Forward arguments after dotnet run's separator:
+dotnet run --project src/Dotty/Dotty.csproj -- -d "$PWD" -- nvim .
 ```
+
+For a published executable, use `dotty -d DIR -- COMMAND ARG...` or
+`dotty --shell PATH`. `dotty --help` and `dotty --version` do not initialize
+graphics. With no arguments, the interactive shell starts in the invocation
+directory. See [command-line usage](docs/CommandLine.md) for details.
+
+Clipboard writes requested by terminal applications through OSC 52 require
+`"clipboard": { "allowOsc52Write": true }` in `config.json`. This permission
+does not disable user-initiated copy/paste, and Lua hooks may veto but cannot
+override a global denial. See the [clipboard policy](docs/Configuration.md#clipboard).
 
 ### Test
 

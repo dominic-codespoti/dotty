@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using Dotty.Silk;
+using Dotty.Runtime.Input;
 using Dotty.Silk.Input;
 using Silk.NET.Input;
 using Xunit;
@@ -8,504 +8,149 @@ namespace Dotty.App.Tests;
 
 public class TerminalKeyboardControllerTests
 {
-    private sealed class FakeClock
-    {
-        public long CurrentTimeMs { get; set; } = 1000;
-        public void Advance(long ms) => CurrentTimeMs += ms;
-    }
+    private readonly record struct Event(Key Key, int Scancode, int PrimaryCodepoint, TerminalKeyEventType Type, string Text);
 
     [Fact]
-    public void ModifierKeys_UpdateState_AndDoNotEmitKeyPressed()
+    public void PhysicalKeyReportsPrimaryCodepointAndPressReleasePhases()
     {
-        var clock = new FakeClock();
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        var charEvents = new List<char>();
-        int activityCount = 0;
-
+        var events = new List<Event>();
         var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            characterReceived: c => charEvents.Add(c),
-            activity: () => activityCount++,
-            clockMilliseconds: () => clock.CurrentTimeMs);
-
-        // Control
-        controller.HandleKeyDown(Key.ControlLeft, 1);
-        Assert.True(controller.Ctrl);
-        controller.HandleKeyUp(Key.ControlLeft, 1);
-        Assert.False(controller.Ctrl);
-
-        controller.HandleKeyDown(Key.ControlRight, 2);
-        Assert.True(controller.Ctrl);
-        controller.HandleKeyUp(Key.ControlRight, 2);
-        Assert.False(controller.Ctrl);
-
-        // Shift
-        controller.HandleKeyDown(Key.ShiftLeft, 3);
-        Assert.True(controller.Shift);
-        controller.HandleKeyUp(Key.ShiftLeft, 3);
-        Assert.False(controller.Shift);
-
-        controller.HandleKeyDown(Key.ShiftRight, 4);
-        Assert.True(controller.Shift);
-        controller.HandleKeyUp(Key.ShiftRight, 4);
-        Assert.False(controller.Shift);
-
-        // Alt
-        controller.HandleKeyDown(Key.AltLeft, 5);
-        Assert.True(controller.Alt);
-        controller.HandleKeyUp(Key.AltLeft, 5);
-        Assert.False(controller.Alt);
-
-        controller.HandleKeyDown(Key.AltRight, 6);
-        Assert.True(controller.Alt);
-        controller.HandleKeyUp(Key.AltRight, 6);
-        Assert.False(controller.Alt);
-
-        // Super
-        controller.HandleKeyDown(Key.SuperLeft, 7);
-        Assert.True(controller.Super);
-        controller.HandleKeyUp(Key.SuperLeft, 7);
-        Assert.False(controller.Super);
-
-        controller.HandleKeyDown(Key.SuperRight, 8);
-        Assert.True(controller.Super);
-        controller.HandleKeyUp(Key.SuperRight, 8);
-        Assert.False(controller.Super);
-
-        // Modifier presses should not trigger keyPressed, characterReceived, or activity
-        Assert.Empty(keyEvents);
-        Assert.Empty(charEvents);
-        Assert.Equal(0, activityCount);
-    }
-
-    [Fact]
-    public void NonModifierKeyDown_DispatchesImmediately_AndTriggersActivity()
-    {
-        var clock = new FakeClock();
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        int activityCount = 0;
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            activity: () => activityCount++,
-            clockMilliseconds: () => clock.CurrentTimeMs);
+            keyEventReceived: (key, scancode, primary, type, text) =>
+                events.Add(new Event(key, scancode, primary, type, text.ToString())),
+            primaryCodepointProvider: static (key, scancode) => key == Key.A ? 'a' : 0);
 
         controller.HandleKeyDown(Key.A, 30);
-
-        Assert.Single(keyEvents);
-        Assert.Equal((Key.A, 30), keyEvents[0]);
-        Assert.Equal(1, activityCount);
-    }
-
-    [Fact]
-    public void KeyRepeat_DoesNotRepeat_BeforeInitialDelay()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 400,
-            repeatIntervalMs: 33);
-
-        controller.HandleKeyDown(Key.Up, 10);
-        Assert.Single(keyEvents);
-
-        // Tick before initial delay
-        clock.Advance(399);
-        controller.Tick();
-        Assert.Single(keyEvents);
-    }
-
-    [Fact]
-    public void KeyRepeat_RepeatsAtConfiguredInterval()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 400,
-            repeatIntervalMs: 33);
-
-        controller.HandleKeyDown(Key.Left, 15);
-        Assert.Single(keyEvents);
-
-        // Reach initial delay threshold
-        clock.Advance(400);
-        controller.Tick();
-        Assert.Equal(2, keyEvents.Count);
-
-        // Advance less than repeat interval
-        clock.Advance(20);
-        controller.Tick();
-        Assert.Equal(2, keyEvents.Count);
-
-        // Complete repeat interval
-        clock.Advance(13);
-        controller.Tick();
-        Assert.Equal(3, keyEvents.Count);
-
-        // Another repeat interval
-        clock.Advance(33);
-        controller.Tick();
-        Assert.Equal(4, keyEvents.Count);
-    }
-
-    [Fact]
-    public void KeyRepeat_UsesScheduledDeadlinesAcrossTickJitter()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        var controller = new TerminalKeyboardController(
-            keyPressed: (key, scancode) => keyEvents.Add((key, scancode)),
-            clockMilliseconds: () => clock.CurrentTimeMs);
-
-        controller.HandleKeyDown(Key.Up, 10);
-        clock.CurrentTimeMs = 1401;
-        controller.Tick();
-        Assert.Equal(2, keyEvents.Count);
-
-        clock.CurrentTimeMs = 1432;
-        controller.Tick();
-        Assert.Equal(2, keyEvents.Count);
-
-        clock.CurrentTimeMs = 1438;
-        controller.Tick();
-        Assert.Equal(3, keyEvents.Count);
-
-        clock.CurrentTimeMs = 1465;
-        controller.Tick();
-        Assert.Equal(3, keyEvents.Count);
-
-        clock.CurrentTimeMs = 1468;
-        controller.Tick();
-        Assert.Equal(4, keyEvents.Count);
-    }
-
-    [Fact]
-    public void KeyRepeat_LateTickCatchesUpAtMostThreeThenResynchronizes()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        var controller = new TerminalKeyboardController(
-            keyPressed: (key, scancode) => keyEvents.Add((key, scancode)),
-            clockMilliseconds: () => clock.CurrentTimeMs);
-
-        controller.HandleKeyDown(Key.Up, 10);
-        clock.CurrentTimeMs = 1550;
-        controller.Tick();
-        Assert.Equal(4, keyEvents.Count);
-
-        clock.CurrentTimeMs = 1582;
-        controller.Tick();
-        Assert.Equal(4, keyEvents.Count);
-
-        clock.CurrentTimeMs = 1583;
-        controller.Tick();
-        Assert.Equal(5, keyEvents.Count);
-    }
-
-    [Fact]
-    public void BackloggedContentCoalescing_IsDisabledForRecentInteraction()
-    {
-        Assert.False(WindowPresentationGate.ShouldCoalesce(350, 340, 100, anyBacklogged: false));
-        Assert.False(WindowPresentationGate.ShouldCoalesce(110, 100, 0, anyBacklogged: true));
-        Assert.False(WindowPresentationGate.ShouldCoalesce(110, 100, 100, anyBacklogged: true));
-        Assert.True(WindowPresentationGate.ShouldCoalesce(350, 340, 100, anyBacklogged: true));
-        Assert.False(WindowPresentationGate.ShouldCoalesce(370, 340, 100, anyBacklogged: true));
-        Assert.False(WindowPresentationGate.ShouldCoalesce(350, 340, 101, anyBacklogged: true));
-    }
-
-    [Fact]
-    public void CharacterReceived_DispatchesImmediately_AndRepeatsStoredChar()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        var charEvents = new List<char>();
-        int activityCount = 0;
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            characterReceived: c => charEvents.Add(c),
-            activity: () => activityCount++,
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 400,
-            repeatIntervalMs: 33);
-
-        controller.HandleKeyDown(Key.A, 30);
-        controller.HandleKeyChar('a');
-
-        Assert.Single(keyEvents);
-        Assert.Single(charEvents);
-        Assert.Equal('a', charEvents[0]);
-        Assert.Equal(2, activityCount); // 1 for KeyDown + 1 for KeyChar
-
-        // Advance to repeat threshold
-        clock.Advance(400);
-        controller.Tick();
-
-        // Repeating should emit characterReceived, NOT keyPressed
-        Assert.Single(keyEvents);
-        Assert.Equal(2, charEvents.Count);
-        Assert.Equal('a', charEvents[1]);
-    }
-
-    [Fact]
-    public void CharacterReceived_SuppressedUnderCtrlOrAlt_AndSwitchesToKeyRepeat()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        var charEvents = new List<char>();
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            characterReceived: c => charEvents.Add(c),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 400,
-            repeatIntervalMs: 33);
-
-        // 1. When Ctrl is down, HandleKeyChar should be ignored completely
-        controller.HandleKeyDown(Key.ControlLeft, 1);
-        controller.HandleKeyDown(Key.C, 20);
-        controller.HandleKeyChar('c');
-
-        Assert.Single(keyEvents);
-        Assert.Empty(charEvents);
-
-        // Repeating under Ctrl should repeat keyPressed, not char
-        clock.Advance(400);
-        controller.Tick();
-
-        Assert.Equal(2, keyEvents.Count);
-        Assert.Equal(Key.C, keyEvents[1].Key);
-        Assert.Empty(charEvents);
-
-        // Release Key.C and Ctrl
-        controller.HandleKeyUp(Key.C, 20);
-        controller.HandleKeyUp(Key.ControlLeft, 1);
-
-        // 2. Test Alt suppresses characterReceived
-        controller.HandleKeyDown(Key.AltLeft, 2);
-        controller.HandleKeyDown(Key.X, 21);
-        controller.HandleKeyChar('x');
-
-        Assert.Equal(3, keyEvents.Count); // C initial, C repeat, X initial
-        Assert.Empty(charEvents);
-
-        clock.Advance(400);
-        controller.Tick();
-        Assert.Equal(4, keyEvents.Count);
-        Assert.Equal(Key.X, keyEvents[3].Key);
-        Assert.Empty(charEvents);
-    }
-
-    [Fact]
-    public void DynamicModifierChange_SwitchesStoredCharToKeyRepeat()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        var charEvents = new List<char>();
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            characterReceived: c => charEvents.Add(c),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 400,
-            repeatIntervalMs: 33);
-
-        // Start typing normal char
-        controller.HandleKeyDown(Key.A, 30);
-        controller.HandleKeyChar('a');
-        Assert.Single(keyEvents);
-        Assert.Single(charEvents);
-
-        // Press Ctrl while key is held
-        controller.HandleKeyDown(Key.ControlLeft, 1);
-
-        // Tick on repeat: since Ctrl is now active, repeat should emit keyPressed instead of char
-        clock.Advance(400);
-        controller.Tick();
-
-        Assert.Equal(2, keyEvents.Count);
-        Assert.Equal(Key.A, keyEvents[1].Key);
-        Assert.Single(charEvents);
-    }
-
-    [Fact]
-    public void KeyUp_ClearsHeldKeyAndChar_StoppingRepeats()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-        var charEvents = new List<char>();
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            characterReceived: c => charEvents.Add(c),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 400,
-            repeatIntervalMs: 33);
-
-        controller.HandleKeyDown(Key.B, 31);
-        controller.HandleKeyChar('b');
-        Assert.Single(keyEvents);
-        Assert.Single(charEvents);
-
-        // Release the key
-        controller.HandleKeyUp(Key.B, 31);
-
-        // Advance time and tick: no repeat events should fire
-        clock.Advance(1000);
-        controller.Tick();
-
-        Assert.Single(keyEvents);
-        Assert.Single(charEvents);
-    }
-
-    [Fact]
-    public void KeyUp_WithDifferentKey_DoesNotClearHeldKey()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var keyEvents = new List<(Key Key, int Scancode)>();
-
-        var controller = new TerminalKeyboardController(
-            keyPressed: (k, s) => keyEvents.Add((k, s)),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 400,
-            repeatIntervalMs: 33);
-
-        controller.HandleKeyDown(Key.B, 31);
-        Assert.Single(keyEvents);
-
-        // Release a different key
-        controller.HandleKeyUp(Key.C, 32);
-
-        // Held key B should still repeat
-        clock.Advance(400);
-        controller.Tick();
-
-        Assert.Equal(2, keyEvents.Count);
-        Assert.Equal(Key.B, keyEvents[1].Key);
-    }
-
-    [Fact]
-    public void NullCallbacks_AreSafeAndDoNotThrow()
-    {
-        var clock = new FakeClock { CurrentTimeMs = 1000 };
-        var controller = new TerminalKeyboardController(clockMilliseconds: () => clock.CurrentTimeMs);
-
-        // None of these should throw NullReferenceException
-        controller.HandleKeyDown(Key.ControlLeft, 1);
-        controller.HandleKeyDown(Key.A, 30);
-        controller.HandleKeyChar('a');
-        clock.Advance(400);
-        controller.Tick();
         controller.HandleKeyUp(Key.A, 30);
-        controller.HandleKeyUp(Key.ControlLeft, 1);
+
+        Assert.Equal(new[]
+        {
+            new Event(Key.A, 30, 'a', TerminalKeyEventType.Press, string.Empty),
+            new Event(Key.A, 30, 'a', TerminalKeyEventType.Release, string.Empty),
+        }, events);
     }
+
     [Fact]
-    public void SurrogatePair_IsDeliveredAsOneTextPayload()
+    public void NativeUnicodeScalarIsAssociatedWithHeldKeyAndSupplementaryScalarIsPreserved()
     {
-        var payloads = new List<string>();
+        var events = new List<Event>();
+        var textEvents = new List<string>();
         var controller = new TerminalKeyboardController(
-            textReceived: text => payloads.Add(text.ToString()));
+            keyEventReceived: (key, scancode, primary, type, text) =>
+                events.Add(new Event(key, scancode, primary, type, text.ToString())),
+            textReceived: text => textEvents.Add(text.ToString()));
 
         controller.HandleKeyDown(Key.A, 30);
-        controller.HandleKeyChar('\uD83D');
-        Assert.Empty(payloads);
+        controller.HandleUnicodeScalar(0x1F642);
+        controller.HandleKeyUp(Key.A, 30);
+        controller.HandleUnicodeScalar('x');
 
-        controller.HandleKeyChar('\uDE00');
-
-        Assert.Single(payloads);
-        Assert.Equal("😀", payloads[0]);
+        Assert.Equal(new[]
+        {
+            new Event(Key.A, 30, 0, TerminalKeyEventType.Press, string.Empty),
+            new Event(Key.A, 30, 0, TerminalKeyEventType.Press, "🙂"),
+            new Event(Key.A, 30, 0, TerminalKeyEventType.Release, "🙂"),
+        }, events);
+        Assert.Equal(new[] { "x" }, textEvents);
     }
+
     [Fact]
-    public void ModifierSides_ReleaseIndependently_AndExposeAltGr()
+    public void NativeRepeatPhaseIsPreservedOnAssociatedUnicodeScalar()
     {
-        var controller = new TerminalKeyboardController();
+        var events = new List<Event>();
+        var controller = new TerminalKeyboardController(
+            keyEventReceived: (key, scancode, primary, type, text) =>
+                events.Add(new Event(key, scancode, primary, type, text.ToString())),
+            primaryCodepointProvider: static (key, scancode) => key == Key.A ? 'a' : 0);
+
+        controller.HandleKeyDown(Key.A, 30);
+        controller.HandleUnicodeScalar('a');
+        controller.HandleKeyRepeat(Key.A, 30);
+        controller.HandleUnicodeScalar('a');
+        controller.HandleKeyUp(Key.A, 30);
+
+        Assert.Equal(new[]
+        {
+            TerminalKeyEventType.Press,
+            TerminalKeyEventType.Press,
+            TerminalKeyEventType.Repeat,
+            TerminalKeyEventType.Repeat,
+            TerminalKeyEventType.Release,
+        }, events.ConvertAll(static item => item.Type));
+        Assert.Equal("a", events[3].Text);
+    }
+
+    [Fact]
+    public void MultipleHeldKeysKeepTheirOwnTextAndReleaseIdentity()
+    {
+        var events = new List<Event>();
+        var controller = new TerminalKeyboardController(
+            keyEventReceived: (key, scancode, primary, type, text) =>
+                events.Add(new Event(key, scancode, primary, type, text.ToString())));
+
+        controller.HandleKeyDown(Key.A, 30);
+        controller.HandleUnicodeScalar('a');
+        controller.HandleKeyDown(Key.B, 48);
+        controller.HandleUnicodeScalar('b');
+        controller.HandleKeyUp(Key.A, 30);
+        controller.HandleKeyUp(Key.B, 48);
+
+        Assert.Equal(new[]
+        {
+            new Event(Key.A, 30, 0, TerminalKeyEventType.Press, string.Empty),
+            new Event(Key.A, 30, 0, TerminalKeyEventType.Press, "a"),
+            new Event(Key.B, 48, 0, TerminalKeyEventType.Press, string.Empty),
+            new Event(Key.B, 48, 0, TerminalKeyEventType.Press, "b"),
+            new Event(Key.A, 30, 0, TerminalKeyEventType.Release, "a"),
+            new Event(Key.B, 48, 0, TerminalKeyEventType.Release, "b"),
+        }, events);
+    }
+
+    [Fact]
+    public void NativeRepeatSelectsTheRepeatedHeldKeyForFollowingCommittedText()
+    {
+        var events = new List<Event>();
+        var controller = new TerminalKeyboardController(
+            keyEventReceived: (key, scancode, primary, type, text) =>
+                events.Add(new Event(key, scancode, primary, type, text.ToString())));
+
+        controller.HandleKeyDown(Key.A, 30);
+        controller.HandleUnicodeScalar('a');
+        controller.HandleKeyDown(Key.B, 48);
+        controller.HandleUnicodeScalar('b');
+        controller.HandleKeyRepeat(Key.A, 30);
+        controller.HandleUnicodeScalar('a');
+
+        Assert.Equal(new Event(Key.A, 30, 0, TerminalKeyEventType.Repeat, "a"), events[^1]);
+    }
+
+    [Fact]
+    public void ModifierTrackingEmitsPhysicalKeyPhasesAndResetClearsState()
+    {
+        var events = new List<Event>();
+        var controller = new TerminalKeyboardController(
+            keyEventReceived: (key, scancode, primary, type, text) =>
+                events.Add(new Event(key, scancode, primary, type, text.ToString())));
 
         controller.HandleKeyDown(Key.ControlLeft, 1);
-        controller.HandleKeyDown(Key.ControlRight, 2);
-        controller.HandleKeyUp(Key.ControlLeft, 1);
+        controller.HandleKeyDown(Key.ShiftRight, 2);
         Assert.True(controller.Ctrl);
-        Assert.False(controller.LeftCtrl);
-        Assert.True(controller.RightCtrl);
+        Assert.True(controller.Shift);
+        Assert.Equal(new[] { Key.ControlLeft, Key.ShiftRight }, events.ConvertAll(static item => item.Key));
 
-        controller.HandleKeyDown(Key.AltLeft, 3);
-        controller.HandleKeyDown(Key.AltRight, 4);
-        controller.HandleKeyUp(Key.AltLeft, 3);
-        Assert.True(controller.Alt);
-        Assert.False(controller.LeftAlt);
-        Assert.True(controller.RightAlt);
-        Assert.True(controller.AltGr);
-        controller.HandleKeyUp(Key.AltRight, 4);
-        controller.HandleKeyUp(Key.ControlRight, 2);
-        Assert.False(controller.Alt);
+        controller.HandleKeyUp(Key.ControlLeft, 1);
+        controller.HandleKeyUp(Key.ShiftRight, 2);
         Assert.False(controller.Ctrl);
-    }
-
-    [Fact]
-    public void RightAlt_ComposedText_IsDeliveredAndRepeatedAsWholeString()
-    {
-        var clock = new FakeClock();
-        var payloads = new List<string>();
-        var controller = new TerminalKeyboardController(
-            textReceived: text => payloads.Add(text.ToString()),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 1,
-            repeatIntervalMs: 1);
-
-        controller.HandleKeyDown(Key.AltRight, 1);
-        controller.HandleKeyDown(Key.A, 2);
-        controller.HandleKeyChar('\uD83D');
-        controller.HandleKeyChar('\uDE00');
-        clock.Advance(1);
-        controller.Tick();
-
-        Assert.Equal(new[] { "😀", "😀" }, payloads);
-    }
-
-    [Fact]
-    public void SpecialKeyRepeat_TriggersActivity()
-    {
-        var clock = new FakeClock();
-        int activityCount = 0;
-        var controller = new TerminalKeyboardController(
-            keyPressed: (_, _) => { },
-            activity: () => activityCount++,
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 1);
-
-        controller.HandleKeyDown(Key.Up, 1);
-        clock.Advance(1);
-        controller.Tick();
-
-        Assert.Equal(2, activityCount);
-    }
-
-    [Fact]
-    public void ResetState_ClearsFocusSensitiveKeyboardState()
-    {
-        var clock = new FakeClock();
-        var payloads = new List<string>();
-        var controller = new TerminalKeyboardController(
-            textReceived: text => payloads.Add(text.ToString()),
-            clockMilliseconds: () => clock.CurrentTimeMs,
-            initialDelayMs: 1);
+        Assert.False(controller.Shift);
+        Assert.Equal(new[]
+        {
+            TerminalKeyEventType.Press,
+            TerminalKeyEventType.Press,
+            TerminalKeyEventType.Release,
+            TerminalKeyEventType.Release,
+        }, events.ConvertAll(static item => item.Type));
 
         controller.HandleKeyDown(Key.ControlLeft, 1);
-        controller.HandleKeyDown(Key.AltRight, 2);
-        controller.HandleKeyDown(Key.A, 3);
-        controller.HandleKeyChar('\uD83D');
         controller.ResetState();
-        controller.HandleKeyChar('\uDE00');
-        clock.Advance(2);
-        controller.Tick();
-
         Assert.False(controller.Ctrl);
-        Assert.False(controller.Alt);
-        Assert.Empty(payloads);
     }
 }

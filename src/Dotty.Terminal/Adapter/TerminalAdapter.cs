@@ -11,7 +11,7 @@ public delegate void TerminalReplyHandler(ReadOnlySpan<char> reply);
 /// Adapter that connects the parser callbacks to a TerminalBuffer and exposes a render event.
 /// Keeps responsibilities minimal: buffer management and render notification.
 /// </summary>
-public class TerminalAdapter : ITerminalHandler
+public partial class TerminalAdapter : ITerminalHandler
 {
     public enum MouseMode
     {
@@ -230,6 +230,7 @@ public class TerminalAdapter : ITerminalHandler
 
     public void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload)
     {
+        if (TryHandleShellIntegration(code, payload)) return;
         if (code == 0 || code == 2)
         {
             if (_windowTitle is null || !payload.SequenceEqual(_windowTitle.AsSpan()))
@@ -271,27 +272,6 @@ public class TerminalAdapter : ITerminalHandler
                 _ => "#FFFFFF",
             };
             SendColorReply(code, hex.AsSpan());
-        }
-        else if (code == 133)
-        {
-            // Shell Integration (OSC 133) — FinalTerm / Suzi protocol
-            if (payload.Length == 0) return;
-            var subcmd = payload[0];
-            switch (subcmd)
-            {
-                case 'A': // Prompt start
-                    _buffer.AddPromptMark(PromptKind.Prompt);
-                    break;
-                case 'B': // Command start
-                    _buffer.AddPromptMark(PromptKind.Command);
-                    break;
-                case 'C': // Output start
-                    _buffer.AddPromptMark(PromptKind.Output);
-                    break;
-                case 'D': // Command end / output done
-                    _buffer.AddPromptMark(PromptKind.CommandEnd);
-                    break;
-            }
         }
     }
 
@@ -489,6 +469,7 @@ public class TerminalAdapter : ITerminalHandler
     public void OnSetAlternateScreen(bool enabled)
     {
         _buffer.SetAlternateScreen(enabled);
+        SetKittyAlternateScreen(enabled);
         Trace?.Invoke($"AltScreen({enabled})", _buffer);
         RequestRender();
     }
@@ -580,7 +561,7 @@ public class TerminalAdapter : ITerminalHandler
         CursorShape = 0;
         KeypadApplicationMode = false;
         ApplicationCursorKeysEnabled = false;
-        KittyKeyboardMode = 0;
+        ResetKittyKeyboardState();
         RequestRender();
     }
 
@@ -654,11 +635,13 @@ public class TerminalAdapter : ITerminalHandler
         {
             case 0:
             case 1:
+                // DA1: report the conservative VT100 capability set supported here.
                 ReplyRequested?.Invoke("\x1b[?1;0c".AsSpan());
                 break;
             case 2:
                 ReplyRequested?.Invoke(_da2Response.AsSpan());
                 break;
+            // DA3 (CSI = c) is not implemented; do not claim an identity/capability.
         }
     }
 
@@ -739,17 +722,6 @@ public class TerminalAdapter : ITerminalHandler
 
     public bool FocusReportingEnabled => _focusReportingEnabled;
 
-    public int KittyKeyboardMode { get; private set; }
-
-    public void OnSetKittyKeyboardMode(int mode)
-    {
-        KittyKeyboardMode = mode;
-    }
-
-    public void OnQueryKittyKeyboard()
-    {
-        SendNumberReply("\x1b[".AsSpan(), KittyKeyboardMode, 'u');
-    }
 
     public void FlushRender()
     {

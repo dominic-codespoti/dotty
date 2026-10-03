@@ -448,6 +448,76 @@ After intentional performance improvements:
 3. Update baseline values in source code or JSON file
 4. Commit updated baselines
 
+### Repeatable baseline snapshots
+
+The existing benchmark JSON stays the source of truth. Capture it into a small
+immutable snapshot and compare snapshots without rerunning or altering the
+workload:
+
+    python3 scripts/perf/perf_baseline.py capture --kind throughput --input <compare.json> --output artifacts/perf/baselines/output-before.json
+    python3 scripts/perf/perf_baseline.py capture --kind nvim --input <nvim-scroll.json> --output artifacts/perf/baselines/nvim-before.json
+For repeated primitive comparison outputs, repeat --input once per run; the
+captured distribution pools raw per-run values and records every source path and
+SHA-256. Each input must have the same workload, host, and build fingerprint.
+
+Repeat the capture commands with the matching after-run JSON, then compare each
+pair using perf_baseline.py compare --baseline <before.json> --candidate
+<after.json>. Exit 1 means regression or incompatible inputs; exit 2 means
+partial evidence or inconclusive evidence. Inconclusive means a point estimate
+crosses a configured gate but the measured noise floor prevents confidence;
+repeat the benchmark and compare the pooled captures rather than treating it as
+pass. The default gates are a 5% throughput or traversal regression and 10%
+latency/RSS regression. Snapshots retain median, p95, MAD, sample count, status,
+source hashes, and compatibility metadata. Workload dimensions, build family,
+host, Neovim fixture/version, font, display geometry, and sampling settings
+must match. Binary hashes are recorded in raw benchmark outputs but not
+compared, because before/after builds are expected to differ.
+
+#### Observed Dotty before/after comparison (2026-10-02)
+
+These captures compare frozen AOT apphosts before and after integration on the
+same Linux x86_64 host. The output-throughput workload ran five alternating
+5-million-line samples per build (275,000,000 bytes per sample). The Neovim
+workload used one million lines, Neovim 0.12.5, a real Hyprland/eDP-1 display
+(2560x1600 at 120.001 Hz, scale 1), a 200x60 grid in a 2000x1140 window,
+DejaVu Sans Mono 16px, and the same 94,999,925-byte fixture
+(81d88047e249252f6f1d11a8394196a486be1c9fc26ad9ff7940fe08f431e31a). Every
+measured Neovim window matched that geometry.
+
+| Workload | Metric | Before median | After median | Change | Regression gate | Metric result |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 5M output | Throughput | 76.014 MB/s | 76.548 MB/s | +0.70% | -5% | ok |
+| 5M output | Output duration | 3450.182 ms | 3426.087 ms | -0.70% | +5% | ok |
+| 5M output | Process-tree peak RSS | 237.352 MiB | 239.258 MiB | +0.80% | +10% | ok |
+| Neovim | Traversal | 114567.331 ms | 113508.224 ms | -0.92% | +5% | ok |
+| Neovim | Lines per second | 8728.483 | 8809.925 | +0.93% | -5% | ok |
+| Neovim | Longest sampled visible stall | 146.720 ms | 140.727 ms | -4.08% | +10% | ok |
+| Neovim | EOF-to-visible tail | 105.869 ms | 114.145 ms | +7.82% | +10% | ok; within measured noise |
+| Neovim | Process-tree peak RSS | 351.047 MiB | 351.008 MiB | -0.01% | +10% | ok |
+
+The throughput comparison used five compatible samples per build and is
+complete (artifacts/perf/integration-baselines/output-5m-comparison.json).
+For Neovim, the pooled before snapshot retains all three source captures and
+their hashes. Traversal, lines/s, and RSS have 15 measured samples; visible
+stall and EOF-tail metrics have 11 successful samples. Four of the 15 before
+captures had a late sample and two had dropped samples; none had capture errors.
+Each source is consequently marked partial because cadence gaps can censor
+stall intervals. The after run has five measured samples, all with verified
+final screens and no late/dropped samples or capture errors. Thus each Neovim
+metric is below its regression gate, but the overall Neovim comparison remains
+partial with repeat_required=true; it is not a complete pass. The pooled
+comparison and snapshots are in artifacts/perf/integration-baselines/.
+
+Incomplete captures retain the available metrics, represent missing metrics as
+unavailable (never zero), and cannot pass as complete. Neovim visible-stall and
+EOF-to-visible timings require successful visible capture; RSS uses process-tree
+measurements only. A one-run Neovim capture is descriptive, not a stable tail
+latency estimate. This tool does not create parser microbenchmark baselines;
+BenchmarkDotNet artifacts remain separate and must be compared under their own
+matching runtime/hardware conditions.
+
+Eval runs already write to unique UTC directories. Keep the raw source JSON and
+logs alongside published snapshots so comparisons remain traceable.
 ## Continuous Integration
 
 The `performance-tests` job in `.github/workflows/ci.yml` runs on Ubuntu for

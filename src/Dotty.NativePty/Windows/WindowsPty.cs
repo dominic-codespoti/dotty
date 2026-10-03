@@ -60,11 +60,13 @@ public sealed class WindowsPty : IPty
 
     /// <inheritdoc />
     public void Start(
-        string? shell = null, 
-        int columns = 80, 
+        string? shell = null,
+        int columns = 80,
         int rows = 24,
         string? workingDirectory = null,
-        System.Collections.Generic.IDictionary<string, string>? environmentVariables = null)
+        System.Collections.Generic.IDictionary<string, string>? environmentVariables = null,
+        System.Collections.Generic.IReadOnlyList<string>? command = null,
+        bool shellIsExecutable = false)
     {
         lock (_stateLock)
         {
@@ -88,7 +90,7 @@ public sealed class WindowsPty : IPty
                 CreatePseudoConsole(columns, rows);
                 
                 // Start the shell process attached to the pseudo console
-                StartShellProcess(shell, workingDirectory, environmentVariables);
+                StartShellProcess(shell, workingDirectory, environmentVariables, command, shellIsExecutable);
                 
                 // CreatePipe produces synchronous handles; wrapping them as async
                 // streams throws ArgumentException on Windows.
@@ -311,7 +313,9 @@ public sealed class WindowsPty : IPty
     private void StartShellProcess(
         string? shell,
         string? workingDirectory,
-        System.Collections.Generic.IDictionary<string, string>? environmentVariables)
+        System.Collections.Generic.IDictionary<string, string>? environmentVariables,
+        System.Collections.Generic.IReadOnlyList<string>? command,
+        bool shellIsExecutable)
     {
         if (!string.IsNullOrWhiteSpace(workingDirectory) && !Directory.Exists(workingDirectory))
         {
@@ -380,7 +384,7 @@ public sealed class WindowsPty : IPty
 
             try
             {
-                var (applicationName, commandLine) = BuildProcessStartInfo(resolvedShell);
+                var (applicationName, commandLine) = BuildProcessStartInfo(resolvedShell, command, shellIsExecutable);
 
                 // Create the process
                 var creationFlags = 0x00080000 /* EXTENDED_STARTUPINFO_PRESENT */ | 0x00000400 /* CREATE_UNICODE_ENVIRONMENT */;
@@ -433,6 +437,32 @@ public sealed class WindowsPty : IPty
         }
     }
 
+    private static (string? ApplicationName, StringBuilder CommandLine) BuildProcessStartInfo(
+        string shell,
+        System.Collections.Generic.IReadOnlyList<string>? command,
+        bool shellIsExecutable)
+    {
+        if (command is not null)
+        {
+            if (command.Count == 0)
+                throw new PtyException(PtyErrorCode.InvalidShell, "The command argv must contain an executable.");
+            string executable = command[0];
+            return (File.Exists(executable) ? executable : null,
+                new StringBuilder(BuildCommandLine(executable, command)));
+        }
+
+        if (shellIsExecutable)
+        {
+            var arguments = new List<string> { shell };
+            string name = Path.GetFileNameWithoutExtension(shell).ToLowerInvariant();
+            if (name is "sh" or "bash" or "zsh" or "fish" or "dash")
+                arguments.Add("-i");
+            return (File.Exists(shell) ? shell : null,
+                new StringBuilder(BuildCommandLine(shell, arguments)));
+        }
+
+        return BuildProcessStartInfo(shell);
+    }
     private static (string? ApplicationName, StringBuilder CommandLine) BuildProcessStartInfo(string shell)
     {
         if (File.Exists(shell))

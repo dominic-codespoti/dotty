@@ -3,6 +3,7 @@ using Dotty.Abstractions.Config;
 
 using Dotty.Runtime.Input;
 using Dotty.Runtime.Panes;
+using Dotty.Terminal.Adapter;
 using Dotty.Runtime.Tabs;
 
 namespace Dotty.Silk.Input;
@@ -122,11 +123,33 @@ public sealed class TerminalActionExecutor
             case TerminalAction.Search:
                 _toggleSearch(activeTab);
                 return true;
+            case TerminalAction.PreviousPrompt:
+                return NavigatePrompt(activeTab, previous: true);
+            case TerminalAction.NextPrompt:
+                return NavigatePrompt(activeTab, previous: false);
+            case TerminalAction.CopyCommandOutput:
+                var pane = activeTab.ActivePane;
+                var buffer = pane.Session.Adapter.Buffer;
+                if (!buffer.TryGetLatestCommandOutputRange(out int startRow, out int startColumn, out int endRow, out int endColumn)
+                    || !pane.Selection.StartRangeExclusive(buffer, startRow, startColumn, endRow, endColumn))
+                    return false;
+                _host.CopySelection();
+                return true;
             default:
                 return false;
         }
     }
 
+    private static bool NavigatePrompt(TerminalTab tab, bool previous)
+    {
+        var pane = tab.ActivePane;
+        var buffer = pane.Session.Adapter.Buffer;
+        int topRow = -pane.ScrollOffset;
+        var mark = buffer.FindNearestPrompt(PromptKind.Prompt, topRow, searchForward: !previous);
+        if (mark is not { } prompt) return false;
+        pane.ScrollTo(Math.Max(0, buffer.ScrollbackCount - prompt.AbsoluteRow), buffer.ScrollbackCount);
+        return true;
+    }
     private static void SelectPane(TerminalTab activeTab, PaneDirection direction)
     {
         var pane = activeTab.PaneTree.NavigateFocus(activeTab.ActivePane, direction);

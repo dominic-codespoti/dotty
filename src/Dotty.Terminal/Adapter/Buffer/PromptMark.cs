@@ -13,11 +13,13 @@ public enum PromptKind
 public readonly struct PromptMark : IComparable<PromptMark>
 {
     public readonly int AbsoluteRow;
+    public readonly int AbsoluteColumn;
     public readonly PromptKind Kind;
 
-    public PromptMark(int absoluteRow, PromptKind kind)
+    public PromptMark(int absoluteRow, PromptKind kind, int absoluteColumn = 0)
     {
         AbsoluteRow = absoluteRow;
+        AbsoluteColumn = absoluteColumn;
         Kind = kind;
     }
 

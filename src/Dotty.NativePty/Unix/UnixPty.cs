@@ -80,7 +80,9 @@ public sealed class UnixPty : IPty
         int columns = 80,
         int rows = 24,
         string? workingDirectory = null,
-        System.Collections.Generic.IDictionary<string, string>? environmentVariables = null)
+        System.Collections.Generic.IDictionary<string, string>? environmentVariables = null,
+        System.Collections.Generic.IReadOnlyList<string>? command = null,
+        bool shellIsExecutable = false)
     {
         lock (_stateLock)
         {
@@ -106,27 +108,35 @@ public sealed class UnixPty : IPty
                 ? PtyPlatform.GetDefaultShell()
                 : shell;
             List<string> shellArguments;
-            try
+            if (command is not null)
             {
-                shellArguments = ParseCommandLine(resolvedShell);
+                if (command.Count == 0)
+                    throw new PtyException(PtyErrorCode.InvalidShell, "The command argv must contain an executable.");
+                shellArguments = new List<string>(command);
             }
-            catch (FormatException ex)
+            else if (shellIsExecutable)
             {
-                throw new PtyException(PtyErrorCode.InvalidShell, ex.Message, ex);
+                shellArguments = IsInteractiveShell(resolvedShell)
+                    ? new List<string> { resolvedShell, "-i" }
+                    : new List<string> { resolvedShell };
             }
-
-            if (shellArguments.Count == 0)
+            else
             {
-                throw new PtyException(PtyErrorCode.InvalidShell, "The configured shell command is empty.");
+                try
+                {
+                    shellArguments = ParseCommandLine(resolvedShell);
+                }
+                catch (FormatException ex)
+                {
+                    throw new PtyException(PtyErrorCode.InvalidShell, ex.Message, ex);
+                }
+                if (shellArguments.Count == 0)
+                    throw new PtyException(PtyErrorCode.InvalidShell, "The configured shell command is empty.");
             }
 
             string executable = shellArguments[0];
             if (Path.IsPathFullyQualified(executable) && !File.Exists(executable))
-            {
-                throw new PtyException(
-                    PtyErrorCode.InvalidShell,
-                    $"The configured shell '{executable}' does not exist.");
-            }
+                throw new PtyException(PtyErrorCode.InvalidShell, $"The configured executable '{executable}' does not exist.");
 
             string workingDirectoryPath = workingDirectory
                 ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -151,7 +161,7 @@ public sealed class UnixPty : IPty
             };
             foreach (var argument in shellArguments)
                 psi.ArgumentList.Add(argument);
-            if (shellArguments.Count == 1 && IsInteractiveShell(executable))
+            if (command is null && !shellIsExecutable && shellArguments.Count == 1 && IsInteractiveShell(executable))
                 psi.ArgumentList.Add("-i");
             // Unix-domain socket path limits vary; stay below the portable
             // sockaddr_un sun_path limit.

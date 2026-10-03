@@ -204,7 +204,7 @@ public partial class TerminalBuffer
             int sourceRow = chronologicalIndex - scrollbackRows;
             var anchor = screen.GetReflowAnchor(
                 sourceRow,
-                0,
+                mark.AbsoluteColumn,
                 wrapPending: false,
                 scrollbackRows,
                 layout);
@@ -228,7 +228,7 @@ public partial class TerminalBuffer
             if (retainedIndex >= 0
                 && retainedIndex < mapping.NewScrollbackRows + newRows)
             {
-                _promptMarks.Add(new PromptMark(retainedIndex, entry.Mark.Kind));
+                _promptMarks.Add(new PromptMark(retainedIndex, entry.Mark.Kind, position.Column));
             }
         }
     }

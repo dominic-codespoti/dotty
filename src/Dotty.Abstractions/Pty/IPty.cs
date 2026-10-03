@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,95 +7,66 @@ using System.Threading.Tasks;
 namespace Dotty.Abstractions.Pty;
 
 /// <summary>
-/// Represents a pseudo-terminal (PTY) session that can spawn processes
-/// and handle input/output with terminal emulation.
+/// Represents a pseudo-terminal session that can spawn a process and handle its terminal I/O.
 /// </summary>
 public interface IPty : IDisposable
 {
-    /// <summary>
-    /// Gets a value indicating whether the PTY session is running.
-    /// </summary>
+    /// <summary>Gets whether the child process is currently running.</summary>
     bool IsRunning { get; }
 
-    /// <summary>
-    /// Gets the process ID of the spawned shell/process.
-    /// Returns -1 if not available.
-    /// </summary>
+    /// <summary>Gets the child process ID, or -1 when it is unavailable.</summary>
     int ProcessId { get; }
 
-    /// <summary>
-    /// Gets the stream for reading output from the PTY.
-    /// </summary>
+    /// <summary>Gets the stream carrying terminal output from the child.</summary>
     Stream? OutputStream { get; }
 
-    /// <summary>
-    /// Gets the stream for writing input to the PTY.
-    /// </summary>
+    /// <summary>Gets the stream carrying terminal input to the child.</summary>
     Stream? InputStream { get; }
 
-    /// <summary>
-    /// Event raised when the PTY process exits.
-    /// </summary>
+    /// <summary>Raised when the child process exits; the value is its exit code.</summary>
     event EventHandler<int>? ProcessExited;
 
-    /// <summary>
-    /// Starts the PTY session with the specified shell and terminal size.
-    /// </summary>
-    /// <param name="shell">The shell executable path. If null, uses platform default.</param>
+    /// <summary>Starts the PTY with a shell or command and the requested initial working directory.</summary>
+    /// <param name="shell">Shell executable or legacy shell command; null selects the platform default.</param>
     /// <param name="columns">Initial terminal width in columns.</param>
     /// <param name="rows">Initial terminal height in rows.</param>
-    /// <param name="workingDirectory">Optional working directory for the process.</param>
-    /// <param name="environmentVariables">Optional additional environment variables.</param>
-    /// <exception cref="InvalidOperationException">Thrown if the PTY is already started.</exception>
-    /// <exception cref="PtyException">Thrown if the PTY creation fails.</exception>
+    /// <param name="workingDirectory">Initial child working directory, or null for the platform default.</param>
+    /// <param name="environmentVariables">Optional additional child environment variables.</param>
+    /// <param name="command">Optional exact argv to execute directly, including argv[0].</param>
+    /// <param name="shellIsExecutable">True when shell is a literal executable path rather than a legacy shell command string.</param>
+    /// <exception cref="InvalidOperationException">The PTY has already been started.</exception>
+    /// <exception cref="PtyException">PTY creation or child process startup failed.</exception>
     void Start(
         string? shell = null,
         int columns = 80,
         int rows = 24,
         string? workingDirectory = null,
-        System.Collections.Generic.IDictionary<string, string>? environmentVariables = null);
+        IDictionary<string, string>? environmentVariables = null,
+        IReadOnlyList<string>? command = null,
+        bool shellIsExecutable = false);
 
-    /// <summary>
-    /// Resizes the PTY to the new dimensions.
-    /// </summary>
-    /// <param name="columns">New width in columns.</param>
-    /// <param name="rows">New height in rows.</param>
+    /// <summary>Resizes the PTY to the requested terminal dimensions.</summary>
     void Resize(int columns, int rows);
 
-    /// <summary>
-    /// Terminates the PTY process.
-    /// </summary>
-    /// <param name="force">If true, force kill the process. Otherwise graceful termination.</param>
+    /// <summary>Terminates the child process.</summary>
     void Kill(bool force = false);
 
-    /// <summary>
-    /// Waits for the PTY process to exit asynchronously.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The process exit code.</returns>
+    /// <summary>Waits asynchronously for the child process to exit.</summary>
     Task<int> WaitForExitAsync(CancellationToken cancellationToken = default);
 }
 
-/// <summary>
-/// Exception thrown when PTY operations fail.
-/// </summary>
+/// <summary>Exception thrown when PTY operations fail.</summary>
 public class PtyException : Exception
 {
+    /// <summary>Gets the typed error category associated with the failure.</summary>
     public PtyErrorCode Code { get; }
 
-    public PtyException(string message)
-        : this(PtyErrorCode.NativeOperationFailed, message)
-    {
-    }
+    /// <summary>Creates an exception with an unclassified error message.</summary>
+    public PtyException(string message) : base(message) { }
 
-    public PtyException(string message, Exception inner)
-        : this(PtyErrorCode.NativeOperationFailed, message, inner)
-    {
-    }
+    /// <summary>Creates an exception with a typed error category.</summary>
+    public PtyException(PtyErrorCode code, string message) : base(message) => Code = code;
 
-    public PtyException(PtyErrorCode code, string message, Exception? inner = null)
-        : base(message, inner)
-    {
-        Code = code;
-    }
+    /// <summary>Creates an exception with a typed error category and inner exception.</summary>
+    public PtyException(PtyErrorCode code, string message, Exception innerException) : base(message, innerException) => Code = code;
 }

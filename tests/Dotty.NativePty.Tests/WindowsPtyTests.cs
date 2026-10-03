@@ -3,8 +3,8 @@
 using Dotty.Abstractions.Pty;
 using Xunit;
 using FluentAssertions;
+using System.Collections.Generic;
 using System.Text;
-using System.Reflection;
 
 namespace Dotty.NativePty.Tests;
 
@@ -15,34 +15,59 @@ namespace Dotty.NativePty.Tests;
 public class WindowsPtyTests : IDisposable
 {
     private IPty? _pty;
+    private readonly List<string> _temporaryDirectories = new();
 
     public void Dispose()
     {
         PtyTestHelpers.SafeCleanup(_pty);
+        foreach (string directory in _temporaryDirectories)
+        {
+            try { Directory.Delete(directory, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
-    private static (string? ApplicationName, string CommandLine) InvokeBuildProcessStartInfo(string shell)
+    private string CreateTempExecutablePath(string fileName)
     {
-        var method = typeof(Windows.WindowsPty).GetMethod("BuildProcessStartInfo", BindingFlags.NonPublic | BindingFlags.Static);
-        method.Should().NotBeNull();
-
-        var result = method!.Invoke(null, [shell]);
-        result.Should().NotBeNull();
-
-        var resultType = result!.GetType();
-        var applicationName = (string?)resultType.GetField("Item1")!.GetValue(result);
-        var commandLine = (StringBuilder)resultType.GetField("Item2")!.GetValue(result)!;
-        return (applicationName, commandLine.ToString());
-    }
-
-    private static string CreateTempExecutablePath(string fileName)
-    {
-        var directory = Path.Combine(Path.GetTempPath(), $"Dotty Windows Pty Tests {Guid.NewGuid():N}");
+        string directory = Path.Combine(Path.GetTempPath(), $"Dotty Windows Pty Tests {Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
+        _temporaryDirectories.Add(directory);
 
-        var executablePath = Path.Combine(directory, fileName);
-        File.WriteAllText(executablePath, string.Empty);
+        string executablePath = Path.Combine(directory, fileName);
+        File.Copy(Path.Combine(Environment.SystemDirectory, "cmd.exe"), executablePath);
         return executablePath;
+    }
+
+    private async Task<string> StartShellAndReadOutput(string shell, string marker)
+    {
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        _pty = new Windows.WindowsPty();
+        _pty.Start(shell: shell, columns: 80, rows: 24);
+        Stream outputStream = _pty.OutputStream ?? throw new InvalidOperationException("PTY output stream was not created.");
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        var buffer = new byte[4096];
+        var output = new StringBuilder();
+
+        try
+        {
+            while (!cts.Token.IsCancellationRequested)
+            {
+                int read = await outputStream.ReadAsync(buffer.AsMemory(), cts.Token);
+                if (read == 0)
+                    break;
+                output.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                if (output.ToString().Contains(marker, StringComparison.Ordinal))
+                    return output.ToString();
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+        }
+
+        string captured = output.ToString();
+        captured.Should().Contain(marker, "the launched shell output was: {0}", captured);
+        return captured;
     }
 
     #region Constructor and Factory Tests
@@ -226,64 +251,54 @@ public class WindowsPtyTests : IDisposable
         Assert.Throws<InvalidOperationException>(() => _pty.Start());
     }
 
-    /// <summary>
-    /// Verifies that existing executable paths containing spaces are quoted for CreateProcess.
-    /// </summary>
+    /// <summary>Verifies CreateProcess launches an existing executable path containing spaces.</summary>
     [Fact]
-    public void WindowsPty_BuildProcessStartInfo_QuotesExistingExecutablePathWithSpaces()
+    public void WindowsPty_Start_LaunchesExistingExecutablePathWithSpaces()
     {
-        var executablePath = CreateTempExecutablePath("dotty test shell.exe");
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+        string executablePath = CreateTempExecutablePath("dotty test shell.exe");
+        _pty = new Windows.WindowsPty();
 
-        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(executablePath);
+        _pty.Start(shell: executablePath, columns: 80, rows: 24);
 
-        applicationName.Should().Be(executablePath);
-        commandLine.Should().Be($"\"{executablePath}\"");
+        _pty.IsRunning.Should().BeTrue();
     }
 
-    /// <summary>
-    /// Verifies that unquoted executable paths with spaces preserve trailing arguments.
-    /// </summary>
+    /// <summary>Verifies an unquoted existing executable path with spaces runs its arguments.</summary>
     [Fact]
-    public void WindowsPty_BuildProcessStartInfo_ResolvesUnquotedExecutablePathWithSpacesAndArguments()
+    public async Task WindowsPty_Start_UnquotedExecutablePathWithSpacesRunsArguments()
     {
-        var executablePath = CreateTempExecutablePath("dotty test shell.exe");
-        var shell = $"{executablePath} /c \"echo hello world\"";
+        string executablePath = CreateTempExecutablePath("dotty test shell.exe");
+        const string marker = "DOTTY_UNQUOTED_SPACED_SHELL_OUTPUT";
 
-        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(shell);
+        string output = await StartShellAndReadOutput($"{executablePath} /d /c echo {marker}", marker);
 
-        applicationName.Should().Be(executablePath);
-        commandLine.Should().Be($"\"{executablePath}\" /c \"echo hello world\"");
+        output.Should().Contain(marker);
     }
 
-    /// <summary>
-    /// Verifies that quoted executable paths preserve arguments without reparsing them.
-    /// </summary>
+    /// <summary>Verifies quoted executable paths and arguments launch through the public PTY API.</summary>
     [Fact]
-    public void WindowsPty_BuildProcessStartInfo_PreservesQuotedExecutableAndArguments()
+    public async Task WindowsPty_Start_PreservesQuotedExecutableAndArguments()
     {
-        var executablePath = CreateTempExecutablePath("dotty test shell.exe");
-        var scriptPath = CreateTempExecutablePath("dotty script file.cmd");
-        var shell = $"\"{executablePath}\" -NoLogo -File \"{scriptPath}\"";
+        string executablePath = CreateTempExecutablePath("dotty test shell.exe");
+        const string marker = "DOTTY_QUOTED_SPACED_SHELL_OUTPUT";
 
-        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(shell);
+        string output = await StartShellAndReadOutput($"\"{executablePath}\" /d /c echo {marker}", marker);
 
-        applicationName.Should().Be(executablePath);
-        commandLine.Should().Be(shell);
+        output.Should().Contain(marker);
     }
 
-    /// <summary>
-    /// Verifies that PATH-resolved commands are left unchanged.
-    /// </summary>
+    /// <summary>Verifies a shell resolved through PATH can execute its arguments.</summary>
     [Fact]
-    public void WindowsPty_BuildProcessStartInfo_LeavesSearchPathCommandsUnchanged()
+    public async Task WindowsPty_Start_LaunchesSearchPathCommand()
     {
-        const string shell = "cmd.exe /c echo hello";
+        const string marker = "DOTTY_SEARCH_PATH_SHELL_OUTPUT";
 
-        var (applicationName, commandLine) = InvokeBuildProcessStartInfo(shell);
+        string output = await StartShellAndReadOutput($"cmd.exe /d /c echo {marker}", marker);
 
-        applicationName.Should().BeNull();
-        commandLine.Should().Be(shell);
+        output.Should().Contain(marker);
     }
+
 
     #endregion
 

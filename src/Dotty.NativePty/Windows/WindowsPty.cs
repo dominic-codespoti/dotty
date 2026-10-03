@@ -461,9 +461,9 @@ public sealed class WindowsPty : IPty
                 new StringBuilder(BuildCommandLine(shell, arguments)));
         }
 
-        return BuildProcessStartInfo(shell);
+        return BuildShellCommandStartInfo(shell);
     }
-    private static (string? ApplicationName, StringBuilder CommandLine) BuildProcessStartInfo(string shell)
+    private static (string? ApplicationName, StringBuilder CommandLine) BuildShellCommandStartInfo(string shell)
     {
         if (File.Exists(shell))
             return (shell, new StringBuilder(QuoteCommandLineArgument(shell)));

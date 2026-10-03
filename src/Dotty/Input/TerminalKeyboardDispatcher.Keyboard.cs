@@ -188,9 +188,17 @@ public sealed partial class TerminalKeyboardDispatcher
         >= Key.A and <= Key.Z => 'a' + (key - Key.A),
         >= Key.Number0 and <= Key.Number9 => '0' + (key - Key.Number0),
         Key.Space => ' ',
-        Key.Minus => '-', Key.Equal => '=', Key.LeftBracket => '[', Key.RightBracket => ']',
-        Key.BackSlash => '\\', Key.Semicolon => ';', Key.Apostrophe => 39, Key.GraveAccent => 96,
-        Key.Comma => ',', Key.Period => '.', Key.Slash => '/',
+        Key.Minus => '-',
+        Key.Equal => '=',
+        Key.LeftBracket => '[',
+        Key.RightBracket => ']',
+        Key.BackSlash => '\\',
+        Key.Semicolon => ';',
+        Key.Apostrophe => 39,
+        Key.GraveAccent => 96,
+        Key.Comma => ',',
+        Key.Period => '.',
+        Key.Slash => '/',
         _ => 0
     };
 

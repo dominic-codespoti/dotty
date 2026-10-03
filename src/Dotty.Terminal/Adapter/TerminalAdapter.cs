@@ -641,7 +641,7 @@ public partial class TerminalAdapter : ITerminalHandler
             case 2:
                 ReplyRequested?.Invoke(_da2Response.AsSpan());
                 break;
-            // DA3 (CSI = c) is not implemented; do not claim an identity/capability.
+                // DA3 (CSI = c) is not implemented; do not claim an identity/capability.
         }
     }
 

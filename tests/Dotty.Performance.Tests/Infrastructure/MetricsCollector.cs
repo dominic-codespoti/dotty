@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime;
 
 namespace Dotty.Performance.Tests.Infrastructure;
 
@@ -45,6 +44,7 @@ public class MetricsCollector : IDisposable
     public MetricSnapshot Snapshot(string label = "")
     {
         _process.Refresh();
+        var gcInfo = GC.GetGCMemoryInfo();
 
         var snapshot = new MetricSnapshot
         {
@@ -58,9 +58,8 @@ public class MetricsCollector : IDisposable
             GcGen1Collections = GC.CollectionCount(1) - _baselineGcCount1,
             GcGen2Collections = GC.CollectionCount(2) - _baselineGcCount2,
             TotalAllocatedBytes = GC.GetTotalAllocatedBytes() - _baselineAllocatedBytes,
-            Gen0HeapSize = GC.GetGeneration(0),
-            Gen1HeapSize = GC.GetGeneration(1),
-            Gen2HeapSize = GC.GetGeneration(2),
+            ManagedHeapBytes = gcInfo.HeapSizeBytes,
+            ManagedFragmentedBytes = gcInfo.FragmentedBytes,
             ThreadCount = _process.Threads.Count,
             HandleCount = _process.HandleCount,
             CpuUsagePercent = GetCpuUsage()
@@ -86,6 +85,7 @@ public class MetricsCollector : IDisposable
             AverageWorkingSetBytes = (long)_snapshots.Average(s => s.WorkingSetBytes),
             FinalWorkingSetBytes = finalSnapshot.WorkingSetBytes,
             TotalAllocatedBytes = finalSnapshot.TotalAllocatedBytes,
+            FinalManagedHeapBytes = finalSnapshot.ManagedHeapBytes,
             GcGen0Collections = finalSnapshot.GcGen0Collections,
             GcGen1Collections = finalSnapshot.GcGen1Collections,
             GcGen2Collections = finalSnapshot.GcGen2Collections,
@@ -126,9 +126,10 @@ public struct MetricSnapshot
     public int GcGen1Collections { get; set; }
     public int GcGen2Collections { get; set; }
     public long TotalAllocatedBytes { get; set; }
-    public int Gen0HeapSize { get; set; }
-    public int Gen1HeapSize { get; set; }
-    public int Gen2HeapSize { get; set; }
+    /// <summary>Managed heap bytes reported at the latest GC; not cumulative allocation.</summary>
+    public long ManagedHeapBytes { get; set; }
+    /// <summary>Fragmented managed heap bytes reported at the latest GC.</summary>
+    public long ManagedFragmentedBytes { get; set; }
     public int ThreadCount { get; set; }
     public int HandleCount { get; set; }
     public double CpuUsagePercent { get; set; }
@@ -164,6 +165,8 @@ public class MetricsSummary
     public long AverageWorkingSetBytes { get; set; }
     public long FinalWorkingSetBytes { get; set; }
     public long TotalAllocatedBytes { get; set; }
+    /// <summary>Heap size reported at the latest GC; distinct from cumulative allocations.</summary>
+    public long FinalManagedHeapBytes { get; set; }
     public int GcGen0Collections { get; set; }
     public int GcGen1Collections { get; set; }
     public int GcGen2Collections { get; set; }

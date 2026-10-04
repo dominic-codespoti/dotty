@@ -13,8 +13,6 @@ internal sealed class ScreenManager : IDisposable
     private bool _usingAlt;
     private readonly int _scrollbackCapacity;
     private readonly List<Screen> _spareScreens = new();
-    private int _highWaterRows;
-    private int _highWaterColumns;
     private readonly Screen.ReflowWorkspace _reflowWorkspace = new();
     private readonly Screen.SourceLayout _mainLayout = new();
     private readonly Screen.SourceLayout _alternateLayout = new();
@@ -32,8 +30,6 @@ internal sealed class ScreenManager : IDisposable
     public ScreenManager(int rows, int columns, int scrollbackCapacity = 10000)
     {
         _scrollbackCapacity = scrollbackCapacity;
-        _highWaterRows = Math.Max(1, rows);
-        _highWaterColumns = Math.Max(1, columns);
         _main = new Screen(rows, columns, scrollbackCapacity);
     }
 
@@ -62,7 +58,6 @@ internal sealed class ScreenManager : IDisposable
             if (_alt is null)
             {
                 _alt = new Screen(_savedMain.Rows, _savedMain.Columns, _scrollbackCapacity);
-                _alt.EnsureCapacity(_highWaterRows, _highWaterColumns);
             }
             _alt.Clear();
         }
@@ -90,19 +85,6 @@ internal sealed class ScreenManager : IDisposable
         out ReflowMapping? mainMapping,
         out ReflowMapping? alternateMapping)
     {
-        bool capacityExpanded = false;
-        if (rows > _highWaterRows)
-        {
-            _highWaterRows = rows;
-            capacityExpanded = true;
-        }
-        if (columns > _highWaterColumns)
-        {
-            _highWaterColumns = columns;
-            capacityExpanded = true;
-        }
-        if (capacityExpanded)
-            EnsureAllScreenCapacities();
         mainMapping = _mainMapping;
         alternateMapping = null;
         bool mainIsSaved = _savedMain != null && ReferenceEquals(_main, _savedMain);
@@ -173,19 +155,12 @@ internal sealed class ScreenManager : IDisposable
             scrollbackRows,
             includeScrollback,
             destination);
+        resized.TrimCapacity();
+        source.ResetForReuseAndTrim(rows, columns);
         _spareScreens.Add(source);
         return resized;
     }
 
-    private void EnsureAllScreenCapacities()
-    {
-        _main.EnsureCapacity(_highWaterRows, _highWaterColumns);
-        _alt?.EnsureCapacity(_highWaterRows, _highWaterColumns);
-        if (_savedMain != null && !ReferenceEquals(_savedMain, _main))
-            _savedMain.EnsureCapacity(_highWaterRows, _highWaterColumns);
-        foreach (var screen in _spareScreens)
-            screen.EnsureCapacity(_highWaterRows, _highWaterColumns);
-    }
 
     private Screen TakeSpareScreen(int rows, int columns)
     {
@@ -198,7 +173,6 @@ internal sealed class ScreenManager : IDisposable
         }
 
         var created = new Screen(rows, columns, _scrollbackCapacity);
-        created.EnsureCapacity(_highWaterRows, _highWaterColumns);
         return created;
     }
 
@@ -206,6 +180,7 @@ internal sealed class ScreenManager : IDisposable
     {
         _main.Dispose();
         _alt?.Dispose();
+        _savedMain?.Dispose();
         foreach (var screen in _spareScreens)
             screen.Dispose();
         _spareScreens.Clear();

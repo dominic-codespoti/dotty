@@ -4,6 +4,38 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Dotty.Terminal.Adapter;
+/// <summary>Process-wide explicit capacity accounting for terminal-owned storage.</summary>
+public static class BufferMemoryMetrics
+{
+    private static long _liveArenaCapacityBytes;
+    private static long _ownedSnapshotArrayCapacityBytes;
+    private static long _arenaCapacityAllocatedBytes;
+    private static long _snapshotCapacityAllocatedBytes;
+
+    public static BufferMemorySnapshot GetSnapshot() => new(
+        Interlocked.Read(ref _liveArenaCapacityBytes),
+        Interlocked.Read(ref _ownedSnapshotArrayCapacityBytes),
+        Interlocked.Read(ref _arenaCapacityAllocatedBytes),
+        Interlocked.Read(ref _snapshotCapacityAllocatedBytes));
+
+    internal static void ChangeArenaCapacity(long oldBytes, long newBytes)
+    {
+        Interlocked.Add(ref _liveArenaCapacityBytes, newBytes - oldBytes);
+        if (newBytes > oldBytes) Interlocked.Add(ref _arenaCapacityAllocatedBytes, newBytes);
+    }
+
+    internal static void ChangeSnapshotCapacity(long oldBytes, long newBytes)
+    {
+        Interlocked.Add(ref _ownedSnapshotArrayCapacityBytes, newBytes - oldBytes);
+        if (newBytes > oldBytes) Interlocked.Add(ref _snapshotCapacityAllocatedBytes, newBytes);
+    }
+}
+
+public readonly record struct BufferMemorySnapshot(
+    long LiveArenaCapacityBytes,
+    long OwnedSnapshotArrayCapacityBytes,
+    long ArenaCapacityAllocatedBytes,
+    long SnapshotCapacityAllocatedBytes);
 
 public unsafe partial class Screen : IDisposable
 {
@@ -96,6 +128,26 @@ public unsafe partial class Screen : IDisposable
     internal void ResetForReflow(int rows, int columns) =>
         PrepareForReuse(rows, columns);
 
+    internal void ResetForReuseAndTrim(int rows, int columns)
+    {
+        PrepareForReuse(rows, columns);
+        TrimCapacity();
+    }
+
+    internal void TrimCapacity()
+    {
+        if (_cellCapacity == _cellCount)
+            return;
+
+        long oldCapacityBytes = (long)_cellCapacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>());
+        long newCapacityBytes = (long)_cellCount * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>());
+        IntPtr newCells = Marshal.ReAllocHGlobal(_cellsPtr, (IntPtr)((long)_cellCount * Unsafe.SizeOf<CellHot>()));
+        _cellsPtr = newCells;
+        IntPtr newColdCells = Marshal.ReAllocHGlobal(_coldCellsPtr, (IntPtr)((long)_cellCount * Unsafe.SizeOf<ColdCell>()));
+        _coldCellsPtr = newColdCells;
+        _cellCapacity = _cellCount;
+        BufferMemoryMetrics.ChangeArenaCapacity(oldCapacityBytes, newCapacityBytes);
+    }
     internal void EnsureCapacity(int rows, int columns)
     {
         rows = Math.Max(1, rows);
@@ -105,6 +157,9 @@ public unsafe partial class Screen : IDisposable
 
         if (_cellCapacity < requiredCells || _cellsPtr == IntPtr.Zero || _coldCellsPtr == IntPtr.Zero)
         {
+            long oldCapacityBytes = _cellsPtr != IntPtr.Zero && _coldCellsPtr != IntPtr.Zero
+                ? (long)_cellCapacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>())
+                : 0;
             int capacity = Math.Max(_cellCapacity, requiredCells);
             IntPtr cells = Marshal.AllocHGlobal(capacity * Unsafe.SizeOf<CellHot>());
             IntPtr cold = Marshal.AllocHGlobal(capacity * Unsafe.SizeOf<ColdCell>());
@@ -121,6 +176,7 @@ public unsafe partial class Screen : IDisposable
             _cellsPtr = cells;
             _coldCellsPtr = cold;
             _cellCapacity = capacity;
+            BufferMemoryMetrics.ChangeArenaCapacity(oldCapacityBytes, (long)capacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>()));
         }
 
         if (_rowMaxCol.Length < total)
@@ -152,6 +208,8 @@ public unsafe partial class Screen : IDisposable
 
     public void Dispose()
     {
+        if (_cellsPtr != IntPtr.Zero && _coldCellsPtr != IntPtr.Zero)
+            BufferMemoryMetrics.ChangeArenaCapacity((long)_cellCapacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>()), 0);
         if (_cellsPtr != IntPtr.Zero)
         {
             Marshal.FreeHGlobal(_cellsPtr);

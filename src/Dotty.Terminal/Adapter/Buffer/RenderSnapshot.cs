@@ -203,8 +203,37 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
 
     private static void EnsureCapacity<T>(ref T[] array, int required)
     {
-        if (array.Length < required)
-            Array.Resize(ref array, required);
+        if (array.Length >= required)
+            return;
+        int oldLength = array.Length;
+        Array.Resize(ref array, required);
+        BufferMemoryMetrics.ChangeSnapshotCapacity((long)oldLength * System.Runtime.CompilerServices.Unsafe.SizeOf<T>(), (long)array.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<T>());
+    }
+
+    internal void ReleaseCapacity()
+    {
+        long bytes = (long)_cellsStorage.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<CellHot>()
+            + (long)_coldStorage.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<ColdCell>()
+            + (long)_rowMapStorage.Length * sizeof(int)
+            + (long)_rowMaxColStorage.Length * sizeof(int)
+            + (long)_rowGenerationsStorage.Length * sizeof(ulong)
+            + (long)_rowOffsetsStorage.Length * sizeof(int)
+            + (long)ScrollbackText.Length * IntPtr.Size;
+        if (bytes != 0) BufferMemoryMetrics.ChangeSnapshotCapacity(bytes, 0);
+        _cellsStorage = Array.Empty<CellHot>();
+        _coldStorage = Array.Empty<ColdCell>();
+        _rowMapStorage = Array.Empty<int>();
+        _rowMaxColStorage = Array.Empty<int>();
+        _rowGenerationsStorage = Array.Empty<ulong>();
+        _rowOffsetsStorage = Array.Empty<int>();
+        Cells = Array.Empty<CellHot>();
+        Cold = Array.Empty<ColdCell>();
+        RowMap = Array.Empty<int>();
+        RowMaxCol = Array.Empty<int>();
+        RowGenerationsArray = Array.Empty<ulong>();
+        RowOffsets = Array.Empty<int>();
+        ScrollbackText = Array.Empty<string>();
+        _styles = Array.Empty<CellAttributes>();
     }
 
     public void Dispose()
@@ -220,6 +249,8 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         RowMaxCol = Array.Empty<int>();
         RowGenerationsArray = Array.Empty<ulong>();
         RowOffsets = Array.Empty<int>();
+        if (ScrollbackText.Length != 0)
+            BufferMemoryMetrics.ChangeSnapshotCapacity((long)ScrollbackText.Length * IntPtr.Size, 0);
         ScrollbackText = Array.Empty<string>();
         _styles = Array.Empty<CellAttributes>();
         NextPooled = null;

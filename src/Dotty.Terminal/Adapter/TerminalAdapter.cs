@@ -11,7 +11,7 @@ public delegate void TerminalReplyHandler(ReadOnlySpan<char> reply);
 /// Adapter that connects the parser callbacks to a TerminalBuffer and exposes a render event.
 /// Keeps responsibilities minimal: buffer management and render notification.
 /// </summary>
-public partial class TerminalAdapter : ITerminalHandler
+public partial class TerminalAdapter : ITerminalHandler, IDisposable
 {
     public enum MouseMode
     {
@@ -743,4 +743,5 @@ public partial class TerminalAdapter : ITerminalHandler
         RequestRender();
         FlushRender();
     }
+    public void Dispose() => _buffer.Dispose();
 }

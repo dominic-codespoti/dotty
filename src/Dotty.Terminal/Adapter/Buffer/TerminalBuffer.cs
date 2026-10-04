@@ -12,7 +12,7 @@ namespace Dotty.Terminal.Adapter;
 /// Very small screen model for now: stores visible lines and a simple scrollback.
 /// Designed to be called from parser callbacks; it is not thread-safe by itself.
 /// </summary>
-public partial class TerminalBuffer : IRenderSource
+public partial class TerminalBuffer : IRenderSource, IDisposable
 {
     public object SyncRoot { get; } = new object();
 
@@ -77,6 +77,7 @@ public partial class TerminalBuffer : IRenderSource
     private CursorState _alternateSavedCursorState;
 
     private ulong[] _rowGenerations = Array.Empty<ulong>();
+    private int _disposed;
     private readonly object _snapshotPoolGate = new();
     private RenderSnapshot? _snapshotPoolHead;
     private ulong _globalGeneration;
@@ -583,6 +584,7 @@ public partial class TerminalBuffer : IRenderSource
     {
         lock (_snapshotPoolGate)
         {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
             RenderSnapshot snapshot;
             if (_snapshotPoolHead is null)
             {
@@ -604,8 +606,35 @@ public partial class TerminalBuffer : IRenderSource
     {
         lock (_snapshotPoolGate)
         {
+            if (_disposed != 0)
+            {
+                snapshot.ReleaseCapacity();
+                return;
+            }
+
             snapshot.NextPooled = _snapshotPoolHead;
             _snapshotPoolHead = snapshot;
+        }
+    }
+
+    public void Dispose()
+    {
+        RenderSnapshot? pooled;
+        lock (_snapshotPoolGate)
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            pooled = _snapshotPoolHead;
+            _snapshotPoolHead = null;
+        }
+
+        _screens.Dispose();
+        while (pooled is not null)
+        {
+            RenderSnapshot next = pooled.NextPooled!;
+            pooled.NextPooled = null;
+            pooled.ReleaseCapacity();
+            pooled = next;
         }
     }
 
@@ -638,6 +667,7 @@ public partial class TerminalBuffer : IRenderSource
         {
             snapshot.CapturedSbStart = sbStart;
             var text = new string[count];
+            BufferMemoryMetrics.ChangeSnapshotCapacity(0, (long)count * IntPtr.Size);
             for (int r = sbStart; r <= sbEnd; r++)
             {
                 int idx = r + ScrollbackCount;
@@ -677,6 +707,7 @@ public partial class TerminalBuffer : IRenderSource
         {
             snapshot.CapturedSbStart = sbStart;
             var text = new string[count];
+            BufferMemoryMetrics.ChangeSnapshotCapacity(0, (long)count * IntPtr.Size);
             for (int r = sbStart; r <= sbEnd; r++)
             {
                 int idx = r + ScrollbackCount;

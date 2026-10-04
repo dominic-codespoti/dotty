@@ -923,6 +923,8 @@ public partial class TerminalSession : IDisposable
             _ptyPipelineCompletionSource?.TrySetResult(null);
             if (_disposed && readerExited)
                 DisposeOutputWaitEvents();
+            if (_disposed && readerExited)
+                Adapter.Dispose();
         }
     }
 
@@ -982,5 +984,7 @@ public partial class TerminalSession : IDisposable
             DisposeInputWaitEvent();
         if (!onOutputThread && outputWorkersExited)
             DisposeOutputWaitEvents();
+        if (!onOutputThread && outputWorkersExited)
+            Adapter.Dispose();
     }
 }

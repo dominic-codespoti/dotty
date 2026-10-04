@@ -7,7 +7,7 @@ namespace Dotty.Terminal.Adapter;
 /// Minimal Unicode width helper roughly following wcwidth semantics.
 /// Wide-range table adapted from Markus Kuhn's public-domain implementation.
 /// </summary>
-internal static class UnicodeWidth
+public static class UnicodeWidth
 {
     private static readonly (int Start, int End)[] WideIntervals =
     {
@@ -25,9 +25,11 @@ internal static class UnicodeWidth
         (0x20000, 0x2FFFD), (0x30000, 0x3FFFD)
     };
 
-    public static int GetWidth(string grapheme)
+    public static int GetWidth(string grapheme) => GetWidth(grapheme.AsSpan());
+
+    public static int GetWidth(ReadOnlySpan<char> grapheme)
     {
-        if (string.IsNullOrEmpty(grapheme))
+        if (grapheme.IsEmpty)
         {
             return 0;
         }
@@ -60,7 +62,7 @@ internal static class UnicodeWidth
         return 1;
     }
 
-    private static bool ContainsEmojiIndicators(string grapheme)
+    private static bool ContainsEmojiIndicators(ReadOnlySpan<char> grapheme)
     {
         foreach (var rune in grapheme.EnumerateRunes())
         {

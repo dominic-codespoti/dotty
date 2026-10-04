@@ -28,19 +28,20 @@ public readonly struct GlyphInfo
 
     public GlyphInfo(
         int x, int y, int width, int height,
-        float advance, float baselineOffset, float leftBearing, float topBearing)
+        float advance, float baselineOffset, float leftBearing, float topBearing, bool isColor = false)
     {
         X = x; Y = y; Width = width; Height = height;
         Advance = advance; BaselineOffset = baselineOffset;
         LeftBearing = leftBearing; TopBearing = topBearing;
+        IsColor = isColor;
     }
+    public readonly bool IsColor;
 }
 
 /// <summary>
 /// Atlas lookup key. Deliberately has NO foreground color: the atlas stores
-/// coverage only, so one entry serves every fg color (the deleted predecessor
-/// baked RGB into the atlas and keyed on color, which both multiplied entries
-/// and made lookups miss). Typeface identity is by instance — canvases share
+/// either grayscale coverage or intrinsic premultiplied color, so one entry
+/// serves every foreground color/alpha. Typeface identity is by instance — canvases share
 /// resolved typefaces through a static cache, so same-family instances compare
 /// equal in practice.
 /// </summary>
@@ -70,7 +71,7 @@ public readonly struct GlyphKey : IEquatable<GlyphKey>
     public override int GetHashCode() =>
         HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Bold);
 }
-/// <summary>One changed rectangle in the A8 atlas bitmap.</summary>
+/// <summary>One changed rectangle in an atlas page bitmap.</summary>
 public readonly struct AtlasDirtyRegion
 {
     public int X { get; }
@@ -88,24 +89,15 @@ public readonly struct AtlasDirtyRegion
 
 
 /// <summary>
-/// Single-channel (A8) coverage glyph atlas. Rasterizes graphemes once per
-/// (grapheme, typeface, size, bold) key, stores tight-bounds placement
-/// with a hard size cap. Mutation and atlas packing are lock-protected.
-/// Glyph lookup reads an immutable copy-on-write map published with
-/// <see cref="Volatile.Write"/>; bitmap access remains lock-protected for
-/// texture upload.
-/// Defects of the deleted predecessor that this design fixes:
-///  - A8 coverage instead of baked RGBA (color applied at draw time);
-///  - no color in the key (single key contract);
-///  - Bold actually applies (synthetic stroke at rasterization);
-///  - bearings recorded (placement verifiable, not centered by bounds width);
-///  - width-2/wide graphemes rasterize at their natural advance;
-///  - bounded growth with a hard cap + fallback signal instead of unbounded
-///    doubling.
+/// Two-page glyph atlas: A8 coverage for monochrome glyphs and lazily allocated
+/// premultiplied RGBA for intrinsic-color glyphs. Rasterizes graphemes once per
+/// (grapheme, typeface, size, bold) key and stores tight-bounds placement.
+/// Mutation and atlas packing are lock-protected. Glyph lookup reads an immutable
+/// copy-on-write map; bitmap access remains lock-protected for texture upload.
 /// </summary>
 public sealed class GlyphAtlas : IDisposable
 {
-    public const int MaxAtlasSize = 4096;   // 4096^2 A8 = 16 MB per atlas
+    public const int MaxAtlasSize = 4096;   // Each page capped independently; A8 1 B/px, RGBA 4 B/px.
     private const int DefaultInitialSize = 1024;
     private const int Padding = 2;          // gap between entries (sampling bleed)
     private const int MaxGlyphDimension = 512;
@@ -122,6 +114,18 @@ public sealed class GlyphAtlas : IDisposable
     private readonly Dictionary<GlyphKey, GlyphInfo> _map = new();
     private readonly List<Shelf> _shelves = new();
     private readonly List<AtlasDirtyRegion> _dirtyRegions = new();
+    private readonly List<Shelf> _colorShelves = new();
+    private readonly List<AtlasDirtyRegion> _colorDirtyRegions = new();
+    private SKBitmap? _colorBitmap;
+    private SKCanvas? _colorCanvas;
+    private int _colorNextShelfY;
+    private int _colorContentVersion;
+    private bool _colorFullUploadRequired;
+    private int _colorWidth;
+    private int _colorHeight;
+    private static readonly object ColorProbeLock = new();
+    private static SKBitmap? _colorProbeBitmap;
+    private static SKCanvas? _colorProbeCanvas;
     private SKBitmap _bitmap;
     private SKCanvas _canvas;
     private int _width;
@@ -130,6 +134,15 @@ public sealed class GlyphAtlas : IDisposable
     private bool _disposed;
     private GlyphInfo _fallbackGlyph;
     private bool _hasFallbackGlyph;
+    /// <summary>Native pixel storage retained by the shared color-probe scratch bitmap, excluding its canvas wrapper.</summary>
+    public static long IntrinsicColorProbeScratchBytes
+    {
+        get
+        {
+            lock (ColorProbeLock)
+                return _colorProbeBitmap == null ? 0 : (long)_colorProbeBitmap.RowBytes * _colorProbeBitmap.Height;
+        }
+    }
     private bool _fullUploadRequired;
     private bool _glyphMapDirty;
     private int _publishedMapCopyCount;
@@ -154,7 +167,10 @@ public sealed class GlyphAtlas : IDisposable
     }
     public int Width => Volatile.Read(ref _width);
     public int Height => Volatile.Read(ref _height);
-    public long SizeBytes => (long)Width * Height; // A8: 1 byte/px
+    public int ColorContentVersion => Volatile.Read(ref _colorContentVersion);
+    public int ColorWidth => Volatile.Read(ref _colorWidth);
+    public int ColorHeight => Volatile.Read(ref _colorHeight);
+    public long SizeBytes => (long)Width * Height + (long)ColorWidth * ColorHeight * 4;
     public int EntryCount
     {
         get
@@ -216,6 +232,31 @@ public sealed class GlyphAtlas : IDisposable
             }
         }
     }
+    public int WithColorAtlasUpdates(Action<SKBitmap, IReadOnlyList<AtlasDirtyRegion>, bool> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_colorBitmap == null) return ColorContentVersion;
+            bool completed = false;
+            try
+            {
+                action(_colorBitmap, _colorDirtyRegions, _colorFullUploadRequired);
+                completed = true;
+                return ColorContentVersion;
+            }
+            finally
+            {
+                if (completed)
+                {
+                    _colorDirtyRegions.Clear();
+                    _colorFullUploadRequired = false;
+                }
+            }
+        }
+    }
+    public SKBitmap? ColorAtlasBitmap { get { lock (_lock) return _colorBitmap; } }
 
     /// <summary>Returns the pre-reserved tofu glyph used when the atlas is full.</summary>
     public bool TryGetFallbackGlyph(out GlyphInfo info)
@@ -412,27 +453,32 @@ public sealed class GlyphAtlas : IDisposable
         {
             if (_map.TryGetValue(key, out info))
                 return true;
+            if (raster.IsColor) EnsureColorPage();
 
-            if (!TryPlace(raster.Width, raster.Height, out int x, out int y))
+            if (!TryPlace(raster.Width, raster.Height, raster.IsColor, out int x, out int y))
                 return false;
 
-            _canvas.DrawImage(
-                raster.Image,
+            var targetCanvas = raster.IsColor ? _colorCanvas! : _canvas;
+            targetCanvas.DrawImage(raster.Image,
                 new SKRect(raster.Left, raster.Top, raster.Left + raster.Width, raster.Top + raster.Height),
                 new SKRect(x, y, x + raster.Width, y + raster.Height),
-                new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None),
-                _rasterBlitPaint);
-            _canvas.Flush();
+                new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None), _rasterBlitPaint);
+            targetCanvas.Flush();
 
-            info = new GlyphInfo(
-                x, y, raster.Width, raster.Height,
-                raster.Advance, raster.BaselineOffset, raster.LeftBearing, raster.TopBearing);
+            info = new GlyphInfo(x, y, raster.Width, raster.Height, raster.Advance,
+                raster.BaselineOffset, raster.LeftBearing, raster.TopBearing, raster.IsColor);
             _map[key] = info;
-            int nextVersion = unchecked(_contentVersion + 1);
-            Volatile.Write(ref _contentVersion, nextVersion);
-
+            if (raster.IsColor)
+            {
+                Volatile.Write(ref _colorContentVersion, unchecked(_colorContentVersion + 1));
+                _colorDirtyRegions.Add(new AtlasDirtyRegion(x, y, raster.Width, raster.Height));
+            }
+            else
+            {
+                Volatile.Write(ref _contentVersion, unchecked(_contentVersion + 1));
+                _dirtyRegions.Add(new AtlasDirtyRegion(x, y, raster.Width, raster.Height));
+            }
             _glyphMapDirty = true;
-            _dirtyRegions.Add(new AtlasDirtyRegion(x, y, raster.Width, raster.Height));
             added = true;
             return true;
         }
@@ -449,13 +495,14 @@ public sealed class GlyphAtlas : IDisposable
         public readonly float BaselineOffset;
         public readonly float LeftBearing;
         public readonly float TopBearing;
+        public readonly bool IsColor;
 
         public GlyphRaster(SKImage image, int left, int top, int width, int height,
-            float advance, float baselineOffset, float leftBearing, float topBearing)
+            float advance, float baselineOffset, float leftBearing, float topBearing, bool isColor = false)
         {
             Image = image; Left = left; Top = top; Width = width; Height = height;
             Advance = advance; BaselineOffset = baselineOffset;
-            LeftBearing = leftBearing; TopBearing = topBearing;
+            LeftBearing = leftBearing; TopBearing = topBearing; IsColor = isColor;
         }
     }
 
@@ -594,6 +641,82 @@ public sealed class GlyphAtlas : IDisposable
         return RasterizeTightCore(key, blob);
     }
 
+    private bool TryRasterizeIntrinsicColor(
+        GlyphKey key, SKTextBlob? blob, SKFont font, SKPaint paint,
+        int width, int height, float baseline, float advance, float reportedBaseline,
+        out GlyphRaster raster)
+    {
+        raster = default;
+        if (width > MaxGlyphDimension || height > MaxGlyphDimension) return false;
+        lock (ColorProbeLock)
+        {
+            if (_colorProbeBitmap == null || _colorProbeBitmap.Width < width || _colorProbeBitmap.Height < height)
+            {
+                _colorProbeCanvas?.Dispose();
+                _colorProbeBitmap?.Dispose();
+                _colorProbeBitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                _colorProbeCanvas = new SKCanvas(_colorProbeBitmap);
+            }
+            var bitmap = _colorProbeBitmap;
+            var canvas = _colorProbeCanvas!;
+            bitmap.Erase(SKColors.Transparent);
+            paint.Color = SKColors.White;
+            if (blob != null) canvas.DrawText(blob, 0f, baseline, paint);
+            else canvas.DrawText(key.Grapheme, 0f, baseline, SKTextAlign.Left, font, paint);
+            canvas.Flush();
+            bool intrinsic = false;
+            int left = width, top = height, right = -1, bottom = -1;
+            unsafe
+            {
+                byte* pixels = (byte*)bitmap.GetPixels();
+                int rowBytes = bitmap.RowBytes;
+                for (int y = 0; y < height; y++)
+                {
+                    byte* row = pixels + (nint)y * rowBytes;
+                    for (int x = 0; x < width; x++)
+                    {
+                        byte* p = row + x * 4;
+                        if (p[3] == 0) continue;
+                        if (p[0] != p[3] || p[1] != p[3] || p[2] != p[3]) intrinsic = true;
+                        if (x < left) left = x; if (x > right) right = x;
+                        if (y < top) top = y; if (y > bottom) bottom = y;
+                    }
+                }
+                if (!intrinsic && right >= left)
+                {
+                    bitmap.Erase(SKColors.Transparent);
+                    paint.Color = SKColors.Black;
+                    if (blob != null) canvas.DrawText(blob, 0f, baseline, paint);
+                    else canvas.DrawText(key.Grapheme, 0f, baseline, SKTextAlign.Left, font, paint);
+                    canvas.Flush();
+                    pixels = (byte*)bitmap.GetPixels();
+                    for (int y = top; y <= bottom && !intrinsic; y++)
+                    {
+                        byte* row = pixels + (nint)y * rowBytes;
+                        for (int x = left; x <= right; x++)
+                        {
+                            byte* p = row + x * 4;
+                            if (p[0] != 0 || p[1] != 0 || p[2] != 0) { intrinsic = true; break; }
+                        }
+                    }
+                }
+            }
+            paint.Color = SKColors.White;
+            if (!intrinsic || right < left || bottom < top) return false;
+            int glyphWidth = right - left + 1, glyphHeight = bottom - top + 1;
+            using var cropped = SKSurface.Create(new SKImageInfo(glyphWidth, glyphHeight, SKColorType.Rgba8888, SKAlphaType.Premul));
+            cropped.Canvas.Clear(SKColors.Transparent);
+            cropped.Canvas.DrawBitmap(bitmap,
+                new SKRect(left, top, right + 1, bottom + 1),
+                new SKRect(0, 0, glyphWidth, glyphHeight),
+                new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None), _rasterBlitPaint);
+            cropped.Canvas.Flush();
+            raster = new GlyphRaster(cropped.Snapshot(), 0, 0, glyphWidth, glyphHeight, advance,
+                reportedBaseline, left, top - baseline, isColor: true);
+            return true;
+        }
+    }
+
     private GlyphRaster RasterizeTightCore(
         GlyphKey key, SKTextBlob? blob,
         float baselineOverride = float.NaN,
@@ -639,6 +762,9 @@ public sealed class GlyphAtlas : IDisposable
         float boundedAdvance = MathF.Min(advance, maxAdvance);
         int width = Math.Max(1, (int)advance);
         int height = Math.Max(1, (int)(ascent + descent));
+
+        if (TryRasterizeIntrinsicColor(key, blob, font, paint, width, height, drawBaseline, boundedAdvance, reportedBaseline, out var colorRaster))
+            return colorRaster;
 
         using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Alpha8, SKAlphaType.Premul));
         var canvas = surface.Canvas;
@@ -689,35 +815,64 @@ public sealed class GlyphAtlas : IDisposable
             boundedAdvance, reportedBaseline, left, top - drawBaseline);
     }
 
-    private bool TryPlace(int width, int height, out int x, out int y)
+    private bool TryPlace(int width, int height, bool color, out int x, out int y)
     {
-        for (int i = 0; i < _shelves.Count; i++)
+        var shelves = color ? _colorShelves : _shelves;
+        var bitmap = color ? _colorBitmap! : _bitmap;
+        int nextShelfY = color ? _colorNextShelfY : _nextShelfY;
+        for (int i = 0; i < shelves.Count; i++)
         {
-            var shelf = _shelves[i];
-            if (shelf.Height >= height && _bitmap.Width - shelf.X >= width + Padding)
+            var shelf = shelves[i];
+            if (shelf.Height >= height && bitmap.Width - shelf.X >= width + Padding)
             {
-                x = shelf.X;
-                y = shelf.Y;
-                _shelves[i] = new Shelf { Y = shelf.Y, Height = shelf.Height, X = shelf.X + width + Padding };
+                x = shelf.X; y = shelf.Y;
+                shelves[i] = new Shelf { Y = shelf.Y, Height = shelf.Height, X = shelf.X + width + Padding };
                 return true;
             }
         }
-
-        if (_nextShelfY + height + Padding > _bitmap.Height)
+        if (width + Padding > bitmap.Width || nextShelfY + height + Padding > bitmap.Height)
         {
-            if (!Grow())
+            while (width + Padding > bitmap.Width || nextShelfY + height + Padding > bitmap.Height)
             {
-                x = 0; y = 0;
-                return false;
+                if (!(color ? GrowColor() : Grow()))
+                {
+                    x = 0; y = 0; return false;
+                }
+                bitmap = color ? _colorBitmap! : _bitmap;
             }
         }
-
-        x = 0;
-        y = _nextShelfY;
-        _shelves.Add(new Shelf { Y = y, Height = height, X = width + Padding });
-        _nextShelfY += height + Padding;
+        x = 0; y = nextShelfY;
+        shelves.Add(new Shelf { Y = y, Height = height, X = width + Padding });
+        if (color) _colorNextShelfY += height + Padding; else _nextShelfY += height + Padding;
         return true;
     }
+
+    private void EnsureColorPage()
+    {
+        if (_colorBitmap != null) return;
+        int size = _bitmap.Width;
+        _colorBitmap = new SKBitmap(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul));
+        _colorBitmap.Erase(SKColors.Transparent);
+        _colorCanvas = new SKCanvas(_colorBitmap);
+        Volatile.Write(ref _colorWidth, size); Volatile.Write(ref _colorHeight, size);
+        _colorFullUploadRequired = true;
+    }
+
+    private bool GrowColor()
+    {
+        int newSize = _colorBitmap!.Width * 2;
+        if (newSize > MaxAtlasSize) return false;
+        var bigger = new SKBitmap(new SKImageInfo(newSize, newSize, SKColorType.Rgba8888, SKAlphaType.Premul));
+        bigger.Erase(SKColors.Transparent);
+        using (var canvas = new SKCanvas(bigger))
+        { canvas.DrawBitmap(_colorBitmap, 0, 0, new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None)); canvas.Flush(); }
+        _colorCanvas!.Dispose(); _colorBitmap.Dispose();
+        _colorBitmap = bigger; _colorCanvas = new SKCanvas(bigger);
+        Volatile.Write(ref _colorWidth, newSize); Volatile.Write(ref _colorHeight, newSize);
+        _colorDirtyRegions.Clear(); _colorFullUploadRequired = true;
+        return true;
+    }
+
 
     /// <summary>
     /// Doubles the atlas (capped at <see cref="MaxAtlasSize"/>), preserving
@@ -755,6 +910,8 @@ public sealed class GlyphAtlas : IDisposable
             _disposed = true;
             _canvas.Dispose();
             _bitmap.Dispose();
+            _colorCanvas?.Dispose();
+            _colorBitmap?.Dispose();
             _rasterBlitPaint.Dispose();
         }
     }

@@ -111,6 +111,10 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Install GLFW build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
+
       - name: Cache NuGet packages
         uses: actions/cache@v6
         with:
@@ -204,6 +208,10 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Install GLFW build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
+
       - name: Cache NuGet packages
         uses: actions/cache@v6
         with:
@@ -287,6 +295,10 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install GLFW build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
 
       - name: Cache NuGet packages
         uses: actions/cache@v6

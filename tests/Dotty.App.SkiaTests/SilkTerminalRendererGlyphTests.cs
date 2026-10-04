@@ -9,6 +9,7 @@ using Xunit;
 
 namespace Dotty.App.SkiaTests;
 
+[Collection(nameof(NativeGlCollection))]
 public sealed class SilkTerminalRendererGlyphTests
 {
     private const int RequestedFramebufferWidth = 128;
@@ -75,6 +76,7 @@ public sealed class SilkTerminalRendererGlyphTests
                 FgR = 255,
                 FgG = 255,
                 FgB = 255,
+                FgA = 255,
                 Flags = 0,
                 // The clear colour is black and this alpha is zero, so the
                 // background pass cannot change any pixel in the cell.

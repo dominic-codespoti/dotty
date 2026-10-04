@@ -1,0 +1,13 @@
+{
+  "name": "GLFW",
+  "version": "3.6.0",
+  "repository": "https://github.com/clear-code/glfw",
+  "commit": "068858eece20cd6b6128f6f07a1d61f2dc2cbfaf",
+  "archiveUrl": "https://github.com/clear-code/glfw/archive/068858eece20cd6b6128f6f07a1d61f2dc2cbfaf.tar.gz",
+  "archiveSha256": "e90335cc2f80a97ae0be9edcb9a600ed801a1340fa0435acb8022742f763d715",
+  "license": "zlib/libpng; see source/LICENSE.md",
+  "sourceDirectory": "vendor/glfw/source",
+  "upstreamStatus": "Clear Code GLFW 3.6 development fork; not an upstream-stable release.",
+  "localNativePatchProvenance": "Local changes are layered on the pinned archive and are not part of commit 068858eece20cd6b6128f6f07a1d61f2dc2cbfaf. Native ownership and scalar-caret changes touch source/src/cocoa_window.m, source/src/x11_window.c, source/src/wl_window.c, source/src/win32_window.c, and source/src/internal.h; source/src/input.c remains unmodified.",
+  "buildPolicy": "Build only from this checked-in source tree; no network access or moving branch references during native builds."
+}

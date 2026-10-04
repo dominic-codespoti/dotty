@@ -13,21 +13,21 @@ public sealed class ShapedRunCache
     private struct CacheKey : IEquatable<CacheKey>
     {
         public readonly string Text;
-        public readonly int TypefaceHash;
+        public readonly SKTypeface Typeface;
         public readonly float TextSize;
         public readonly bool Bold;
 
         public CacheKey(string text, SKTypeface typeface, float textSize, bool bold)
         {
             Text = text;
-            TypefaceHash = typeface.GetHashCode();
+            Typeface = typeface;
             TextSize = textSize;
             Bold = bold;
         }
 
         public bool Equals(CacheKey other) =>
             Text == other.Text &&
-            TypefaceHash == other.TypefaceHash &&
+            ReferenceEquals(Typeface, other.Typeface) &&
             TextSize.Equals(other.TextSize) &&
             Bold == other.Bold;
 
@@ -35,7 +35,7 @@ public sealed class ShapedRunCache
             obj is CacheKey other && Equals(other);
 
         public override int GetHashCode() =>
-            HashCode.Combine(Text, TypefaceHash, TextSize, Bold);
+            HashCode.Combine(Text, System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Typeface), TextSize, Bold);
     }
 
     private sealed class CacheEntry

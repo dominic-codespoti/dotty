@@ -36,6 +36,43 @@
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <PropertyGroup>
+    <GlfwRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GlfwRid>
+    <GlfwRid Condition="'$(GlfwRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</GlfwRid>
+    <GlfwLibraryName Condition="$([System.String]::Copy('$(GlfwRid)').StartsWith('linux-'))">libglfw.so.3</GlfwLibraryName>
+    <GlfwLibraryName Condition="$([System.String]::Copy('$(GlfwRid)').StartsWith('win-'))">glfw3.dll</GlfwLibraryName>
+    <GlfwLibraryName Condition="$([System.String]::Copy('$(GlfwRid)').StartsWith('osx-'))">libglfw.3.dylib</GlfwLibraryName>
+    <Python3Command Condition="$([MSBuild]::IsOSPlatform('Windows'))">python</Python3Command>
+    <Python3Command Condition="!$([MSBuild]::IsOSPlatform('Windows'))">python3</Python3Command>
+    <GlfwOutputDirectory>$(MSBuildProjectDirectory)/../../obj/native/glfw/$(GlfwRid)/output</GlfwOutputDirectory>
+    <GlfwSourceLibrary>$(GlfwOutputDirectory)/$(GlfwLibraryName)</GlfwSourceLibrary>
+  </PropertyGroup>
+  <ItemGroup>
+    <Content Include="$(GlfwSourceLibrary)"
+             Link="$(GlfwLibraryName)"
+             CopyToOutputDirectory="Always"
+             CopyToPublishDirectory="Always" />
+  </ItemGroup>
+  <Target Name="RequireGlfwRid" BeforeTargets="Build;Publish" Condition="'$(GlfwRid)' == ''">
+    <Error Text="Could not determine the host or target RID required to build pinned GLFW." />
+  </Target>
+  <Target Name="BuildPinnedGlfw" BeforeTargets="Build;Publish;GetCopyToOutputDirectoryItems" Condition="'$(GlfwRid)' != ''">
+    <Exec Command="$(Python3Command) &quot;$(MSBuildProjectDirectory)/../../scripts/native/build-glfw.py&quot; --rid &quot;$(GlfwRid)&quot; --output-dir &quot;$(GlfwOutputDirectory)&quot;" />
+  </Target>
+  <Target Name="CopyPinnedGlfwToBuildOutput" AfterTargets="Build" Condition="'$(GlfwRid)' != ''">
+    <ItemGroup>
+      <_ExistingGlfwCopy Include="$(TargetDir)libglfw*;$(TargetDir)glfw3.dll" />
+    </ItemGroup>
+    <Delete Files="@(_ExistingGlfwCopy)" />
+    <Copy SourceFiles="$(GlfwSourceLibrary)" DestinationFolder="$(TargetDir)" />
+  </Target>
+  <Target Name="CopyPinnedGlfwToPublishOutput" AfterTargets="Publish" Condition="'$(GlfwRid)' != ''">
+    <ItemGroup>
+      <_ExistingGlfwPublishCopy Include="$(PublishDir)libglfw*;$(PublishDir)glfw3.dll" />
+    </ItemGroup>
+    <Delete Files="@(_ExistingGlfwPublishCopy)" />
+    <Copy SourceFiles="$(GlfwSourceLibrary)" DestinationFolder="$(PublishDir)" />
+  </Target>
   <Target Name="CopyUnixPtyHelperToPublish"
           AfterTargets="Publish"
           Condition="$([MSBuild]::IsOSPlatform('Linux')) Or $([MSBuild]::IsOSPlatform('OSX'))">

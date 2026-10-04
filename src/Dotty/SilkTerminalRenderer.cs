@@ -20,6 +20,12 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private int _uFramebufferPx;
     private int _uCellPx;
     private int _uAtlasSize;
+    private int _uColorAtlasSize;
+    private int _uColorAtlas;
+    private bool _colorAtlasSizeSet;
+    private float _cachedColorAtlasW;
+    private float _cachedColorAtlasH;
+    private bool _colorAtlasSamplerSet;
     private int _uPass;
     private int _uAtlas;
     private int _uUnderlineY;
@@ -71,6 +77,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private uint _boundProgram = uint.MaxValue;
     private uint _boundVao = uint.MaxValue;
     private uint _boundTexture = uint.MaxValue;
+    private uint _boundColorTexture = uint.MaxValue;
     private TextureUnit _activeTextureUnit = TextureUnit.Texture0;
     private bool _activeTextureSet;
     private bool _cellFramebufferSet;
@@ -96,6 +103,12 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private float _cachedChromeFramebufferH;
 
     public SilkGlTextureManager TextureManager { get; }
+    /// <summary>Estimated uploaded R8 pixel payload; not actual driver RSS.</summary>
+    public long R8TexturePayloadBytes => TextureManager.R8TexturePayloadBytes;
+    /// <summary>Estimated uploaded RGBA8 pixel payload; not actual driver RSS.</summary>
+    public long Rgba8TexturePayloadBytes => TextureManager.Rgba8TexturePayloadBytes;
+    /// <summary>Process-wide retained native pixel storage for color-glyph probes.</summary>
+    public static long IntrinsicColorProbeScratchBytes => GlyphAtlas.IntrinsicColorProbeScratchBytes;
 
     public SilkTerminalRenderer(GL gl, GlyphAtlas atlas)
     {
@@ -108,6 +121,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         _uFramebufferPx = _gl.GetUniformLocation(_program, "uFramebufferPx");
         _uCellPx = _gl.GetUniformLocation(_program, "uCellPx");
         _uAtlasSize = _gl.GetUniformLocation(_program, "uAtlasSize");
+        _uColorAtlasSize = _gl.GetUniformLocation(_program, "uColorAtlasSize");
+        _uColorAtlas = _gl.GetUniformLocation(_program, "uColorAtlas");
         _uPass = _gl.GetUniformLocation(_program, "uPass");
         _uAtlas = _gl.GetUniformLocation(_program, "uAtlas");
         _uUnderlineY = _gl.GetUniformLocation(_program, "uUnderlineY");
@@ -325,11 +340,18 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         Uniform2CellFramebuffer((float)framebufferWidth, (float)framebufferHeight);
         Uniform2CellSize(cellW, cellH);
         Uniform2AtlasSize((float)atlasWidth, (float)atlasHeight);
+        Uniform2ColorAtlasSize(Math.Max(1, TextureManager.Atlas.ColorWidth), Math.Max(1, TextureManager.Atlas.ColorHeight));
         Uniform1Underline(underlineY);
         Uniform1Strike(strikeY);
         Uniform1LineHalf(lineHalf);
         BindAtlasTexture(texId);
         Uniform1AtlasSampler();
+        BindColorAtlasTexture(TextureManager.ColorTextureId);
+        if (!_colorAtlasSamplerSet)
+        {
+            _gl.Uniform1(_uColorAtlas, 1);
+            _colorAtlasSamplerSet = true;
+        }
         UploadAndDraw(
             cellW,
             cellH,
@@ -479,6 +501,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         && left.FgR == right.FgR
         && left.FgG == right.FgG
         && left.FgB == right.FgB
+        && left.FgA == right.FgA
         && left.Flags == right.Flags
         && left.BgR == right.BgR
         && left.BgG == right.BgG
@@ -706,7 +729,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         staging[offset + 10] = cell.FgR / 255f;
         staging[offset + 11] = cell.FgG / 255f;
         staging[offset + 12] = cell.FgB / 255f;
-        staging[offset + 13] = 1f;
+        staging[offset + 13] = cell.FgA / 255f;
         staging[offset + 14] = cell.BgR / 255f;
         staging[offset + 15] = cell.BgG / 255f;
         staging[offset + 16] = cell.BgB / 255f;
@@ -731,7 +754,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         staging[decoration + 10] = cell.FgR / 255f;
         staging[decoration + 11] = cell.FgG / 255f;
         staging[decoration + 12] = cell.FgB / 255f;
-        staging[decoration + 13] = 1f;
+        staging[decoration + 13] = cell.FgA / 255f;
         staging[decoration + 14] = 0f;
         staging[decoration + 15] = 0f;
         staging[decoration + 16] = 0f;
@@ -937,6 +960,22 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             _boundTexture = texture;
         }
     }
+    private void BindColorAtlasTexture(uint texture)
+    {
+        if (!_activeTextureSet || _activeTextureUnit != TextureUnit.Texture1)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture1);
+            _activeTextureUnit = TextureUnit.Texture1;
+            _activeTextureSet = true;
+        }
+        if (_boundColorTexture != texture)
+        {
+            _gl.BindTexture(TextureTarget.Texture2D, texture);
+            _boundColorTexture = texture;
+        }
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _activeTextureUnit = TextureUnit.Texture0;
+    }
 
     private void Uniform2CellFramebuffer(float width, float height)
     {
@@ -971,7 +1010,16 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
 
         _atlasSizeSet = true;
     }
+    private void Uniform2ColorAtlasSize(float width, float height)
+    {
+        if (_colorAtlasSizeSet && _cachedColorAtlasW == width && _cachedColorAtlasH == height)
+            return;
 
+        _gl.Uniform2(_uColorAtlasSize, width, height);
+        _cachedColorAtlasW = width;
+        _cachedColorAtlasH = height;
+        _colorAtlasSizeSet = true;
+    }
     private void Uniform1Underline(float value)
     {
         if (_underlineSet && _cachedUnderline == value)
@@ -1042,6 +1090,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         _boundProgram = uint.MaxValue;
         _boundVao = uint.MaxValue;
         _boundTexture = uint.MaxValue;
+        _boundColorTexture = uint.MaxValue;
         _activeTextureSet = false;
         _cellFramebufferSet = false;
         _cellSizeSet = false;

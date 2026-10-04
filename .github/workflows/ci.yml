@@ -61,6 +61,9 @@ jobs:
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Install GLFW build prerequisites (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
       - name: Cache NuGet packages
         uses: actions/cache@v6
         with:
@@ -193,7 +196,7 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Install GUI smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
 
       - name: Restore and build
         shell: bash
@@ -271,7 +274,7 @@ jobs:
         run: dotnet restore ${{ env.SOLUTION_PATH }}
 
       - name: Build solution
-        run: dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev && dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
 
       - name: Run Performance Tests
         shell: bash

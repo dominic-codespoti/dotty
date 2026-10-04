@@ -9,6 +9,7 @@ internal static unsafe class NativeGlfwMetadata
 {
     private static delegate* unmanaged[Cdecl]<int, int, byte*> _getKeyName;
     private static delegate* unmanaged[Cdecl]<int> _getPlatform;
+    private static delegate* unmanaged[Cdecl]<nint, int, int> _getWindowAttrib;
     private static bool _initialized;
 
     /// <summary>Resolve core GLFW exports from the already-loaded Silk GLFW instance.</summary>
@@ -24,8 +25,11 @@ internal static unsafe class NativeGlfwMetadata
 
         _getKeyName = (delegate* unmanaged[Cdecl]<int, int, byte*>)keyName;
         _getPlatform = (delegate* unmanaged[Cdecl]<int>)platform;
+        _getWindowAttrib = (delegate* unmanaged[Cdecl]<nint, int, int>)glfw.Context.GetProcAddress("glfwGetWindowAttrib");
         _initialized = true;
     }
+
+    public static bool IsWindowFocused(nint window) => window != 0 && _getWindowAttrib != null && _getWindowAttrib(window, 0x00020001) != 0;
 
     /// <summary>Returns the first printable Unicode scalar for a key, falling back to GLFW's physical scancode mapping.</summary>
     public static bool TryGetPrimaryCodePoint(int key, int scancode, out uint codePoint)

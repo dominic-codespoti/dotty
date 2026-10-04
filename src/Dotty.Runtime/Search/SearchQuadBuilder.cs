@@ -87,6 +87,7 @@ public static class SearchQuadBuilder
                     FgR = fg.R,
                     FgG = fg.G,
                     FgB = fg.B,
+                    FgA = 255,
                     BgR = bg.R,
                     BgG = bg.G,
                     BgB = bg.B,
@@ -262,7 +263,8 @@ public static class SearchQuadBuilder
             FgR = fg.R,
             FgG = fg.G,
             FgB = fg.B,
-            BgR = bg.R,
+            FgA = 255,
+            Flags = glyphInfo.IsColor ? CellFlags.ColorGlyph : (byte)0,
             BgG = bg.G,
             BgB = bg.B,
             BgA = 255
@@ -311,7 +313,8 @@ public static class SearchQuadBuilder
                 FgR = fg.R,
                 FgG = fg.G,
                 FgB = fg.B,
-                BgR = OverlayButtonBg.R,
+                FgA = 255,
+                Flags = glyphInfo.IsColor ? CellFlags.ColorGlyph : (byte)0,
                 BgG = OverlayButtonBg.G,
                 BgB = OverlayButtonBg.B,
                 BgA = 255

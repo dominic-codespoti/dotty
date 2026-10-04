@@ -1,3 +1,4 @@
+using Dotty.Silk;
 using System;
 using System.Diagnostics;
 using System.Collections.Generic;
@@ -814,5 +815,68 @@ public sealed class TerminalSceneComposerTests
         Assert.InRange(frame.MenuChromeStart, 0, frame.ChromeQuadCount - 1);
         Assert.True(frame.MenuInstanceStart < frame.InstanceCount);
         Assert.True(frame.MenuChromeStart < frame.ChromeQuadCount);
+    }
+
+
+    [Fact]
+    public void Compose_PreeditRendersGraphemeClustersAndClipsAtPaneEdgeWithoutChangingTerminal()
+    {
+        using var tab = new TerminalTab(rows: 4, columns: 10);
+        using var manager = new TerminalTabManager();
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        tab.Session.Adapter.Buffer.SetCursor(0, 2);
+
+        TerminalSceneFrame Compose(ImePreeditState? preedit) => composer.Compose(
+            tab, manager, theme, new SgrColorArgb(theme.Foreground), new SgrColorArgb(0x803385DB),
+            framebufferWidth: 100, framebufferHeight: 80, cellWidth: 10, cellHeight: 20, scale: 1,
+            rows: 4, columns: 10, padding: NoPadding(), showTabBar: false, cursorVisible: false,
+            scrollbarHovered: false, scrollbarDragging: false,
+            searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
+            activeContextMenu: null, preeditState: preedit);
+
+        var composed = new ImePreeditState("A界e\u0301🙂", 4, 1, 1);
+        var frame = Compose(composed);
+        ReadOnlySpan<CellInstance> instances = frame.AsSpan();
+        Span<ushort> columns = stackalloc ushort[4];
+        Span<CellInstance> preeditCells = stackalloc CellInstance[4];
+        int count = 0;
+        for (int i = 0; i < instances.Length; i++)
+        {
+            if ((instances[i].Flags & CellFlags.Underline) == 0)
+                continue;
+            columns[count] = instances[i].Col;
+            preeditCells[count++] = instances[i];
+        }
+
+        Assert.Equal(4, count);
+        Assert.Equal(new ushort[] { 2, 3, 5, 6 }, columns.ToArray());
+        Assert.True((preeditCells[1].Flags & CellFlags.WideCell) != 0);
+        Assert.True((preeditCells[3].Flags & CellFlags.WideCell) != 0);
+        Assert.Equal((byte)255, preeditCells[1].BgA);
+        Assert.Equal(2, tab.Session.Adapter.Buffer.CursorCol);
+        Assert.True(frame.ImeCaretBoundsValid);
+        Assert.Equal(60f, frame.ImeCaretBounds.Left);
+
+        tab.Session.Adapter.Buffer.SetCursor(0, 8);
+        frame = Compose(new ImePreeditState("A界B", 0, 0, 0));
+        instances = frame.AsSpan();
+        count = 0;
+        for (int i = 0; i < instances.Length; i++)
+        {
+            if ((instances[i].Flags & CellFlags.Underline) != 0)
+            {
+                Assert.Equal((ushort)8, instances[i].Col);
+                count++;
+            }
+        }
+        Assert.Equal(1, count);
+        Assert.Equal(8, tab.Session.Adapter.Buffer.CursorCol);
+
+        frame = Compose(null);
+        Assert.DoesNotContain(frame.AsSpan().ToArray(), instance => (instance.Flags & CellFlags.Underline) != 0);
+        Assert.True(frame.ImeCaretBoundsValid);
+        Assert.Equal(80f, frame.ImeCaretBounds.Left);
     }
 }

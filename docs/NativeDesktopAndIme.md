@@ -1,4 +1,12 @@
-# Native desktop verification and IME feasibility
+# Native GLFW dependency
+
+The desktop application builds and ships the clear-code GLFW IME fork from the checked-in source at `vendor/glfw/source/`. `vendor/glfw/SOURCE.json` records the approved commit (`068858eece20cd6b6128f6f07a1d61f2dc2cbfaf`), HTTPS archive URL and verified archive SHA-256. The upstream zlib/libpng license is retained in `vendor/glfw/source/LICENSE.md`. Build and publish do not download GLFW or follow a branch; an offline build uses this vendored tree.
+
+`scripts/native/build-glfw.py --rid <rid>` builds the native shared library for the current host architecture from that source and writes the platform library to the requested output directory. The .NET project invokes it for both build and publish outputs and overwrites any GLFW library supplied by transitive packages, so app and test runs use the pinned fork. Supported RIDs are `linux-x64`, `linux-arm64`, `win-x64`, `win-arm64`, `osx-x64`, and `osx-arm64`; cross-compiling a different host architecture is not configured.
+
+The build requires CMake and a C compiler. Linux also requires X11 development headers (`xorg-dev`), Wayland development headers and protocols (`libwayland-dev`, `wayland-protocols`), and `libxkbcommon-dev`; Windows requires Visual Studio C/C++ build tools and CMake; macOS requires Xcode Command Line Tools and CMake. CI installs the Linux packages before the .NET builds.
+
+# Native desktop verification and IME composition
 
 ## Running native desktop smoke lanes
 
@@ -25,19 +33,74 @@ On Windows use `python scripts/native/desktop-smoke.py --backend windows --execu
 
 This is deterministic app/host integration coverage. Separate real-user passes are still required for focus transitions, physical key layout/dead keys, mouse capture/selection, clipboard, compositor/window-manager decoration, HiDPI, sleep/resume, and screenshots on each native backend; they are not covered by the control socket. A successful Linux X11 lane is not Wayland or macOS/Windows evidence.
 
-## IME feasibility assessment (no IME implementation)
+## Native IME implementation
 
-Dotty creates its GLFW window through Silk.NET.Windowing (`Window.Create`), but installs native GLFW key and committed-character callbacks through the already-loaded GLFW library context. Native key actions provide press/repeat/release phases; the character callback retains the complete Unicode scalar (`uint`) rather than Silk input's 16-bit character conversion. The project references Silk.NET.GLFW 2.23.0 and `Ultz.Native.GLFW` 3.4.0. Real Wayland keyboard injection of `a🙂` passed both negotiated Kitty flags 31 and legacy flags 0, including U+1F642 associated text and releases without text. This is committed Unicode input, not IME composition support. GLFW exposes no portable preedit, candidate-placement, or commit/cancel lifecycle contract.
+The host installs committed-character, physical-key, and preedit callbacks on the
+same GLFW window and loaded library context. Silk.NET's generated GLFW bindings
+provide the ordinary window/input API; the host-owned `NativeTextInputBridge` resolves
+the pinned fork's composition exports explicitly. Missing required exports fail
+initialization rather than silently reverting to committed characters alone.
 
-Silk.NET.Windowing.Common documents `IView.Handle` as a handle to the underlying window. That is a GLFW window handle, not a portable native `HWND`, `NSWindow`/view, X11 `Window`, or Wayland surface, and GLFW's ordinary generated binding exposes no portable composition API. [INFERENCE] IME support can retain the existing renderer, but needs an explicit host-owned native integration seam and platform plumbing after the GLFW window/context exists:
+The native platform paths are Wayland text-input-v3, X11 XIM, Windows IMM32, and
+Cocoa's text-input client/marked-text lifecycle. These are native implementations,
+not synthetic control-socket composition. The fork is a GLFW 3.6 development fork,
+not an upstream stable release; `vendor/glfw/SOURCE.json` distinguishes the pinned
+archive from Dotty's checked-in ownership and scalar-caret patches.
 
-- **Windows:** obtain HWND (GLFW native access, e.g. `glfwGetWin32Window`) and integrate TSF/IMM32 composition messages, candidate/commit handling, DPI-aware client caret rectangle and focus lifecycle.
-- **macOS:** obtain the Cocoa window/view (e.g. `glfwGetCocoaWindow`) and implement `NSTextInputClient`/input-context marked-text, selected-range, candidate and commit callbacks on the AppKit main thread.
-- **Linux X11:** obtain X11 display/window (e.g. `glfwGetX11Display`/`glfwGetX11Window`) and integrate the selected input-method framework (commonly XIM), including preedit, spot location, commit and focus.
-- **Linux Wayland:** obtain the Wayland display/surface (e.g. `glfwGetWaylandDisplay`/`glfwGetWaylandWindow`) and integrate `zwp_text_input_v3` (or the compositor-supported text-input protocol), including enable/disable, surrounding/selection state as required, cursor rectangle, preedit and commit. A Wayland text-input protocol is distinct from GLFW's committed character event.
+Preedit text, caret, and selected clause are kept as ephemeral composition state.
+Native Unicode scalar offsets are converted to UTF-16 offsets at the managed
+boundary. The scene composer uses the terminal's canonical grapheme width rules
+and configured font fallback, clips composition at the active pane boundary, and
+draws underlining, clause selection, and the composition caret without writing
+preedit characters into the terminal buffer. Stable composition frames reuse
+their emitted instances rather than repeatedly allocating grapheme strings.
 
-These native accessor names denote upstream GLFW native-platform APIs, not APIs demonstrated by Silk's common `IView.Handle` contract. The package metadata confirms GLFW 3.4.0 native assets for the project's supported x64/arm64 Windows, macOS, and Linux RIDs; Silk's generated managed API does not supply a portable IME callback or a platform-native window handle type. Any implementation must verify native accessor availability/version and threading on each target. The external host prerequisite is native message/event plumbing: Dotty must install platform integrations on the UI thread, expose native handles plus caret/focus/composition callbacks to input handling, and translate preedit/commit into app-level composition state and terminal committed text. No current app seam delivers composition state, and this task does not add one. The direct native integration route is **feasible in principle** because the host owns the GLFW window and its GLFW handle; callback registration alone is not a substitute for platform IME clients/protocols.
+After composition, the host converts the completed frame's framebuffer caret
+rectangle to logical client coordinates before setting the native candidate
+position. The active terminal pane or search query caret owns that rectangle.
+Initial focus is read from GLFW; focus loss, pane/tab changes, and context-menu
+ownership cancel/reset composition. Wayland uses text-input enable/disable
+transactions instead of calling an unsupported native reset operation.
 
-Silk's installed assemblies were probed without creating a window: `Glfw` inherits `NativeAPI`, whose public `Context` is `INativeContext`. The loaded GLFW library's native export resolver returned nonzero addresses for `glfwGetKeyName` and `glfwGetPlatform`; this is distinct from `Glfw.GetProcAddress`, which asks for a GL procedure. A reflection check found 122 shared `Silk.NET.Input.Key` / GLFW `Keys` names with zero numeric mismatches, including `Unknown=-1`. `NativeGlfwMetadata` caches the native exports. It asks for a known key's printable name first (GLFW ignores the scancode in this case); only a missing name falls back to `GLFW_KEY_UNKNOWN` with the same physical scancode. Negative synthetic scancodes are never passed to GLFW, while native scancode 0 remains valid. The helper decodes the first UTF-8 scalar without allocating and rejects invalid/control characters. Physical identity, current-layout primary Unicode, and committed text remain separate; missing platform metadata is omitted rather than guessed.
+Committed Unicode continues through the full-scalar character callback and
+existing keyboard/text route. Native composition ownership suppresses consumed
+physical presses and their matching releases, so negotiated Kitty key reporting
+does not also deliver the keys used to produce an IME commit. Win32 handles
+`GCS_RESULTSTR` as the result route rather than broadly suppressing ordinary
+`WM_CHAR` input. Callback errors are returned to the host render/event thread,
+not allowed to escape across the unmanaged callback boundary.
 
-No IME composition probe was run. This pass resolves the integration boundary only; full IME requires native input-method services and per-platform composition implementations. The desktop smoke above tests committed UTF-8/Unicode, not intermediate composition, candidate placement, or commit/cancel behavior.
+With the opt-in `DOTTY_TEST_PORT` control socket, `IME` reports the selected backend,
+current preedit, caret, and selection offsets for observation. It cannot inject
+composition. Real qualification must combine native keyboard events, an actual
+input-method service, visible candidate/preedit screenshots, exact committed PTY
+bytes under Kitty negotiation, and focus/pane cancellation. Conversion and scene
+tests, CI compilation, and the desktop control-socket smoke above are not
+substitutes for that qualification.
+
+Windows and macOS interactive qualification requires the real desktop sessions
+listed above. It remains explicitly blocked when those hosts are unavailable;
+Linux results must not be represented as Windows/macOS passes.
+## Current qualification status
+
+The final portable-AOT publish and full multi-target test suite completed with
+1,224 passed, zero failed, and one skipped test. A real native Wayland window
+was exercised, and a captured terminal image confirmed that green ASCII and
+multicolor emoji retain their intended colors. This is Linux Wayland evidence
+only.
+
+The final native Wayland qualification used a real Fcitx/Rime service and
+wtype-generated native Wayland keyboard events; it is not a physical-hardware
+keyboard test. Rime displayed the “ni hao” preedit and candidate popup at the
+terminal caret, while preedit produced no PTY bytes. The commit was verified in
+two input modes: with Kitty flags 31, Space emitted each committed Unicode scalar
+once as CSI-u (20320, 22909); with flags 0, Space emitted the UTF-8 text
+“你好” once. Splitting the pane and losing window focus both canceled composition,
+with an empty IME state and no stale bytes delivered to the old or new pane.
+
+This qualification ran on Linux Wayland only. Windows and macOS interactive
+qualification remain blocked pending their required desktop hosts. The first
+native IME attempt showed no preedit because its isolated run lacked system XKB
+data; the successful retry used a private read-only XKB-data mount and an
+explicitly activated private D-Bus input-method service. That initial failure was
+an environment setup issue, not evidence of a native bridge defect.

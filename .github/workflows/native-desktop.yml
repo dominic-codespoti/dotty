@@ -27,7 +27,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Install X11 and software OpenGL prerequisites
-        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0 cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
       - name: Build native PTY helper and publish host
         shell: bash
         run: |

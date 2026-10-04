@@ -16,10 +16,12 @@ public static class SilkGlShaders
         uniform vec2 uFramebufferPx;
         uniform vec2 uCellPx;
         uniform vec2 uAtlasSize;
+        uniform vec2 uColorAtlasSize;
         uniform int uPass;
         flat out vec4 vFg;
         flat out vec4 vBg;
         out vec2 vUv;
+        out vec2 vColorUv;
         out float vCornerY;
         flat out uint vFlags;
         const uint FLAG_WIDE = 2u;      // CellFlags.WideCell
@@ -41,6 +43,7 @@ public static class SilkGlShaders
                 origin = floor(origin + vec2(0.5));
                 size = aAtlasPx.zw;
                 vUv = (aAtlasPx.xy + aCorner * size) / uAtlasSize;
+                vColorUv = (aAtlasPx.xy + aCorner * size) / uColorAtlasSize;
             }
             else
             {
@@ -68,6 +71,7 @@ public static class SilkGlShaders
 
     public const string FragmentSource = """
         #version 330 core
+        uniform sampler2D uColorAtlas;
         uniform sampler2D uAtlas;
         uniform int uPass;
         uniform float uUnderlineY;   // fraction of cell height
@@ -76,6 +80,7 @@ public static class SilkGlShaders
         flat in vec4 vFg;
         flat in vec4 vBg;
         in vec2 vUv;
+        in vec2 vColorUv;
         in float vCornerY;
         flat in uint vFlags;
         out vec4 fragColor;
@@ -83,6 +88,7 @@ public static class SilkGlShaders
         const uint FLAG_UNDERLINE = 8u;
         const uint FLAG_STRIKE = 16u;
         const uint FLAG_OVERLINE = 32u;
+        const uint FLAG_COLOR_GLYPH = 64u;
 
         void main()
         {
@@ -106,9 +112,15 @@ public static class SilkGlShaders
                 { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
                 discard;
             }
-            float coverage = texture(uAtlas, vUv).r;
-            if (coverage <= 0.001) discard;
-            fragColor = vec4(vFg.rgb * coverage * vFg.a, coverage * vFg.a);
+            if ((vFlags & FLAG_COLOR_GLYPH) != 0u) {
+                vec4 colorGlyph = texture(uColorAtlas, vColorUv);
+                if (colorGlyph.a <= 0.001) discard;
+                fragColor = colorGlyph * vFg.a;
+            } else {
+                float coverage = texture(uAtlas, vUv).r;
+                if (coverage <= 0.001) discard;
+                fragColor = vec4(vFg.rgb * coverage * vFg.a, coverage * vFg.a);
+            }
         }
         """;
     public static uint CreateProgram(GL gl, string vertexSource, string fragmentSource)

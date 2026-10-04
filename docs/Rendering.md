@@ -11,7 +11,7 @@ snapshots so rendering can run without changing parser or PTY code.
 2. `TerminalSceneComposer` classifies cells and builds background, underline,
    scrollbar, tab, pane, selection, cursor, and glyph instances.
 3. `GlyphAtlasService` resolves the configured font stack, shapes glyphs, and
-   stores coverage in a shared atlas.
+   stores grayscale coverage and intrinsic-color pixels in shared atlas pages.
 4. `SilkTerminalRenderer` uploads atlas changes and submits instanced quads to
    the OpenGL 3.3 core context.
 5. `WindowPresentationGate` coalesces invalidation reasons and allows an
@@ -81,15 +81,57 @@ reserved tofu glyph if it still cannot fit.
 
 ## Glyph atlas limitations
 
-`GlyphAtlas` is a single-channel A8 coverage atlas: glyphs are rasterized once
-per grapheme/typeface/size/bold key, and foreground color is applied by the
-shader at draw time. This keeps one atlas entry reusable across terminal
-colors, but it is grayscale coverage rather than RGB subpixel coverage. Color
-font layers are not preserved, so color emoji fonts may render as
-monochrome/grayscale glyphs (or use the tofu fallback when a glyph cannot be
-represented within the atlas or cell bounds). The atlas also has finite glyph
-and texture-size limits; an unrepresentable glyph is not silently uploaded.
+`GlyphAtlas` stores monochrome glyphs in a single-channel A8 coverage page and
+intrinsic-color glyphs in a separate, lazily allocated premultiplied RGBA page.
+The rasterizer probes glyph output using white and black paint, so classification
+does not depend on font names or a fixed emoji range. Monochrome foreground color
+and alpha are applied by the shader; intrinsic-color pixels preserve their own
+RGB and are modulated only by terminal foreground alpha. Both pages share the
+same glyph lookup key and dirty-upload lifecycle, while the color page's four
+bytes per pixel are included in atlas memory accounting. The `MEMORY` diagnostic
+also reports estimated R8 and RGBA8 texture pixel payloads from uploaded page
+dimensions; these are estimates, not driver RSS or total GPU allocation. The
+retained color-probe bitmap payload is reported separately from atlas page bytes.
+Atlas pages have finite glyph and texture-size limits; an unrepresentable glyph
+is not silently uploaded.
+A native Wayland screenshot also confirmed that green ASCII and multicolor emoji
+retain their intended colors in the actual OpenGL window.
 
+## Memory diagnostics and lifecycle measurements
+
+The terminal buffer's live arena and its managed owner arrays are separate
+measurements from the GC last-heap figure. Renderer memory diagnostics also report
+estimated R8/RGBA8 texture pixel payload from uploaded atlas dimensions; that
+payload is not driver RSS or total GPU allocation. Retained color-probe bitmap
+payload is accounted separately from atlas pages. These figures describe
+application-side ownership and estimated resource payload, not a complete GPU
+memory total.
+
+In the final measured lifecycle run, the live terminal arena was 9.20 MiB both
+cold and after resizing a terminal that had held a large workload; the large
+workload's exact history contained 5,000 output lines (2,489 small and 2,453
+large lines). The final resized-small-window PSS observation was 163.80 MiB,
+compared with 194.18 MiB for the frozen build. These are individual lifecycle
+observations, not a statistical population; PSS includes more than the terminal
+arena and is not attributable to that arena alone. Avoid interpreting these PSS
+values as driver/GPU RSS. The same optimized lifecycle trace recorded process
+PSS of 112.25 MiB cold, 114.69 MiB after output, 152.12 MiB after split
+closure, and 156.78, 156.79, and 156.80 MiB across three tab-closure
+observations. These are lifecycle context, not a population or a comparison to
+the frozen build except where a matching frozen measurement is explicitly given.
+
+A separate frozen/final ownership comparison used a real 1,000,000-line file
+(opened and navigated to EOF by Neovim itself) and the same 2,492-line terminal
+history. At Neovim EOF, the frozen process-tree PSS was 323.635 MiB and the final
+was 284.935 MiB; Dotty-root PSS was 211.064 MiB and 172.295 MiB respectively.
+After Neovim closed, process-tree PSS was 212.697 MiB frozen and 173.950 MiB
+final. In that final run, the live terminal arena was 14,469,120 bytes; the
+render snapshot was 145,296 bytes; one CPU glyph-atlas page was 1,048,576 bytes
+with an estimated 1,048,576-byte R8 payload and zero RGBA payload; scratch was
+924 bytes. The separate managed-memory estimate was 41,356,360 bytes, while the
+latest GC heap was 36,907,664 bytes. These are distinct counters, and the PSS
+comparison consists of individual observations rather than a population or a
+performance gate.
 ## Graphics contract
 
 The host requests an OpenGL 3.3 core context and validates the active driver

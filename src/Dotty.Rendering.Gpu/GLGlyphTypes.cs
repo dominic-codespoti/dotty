@@ -5,7 +5,7 @@ namespace Dotty.Rendering.Gpu;
 /// <summary>
 /// Per-instance data for one terminal cell in the GL glyph renderer.
 /// One instance per visible non-empty cell; continuations are skipped.
-/// Packed to 20 bytes for efficient GPU upload via instanced arrays.
+/// Packed for efficient CPU row caching; SilkTerminalRenderer expands it to the GPU instance stream.
 /// </summary>
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 public struct CellInstance
@@ -42,8 +42,10 @@ public struct CellInstance
 
     /// <summary>Foreground blue channel (0–255).</summary>
     public byte FgB;
+    /// <summary>Foreground alpha (0–255).</summary>
+    public byte FgA;
 
-    /// <summary>Flags: bit 0 = bold, bit 1 = wide cell, bit 2 = inverse video.</summary>
+    /// <summary>Flags: bit 0 = bold, bit 1 = wide cell, bit 2 = inverse video, bit 6 = intrinsic-color glyph.</summary>
     public byte Flags;
 
     /// <summary>Background red channel (0–255).</summary>
@@ -67,6 +69,8 @@ public static class CellFlags
     public const byte InverseVideo = 0x04;
     public const byte Underline = 0x08;
     public const byte Strikethrough = 0x10;
+    /// <summary>Glyph uses premultiplied intrinsic RGBA pixels rather than A8 coverage.</summary>
+    public const byte ColorGlyph = 0x40;
     public const byte Overline = 0x20;
     /// <summary>Instance draws only the decoration bars (no glyph).</summary>
     public const byte DecorOnly = 0x80;

@@ -466,7 +466,8 @@ public static class TabBarQuadBuilder
                 FgR = fgR,
                 FgG = fgG,
                 FgB = fgB,
-                Flags = isBold ? CellFlags.Bold : (byte)0,
+                FgA = 255,
+                Flags = (byte)((isBold ? CellFlags.Bold : 0) | (glyphInfo.IsColor ? CellFlags.ColorGlyph : 0)),
                 BgA = 0
             };
 

@@ -62,6 +62,8 @@ internal static class DottyWindowHost
     private static TerminalKeyboardDispatcher _keyboardDispatcher = null!;
     private static TerminalMouseController _mouseController = null!;
     private static TerminalSceneComposer _sceneComposer = null!;
+    private static NativeTextInputBridge? _nativeTextInput;
+    private static bool _initialWindowInputFocus;
     private static MouseHost _mouseHost = null!;
 
     private static bool _closed;
@@ -396,6 +398,9 @@ internal static class DottyWindowHost
             _clipboard = new KeyboardClipboard(_keyboard);
         }
         InstallNativeKeyboardCallbacks();
+        _nativeTextInput = new NativeTextInputBridge(_glfwApi!, _window.Native?.Glfw ?? 0, OnNativePreeditChanged);
+        _initialWindowInputFocus = NativeGlfwMetadata.IsWindowFocused(_window.Native?.Glfw ?? 0);
+        _nativeTextInput.SetFocus(_initialWindowInputFocus);
 
         if (_input.Mice.Count > 0)
         {
@@ -425,6 +430,7 @@ internal static class DottyWindowHost
 
     private static void OnActiveTabChanged(TerminalTab? tab)
     {
+        _nativeTextInput?.Cancel();
         WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
         if (_lastWindowFocus == true)
         {
@@ -513,6 +519,7 @@ internal static class DottyWindowHost
 
     private static void OnActivePaneChanged(LeafPane oldPane, LeafPane newPane)
     {
+        _nativeTextInput?.Cancel();
         WindowPresentationGate.Invalidate(WindowFrameReason.TabOrPane);
         var activeTab = _tabManager?.ActiveTab;
         if (!_closed && _lastWindowFocus == true &&
@@ -1102,6 +1109,19 @@ internal static class DottyWindowHost
             int gen0 = GC.CollectionCount(0);
             return $"{{\"totalAllocatedBytes\":{total},\"gen0Collections\":{gen0}}}";
         }
+        if (string.Equals(command, "MEMORY", StringComparison.OrdinalIgnoreCase))
+        {
+            // Ownership capacities are not resident-memory or live-object measurements.
+            var buffers = BufferMemoryMetrics.GetSnapshot();
+            long heapEstimate = GC.GetTotalMemory(forceFullCollection: false);
+            var lastGc = GC.GetGCMemoryInfo();
+            return $"{{\"managedHeapEstimateBytes\":{heapEstimate},\"lastGcHeapSizeBytes\":{lastGc.HeapSizeBytes},\"lastGcCommittedBytes\":{lastGc.TotalCommittedBytes},\"lastGcIndex\":{lastGc.Index},\"terminalArenaCapacityBytes\":{buffers.LiveArenaCapacityBytes},\"ownedSnapshotArrayCapacityBytes\":{buffers.OwnedSnapshotArrayCapacityBytes},\"arenaCapacityAllocatedBytes\":{buffers.ArenaCapacityAllocatedBytes},\"snapshotCapacityAllocatedBytes\":{buffers.SnapshotCapacityAllocatedBytes},\"atlasBitmapBytes\":{GlyphAtlasService.TotalBytes},\"atlasCount\":{GlyphAtlasService.AtlasCount},\"r8TexturePayloadBytesEstimate\":{_renderer?.R8TexturePayloadBytes ?? 0},\"rgba8TexturePayloadBytesEstimate\":{_renderer?.Rgba8TexturePayloadBytes ?? 0},\"intrinsicColorProbeScratchBytes\":{SilkTerminalRenderer.IntrinsicColorProbeScratchBytes}}}";
+        }
+        if (string.Equals(command, "IME", StringComparison.OrdinalIgnoreCase))
+        {
+            var preedit = _nativeTextInput?.Preedit ?? ImePreeditState.Empty;
+            return $"{{\"backend\":{QuoteJson(_windowBackend)},\"preedit\":{QuoteJson(preedit.Text ?? string.Empty)},\"caretUtf16\":{preedit.CaretIndex},\"selectionStartUtf16\":{preedit.SelectionStart},\"selectionLengthUtf16\":{preedit.SelectionLength}}}";
+        }
         if (string.Equals(command, "STATS", StringComparison.OrdinalIgnoreCase))
         {
             int tabCount = _tabManager?.Count ?? 0;
@@ -1423,6 +1443,7 @@ internal static class DottyWindowHost
 
     private static void OnRenderCore(double delta)
     {
+        _nativeTextInput?.ThrowPendingCallbackError();
         DrainWindowEvents();
         if (_closed)
             return;
@@ -1610,7 +1631,8 @@ internal static class DottyWindowHost
                     _keyboardDispatcher?.SearchQuery ?? string.Empty,
                     _keyboardDispatcher?.ActiveMatchIndex ?? -1,
                     _keyboardDispatcher?.SearchMatches?.Count ?? 0,
-                    _keyboardDispatcher?.SearchMatches),
+                    _keyboardDispatcher?.SearchMatches,
+                    _keyboardDispatcher?.SearchQueryCursor ?? -1),
                 _activeContextMenu,
                 _mouseController?.HoveredTabIndex ?? -1,
                 _mouseController?.HoveredTabHitType ?? TabBarHitType.None,
@@ -1620,7 +1642,8 @@ internal static class DottyWindowHost
                 captionButtonsWidth: _customFrameActive
                     ? Math.Min(framebufferWidth, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
                     : 0f,
-                isMaximized: _window.WindowState == WindowState.Maximized);
+                isMaximized: _window.WindowState == WindowState.Maximized,
+                preeditState: _nativeTextInput?.Preedit);
 
             if (frame.IsIncomplete)
             {
@@ -1633,6 +1656,15 @@ internal static class DottyWindowHost
                 WindowPresentationGate.Requeue(consumedReasons);
                 Thread.Sleep(IdleFrameSleepMs);
                 return;
+            }
+            if (frame.ImeCaretBoundsValid && _nativeTextInput != null)
+            {
+                var caret = frame.ImeCaretBounds;
+                int left = (int)MathF.Floor(caret.Left / _scale);
+                int top = (int)MathF.Floor(caret.Top / _scale);
+                _nativeTextInput.SetCursorRectangle(left, top,
+                    Math.Max(1, (int)MathF.Ceiling(caret.Right / _scale) - left),
+                    Math.Max(1, (int)MathF.Ceiling(caret.Bottom / _scale) - top));
             }
             _renderer.Render(
                 frame.AsSpan(),
@@ -1787,6 +1819,17 @@ internal static class DottyWindowHost
         _keyboardController.HandleUnicodeScalar(codepoint);
     }
 
+    private static void OnNativePreeditChanged(ImePreeditState state)
+    {
+        if (_closed)
+            return;
+        if (state.IsActive)
+            _tabManager?.ActiveTab?.ActivePane.ScrollToBottom();
+        RecordInteraction();
+        _cursorBlinkVisible = true;
+        WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
+    }
+
     private static void OnKeyboardActivity()
     {
         RecordInteraction();
@@ -1815,6 +1858,7 @@ internal static class DottyWindowHost
 
     private static void ApplyWindowFocusState(bool focused)
     {
+        _nativeTextInput?.SetFocus(focused && _activeContextMenu?.IsVisible != true);
         if (focused && _tabManager?.ActiveTab is { } activeTab)
         {
             _focusedPane = activeTab.ActivePane;
@@ -1906,6 +1950,8 @@ internal static class DottyWindowHost
     private static void OnClosing()
     {
         if (_closed) return;
+        _nativeTextInput?.Dispose();
+        _nativeTextInput = null;
         _closed = true;
         Win32WindowFrame.Uninstall();
         _customFrameActive = false;
@@ -2002,7 +2048,14 @@ internal static class DottyWindowHost
         public ContextMenuModel? ActiveContextMenu
         {
             get => _activeContextMenu;
-            set => _activeContextMenu = value;
+            set
+            {
+                if (ReferenceEquals(_activeContextMenu, value))
+                    return;
+                _nativeTextInput?.Cancel();
+                _activeContextMenu = value;
+                _nativeTextInput?.SetFocus((_lastWindowFocus ?? _initialWindowInputFocus) && value?.IsVisible != true);
+            }
         }
 
         public TerminalMouseGeometry Geometry

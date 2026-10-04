@@ -11,6 +11,7 @@ using Dotty.Runtime.Selection;
 using Dotty.Runtime.Scrollbar;
 using Dotty.Runtime.Search;
 using RuntimeSearchMatch = Dotty.Runtime.Search.SearchMatch;
+using Dotty.Silk;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Adapter.Buffer;
 using SkiaSharp;
@@ -25,7 +26,8 @@ public readonly record struct SearchOverlayRenderState(
     string Query,
     int ActiveMatchIndex,
     int TotalMatches,
-    IReadOnlyList<RuntimeSearchMatch>? Matches);
+    IReadOnlyList<RuntimeSearchMatch>? Matches,
+    int QueryCursorIndex = -1);
 
 /// <summary>
 /// The GPU instances and atlas rows produced by <see cref="TerminalSceneComposer"/>.
@@ -41,6 +43,9 @@ public sealed class TerminalSceneFrame
     public int MenuInstanceStart { get; private set; }
     public int MenuChromeStart { get; private set; }
     public bool IsIncomplete { get; private set; }
+    /// <summary>Framebuffer-pixel text caret anchor for native IME candidate UI.</summary>
+    public SKRect ImeCaretBounds { get; private set; }
+    public bool ImeCaretBoundsValid { get; private set; }
 
     public TerminalSceneFrame(
         CellInstance[] instances,
@@ -51,10 +56,13 @@ public sealed class TerminalSceneFrame
         int menuInstanceStart = -1,
         int menuChromeStart = -1,
         int scrollbarChromeStart = -1,
-        bool isIncomplete = false)
+        bool isIncomplete = false,
+        SKRect imeCaretBounds = default,
+        bool imeCaretBoundsValid = false)
     {
         Update(instances, instanceCount, dirtyAtlasRows, chromeQuads, chromeQuadCount,
-            menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete);
+            menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete,
+            imeCaretBounds, imeCaretBoundsValid);
     }
 
     internal void Update(
@@ -66,7 +74,9 @@ public sealed class TerminalSceneFrame
         int menuInstanceStart,
         int menuChromeStart,
         int scrollbarChromeStart,
-        bool isIncomplete)
+        bool isIncomplete,
+        SKRect imeCaretBounds,
+        bool imeCaretBoundsValid)
     {
         Instances = instances;
         InstanceCount = instanceCount;
@@ -77,6 +87,8 @@ public sealed class TerminalSceneFrame
         MenuChromeStart = menuChromeStart;
         ScrollbarChromeStart = scrollbarChromeStart;
         IsIncomplete = isIncomplete;
+        ImeCaretBounds = imeCaretBounds;
+        ImeCaretBoundsValid = imeCaretBoundsValid;
     }
 
 
@@ -98,6 +110,7 @@ public sealed class TerminalSceneComposer
     private ChromeQuadInstance[] _scrollbarScratch = Array.Empty<ChromeQuadInstance>();
     private readonly HashSet<int> _dirtyAtlasRows = new();
     private TerminalSceneFrame? _cachedFrame;
+    private readonly ImePreeditQuadBuilder _preeditQuadBuilder = new();
     private ContextMenuModel? _cachedMenuModel;
     private IReadOnlyList<ContextMenuItem>? _cachedMenuItems;
     private ContextMenuLayout? _cachedMenuLayout;
@@ -187,7 +200,8 @@ public sealed class TerminalSceneComposer
         ReadOnlySpan<char> status = default,
         bool statusWarning = false,
         float captionButtonsWidth = 0f,
-        bool isMaximized = false)
+        bool isMaximized = false,
+        ImePreeditState? preeditState = null)
     {
         ArgumentNullException.ThrowIfNull(activeTab);
         ArgumentNullException.ThrowIfNull(tabManager);
@@ -213,6 +227,8 @@ public sealed class TerminalSceneComposer
         int menuInstanceStart = -1;
         int menuChromeStart = -1;
         bool skippedLeaf = false;
+        SKRect imeCaretBounds = default;
+        bool imeCaretBoundsValid = false;
         _dirtyAtlasRows.Clear();
         int atlasVersionAtStart = _atlas.ContentVersion;
         ConfigureRowCaches(theme, themeForeground, new SgrColorArgb(theme.Background), selectionColor,
@@ -333,6 +349,10 @@ public sealed class TerminalSceneComposer
                                 {
                                     Col = (ushort)targetColumn,
                                     Row = (ushort)targetRow,
+                                    FgR = themeForeground.R,
+                                    FgG = themeForeground.G,
+                                    FgB = themeForeground.B,
+                                    FgA = 255,
                                     BgR = selectionColor.R,
                                     BgG = selectionColor.G,
                                     BgB = selectionColor.B,
@@ -379,11 +399,60 @@ public sealed class TerminalSceneComposer
                         {
                             Col = (ushort)cursorColumn,
                             Row = (ushort)cursorRow,
+                            FgR = themeForeground.R,
+                            FgG = themeForeground.G,
+                            FgB = themeForeground.B,
+                            FgA = 255,
                             BgR = themeForeground.R,
                             BgG = themeForeground.G,
                             BgB = themeForeground.B,
                             BgA = 128,
                         };
+                    }
+                }
+                if (ReferenceEquals(leaf, activePane) && scrollOffset == 0 &&
+                    leafSnapshot.CursorRow >= 0 && leafSnapshot.CursorRow < paneRows &&
+                    leafSnapshot.CursorCol >= 0 && leafSnapshot.CursorCol < paneColumns &&
+                    (activeContextMenu == null || !activeContextMenu.IsVisible))
+                {
+                    int cursorGlobalRow = leafSnapshot.CursorRow + startRowOffset;
+                    int cursorGlobalColumn = leafSnapshot.CursorCol + startColumnOffset;
+                    float scaledCellWidth = cellWidth * scale;
+                    float scaledCellHeight = cellHeight * scale;
+                    float paneLeft = padLeft + leaf.Bounds.X;
+                    float paneTop = padTop + topOffset + leaf.Bounds.Y;
+                    float paneRight = paneLeft + leaf.Bounds.Width;
+                    float paneBottom = paneTop + leaf.Bounds.Height;
+                    float cursorX = padLeft + cursorGlobalColumn * scaledCellWidth;
+                    float cursorY = padTop + cursorGlobalRow * scaledCellHeight;
+                    if (cursorX >= paneLeft && cursorX <= paneRight && cursorY >= paneTop && cursorY + scaledCellHeight <= paneBottom &&
+                        cursorX >= 0 && cursorX <= framebufferWidth && cursorY >= 0 && cursorY + scaledCellHeight <= framebufferHeight)
+                    {
+                        imeCaretBounds = new SKRect(cursorX, cursorY, cursorX + Math.Min(2f, scaledCellWidth), cursorY + scaledCellHeight);
+                        imeCaretBoundsValid = true;
+                        if (preeditState is { IsActive: true } composition && !searchOverlay.IsActive)
+                        {
+                            int availableColumns = Math.Min(paneColumns - leafSnapshot.CursorCol,
+                                Math.Max(0, columns - cursorGlobalColumn));
+                            if (availableColumns > 0)
+                            {
+                                EnsureScratchCapacity(checked(instanceCount + composition.Text.Length));
+                                int preeditCount = _preeditQuadBuilder.Build(
+                                    in composition, cursorGlobalColumn, cursorGlobalRow, availableColumns,
+                                    _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
+                                    _dirtyAtlasRows, out int caretOffset);
+                                instanceCount += preeditCount;
+                                float caretLeft = cursorX + caretOffset * scaledCellWidth;
+                                float caretRight = Math.Min(caretLeft + 2f, paneRight);
+                                if (caretLeft >= paneLeft && caretLeft < paneRight && caretRight > caretLeft)
+                                {
+                                    imeCaretBounds = new SKRect(caretLeft, cursorY, caretRight, cursorY + scaledCellHeight);
+                                    imeCaretBoundsValid = true;
+                                    EnsureChromeScratchCapacity(chromeQuadCount + 1);
+                                    _chromeScratch[chromeQuadCount++] = MakeImeCaretQuad(imeCaretBounds, themeForeground);
+                                }
+                            }
+                        }
                     }
                 }
                 if (ReferenceEquals(leaf, activePane)
@@ -488,6 +557,50 @@ public sealed class TerminalSceneComposer
                 _frameScratch.AsSpan(instanceCount),
                 _dirtyAtlasRows);
             instanceCount += overlayQuads;
+            if (searchOverlay.QueryCursorIndex >= 0 && (activeContextMenu == null || !activeContextMenu.IsVisible))
+            {
+                float scaledWidth = cellWidth * scale;
+                float scaledHeight = cellHeight * scale;
+                int inputStart = (int)(overlayLayout.InputBoxRect.X / scaledWidth);
+                int inputRow = (int)(overlayLayout.InputBoxRect.Y / scaledHeight);
+                int inputColumns = Math.Max(0, (int)(overlayLayout.InputBoxRect.Width / scaledWidth));
+                int queryCursor = Math.Clamp(searchOverlay.QueryCursorIndex, 0, Math.Min(searchOverlay.Query.Length, inputColumns));
+                int caretColumn = inputStart + queryCursor;
+                float caretX = caretColumn * scaledWidth;
+                float caretY = inputRow * scaledHeight;
+                float inputRight = (inputStart + inputColumns) * scaledWidth;
+                if (caretColumn >= 0 && caretColumn <= columns && caretX <= inputRight && caretY >= 0 && caretY + scaledHeight <= framebufferHeight)
+                {
+                    imeCaretBounds = new SKRect(caretX, caretY, Math.Min(caretX + 2f, inputRight), caretY + scaledHeight);
+                    imeCaretBoundsValid = imeCaretBounds.Width > 0;
+                    if (imeCaretBoundsValid && preeditState is { IsActive: true } composition && queryCursor < inputColumns)
+                    {
+                        int visibleColumns = Math.Min(inputColumns - queryCursor, Math.Max(0, columns - caretColumn));
+                        EnsureScratchCapacity(checked(instanceCount + composition.Text.Length));
+                        int preeditCount = _preeditQuadBuilder.Build(
+                            in composition, caretColumn, inputRow, visibleColumns,
+                            _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
+                            _dirtyAtlasRows, out int caretOffset);
+                        instanceCount += preeditCount;
+                        float compositionCaretX = caretX + caretOffset * scaledWidth;
+                        float caretRight = Math.Min(compositionCaretX + 2f, inputRight);
+                        if (compositionCaretX < inputRight && caretRight > compositionCaretX)
+                        {
+                            imeCaretBounds = new SKRect(compositionCaretX, caretY, caretRight, caretY + scaledHeight);
+                            EnsureChromeScratchCapacity(chromeQuadCount + 1);
+                            _chromeScratch[chromeQuadCount++] = MakeImeCaretQuad(imeCaretBounds, themeForeground);
+                        }
+                    }
+                }
+                else
+                {
+                    imeCaretBoundsValid = false;
+                }
+            }
+            else
+            {
+                imeCaretBoundsValid = false;
+            }
         }
 
         // Scrollbars are collected separately while panes are rendered so they
@@ -540,17 +653,33 @@ public sealed class TerminalSceneComposer
             _cachedFrame = new TerminalSceneFrame(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid);
         }
         else
         {
             _cachedFrame.Update(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid);
         }
         return _cachedFrame;
     }
+    private static ChromeQuadInstance MakeImeCaretQuad(SKRect rect, SgrColorArgb color)
+        => new()
+        {
+            X = rect.Left,
+            Y = rect.Top,
+            W = rect.Width,
+            H = rect.Height,
+            TopR = color.R,
+            TopG = color.G,
+            TopB = color.B,
+            TopA = 1f,
+            BottomR = color.R,
+            BottomG = color.G,
+            BottomB = color.B,
+            BottomA = 1f
+        };
     private void ConfigureRowCaches(
         IColorScheme theme,
         SgrColorArgb foreground,

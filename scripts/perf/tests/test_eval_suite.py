@@ -80,7 +80,7 @@ class EvalSuiteTests(unittest.TestCase):
         return EVAL.parser_for(self.root).parse_args(argv)
 
     def test_compare_forwards_argv_and_keeps_skips_nonfatal(self):
-        args = self._args(["compare", "--output-root", str(self.output), "--app", str(self.app), "--timeout", "9", "--runs", "4", "--lines", "12", "--include", "dotty,kitty", "--sample-interval-ms", "7.5", "--startup-timeout", "8"])
+        args = self._args(["compare", "--output-root", str(self.output), "--app", str(self.app), "--timeout", "9", "--runs", "4", "--warmup-runs", "2", "--lines", "12", "--include", "dotty,kitty", "--sample-interval-ms", "7.5", "--startup-timeout", "8"])
         with mock.patch.object(EVAL, "run_child", side_effect=self._fake_child):
             code, run_dir, summary = EVAL.run(args)
         self.assertEqual(code, 0)
@@ -89,7 +89,7 @@ class EvalSuiteTests(unittest.TestCase):
         self.assertEqual(timeout, 9.0)
         self.assertEqual(command, [
             EVAL.sys.executable, str(self.bench), "--app", str(self.app), "--json-out", str(run_dir / "compare.json"),
-            "--runs", "4", "--lines", "12", "--include", "dotty,kitty", "--sample-interval-ms", "7.5", "--startup-timeout", "8",
+            "--runs", "4", "--warmup-runs", "2", "--lines", "12", "--include", "dotty,kitty", "--sample-interval-ms", "7.5", "--startup-timeout", "8",
         ])
         self.assertIn("kitty", (run_dir / "report.md").read_text(encoding="utf-8"))
         self.assertTrue((run_dir / "summary.json").exists())

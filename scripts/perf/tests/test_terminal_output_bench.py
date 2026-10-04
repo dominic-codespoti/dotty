@@ -29,6 +29,92 @@ class TerminalOutputBenchTests(unittest.TestCase):
         values.update(overrides)
         return Namespace(**values)
 
+    def test_schedule_separates_warmups_rotates_measured_rounds_and_ids(self):
+        schedule = bench.build_schedule(["dotty", "kitty", "ghostty"], 1, 3, "session")
+        warmups = [item for item in schedule if item["warmup"]]
+        measured = [item for item in schedule if not item["warmup"]]
+        self.assertEqual([item["terminal"] for item in warmups], ["dotty", "kitty", "ghostty"])
+        self.assertEqual([item["terminal"] for item in measured], ["dotty", "kitty", "ghostty", "kitty", "ghostty", "dotty", "ghostty", "dotty", "kitty"])
+        self.assertEqual(len({item["run_id"] for item in schedule}), 12)
+        self.assertEqual([item["run"] for item in schedule], list(range(1, 13)))
+        stats = {"terminal": "dotty", "status": "ok", "skipped": False, "launch_to_child_start_ms": 1, "peak_rss_mb": 1, "peak_tree_rss_mb": 1, "throughput_mb_s": 1}
+        summary = bench.summarize([dict(stats, warmup=True, output_ms=900), dict(stats, warmup=False, output_ms=100)])
+        self.assertEqual(summary["dotty"]["output_ms_avg"], 100)
+    def test_actual_grid_controls_comparison_completeness(self):
+        self.assertEqual(bench.compare_grid({"cols": 80, "rows": 24}), (True, None))
+        self.assertEqual(bench.compare_grid({"cols": 100, "rows": 24})[0], False)
+        self.assertEqual(bench.compare_grid(None)[0], False)
+
+    def test_event_log_retains_child_pty_geometry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "events.log"
+            log.write_text("10 geometry 24 80\n11 stty 24 80\n12 start\n20 end\n", encoding="utf-8")
+            events = bench.read_events(log)
+        self.assertEqual(events["geometry"], {"timestamp_ns": 10, "rows": 24, "cols": 80})
+        self.assertEqual(events["stty"], {"rows": 24, "cols": 80})
+        self.assertEqual(events["start"], 12)
+
+    def test_generated_workload_waits_for_real_pty_geometry_gate(self):
+        import fcntl
+        import os
+        import pty
+        import select
+        import struct
+        import subprocess
+        import time
+        import termios
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workload = root / "workload.sh"
+            log = root / "events.log"
+            go_file = root / "go"
+            bench.write_workload(workload)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+            attrs = termios.tcgetattr(slave)
+            attrs[1] &= ~termios.OPOST
+            termios.tcsetattr(slave, termios.TCSANOW, attrs)
+            env = {
+                **os.environ,
+                "TERMINAL_BENCH_LINES": "1003",
+                "TERMINAL_BENCH_LOG": str(log),
+                "TERMINAL_BENCH_GO_FILE": str(go_file),
+                "TERMINAL_BENCH_STARTUP_TIMEOUT": "3",
+                "TERMINAL_BENCH_HOLD_SECONDS": "0.01",
+            }
+            process = subprocess.Popen(["/bin/sh", str(workload)], stdin=slave, stdout=slave, stderr=subprocess.PIPE, env=env)
+            os.close(slave)
+            try:
+                deadline = time.monotonic() + 2
+                while "ready" not in bench.read_events(log) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                events = bench.read_events(log)
+                self.assertIn("ready", events)
+                self.assertEqual((events["geometry"]["rows"], events["geometry"]["cols"]), (24, 80))
+                self.assertEqual((events["stty"]["rows"], events["stty"]["cols"]), (24, 80))
+                self.assertFalse(select.select([master], [], [], 0.1)[0], "workload wrote output before the parent released its geometry gate")
+                go_file.touch()
+                line_count = 1003
+                output = bytearray()
+                expected = bench.LINE.encode("utf-8") * line_count
+                self.assertEqual(len(bench.LINE.encode("utf-8")), 55)
+                while len(output) < len(expected):
+                    readable, _, _ = select.select([master], [], [], 2)
+                    self.assertTrue(readable, "gated workload did not produce its configured output")
+                    output.extend(os.read(master, 4096))
+                self.assertEqual(bytes(output), expected)
+                process.wait(timeout=2)
+                events = bench.read_events(log)
+                self.assertIn("start", events)
+                self.assertIn("end", events)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+                process.stderr.close()
+                os.close(master)
+
     def test_default_app_prefers_lowercase_jit_apphost(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

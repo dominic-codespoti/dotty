@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import importlib.util
+import io
+import threading
+from types import SimpleNamespace
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -41,7 +45,7 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(decoded["phase"], "done")
         self.assertTrue(decoded["eof_visible"])
         self.assertEqual(decoded["cell_width"], 3)
-
+        self.assertEqual(decoded["cell_height"], 3)
     def test_eof_requires_aligned_orange_run_at_least_eight_cells(self):
         short = frame(phase=2, orange=True, cw=3)
         short_rgb = bytearray(short.rgb)
@@ -61,6 +65,64 @@ class DecoderTests(unittest.TestCase):
             decoded = OBS._decode(pixels, check_eof=True)
             self.assertEqual(decoded["phase"], "done")
             self.assertFalse(decoded["eof_visible"])
+    def test_eof_verification_uses_cached_cell_height_and_bottom_roi(self):
+        observer = OBS.VisualObserver.__new__(OBS.VisualObserver)
+        observer._statusline_rect = None
+        observer._metadata = {}
+        observer.backend = "wayland-grim"
+        observer.continuous = False
+        observer.record_capture_preroll({"line": 1, "phase": "ready", "cell_width": 3,
+                                         "cell_height": 10, "monotonic_ns": 12})
+        rects = []
+        def capture(rect):
+            rects.append(rect)
+            if len(rects) == 1:
+                return frame(line=1, phase=0, height=10), rect
+            return frame(line=100, phase=2, orange=True, height=9), rect
+        observer._capture = capture
+        observer.sample((0, 0, 600, 400))
+        self.assertTrue(observer.verify_eof((0, 0, 600, 400), 100, 3))
+        self.assertEqual(rects[1], (0, 0, 600, 9))
+        self.assertEqual(observer.metadata["eof_capture_pixels"], frame(height=9).width * 9)
+        self.assertEqual(observer.metadata["capture_preroll"], {
+            "line": 1, "phase": "ready", "cell_width": 3, "cell_height": 10, "monotonic_ns": 12})
+    def test_continuous_eof_requires_orange_in_same_timestamped_frame(self):
+        observer = OBS.VisualObserver.__new__(OBS.VisualObserver)
+        observer.continuous = True
+        observer._capture_stopping = False
+        observer.backend = "wayland-wl-shm"
+        observer._statusline_rect = (0, 2, 200, 1)
+        observer._metadata = {"cell_height": 3}
+        observer._capture_condition = threading.Condition()
+        observer._capture_generation = 0
+        observer._consumed_generation = 0
+        observer._capture_error = None
+        observer._stream_rect = None
+
+        def capture(generation, timestamp, orange):
+            pixels = frame(line=100, phase=2, orange=orange)
+            rect = (0, 0, pixels.width, pixels.height)
+            observer._stream_rect = rect
+            observer._capture_generation = generation
+            observer._capture_frame = (generation, pixels, timestamp)
+            return observer.sample(rect)
+
+        without_band = capture(1, 123, False)
+        self.assertFalse(without_band["eof_visible"])
+        self.assertNotIn("eof_verified_line", observer.metadata)
+
+        with_band = capture(2, 456, True)
+        self.assertTrue(with_band["eof_visible"])
+        self.assertEqual(with_band["monotonic_ns"], 456)
+        self.assertEqual(observer.metadata["eof_capture_monotonic_ns"], 456)
+        self.assertEqual(observer.metadata["eof_capture_rect"], with_band["rect"])
+        self.assertEqual(observer.metadata["eof_verified_line"], 100)
+
+        later_without_band = capture(3, 789, False)
+        self.assertFalse(later_without_band["eof_visible"])
+        self.assertEqual(later_without_band["monotonic_ns"], 789)
+        self.assertEqual(observer.metadata["eof_capture_monotonic_ns"], 789)
+        self.assertNotIn("eof_verified_line", observer.metadata)
     def test_rejects_corrupt_parity_and_tail_sync(self):
         self.assertIsNone(OBS._decode(frame(corrupt="parity")))
         self.assertIsNone(OBS._decode(frame(corrupt="tail")))
@@ -93,6 +155,58 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(decoded["line"], 0x12345678)
         self.assertEqual(decoded["cell_width"], 10)
 
+class PersistentReaderTests(unittest.TestCase):
+    def test_unexpected_clean_eof_unblocks_waiting_sample_as_failure(self):
+        observer = OBS.VisualObserver.__new__(OBS.VisualObserver)
+        observer._capture_condition = threading.Condition()
+        observer._capture_generation = 0
+        observer._capture_frame = None
+        observer._capture_error = None
+        observer._consumed_generation = 0
+        observer._capture_stopping = False
+        observer._capture_process = SimpleNamespace(stdout=io.StringIO(""), poll=lambda: 0)
+        observer.continuous = True
+        observer._statusline_rect = None
+        observer._read_capture_stream()
+        with self.assertRaisesRegex(OBS.VisualObserverUnavailable, "stream ended unexpectedly"):
+            observer.sample((0, 0, 1, 1))
+    def test_cancellation_wakes_and_joins_a_blocked_sample(self):
+        observer = OBS.VisualObserver.__new__(OBS.VisualObserver)
+        observer._capture_condition = threading.Condition()
+        observer._capture_generation = 0
+        observer._capture_frame = None
+        observer._capture_error = None
+        observer._consumed_generation = 0
+        observer._capture_stopping = False
+        observer.continuous = True
+        observer._statusline_rect = None
+        failures = []
+        entered = threading.Event()
+
+        def sample():
+            entered.set()
+            try:
+                observer.sample((0, 0, 1, 1))
+            except Exception as exc:
+                failures.append(exc)
+
+        waiter = threading.Thread(target=sample)
+        waiter.start()
+        self.assertTrue(entered.wait(1))
+        deadline = __import__("time").monotonic() + 1
+        while __import__("time").monotonic() < deadline:
+            with observer._capture_condition:
+                if observer._capture_condition._waiters:
+                    break
+            threading.Event().wait(.001)
+        else:
+            self.fail("sample thread did not block on the capture condition")
+
+        observer.cancel_pending_sample()
+        waiter.join(timeout=1)
+        self.assertFalse(waiter.is_alive(), "cancelled sample thread did not join")
+        self.assertEqual(len(failures), 1)
+        self.assertIsInstance(failures[0], OBS.VisualObserverStopped)
 class SummaryTests(unittest.TestCase):
     @staticmethod
     def s(t, line, phase="running", eof=False):

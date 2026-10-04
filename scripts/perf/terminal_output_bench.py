@@ -4,9 +4,12 @@ import datetime as _datetime
 import json
 import math
 import os
+import hashlib
+import secrets
 import platform
 import shutil
 import signal
+import socket
 import statistics
 import subprocess
 import tempfile
@@ -14,6 +17,9 @@ import time
 from pathlib import Path
 
 
+TERMINAL_COLS = 80
+TERMINAL_ROWS = 24
+BENCH_FONT = "DejaVu Sans Mono"
 LINE = "The quick brown fox jumps over the lazy dog 0123456789\n"
 
 
@@ -57,24 +63,51 @@ def parse_args(argv=None):
         description="Launch terminal emulators with the same high-output child workload."
     )
     parser.add_argument("--runs", type=_positive_int, default=3)
+    parser.add_argument("--warmup-runs", type=int, default=1)
     parser.add_argument("--lines", type=_positive_int, default=500_000)
     parser.add_argument("--sample-interval-ms", type=_positive_float, default=50.0)
     parser.add_argument("--startup-timeout", type=_positive_float, default=20.0)
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument("--app", default=str(default_app(root)))
     parser.add_argument("--include", default="dotty,kitty,ghostty,wezterm")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.warmup_runs < 0:
+        parser.error("--warmup-runs cannot be negative")
+    return args
 
 
 def write_workload(script_path):
     script_path.write_text(
         "#!/bin/sh\n"
         "set -eu\n"
-        "python3 - <<'PY'\n"
-        "import os, sys, time\n"
+        "python3 - <<'PY' 2>>\"$TERMINAL_BENCH_LOG\"\n"
+        "import os, sys, time, subprocess\n"
         "line = b'The quick brown fox jumps over the lazy dog 0123456789\\n'\n"
         "lines = int(os.environ['TERMINAL_BENCH_LINES'])\n"
         "log = os.environ['TERMINAL_BENCH_LOG']\n"
+        "ready = False\n"
+        "go_file = os.environ['TERMINAL_BENCH_GO_FILE']\n"
+        "deadline = time.monotonic() + float(os.environ['TERMINAL_BENCH_STARTUP_TIMEOUT'])\n"
+        "while not os.path.exists(go_file):\n"
+        "    size = os.get_terminal_size(sys.stdout.fileno())\n"
+        "    stty = subprocess.run(['stty', 'size'], check=True, stdin=sys.stdout, capture_output=True, text=True).stdout.split()\n"
+        "    tty_rows, tty_cols = map(int, stty)\n"
+        "    with open(log, 'a', encoding='utf-8') as handle:\n"
+        "        handle.write(f'{time.time_ns()} geometry {size.lines} {size.columns}\\n')\n"
+        "        handle.write(f'{time.time_ns()} stty {tty_rows} {tty_cols}\\n')\n"
+        "        if not ready:\n"
+        "            handle.write(f'{time.time_ns()} ready\\n')\n"
+        "            ready = True\n"
+        "    if time.monotonic() >= deadline:\n"
+        "        raise SystemExit('timed out waiting for terminal geometry gate')\n"
+        "    time.sleep(0.05)\n"
+        "size = os.get_terminal_size(sys.stdout.fileno())\n"
+        "stty = subprocess.run(['stty', 'size'], check=True, stdin=sys.stdout, capture_output=True, text=True).stdout.split()\n"
+        "tty_rows, tty_cols = map(int, stty)\n"
+        "if (size.lines, size.columns, tty_rows, tty_cols) != (24, 80, 24, 80):\n"
+        "    with open(log, 'a', encoding='utf-8') as handle:\n"
+        "        handle.write(f'{time.time_ns()} invalid-grid\\n')\n"
+        "    raise SystemExit(f'expected 24x80 child tty at start, got {size.lines}x{size.columns} and stty {tty_rows}x{tty_cols}')\n"
         "with open(log, 'a', encoding='utf-8') as handle:\n"
         "    handle.write(f'{time.time_ns()} start\\n')\n"
         "out = sys.stdout.buffer\n"
@@ -160,27 +193,132 @@ def read_events(log_path):
     try:
         for line in log_path.read_text(encoding="utf-8").splitlines():
             parts = line.split()
-            if len(parts) == 2:
+            if len(parts) == 2 and parts[1] != "invalid-grid":
                 events[parts[1]] = int(parts[0])
+            elif len(parts) == 4 and parts[1] == "geometry":
+                events["geometry"] = {"timestamp_ns": int(parts[0]), "rows": int(parts[2]), "cols": int(parts[3])}
+            elif len(parts) == 4 and parts[1] == "stty":
+                events["stty"] = {"rows": int(parts[2]), "cols": int(parts[3])}
+            elif len(parts) == 2 and parts[1] == "invalid-grid":
+                events["invalid_grid"] = True
     except (OSError, ValueError):
         pass
     return events
 
 
-def terminal_command(name, args, workload):
+def failure_artifacts(log_path, workload):
+    details = {"child_log_path": str(log_path), "workload_script": str(workload)}
+    try:
+        size = log_path.stat().st_size
+        with log_path.open("rb") as handle:
+            handle.seek(max(0, size - 8192))
+            details["child_log_tail"] = handle.read().decode("utf-8", errors="replace")
+        details["child_log_truncated"] = size > 8192
+    except OSError as exc:
+        details["child_log_error"] = str(exc)
+    try:
+        details["workload_script_text"] = workload.read_text(encoding="utf-8")
+    except OSError as exc:
+        details["workload_script_error"] = str(exc)
+    return details
+
+def terminal_command(name, args, workload, config_dir=None):
     if name == "dotty":
         app = Path(args.app)
         return [str(app)] if app.exists() else None
     if name == "kitty":
         exe = os.environ.get("KITTY_BIN") or shutil.which("kitty")
-        return [exe, "--config", "NONE", "--detach=no", "--title", "terminal-output-bench", str(workload)] if exe else None
+        return [exe, "--config", "NONE", "--detach=no", "--title", "terminal-output-bench",
+                "-o", f"font_family={BENCH_FONT}", "-o", "font_size=12", "-o", "window_padding_width=0",
+                "-o", f"initial_window_width={TERMINAL_COLS}c", "-o", f"initial_window_height={TERMINAL_ROWS}c", str(workload)] if exe else None
     if name == "ghostty":
         exe = os.environ.get("GHOSTTY_BIN") or shutil.which("ghostty")
-        return [exe, "-e", str(workload)] if exe else None
+        return [exe, "--config-default-files=false", "--gtk-single-instance=false", f"--font-family={BENCH_FONT}",
+                "--font-size=12", "--window-padding-x=0", "--window-padding-y=0",
+                f"--window-width={TERMINAL_COLS}", f"--window-height={TERMINAL_ROWS}", "-e", str(workload)] if exe else None
     if name == "wezterm":
         exe = os.environ.get("WEZTERM_BIN") or shutil.which("wezterm")
-        return [exe, "start", "--always-new-process", "--", str(workload)] if exe else None
+        config_file = Path(config_dir or workload.parent) / "wezterm.lua"
+        return [exe, "--config-file", str(config_file), "start", "--always-new-process", "--", str(workload)] if exe else None
     return None
+def prepare_run_config(name, workload, run_id):
+    config_dir = workload.parent / f"config-{name}-{run_id}"
+    config_dir.mkdir()
+    if name == "dotty":
+        config = {"font": {"family": BENCH_FONT, "size": 16, "lineHeight": 1},
+                  "window": {"opacity": 1, "padding": {"left": 0, "right": 0, "top": 0, "bottom": 0}},
+                  "tabBar": {"show": False}}
+        (config_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    elif name == "wezterm":
+        config = (
+            "local wezterm = require 'wezterm'\n"
+            "return {\n"
+            f"  font = wezterm.font('{BENCH_FONT}'), font_size = 12,\n"
+            f"  initial_cols = {TERMINAL_COLS}, initial_rows = {TERMINAL_ROWS},\n"
+            "  window_background_opacity = 1, enable_tab_bar = false, window_decorations = 'NONE',\n"
+            "  window_padding = { left = 0, right = 0, top = 0, bottom = 0 },\n"
+            "}\n"
+        )
+        (config_dir / "wezterm.lua").write_text(config, encoding="utf-8")
+    return config_dir
+def _reserve_loopback_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+def _dotty_stats(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.25) as connection:
+            connection.sendall(b"STATS\n")
+            response = connection.makefile("r", encoding="utf-8").readline()
+        return json.loads(response) if response else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def terminal_provenance(name, args):
+    cmd = terminal_command(name, args, Path("workload.sh"))
+    if not cmd:
+        return {"status": "unavailable"}
+    binary = Path(cmd[0]).resolve()
+    record = {"status": "available", "binary": str(binary)}
+    if not binary.is_file():
+        return record | {"status": "unavailable"}
+    record["sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+    if name == "dotty":
+        record["managed_module_sha256"] = {module.name: hashlib.sha256(module.read_bytes()).hexdigest() for module in sorted(binary.parent.glob("*otty*.dll"))}
+    native_dependencies = sorted(path for path in binary.parent.rglob("*.so*") if path.is_file())
+    record["native_dependency_sha256"] = {str(path.relative_to(binary.parent)): hashlib.sha256(path.read_bytes()).hexdigest() for path in native_dependencies}
+    record["glfw_native_sha256"] = {name: digest for name, digest in record["native_dependency_sha256"].items() if "glfw" in name.lower()}
+    dependency_tool = shutil.which("ldd")
+    if dependency_tool:
+        try:
+            linked = subprocess.run([dependency_tool, str(binary)], capture_output=True, text=True, timeout=5)
+            dependencies, missing = {}, []
+            for line in linked.stdout.splitlines():
+                if "not found" in line:
+                    missing.append(line.split("=>", 1)[0].strip())
+                for token in line.split():
+                    candidate = Path(token)
+                    if token.startswith("/") and candidate.is_file():
+                        resolved = candidate.resolve()
+                        dependencies[str(resolved)] = hashlib.sha256(resolved.read_bytes()).hexdigest()
+                        break
+            record["loaded_native_dependency_sha256"] = dependencies
+            record["unresolved_native_dependencies"] = missing
+            record["glfw_native_sha256"].update({path: digest for path, digest in dependencies.items() if "glfw" in Path(path).name.lower()})
+            record["ldd_returncode"] = linked.returncode
+        except (OSError, subprocess.SubprocessError):
+            record["ldd_returncode"] = None
+    version_args = [str(binary), "+version" if name == "ghostty" else "--version"]
+    try:
+        version = subprocess.run(version_args, capture_output=True, text=True, timeout=5)
+        text = (version.stdout or version.stderr).strip()
+        record["version"] = text.splitlines()[0] if version.returncode == 0 and text else None
+    except (OSError, subprocess.SubprocessError):
+        record["version"] = None
+    return record
 
 
 def stop_process(proc):
@@ -221,26 +359,79 @@ def _sample_metrics(samples, tree_samples):
         "final_tree_rss_mb": tree_samples[-1] if tree_samples else None,
         "process_tree_sample_count": len(tree_samples),
     }
+def compare_grid(actual):
+    if not isinstance(actual, dict) or not isinstance(actual.get("cols"), int) or not isinstance(actual.get("rows"), int):
+        return False, "workload could not query terminal PTY geometry"
+    matches = actual["cols"] == TERMINAL_COLS and actual["rows"] == TERMINAL_ROWS
+    reason = None if matches else f"terminal grid was {actual['cols']}x{actual['rows']}, requested {TERMINAL_COLS}x{TERMINAL_ROWS}"
+    return matches, reason
 
 
-def run_once(name, args, workload, run_number):
-    log_path = Path(tempfile.gettempdir()) / f"terminal-output-bench-{name}-{os.getpid()}-{run_number}.log"
+def _display_window(pid):
+    """Find and expose the benchmark-owned terminal window for live grid sizing."""
+    hyprland = bool(os.environ.get("WAYLAND_DISPLAY") and os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") and shutil.which("hyprctl"))
+    if os.environ.get("WAYLAND_DISPLAY") and not hyprland:
+        raise RuntimeError("Wayland geometry requires Hyprland/hyprctl")
+    if not hyprland and not shutil.which("xdotool"):
+        raise RuntimeError("terminal geometry requires Hyprland/hyprctl or X11/xdotool")
+    owned = process_tree_pids(pid) | {pid}
+    if hyprland:
+        clients = json.loads(subprocess.check_output(["hyprctl", "-j", "clients"], text=True, timeout=5))
+        window = next((client for client in clients if client.get("pid") in owned and client.get("mapped")), None)
+        if not window:
+            return None
+        address = window["address"]
+        selector = f"address:{address}"
+        subprocess.run(["hyprctl", "dispatch", "setfloating", selector], check=True, capture_output=True, text=True, timeout=5)
+        subprocess.run(["hyprctl", "dispatch", "focuswindow", selector], check=True, capture_output=True, text=True, timeout=5)
+        clients = json.loads(subprocess.check_output(["hyprctl", "-j", "clients"], text=True, timeout=5))
+        window = next(client for client in clients if client.get("address") == address)
+        return {"kind": "hyprland", "id": address, "rect": (*window["at"], *window["size"])}
+    for child in owned:
+        found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(child)], capture_output=True, text=True, timeout=5)
+        if found.returncode == 0 and found.stdout.strip():
+            window_id = found.stdout.splitlines()[-1]
+            values = dict(line.split("=", 1) for line in subprocess.check_output(["xdotool", "getwindowgeometry", "--shell", window_id], text=True, timeout=5).splitlines() if "=" in line)
+            return {"kind": "x11", "id": window_id, "rect": tuple(int(values[key]) for key in ("X", "Y", "WIDTH", "HEIGHT"))}
+    return None
+
+
+def _resize_display_window(window, width, height):
+    width, height = max(100, round(width)), max(100, round(height))
+    if window["kind"] == "hyprland":
+        subprocess.run(["hyprctl", "dispatch", "resizewindowpixel", f"exact {width} {height},address:{window['id']}"], check=True, capture_output=True, text=True, timeout=5)
+    else:
+        subprocess.run(["xdotool", "windowsize", window["id"], str(width), str(height)], check=True, capture_output=True, text=True, timeout=5)
+
+
+def run_once(name, args, workload, run_number, run_id=None, warmup=False):
+    run_id = run_id or secrets.token_hex(6)
+    log_path = Path(tempfile.gettempdir()) / f"terminal-output-bench-{name}-{os.getpid()}-{run_id}.log"
     try:
         log_path.unlink()
     except OSError:
         pass
 
-    cmd = terminal_command(name, args, workload)
-    base = {"terminal": name, "run": run_number}
+    config_dir = prepare_run_config(name, workload, run_id)
+    cmd = terminal_command(name, args, workload, config_dir)
+    base = {"terminal": name, "run": run_number, "run_id": run_id, "warmup": warmup,
+            "terminal_config": {"font_family": BENCH_FONT, "font_size": 16 if name == "dotty" else 12,
+                                 "font_size_unit": "px" if name == "dotty" else "pt",
+                                 "requested_cols": TERMINAL_COLS, "requested_rows": TERMINAL_ROWS,
+                                 "padding_px": 0, "user_config_isolated": True}}
     if cmd is None:
         base.update({"skipped": True, "reason": "binary not found", **_sample_metrics([], [])})
         return base
 
     env = os.environ.copy()
+    go_path = workload.parent / f"go-{name}-{run_id}"
+    env["TERMINAL_BENCH_GO_FILE"] = str(go_path)
+    env["TERMINAL_BENCH_STARTUP_TIMEOUT"] = str(args.startup_timeout)
     env["TERMINAL_BENCH_LINES"] = str(args.lines)
     env["TERMINAL_BENCH_LOG"] = str(log_path)
+    dotty_port = _reserve_loopback_port() if name == "dotty" else None
     if name == "dotty":
-        env["DOTTY_SHELL"] = str(workload)
+        env.update(DOTTY_SHELL=str(workload), DOTTY_CONFIG_HOME=str(config_dir), DOTTY_TEST_PORT=str(dotty_port))
     env["DOTTY_SKIP_CONFIG_COMPILE"] = "1"
 
     started_ns = time.time_ns()
@@ -256,6 +447,9 @@ def run_once(name, args, workload, run_number):
     deadline = time.monotonic() + args.startup_timeout
     sample_interval = args.sample_interval_ms / 1000.0
     result = None
+    window_info = None
+    gate_released = False
+    last_resize_at = 0.0
 
     try:
         while time.monotonic() < deadline:
@@ -268,56 +462,89 @@ def run_once(name, args, workload, run_number):
 
             events = read_events(log_path)
             started_event_seen = started_event_seen or "start" in events
+            if events.get("invalid_grid"):
+                result = {**base, "skipped": False, "status": "partial", "reason": "child TTY did not match requested 80x24 before timing",
+                          "terminal_grid": events.get("geometry"), "child_stty": events.get("stty"),
+                          "command": cmd, "command_argv": cmd, **_sample_metrics(samples, tree_samples)}
+                return result
+            if events.get("ready") and not gate_released:
+                try:
+                    window_info = _display_window(proc.pid)
+                except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, StopIteration) as exc:
+                    result = {**base, "skipped": True, "reason": f"could not prepare actual terminal window: {exc}",
+                              "command": cmd, "command_argv": cmd, **_sample_metrics(samples, tree_samples)}
+                    return result
+                geometry = events.get("geometry")
+                stty = events.get("stty")
+                if window_info and geometry and stty and geometry.get("cols") == stty.get("cols") and geometry.get("rows") == stty.get("rows"):
+                    if geometry["cols"] == TERMINAL_COLS and geometry["rows"] == TERMINAL_ROWS:
+                        go_path.touch()
+                        gate_released = True
+                    elif geometry["cols"] > 0 and geometry["rows"] > 0 and time.monotonic() - last_resize_at >= 0.2:
+                        _, _, width, height = window_info["rect"]
+                        target_width = width * TERMINAL_COLS / geometry["cols"]
+                        target_height = height * TERMINAL_ROWS / geometry["rows"]
+                        _resize_display_window(window_info, target_width, target_height)
+                        last_resize_at = time.monotonic()
             if "end" in events and "start" in events:
                 output_ms = (events["end"] - events["start"]) / 1_000_000.0
                 launch_to_start_ms = (events["start"] - started_ns) / 1_000_000.0
                 bytes_written = len(LINE.encode("utf-8")) * args.lines
+                geometry = events.get("geometry")
                 result = {
-                    "terminal": name,
-                    "run": run_number,
-                    "skipped": False,
-                    "status": "ok",
-                    "pid": proc.pid,
-                    "launch_to_child_start_ms": launch_to_start_ms,
-                    "output_ms": output_ms,
+                    **base, "skipped": False, "status": "ok", "pid": proc.pid,
+                    "launch_to_child_start_ms": launch_to_start_ms, "output_ms": output_ms,
                     "throughput_mb_s": (bytes_written / (1024 * 1024)) / (output_ms / 1000.0) if output_ms > 0 else None,
-                    "bytes_written": bytes_written,
-                    **_sample_metrics(samples, tree_samples),
-                    "command": cmd,
-                    "command_argv": cmd,
+                    "bytes_written": bytes_written, "terminal_grid": geometry,
+                    "actual_window": {"kind": window_info["kind"], "id": window_info["id"], "rect": window_info["rect"]} if window_info else None,
+                    "child_stty": events.get("stty"),
+                    "display_protocol": "wayland" if os.environ.get("WAYLAND_DISPLAY") else "x11" if os.environ.get("DISPLAY") else "unknown",
+                    **_sample_metrics(samples, tree_samples), "command": cmd, "command_argv": cmd,
                 }
+                geometry_match, geometry_error = compare_grid(geometry)
+                stty_match, stty_error = compare_grid(events.get("stty"))
+                geometry_match = geometry_match and stty_match
+                geometry_error = geometry_error or stty_error
+                result["geometry_match"] = geometry_match
+                if not geometry_match:
+                    result.update(status="partial", reason=geometry_error)
+                if name == "dotty":
+                    state = _dotty_stats(dotty_port)
+                    result["window_backend"] = state.get("windowBackend") if state else None
                 return result
 
             if proc.poll() is not None and not started_event_seen:
-                result = {
-                    "terminal": name,
-                    "run": run_number,
-                    "skipped": True,
-                    "reason": f"process exited before workload started ({proc.returncode})",
-                    "command": cmd,
-                    "command_argv": cmd,
-                    **_sample_metrics(samples, tree_samples),
-                }
+                result = {**base, "skipped": True, "reason": f"process exited before workload started ({proc.returncode})",
+                          "command": cmd, "command_argv": cmd, **_sample_metrics(samples, tree_samples)}
                 return result
 
             time.sleep(sample_interval)
 
-        result = {
-            "terminal": name,
-            "run": run_number,
-            "skipped": True,
-            "reason": "timed out waiting for workload completion",
-            "started_event_seen": started_event_seen,
-            "command": cmd,
-            "command_argv": cmd,
-            **_sample_metrics(samples, tree_samples),
-        }
+        events = read_events(log_path)
+        reason = "timed out preparing a visible terminal window with actual PTY geometry 80x24" if events.get("ready") and not gate_released else "timed out waiting for workload completion"
+        result = {**base, "skipped": True, "reason": reason,
+                  "terminal_grid": events.get("geometry"), "child_stty": events.get("stty"),
+                  "actual_window": {"kind": window_info["kind"], "id": window_info["id"], "rect": window_info["rect"]} if window_info else None,
+                  "started_event_seen": started_event_seen, "command": cmd, "command_argv": cmd,
+                  **_sample_metrics(samples, tree_samples)}
         return result
     finally:
+        try:
+            go_path.unlink()
+        except OSError:
+            pass
         cleanup_errors = stop_process(proc)
+        if result is not None:
+            result.setdefault("run_id", run_id)
+            result.setdefault("warmup", warmup)
+            result.setdefault("terminal", name)
+            result.setdefault("run", run_number)
+        if result is not None and (result.get("skipped") or result.get("status") != "ok"):
+            result.update(failure_artifacts(log_path, workload))
         if result is not None and cleanup_errors:
             result["errors"] = cleanup_errors
             result["status"] = "partial" if not result.get("skipped") else result.get("status", "skipped")
+
 
 
 def _percentile(values, percentile):
@@ -340,7 +567,7 @@ def _mean(values):
 def summarize(results):
     summary = {}
     for terminal in sorted({result["terminal"] for result in results}):
-        terminal_results = [result for result in results if result["terminal"] == terminal]
+        terminal_results = [result for result in results if result["terminal"] == terminal and not result.get("warmup")]
         values = [result for result in terminal_results if not result.get("skipped") and result.get("status", "ok") != "failed"]
         skipped = [result for result in terminal_results if result.get("skipped")]
         reasons = [item.get("reason") for item in skipped if item.get("reason")]
@@ -415,14 +642,15 @@ def _effective_args(args):
 
 
 def _payload_status(results):
-    if not results:
+    measured = [item for item in results if not item.get("warmup")]
+    if not measured:
         return "skipped"
-    failed = [item for item in results if item.get("status") == "failed"]
-    successful = [item for item in results if not item.get("skipped") and item.get("status", "ok") != "failed"]
-    skipped = [item for item in results if item.get("skipped")]
+    failed = [item for item in measured if item.get("status") == "failed"]
+    successful = [item for item in measured if not item.get("skipped") and item.get("status", "ok") != "failed"]
+    skipped = [item for item in measured if item.get("skipped")]
     if failed and not successful:
         return "failed"
-    if failed or (successful and skipped) or any(item.get("status") == "partial" for item in results):
+    if failed or (successful and skipped) or any(item.get("status") == "partial" for item in measured):
         return "partial"
     if not successful:
         return "skipped"
@@ -446,10 +674,22 @@ def build_payload(args, results):
         "kind": "terminal-output-benchmark",
         "status": _payload_status(results),
         "metadata": {
+            "run_id": getattr(args, "_run_id", None),
             "started_at_utc": getattr(args, "_started_at_utc", _utc_now()),
             "completed_at_utc": _utc_now(),
             "effective_args": _effective_args(args),
             "bytes_written": bytes_per_run,
+            "terminal_setup": {
+                "grid": {"cols": TERMINAL_COLS, "rows": TERMINAL_ROWS},
+                "font_family": BENCH_FONT,
+                "font_sizes": {"dotty_px": 16, "references_pt": 12},
+                "padding_px": 0, "user_configs_isolated": True,
+                "window_backend_source": "Dotty STATS; reference terminals not exposed by stable CLI",
+                "display_protocol_environment": "wayland" if os.environ.get("WAYLAND_DISPLAY") else "x11" if os.environ.get("DISPLAY") else "unknown",
+            },
+            "workload_line_sha256": hashlib.sha256(LINE.encode("utf-8")).hexdigest(),
+            "benchmark_script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "terminal_provenance": getattr(args, "_terminal_provenance", {}),
             "total_bytes_written": total_bytes,
             "command_argv": [item["command"] for item in results if item.get("command")],
             "host": {
@@ -475,18 +715,30 @@ def write_json(path, payload):
     destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def build_schedule(terminals, warmup_runs, runs, run_id):
+    schedule = []
+    sequence = 0
+    for warmup, rounds in ((True, warmup_runs), (False, runs)):
+        for round_number in range(rounds):
+            shift = round_number % len(terminals)
+            for terminal in terminals[shift:] + terminals[:shift]:
+                sequence += 1
+                schedule.append({"terminal": terminal, "run": sequence, "run_id": f"{run_id}-{sequence:04d}", "warmup": warmup})
+    return schedule
+
+
 def main():
     args = parse_args()
     args._started_at_utc = _utc_now()
+    args._run_id = secrets.token_hex(8)
+    args.warmup_runs = getattr(args, "warmup_runs", 0)
     terminals = [item.strip() for item in args.include.split(",") if item.strip()]
+    args._terminal_provenance = {name: terminal_provenance(name, args) for name in terminals}
     with tempfile.TemporaryDirectory(prefix="terminal-output-bench-") as temp_dir:
         workload = Path(temp_dir) / "workload.sh"
         write_workload(workload)
-        results = [
-            run_once(terminal, args, workload, run_number)
-            for terminal in terminals
-            for run_number in range(1, args.runs + 1)
-        ]
+        schedule = build_schedule(terminals, args.warmup_runs, args.runs, args._run_id)
+        results = [run_once(item["terminal"], args, workload, item["run"], item["run_id"], item["warmup"]) for item in schedule]
     payload = build_payload(args, results)
     if args.json_out is not None:
         write_json(args.json_out, payload)

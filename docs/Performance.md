@@ -163,8 +163,22 @@ types.
 The app default is the lowercase `Release` apphost. If a requested competitor
 is not installed, it is reported as **skipped** rather than treated as a zero
 or failed run.
-Required .NET diagnostics tools are `dotnet-trace`, `dotnet-counters`, and
-`dotnet-gcdump`.
+Output comparison defaults to one unmeasured warmup round (`--warmup-runs 1`)
+followed by the requested measured rounds (`--runs`). Each round visits every
+participant serially; participant order rotates by round so a terminal is not
+always favored by first/last position. Warmup records remain in JSON but are
+excluded from statistics. Requested competitors that are unavailable remain
+`skipped`, and any missing requested round makes the comparison partial; a
+partial set is not a complete cross-terminal comparison. JSON includes run IDs,
+workload line hash, terminal executable hashes and reported versions. The 5M output
+workload checks both the child PTY ioctl and `stty size` report 80x24 before its
+timing start event; other geometry is partial evidence, never an apparently valid run.
+For skipped or partial launches, result JSON retains the generated workload script and
+child stderr/log tail so terminal startup and shell failures remain diagnosable after
+the temporary workload directory is removed.
+Required .NET diagnostics tools for `profile` are `dotnet-trace`,
+`dotnet-counters`, and `dotnet-gcdump`.
+
 
 Each invocation writes a unique UTC directory below `artifacts/perf/eval/`.
 The directory contains `summary.json`, `report.md`, per-run child logs and
@@ -205,20 +219,105 @@ display: Hyprland with `hyprctl`/`grim`, or X11 with `xdotool`. Neovim's experim
 `--profile syntax` for built-in C syntax highlighting. For virtual X11, explicitly
 use `--display-kind virtual` and unset `WAYLAND_DISPLAY` and
 `HYPRLAND_INSTANCE_SIGNATURE` (e.g. under Xvfb); this does not prove physical
-compositor presentation. The 300x100 stress grid needs a display large enough
-for the configured font. Dotty uses DejaVu Sans Mono at 16px, competitors at
-12pt; keep grid, fonts, resolution/refresh/scale, and backend stable, and
-inspect recorded metadata and fixture/binary hashes. Keep windows visible and
-avoid other applications, workspaces, or image viewers that can occlude them.
+compositor presentation. The published long-run example requests 200x60; the
+benchmark also permits larger stress grids, which must fit the physical display
+at the selected terminal font size. Dotty uses DejaVu Sans Mono at 16px and
+competitors at 12pt; treat these as configurations, not equivalent cell sizes.
+The child JSON records each terminal's measured Neovim grid and window rectangle,
+plus monitor geometry, configured font, binary hash/version, and capture backend.
+Inspect those actual values instead of inferring equal cell geometry from the
+requested grid or font settings. A comparison is complete only for participants
+with matching observed grid/display conditions; keep mismatches as partial evidence.
+Before measured rounds, use this one-run physical-display pilot (100k lines, 200x60).
+The example acquires at 120 Hz with a strict 60-Hz minimum observation-quality floor;
+verify every participant and the actual cadence, not just the requested rates:
+
+```bash
+dotnet publish src/Dotty/Dotty.csproj -c Release -o /tmp/dotty-portable-benchmark \
+  -p:RequireUnixPtyHelper=true -p:IncludeSourceRevisionInInformationalVersion=false
+APP=/tmp/dotty-portable-benchmark/dotty
+python3 scripts/perf/eval_suite.py nvim-scroll --app "$APP" \
+  --include dotty,ghostty,kitty --lines 100000 --cols 200 --rows 60 \
+  --runs 1 --warmup-runs 0 --profile plain --capture auto --sample-hz 60 --capture-hz 120 \
+  --startup-timeout 30 --run-timeout 600 --timeout 1200
+```
+
+The full matched plan uses two output warmups and five measured output rounds;
+each 1M-line plain and syntax Neovim profile uses one warmup and five measured rounds.
+Terminal order rotates between rounds. A clean pilot qualifies the full visual
+comparison. With explicit approval, a full campaign may instead retain partial
+capture evidence: preserve every failed-quality round and report its visual gate
+as inconclusive, never as a protected latency tail or a clean terminal ranking.
+Identical requested/actual grids and capture settings remain required.
+
+```bash
+APP=/tmp/dotty-portable-benchmark/dotty
+python3 scripts/perf/eval_suite.py compare --app "$APP" --include dotty,ghostty,kitty \
+  --lines 5000000 --runs 5 --warmup-runs 2 --timeout 86400
+for PROFILE in plain syntax; do
+  python3 scripts/perf/eval_suite.py nvim-scroll --app "$APP" \
+    --include dotty,ghostty,kitty --lines 1000000 --cols 200 --rows 60 \
+    --runs 5 --warmup-runs 1 --profile "$PROFILE" --capture auto --sample-hz 60 --capture-hz 120 \
+    --startup-timeout 30 --run-timeout 1800 --timeout 86400
+done
+```
+Reserve the display for the batch: pause other GUI-opening workflows, keep benchmark
+windows visible, and avoid workspace changes or occlusion. The harness restores the
+original workspace. `--capture-hz` controls the persistent Wayland producer;
+`--sample-hz` remains the minimum temporal-quality target. Omit `--capture-hz` to use
+the same rate as `--sample-hz`. Both configured and observed rates are recorded, and
+both settings must match between baseline and candidate. Oversampling does not
+ignore late/unrecognized frames or make a partial result pass. Even a failed marker
+decode retains the captured frame's native timestamp; a no-frame observation is
+untimed instead of inventing a Python delivery-time acquisition. All missing
+observations continue to break continuity and censor affected stall intervals.
+Sampler shutdown cancels a pending capture wait explicitly: the observer marks
+capture stopping and notifies its condition, and the pending sample exits with
+a distinct stopped outcome rather than waiting indefinitely or being reported as
+a timed observation. Capture errors remain distinct and take precedence when
+present. Closing the observer also verifies that its reader thread has joined.
+This lifecycle fix prevents a shutdown wait from hanging; it does not restore
+missing frames or qualify any historical capture. Previously recorded failed
+or partial rows retain their original status and are not rescored after the fix.
+A post-fix real 10,000-line, three-terminal smoke is recorded at
+`artifacts/perf/eval/20261004T225306Z-668e8a/nvim-scroll.json`. Dotty, Ghostty,
+and Kitty each completed 9,999 moves and verified line 10,000/EOF, with no
+capture errors. The runner exited 0, but the campaign remains **PARTIAL**: Dotty
+and Kitty each had one late sample (zero dropped); Ghostty had no late or dropped
+samples. Exit 0 records runner completion, not visual-quality qualification. A
+separate real Wayland cancellation probe paused the producer while a consumer
+waited on the capture condition; cancellation surfaced as `VisualObserverStopped`,
+and the worker, producer, and reader all joined without synthesizing EOF ([retained
+native cancellation probe](../artifacts/perf/competitive-portable/native-capture-cancel-smoke.json)).
+
 
 The deterministic ~95 MB, one-million-line fixture checks exact one-line
 cursor advance for each of N-1 steps and flushes every redraw. Phase/parity
 markers correlate Neovim progress with visible pixels. `--capture none` makes
-visible metrics partial. The 60 Hz sample rate is a target, not a guarantee;
-expensive `grim` capture may need `--sample-hz 20` or `10`. Missing/late markers or
-cadence gaps censor visual data; preserve valid traversal data and report
-visual measures as partial/unknown, never zero. Samples are compositor
-observations, not GPU fences or proof of root cause.
+visible metrics partial.
+A Wayland run requires the persistent native ROI helper; build it once with
+`scripts/perf/build_wayland_roi_observer.sh` (or set `WAYLAND_ROI_OBSERVER_BIN` to the
+resulting executable). Its JSONL frames use monotonic capture timestamps and a single
+latest-frame slot, so the consumer never drains stale queued images.
+Before releasing the Neovim go gate, capture must yield a continuous decoded ready/line-1
+marker with positive cell dimensions matching the initial observation; the pre-roll sample
+and monotonic timestamp are retained. Helper startup is outside the traversal capture
+window instead of being hidden by dropping the first late sample.
+The persistent Wayland ROI includes the marker and EOF orange band. EOF is proved
+only when both appear in the same captured frame, using that native frame timestamp;
+the observer does not launch a competing timed `grim` capture or backdate later
+verification onto an earlier marker. Non-continuous/X11 capture retains its separate
+EOF verification worker. Full-window PNGs are retained after timed sampling. The
+observer records requested and observed Hz, cadence-met status, and capture metadata;
+cadence is met only at >=90% of the requested rate with zero late or dropped samples.
+Each visual result also stores `capture_metadata.native_helper` with the absolute binary
+path and SHA-256, plus the source C and pinned screencopy protocol XML paths and SHA-256
+values. This identifies the actual helper invoked, including when a stale cache binary is
+present; rebuild it with `scripts/perf/build_wayland_roi_observer.sh` before benchmarking.
+Preserve helper stderr in `wayland-observer.stderr`. Missing/late markers, geometry or
+style mismatches, missing participants/rounds, or cadence gaps make visual evidence
+partial/unknown; preserve usable traversal values and never substitute zero for censored
+visual values. Samples are compositor observations, not GPU fences or proof of root cause.
 
 JSON records launch-to-ready, file-open-to-ready, geometry-ready, traversal,
 visual threshold counts, largest positive visible-line jump, EOF visibility
@@ -470,8 +569,12 @@ pass. The default gates are a 5% throughput or traversal regression and 10%
 latency/RSS regression. Snapshots retain median, p95, MAD, sample count, status,
 source hashes, and compatibility metadata. Workload dimensions, build family,
 host, Neovim fixture/version, font, display geometry, and sampling settings
-must match. Binary hashes are recorded in raw benchmark outputs but not
-compared, because before/after builds are expected to differ.
+must match, including both the minimum observation rate and native acquisition rate.
+Cross-snapshot comparison allows the intended Dotty executable path/hash and bundled
+GLFW implementation identity to change; it reports their exact before/after values
+in `build_changes` and retains full provenance in both snapshots. Competitor identity,
+system/runtime native dependencies, and all experimental conditions remain strict.
+Pooling multiple inputs within one capture still requires identical build provenance.
 
 #### Observed Dotty before/after comparison (2026-10-02)
 
@@ -521,6 +624,34 @@ matching runtime/hardware conditions.
 
 Eval runs already write to unique UTC directories. Keep the raw source JSON and
 logs alongside published snapshots so comparisons remain traceable.
+### Final portable benchmark evidence (2026-10-05)
+
+The portable AOT 5M-output comparison is a formal **PASS**: all five measured
+samples per build were complete (5/5 before and 5/5 after). Median throughput
+was 80.8646 to 80.0348 MiB/s (-1.03%); process-tree peak RSS was 208.7148 to
+190.793 MiB (-8.59%). See
+`artifacts/perf/competitive-portable/throughput-comparison-qualified.json`.
+
+The two full Neovim campaigns each retain 18 records per side, but visual
+capture was not complete: the plain baseline is partial and the final campaign
+has a Kitty capture-shutdown failure despite exact cursor-to-EOF traversal.
+The formal plain comparison is **REGRESSION**, not PASS: its limited qualified
+longest-stall subset is 22.210654 to 31.7572125 ms (+42.98%; 4 before and 2
+after samples), and the result correctly remains `evidence_complete=false` and
+`repeat_required=true`. Traversal (+2.66%) and RSS (-4.81%) meet their metrics;
+they do not erase the visual-tail signal or incomplete evidence. The syntax
+comparison is **PARTIAL**, with unavailable visual tails (five pre-roll
+failures before, two after); traversal (-6.01%) and RSS (-6.91%) are descriptive
+only, not a visual gate or a complete comparison. See
+`artifacts/perf/competitive-portable/nvim-plain-comparison.json` and
+`artifacts/perf/competitive-portable/nvim-syntax-comparison.json`.
+
+The final .NET gate recorded 1,224 passed, 0 failed, and 1 skipped of 1,225
+project tests; the skipped test is the existing ThemeRoot skip. The final Python
+check recorded 89 passed and 0 failed. The documented memory-ownership/PSS
+observations are descriptive evidence of owned-capacity accounting, not a
+population-wide memory claim. Windows and macOS physical-device qualification
+remains blocked; these results make no such qualification claim.
 ## Continuous Integration
 
 The `performance-tests` job in `.github/workflows/ci.yml` runs on Ubuntu for
@@ -561,6 +692,28 @@ project writes `regressions.txt`. CI does not run the detailed benchmark mode.
 3. **Object pooling**: Reuse objects instead of creating new
 4. **Struct types**: Use value types for hot paths
 5. **BufferTextWriter**: Optimized bulk cell write path — reduces per-cell overhead by batching writes and minimizing buffer flushes
+
+### Memory ownership and lifecycle
+
+The opt-in control-port `MEMORY` response separates process RSS/PSS from owned
+terminal native arena capacity, owned snapshot-array capacity, atlas bitmap bytes,
+and R8/RGBA8 texture payload estimates. Texture payload is computed from page
+dimensions and format; it is not measured driver allocation or total GPU memory.
+Intrinsic-color probe scratch is reported separately from retained atlas pages.
+
+`managedHeapEstimateBytes` uses `GC.GetTotalMemory(false)` without forcing a
+collection; it is not a measurement of live managed objects. Latest-GC heap,
+committed bytes and index describe that collection, while allocated-byte counters
+are cumulative growth/traffic, not retained ownership. Do not subtract managed
+heap estimates from RSS to label the remainder as GPU memory.
+
+Tab/pane disposal releases model ownership once stopped workers and outstanding
+snapshots no longer need it. After resize/reflow completes, both the completed
+destination and reset spare native arena trim unused capacity to the current
+screen geometry. This does not drop active cells or change history/reflow policy;
+native realloc may move/copy the arena. It runs at resize completion, not per key
+or render frame. Lifecycle measurements and their single-observation caveats are
+recorded in [Rendering](Rendering.md).
 
 ### Steady-state allocation policy
 
@@ -704,6 +857,7 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 | 2026-09-18 | Added consolidated evaluation commands, artifact/status semantics, and measured findings |
 | 2026-06-15 | Added cold-start benchmark guidance |
 | 2026-10-02 | Added real Neovim scrolling/compositor-visible benchmark guidance, measurement caveats, and artifact/cleanup details |
+| 2026-10-05 | Recorded portable AOT throughput, partial Neovim evidence, and capture-lifecycle cancellation limits |
 | 2026-09-24 | Added the steady-state zero-allocation policy and measurement harness |
 
 ---
@@ -712,4 +866,4 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 - [Dotty Parsing Performance](Parsing.md)
 - [.NET Performance Best Practices](https://docs.microsoft.com/en-us/dotnet/framework/performance/)
 
-*Last updated: 2026-10-02*
+*Last updated: 2026-10-05*

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import secrets
 import json
 import os
 import shlex
@@ -15,6 +16,7 @@ import threading
 import time
 from pathlib import Path
 
+from nvim_scroll_observer import VisualObserverStopped
 from terminal_output_bench import default_app, process_tree_pids, process_tree_rss_mb, _positive_int, _positive_float
 
 HERE = Path(__file__).resolve().parent
@@ -32,12 +34,15 @@ def parse_args(argv=None):
     parser.add_argument("--profile", choices=("plain", "syntax"), default="plain")
     parser.add_argument("--capture", choices=("auto", "none"), default="auto")
     parser.add_argument("--sample-hz", type=_positive_float, default=60)
+    parser.add_argument("--capture-hz", type=_positive_float)
     parser.add_argument("--startup-timeout", type=_positive_float, default=30)
     parser.add_argument("--timeout", type=_positive_float, default=1800)
     parser.add_argument("--display-kind", choices=("real", "virtual"), default="real")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args(argv)
+    if args.capture_hz is None:
+        args.capture_hz = args.sample_hz
     if args.cols < 60 or args.rows < 5:
         parser.error("the visible progress marker requires at least 60 columns and 5 rows")
     if args.lines > 0xffffffff or args.warmup_runs < 0:
@@ -71,6 +76,35 @@ def command_output(argv):
     if result.returncode:
         raise RuntimeError(f"{argv[0]} failed: {result.stderr.strip() or result.stdout.strip()}")
     return result.stdout
+def native_dependency_hashes(binary):
+    local = {}
+    for path in sorted(binary.parent.rglob("*.so*")):
+        if path.is_file():
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for block in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(block)
+            local[str(path.relative_to(binary.parent))] = digest.hexdigest()
+    loaded, missing = {}, []
+    ldd = shutil.which("ldd")
+    if ldd:
+        result = subprocess.run([ldd, str(binary)], capture_output=True, text=True, timeout=10)
+        for line in result.stdout.splitlines():
+            if "not found" in line:
+                missing.append(line.split("=>", 1)[0].strip())
+            for token in line.split():
+                path = Path(token)
+                if token.startswith("/") and path.is_file():
+                    resolved = path.resolve()
+                    digest = hashlib.sha256()
+                    with resolved.open("rb") as handle:
+                        for block in iter(lambda: handle.read(1024 * 1024), b""):
+                            digest.update(block)
+                    loaded[str(resolved)] = digest.hexdigest()
+                    break
+    return {"native_dependency_sha256": local, "loaded_native_dependency_sha256": loaded,
+            "glfw_native_sha256": {path: digest for path, digest in (local | loaded).items() if "glfw" in path.lower()},
+            "unresolved_native_dependencies": missing}
 
 
 class WindowController:
@@ -178,24 +212,54 @@ class Sampler:
         self.samples, self.errors = [], []
         self.stop = threading.Event()
         self.thread = threading.Thread(target=self.run, daemon=True)
-
+        self.eof_thread = None
     def run(self):
         while not self.stop.is_set():
             started = time.monotonic()
             try:
                 sample = self.observer.sample(self.rect)
-                self.samples.append(sample or {"monotonic_ns": time.monotonic_ns(), "line": None, "phase": None, "eof_visible": False})
+                self.samples.append(sample if sample is not None else {"line": None, "phase": None, "eof_visible": False, "capture_outcome": "no_frame"})
+                if sample and sample.get("phase") == "done" and self.eof_thread is None and not self.observer.continuous:
+                    self.eof_thread = threading.Thread(target=self.verify_eof, args=(sample,), daemon=True)
+                    self.eof_thread.start()
+            except VisualObserverStopped:
+                break
             except Exception as exc:
                 self.errors.append(str(exc))
                 break
-            self.stop.wait(max(0, self.interval - (time.monotonic() - started)))
+            # The persistent Wayland producer already emits at the requested cadence.
+            # Waiting again here can phase-lock consumption to work time and skip provider frames.
+            # observer.sample() waits for a new generation while preserving latest-frame semantics.
+            if not self.observer.continuous:
+                self.stop.wait(max(0, self.interval - (time.monotonic() - started)))
+    def verify_eof(self, sample):
+        try:
+            for _ in range(20):
+                if self.observer.verify_eof(self.rect, sample["line"], sample["cell_width"]):
+                    return
+                time.sleep(.05)
+        except Exception as exc:
+            self.errors.append(f"EOF verification failed: {exc}")
 
     def close(self):
         self.stop.set()
+        self.observer.cancel_pending_sample()
         self.thread.join(timeout=10)
         if self.thread.is_alive():
             raise RuntimeError("visual capture did not stop")
+        if self.eof_thread is not None:
+            self.eof_thread.join(timeout=2)
 
+def cadence_report(visual, requested_hz):
+    quality = visual.get("quality", {})
+    interval_ms = quality.get("observed_interval_ms_mean")
+    observed_hz = 1000 / interval_ms if interval_ms and interval_ms > 0 else None
+    return {
+        "requested_sample_hz": requested_hz,
+        "observed_sample_hz": observed_hz,
+        "cadence_met": observed_hz is not None and observed_hz >= requested_hz * 0.9
+        and visual.get("late_samples") == 0 and visual.get("dropped_samples") == 0,
+    }
 
 def cleanup(proc, run_dir):
     (run_dir / "release").touch()
@@ -228,7 +292,8 @@ def cleanup(proc, run_dir):
 def run_once(name, args, fixture, root, controller, index, warmup):
     run_dir = root / f"{index:03d}-{name}-{'warmup' if warmup else 'measured'}"
     run_dir.mkdir()
-    result = {"terminal": name, "run": index, "warmup": warmup, "status": "failed", "errors": [], "artifacts": {"directory": str(run_dir), "events": str(run_dir / "events.jsonl"), "samples": str(run_dir / "visual-samples.jsonl"), "terminal_log": str(run_dir / "terminal.log")}}
+    run_id = secrets.token_hex(8)
+    result = {"terminal": name, "run": index, "run_id": run_id, "warmup": warmup, "status": "failed", "errors": [], "artifacts": {"directory": str(run_dir), "events": str(run_dir / "events.jsonl"), "samples": str(run_dir / "visual-samples.jsonl"), "terminal_log": str(run_dir / "terminal.log")}}
     shell = run_dir / "workload.sh"
     nvim = shutil.which("nvim")
     if not nvim:
@@ -322,15 +387,31 @@ def run_once(name, args, fixture, root, controller, index, warmup):
                     time.sleep(.02)
                 else:
                     raise RuntimeError("initial Neovim progress marker not visible in compositor capture")
+                expected_cell = (sample["cell_width"], sample["cell_height"])
+                if any(not isinstance(size, int) or size <= 0 for size in expected_cell):
+                    raise RuntimeError("initial marker has invalid cell geometry")
+                observer.start_continuous(args.capture_hz, run_dir / "wayland-observer.stderr", rect)
+                preroll_deadline = time.monotonic() + args.startup_timeout
+                while time.monotonic() < preroll_deadline:
+                    remaining = preroll_deadline - time.monotonic()
+                    preroll = observer.sample(rect, timeout=remaining if observer.continuous else None)
+                    if preroll and preroll["line"] == 1 and preroll["phase"] == "ready":
+                        actual_cell = (preroll.get("cell_width"), preroll.get("cell_height"))
+                        if actual_cell != expected_cell:
+                            raise RuntimeError(f"capture preroll marker geometry changed from {expected_cell} to {actual_cell}")
+                        break
+                    if not observer.continuous:
+                        time.sleep(min(.02, max(0, remaining)))
+                else:
+                    raise RuntimeError("timed out waiting for a valid persistent capture preroll marker")
+                sample = preroll
+                observer.record_capture_preroll(sample)
                 sampler = Sampler(observer, rect, args.sample_hz)
                 sampler.samples.append(sample)
                 sampler.thread.start()
             except Exception as exc:
                 capture_error = str(exc)
-                result["visual"] = {"status": "partial", "reason": capture_error, "final_screen_verified": False}
-                if observer is not None:
-                    observer.close()
-                    observer = None
+                raise RuntimeError(f"visual capture readiness barrier failed before workload start: {exc}") from exc
         (run_dir / "go").touch()
         deadline = time.monotonic() + args.timeout
         end = start = None
@@ -366,6 +447,8 @@ def run_once(name, args, fixture, root, controller, index, warmup):
             from nvim_scroll_observer import summarize_samples
             result["visual"] = summarize_samples(sampler.samples, start["monotonic_ns"], end["monotonic_ns"], args.lines, args.sample_hz)
             result["visual"]["capture_errors"] = sampler.errors
+            quality = result["visual"]["quality"]
+            quality.update(cadence_report(result["visual"], args.sample_hz))
             result["visual"]["backend"] = getattr(observer, "backend", type(observer).__name__)
             result["visual"]["capture_metadata"] = observer.metadata
             progress = [event for event in events.events if event["type"] == "progress"]
@@ -410,20 +493,22 @@ def run_once(name, args, fixture, root, controller, index, warmup):
     return result
 
 
-def summarize(runs):
+def summarize(runs, expected_runs=None):
     summary = {}
     for name in dict.fromkeys(run["terminal"] for run in runs):
         measured = [run for run in runs if run["terminal"] == name and not run["warmup"]]
         usable = [run for run in measured if run.get("traversal_ms") is not None]
         states = [run["status"] for run in measured]
         status = "failed" if "failed" in states else "skipped" if states and all(state == "skipped" for state in states) else "partial" if any(state in ("partial", "skipped") for state in states) else "ok"
+        if expected_runs is not None and len(measured) != expected_runs and status not in ("failed", "skipped"):
+            status = "partial"
         def values(key, visual=False):
             return [value for run in usable if (value := (run.get("visual", {}) if visual else run).get(key)) is not None]
         def median(key, visual=False):
             data = values(key, visual)
             return statistics.median(data) if data else None
         stalls, memory = values("longest_visible_stall_ms", True), values("process_tree_peak_rss_mb")
-        summary[name] = {"status": status, "runs": len(usable), "traversal_ms_median": median("traversal_ms"), "lines_per_second_median": median("lines_per_second"), "longest_visible_stall_ms_max": max(stalls) if stalls else None, "eof_to_visible_ms_median": median("eof_to_visible_ms", True), "process_tree_peak_rss_mb_max": max(memory) if memory else None}
+        summary[name] = {"status": status, "runs": len(usable), "requested_runs": expected_runs, "rounds_complete": expected_runs is None or len(measured) == expected_runs, "traversal_ms_median": median("traversal_ms"), "lines_per_second_median": median("lines_per_second"), "longest_visible_stall_ms_max": max(stalls) if stalls else None, "eof_to_visible_ms_median": median("eof_to_visible_ms", True), "process_tree_peak_rss_mb_max": max(memory) if memory else None}
     return summary
 
 
@@ -447,6 +532,7 @@ def main(argv=None):
                 record = {"binary": str(binary.resolve()), "sha256": digest.hexdigest()}
                 if name == "dotty":
                     record["managed_module_sha256"] = {module.name: hashlib.sha256(module.read_bytes()).hexdigest() for module in sorted(binary.parent.glob("*otty*.dll"))}
+                    record.update(native_dependency_hashes(binary))
                 if name != "dotty":
                     record["version"] = command_output([str(binary), "+version" if name == "ghostty" else "--version"]).strip()
                 payload["terminal_versions"][name] = record
@@ -469,7 +555,7 @@ def main(argv=None):
                 payload["runs"].append(run)
                 print(f"{name}: {run['status']}; traversal={run.get('traversal_ms')} ms; visual={run.get('visual', {}).get('status', 'unavailable')}", flush=True)
                 json_path.write_text(json.dumps(payload, indent=2) + "\n")
-        payload["summary"] = summarize(payload["runs"])
+        payload["summary"] = summarize(payload["runs"], args.runs)
         states = [run["status"] for run in payload["runs"]]
         payload["status"] = "failed" if "failed" in states else "partial" if any(state in ("partial", "skipped") for state in states) else "ok"
     except (OSError, RuntimeError, subprocess.SubprocessError, ValueError, KeyboardInterrupt) as exc:

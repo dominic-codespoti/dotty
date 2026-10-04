@@ -303,6 +303,7 @@ def parser_for(root: Path | None = None) -> argparse.ArgumentParser:
     compare = subparsers.add_parser("compare", help="compare Dotty with available terminal competitors")
     _add_common(compare, root)
     compare.add_argument("--runs", type=int, default=3)
+    compare.add_argument("--warmup-runs", type=int, default=1)
     compare.add_argument("--lines", type=int, default=500_000)
     compare.add_argument("--include", default="dotty,kitty,ghostty,wezterm")
     compare.add_argument("--sample-interval-ms", type=float, default=50.0)
@@ -318,6 +319,7 @@ def parser_for(root: Path | None = None) -> argparse.ArgumentParser:
     all_parser = subparsers.add_parser("all", help="run compare and profile")
     _add_common(all_parser, root)
     all_parser.add_argument("--runs", type=int, default=3)
+    all_parser.add_argument("--warmup-runs", type=int, default=1)
     all_parser.add_argument("--lines", type=int, default=500_000)
     all_parser.add_argument("--include", default="dotty,kitty,ghostty,wezterm")
     all_parser.add_argument("--sample-interval-ms", type=float, default=50.0)
@@ -336,6 +338,7 @@ def parser_for(root: Path | None = None) -> argparse.ArgumentParser:
     nvim.add_argument("--profile", choices=("plain", "syntax"), default="plain")
     nvim.add_argument("--startup-timeout", type=float, default=30.0)
     nvim.add_argument("--sample-hz", type=float, default=60.0)
+    nvim.add_argument("--capture-hz", type=float)
     nvim.add_argument("--warmup-runs", type=int, default=1)
     nvim.add_argument("--capture", choices=("auto", "none"), default="auto")
     nvim.add_argument("--display-kind", choices=("real", "virtual"), default="real")
@@ -368,7 +371,7 @@ def _cli_number(value: int | float) -> str:
 
 
 def _compare_command(args: argparse.Namespace, json_path: Path) -> list[str]:
-    return [sys.executable, str(TERMINAL_BENCH), "--app", str(args.app), "--json-out", str(json_path), "--runs", _cli_number(args.runs), "--lines", _cli_number(args.lines), "--include", str(args.include), "--sample-interval-ms", _cli_number(args.sample_interval_ms), "--startup-timeout", _cli_number(args.startup_timeout)]
+    return [sys.executable, str(TERMINAL_BENCH), "--app", str(args.app), "--json-out", str(json_path), "--runs", _cli_number(args.runs), "--warmup-runs", _cli_number(args.warmup_runs), "--lines", _cli_number(args.lines), "--include", str(args.include), "--sample-interval-ms", _cli_number(args.sample_interval_ms), "--startup-timeout", _cli_number(args.startup_timeout)]
 
 
 def _profile_command(args: argparse.Namespace, output_dir: Path) -> list[str]:
@@ -378,7 +381,7 @@ def _nvim_scroll_command(args: argparse.Namespace, json_path: Path, output_dir: 
                "--lines", _cli_number(args.lines), "--cols", _cli_number(args.cols), "--rows", _cli_number(args.rows),
                "--runs", _cli_number(args.runs), "--include", str(args.include), "--profile", str(args.profile),
                "--startup-timeout", _cli_number(args.startup_timeout), "--timeout", _cli_number(args.run_timeout),
-               "--sample-hz", _cli_number(args.sample_hz), "--warmup-runs", _cli_number(args.warmup_runs),
+               "--sample-hz", _cli_number(args.sample_hz), "--capture-hz", _cli_number(args.capture_hz), "--warmup-runs", _cli_number(args.warmup_runs),
                "--capture", str(args.capture), "--display-kind", str(args.display_kind)]
     if any(name.strip().lower() == "dotty" for name in args.include.split(",")):
         command.extend(["--app", str(args.app)])
@@ -618,6 +621,8 @@ def _final_status(components: dict[str, Any]) -> str:
 
 
 def run(args: argparse.Namespace) -> tuple[int, Path, dict[str, Any]]:
+    if args.command == "nvim-scroll" and args.capture_hz is None:
+        args.capture_hz = args.sample_hz
     root = repository_root()
     validation = _validate(args, root)
     run_dir = create_run_dir(Path(args.output_root))

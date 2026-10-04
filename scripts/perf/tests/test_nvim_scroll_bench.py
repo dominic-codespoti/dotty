@@ -9,7 +9,6 @@ PERF = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PERF))
 import nvim_scroll_bench as bench
 
-
 class NvimScrollBenchTests(unittest.TestCase):
     def test_event_reader_retains_partial_records_without_duplicates(self):
         with tempfile.TemporaryDirectory() as root:
@@ -24,6 +23,7 @@ class NvimScrollBenchTests(unittest.TestCase):
             reader.update()
             reader.update()
             self.assertEqual(reader.events, [{"type": "start", "monotonic_ns": 123}, {"type": "end", "steps": 9}])
+
 
     def test_missing_visual_measurements_stay_missing_and_warmup_excluded(self):
         runs = [
@@ -44,7 +44,28 @@ class NvimScrollBenchTests(unittest.TestCase):
             with self.subTest(state=state):
                 runs = [{"terminal": "kitty", "warmup": False, "status": "ok", "traversal_ms": 100}, {"terminal": "kitty", "warmup": False, "status": state}]
                 self.assertEqual(bench.summarize(runs)["kitty"]["status"], expected)
+    def test_missing_requested_measured_rounds_are_partial(self):
+        runs = [{"terminal": "kitty", "warmup": False, "status": "ok", "traversal_ms": 100}]
+        result = bench.summarize(runs, expected_runs=2)["kitty"]
+        self.assertEqual(result["status"], "partial")
+        self.assertFalse(result["rounds_complete"])
+        self.assertEqual(result["requested_runs"], 2)
+    def test_cadence_met_uses_top_level_gap_counts_and_rate_threshold(self):
+        def visual(rate, *, late=0, dropped=0):
+            return {"quality": {"observed_interval_ms_mean": 1000 / rate},
+                    "late_samples": late, "dropped_samples": dropped}
 
+        low = bench.cadence_report(visual(30), 60)
+        target = bench.cadence_report(visual(54), 60)
+        late = bench.cadence_report(visual(60, late=1), 60)
+        dropped = bench.cadence_report(visual(60, dropped=1), 60)
+        missing = bench.cadence_report({"quality": {"observed_interval_ms_mean": 1000 / 60}}, 60)
+        self.assertAlmostEqual(low["observed_sample_hz"], 30)
+        self.assertFalse(low["cadence_met"])
+        self.assertTrue(target["cadence_met"])
+        self.assertFalse(late["cadence_met"])
+        self.assertFalse(dropped["cadence_met"])
+        self.assertFalse(missing["cadence_met"])
 
 if __name__ == "__main__":
     unittest.main()

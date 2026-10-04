@@ -5,6 +5,10 @@ Timings are sampled-observation estimates, not compositor or GPU frame timestamp
 """
 from __future__ import annotations
 
+import hashlib
+import base64
+import json
+import threading
 import ctypes
 import os
 import re
@@ -12,6 +16,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 _ORANGE_PIXEL = re.compile(rb"(?:[\xfc-\xff][\x85-\x8b][\x00-\x03])")
@@ -27,6 +32,10 @@ _SYNC = (BLUE, WHITE, BLUE, WHITE)
 
 class VisualObserverUnavailable(RuntimeError):
     pass
+
+
+class VisualObserverStopped(VisualObserverUnavailable):
+    """A pending sample was cancelled because its consumer is stopping."""
 
 
 class _XImage(ctypes.Structure):
@@ -175,9 +184,18 @@ def _decode(pixels: _Pixels, final_line: int | None = None, *, check_eof: bool =
             eof_visible = False
             if check_eof and phase == 2:
                 eof_visible = _has_orange_band(pixels, 8 * cw)
+            anchors = tuple((cell, color) for cell, color in enumerate(_SYNC)) + tuple((39 + cell, color) for cell, color in enumerate(_SYNC))
+            def matches_row(row):
+                return all(_normalized_color(pixels.color(x0 + cell * cw + cw // 2, row)) == color for cell, color in anchors)
+            top = y
+            while top > 0 and matches_row(top - 1):
+                top -= 1
+            bottom = y
+            while bottom + 1 < pixels.height and matches_row(bottom + 1):
+                bottom += 1
             return {"line": line, "phase": ("ready", "running", "done")[phase],
                     "phase_code": phase, "eof_visible": eof_visible,
-                    "cell_width": cw, "cell_height": None,
+                    "cell_width": cw, "cell_height": bottom - top + 1,
                     "_marker_bounds": (x0, y, 43 * cw, 1)}
     return None
 
@@ -193,6 +211,15 @@ class VisualObserver:
         self._statusline_rect: tuple[int, int, int, int] | None = None
         self._metadata = {"backend": None, "capture_scale": 1,
                           "timing_limitations": "sampled timings, not GPU frame times"}
+        self._capture_process = None
+        self._capture_stderr_file = None
+        self._capture_condition = threading.Condition()
+        self._capture_generation = 0
+        self._capture_frame = None
+        self._capture_error = None
+        self._consumed_generation = 0
+        self._capture_stopping = False
+        self.continuous = False
         # Xwayland root pixels are not compositor output; never use them on Wayland.
         if os.environ.get("WAYLAND_DISPLAY"):
             grim = shutil.which("grim")
@@ -207,6 +234,12 @@ class VisualObserver:
     @property
     def metadata(self) -> dict[str, Any]:
         return dict(self._metadata)
+    def record_capture_preroll(self, sample: dict[str, Any]) -> None:
+        """Retain the validated pre-GO frame as capture readiness evidence."""
+        self._metadata["capture_preroll"] = {
+            key: sample[key] for key in ("line", "phase", "cell_width", "cell_height", "monotonic_ns")
+        }
+
 
     def _init_x11(self, display: str | None) -> None:
         try:
@@ -238,7 +271,7 @@ class VisualObserver:
         x, y, width, height = map(int, rect)
         if width <= 0 or height <= 0:
             raise ValueError("capture rectangle must have positive dimensions")
-        if self.backend == "wayland-grim":
+        if self.backend in ("wayland-grim", "wayland-wl-shm"):
             try:
                 raw = subprocess.run([self._grim, "-s", "1", "-t", "ppm", "-g", f"{x},{y} {width}x{height}", "-"],
                                      check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5).stdout
@@ -279,30 +312,148 @@ class VisualObserver:
         finally:
             self._lib.XDestroyImage(image)
 
-    def sample(self, rect: tuple[int, int, int, int]) -> dict[str, Any] | None:
+    def start_continuous(self, sample_hz: float, stderr_path: Path | None = None,
+                         window_rect: tuple[int, int, int, int] | None = None) -> None:
+        if self.backend != "wayland-grim":
+            return
+        if self._statusline_rect is None:
+            raise VisualObserverUnavailable("cannot start Wayland stream before marker geometry is known")
+        x, y, width, _ = self._statusline_rect
+        if window_rect is None:
+            raise VisualObserverUnavailable("continuous capture requires the benchmark window rectangle")
+        _, window_y, _, _ = map(int, window_rect)
+        height = int(self._metadata["cell_height"])
+        capture_y = max(window_y, y - 2 * height + 1)
+        rect = (x, capture_y, width, y - capture_y + 1)
+        configured = os.environ.get("WAYLAND_ROI_OBSERVER_BIN")
+        cache = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        executable = Path(configured) if configured else cache / "dotty" / "wayland_roi_observer"
+        executable = executable.resolve()
+        if not executable.is_file():
+            raise VisualObserverUnavailable(
+                f"persistent Wayland observer not found at {executable}; build it with scripts/perf/build_wayland_roi_observer.sh or set WAYLAND_ROI_OBSERVER_BIN")
+        helper_source = Path(__file__).with_name("wayland_roi_observer.c").resolve()
+        protocol_xml = Path(__file__).with_name("wlr-screencopy-unstable-v1.xml").resolve()
+        helper_provenance = {
+            "path": str(executable),
+            "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+            "source_path": str(helper_source),
+            "source_sha256": hashlib.sha256(helper_source.read_bytes()).hexdigest(),
+            "protocol_xml_path": str(protocol_xml),
+            "protocol_xml_sha256": hashlib.sha256(protocol_xml.read_bytes()).hexdigest(),
+        }
+        command = [str(executable), "--rect", f"{rect[0]},{rect[1]},{rect[2]},{rect[3]}", "--sample-hz", str(sample_hz)]
+        try:
+            self._capture_stderr_file = stderr_path.open("wb") if stderr_path else None
+            self._capture_process = subprocess.Popen(command, stdout=subprocess.PIPE,
+                                                     stderr=self._capture_stderr_file or subprocess.PIPE,
+                                                     text=True, bufsize=1)
+        except OSError as exc:
+            if self._capture_stderr_file:
+                self._capture_stderr_file.close()
+                self._capture_stderr_file = None
+            raise VisualObserverUnavailable(f"cannot start persistent Wayland observer: {exc}") from exc
+        self._stream_rect = rect
+        self.continuous = True
+        self.backend = "wayland-wl-shm"
+        self._metadata["native_helper"] = helper_provenance
+        self._metadata.update({"backend": self.backend, "capture_rect": list(rect), "capture_hz": sample_hz,
+                               "capture_timestamp_source": "CLOCK_MONOTONIC from persistent Wayland helper"})
+        self._capture_reader = threading.Thread(target=self._read_capture_stream, name="wayland-roi-reader", daemon=True)
+        self._capture_reader.start()
+
+
+    def _read_capture_stream(self) -> None:
+        try:
+            assert self._capture_process is not None and self._capture_process.stdout is not None
+            for line in self._capture_process.stdout:
+                frame = json.loads(line)
+                width, height = int(frame["width"]), int(frame["height"])
+                rgba = base64.b64decode(frame["rgba_base64"], validate=True)
+                if width != self._stream_rect[2] or height != self._stream_rect[3] or len(rgba) != width * height * 4:
+                    raise ValueError("Wayland observer returned an unexpected frame size")
+                rgb = bytearray(width * height * 3)
+                rgb[0::3], rgb[1::3], rgb[2::3] = rgba[0::4], rgba[1::4], rgba[2::4]
+                with self._capture_condition:
+                    self._capture_generation += 1
+                    self._capture_frame = (self._capture_generation, _Pixels(width, height, bytes(rgb)), int(frame["monotonic_ns"]))
+                    self._capture_condition.notify_all()
+            if not self._capture_stopping:
+                status = self._capture_process.poll()
+                raise VisualObserverUnavailable(f"Wayland observer stream ended unexpectedly (exit status {status})")
+        except Exception as exc:
+            with self._capture_condition:
+                if not self._capture_stopping:
+                    self._capture_error = exc
+                self._capture_condition.notify_all()
+
+    def verify_eof(self, rect: tuple[int, int, int, int], line: int, cell_width: int) -> bool:
+        x, y, width, height = map(int, rect)
+        marker_y = self._statusline_rect[1]
+        cell_height = int(self._metadata["cell_height"])
+        capture_y = max(y, marker_y - 2 * cell_height)
+        eof_rect = (x, capture_y, width, max(1, min(y + height, marker_y) - capture_y))
+        pixels, clipped = self._capture(eof_rect)
+        visible = _has_orange_band(pixels, 8 * cell_width)
+        self._metadata.update({"eof_capture_done": True, "eof_capture_rect": list(clipped),
+                               "eof_capture_pixels": pixels.width * pixels.height,
+                               "eof_capture_monotonic_ns": time.monotonic_ns(), "eof_visible": visible})
+        if visible:
+            self._metadata["eof_verified_line"] = line
+        return visible
+
+    def cancel_pending_sample(self) -> None:
+        """Wake a continuous sample waiter when its consumer is shutting down."""
+        if not self.continuous:
+            return
+        with self._capture_condition:
+            self._capture_stopping = True
+            self._capture_condition.notify_all()
+
+    def sample(self, rect: tuple[int, int, int, int], timeout: float | None = None) -> dict[str, Any] | None:
         requested = tuple(map(int, rect))
         target = self._statusline_rect or requested
-        pixels, clipped = self._capture(target)
-        captured_ns = time.monotonic_ns()
+        if self.continuous:
+            deadline = time.monotonic() + timeout if timeout is not None else None
+            with self._capture_condition:
+                while (self._capture_generation <= self._consumed_generation
+                       and self._capture_error is None and not self._capture_stopping):
+                    remaining = deadline - time.monotonic() if deadline is not None else None
+                    if remaining is not None and remaining <= 0:
+                        raise VisualObserverUnavailable("timed out waiting for a persistent capture frame")
+                    self._capture_condition.wait(remaining)
+                if self._capture_error is not None:
+                    raise VisualObserverUnavailable(f"persistent Wayland capture failed: {self._capture_error}")
+                if self._capture_stopping:
+                    raise VisualObserverStopped("persistent Wayland capture sampling stopped")
+                generation, pixels, captured_ns = self._capture_frame
+                self._consumed_generation = generation
+            clipped = self._stream_rect
+        else:
+            pixels, clipped = self._capture(target)
+            captured_ns = time.monotonic_ns()
         decoded = _decode(pixels)
         if decoded is None:
-            return None
+            return {"line": None, "phase": None, "eof_visible": False,
+                    "monotonic_ns": captured_ns, "rect": list(clipped), "backend": self.backend}
         bx, by, bw, _ = decoded.pop("_marker_bounds")
         if self._statusline_rect is None:
-            # Each protocol cell is a solid background block; a validated
-            # scanline is sufficient to re-read the 43-cell marker.
             self._statusline_rect = (clipped[0] + bx, clipped[1] + by, bw, 1)
             self._metadata["statusline_rect"] = list(self._statusline_rect)
-        if decoded["phase_code"] == 2 and not self._metadata.get("eof_capture_done"):
-            full, full_rect = self._capture(requested)
-            captured_ns = time.monotonic_ns()
-            decoded["eof_visible"] = _has_orange_band(full, 8 * decoded["cell_width"])
-            self._metadata["eof_capture_done"] = True
-            if decoded["eof_visible"]:
-                self._metadata["eof_verified_line"] = decoded["line"]
-            clipped = full_rect
-        elif (decoded["phase_code"] == 2 and
-              self._metadata.get("eof_verified_line") == decoded["line"]):
+            self._metadata["cell_height"] = decoded["cell_height"]
+        decoded["cell_height"] = self._metadata["cell_height"]
+        if self.continuous:
+            eof_visible = decoded["phase_code"] == 2 and _has_orange_band(pixels, 8 * decoded["cell_width"])
+            decoded["eof_visible"] = eof_visible
+            if decoded["phase_code"] == 2:
+                self._metadata.update({"eof_capture_done": True, "eof_capture_rect": list(clipped),
+                                       "eof_capture_pixels": pixels.width * pixels.height,
+                                       "eof_capture_monotonic_ns": captured_ns, "eof_visible": eof_visible})
+                if eof_visible:
+                    self._metadata["eof_verified_line"] = decoded["line"]
+                else:
+                    self._metadata.pop("eof_verified_line", None)
+        elif decoded["phase_code"] == 2 and self._metadata.get("eof_verified_line") == decoded["line"]:
             decoded["eof_visible"] = True
         elif self._metadata.get("eof_verified_line") != decoded["line"]:
             self._metadata.pop("eof_verified_line", None)
@@ -310,10 +461,27 @@ class VisualObserver:
         return decoded
 
     def close(self) -> None:
+        if self._capture_process is not None:
+            self.cancel_pending_sample()
+            self._capture_process.terminate()
+            try:
+                self._capture_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._capture_process.kill()
+                self._capture_process.wait()
+            if hasattr(self, "_capture_reader"):
+                self._capture_reader.join(timeout=2)
+                if self._capture_reader.is_alive():
+                    raise RuntimeError("persistent capture reader did not stop")
+            if self._capture_stderr_file is not None:
+                self._capture_stderr_file.close()
+                self._capture_stderr_file = None
+            self._capture_process = None
         if self._display:
             self._lib.XCloseDisplay.argtypes = [ctypes.c_void_p]
             self._lib.XCloseDisplay(self._display)
             self._display = None
+
 
     def __enter__(self) -> "VisualObserver":
         return self

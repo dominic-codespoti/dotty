@@ -188,20 +188,21 @@ def main():
                 expect_ok("KEY:enter")
                 tab_dump = wait_for_output_line(tab_marker)
 
-                expect_ok("RESIZE:91:31")
-                deadline = time.monotonic() + 10
-                resized_state = None
-                while time.monotonic() < deadline:
-                    resized_state = json.loads(command("GET_STATE"))
-                    if int(resized_state.get("rows", 0)) == 31 and int(resized_state.get("cols", 0)) == 91:
-                        break
-                    if process.poll() is not None:
-                        fail(f"Dotty exited before grid resize appeared (exit {process.returncode}): {resized_state!r}", log_path)
-                    time.sleep(0.1)
-                if resized_state is None or int(resized_state.get("rows", 0)) != 31 or int(resized_state.get("cols", 0)) != 91:
-                    actual_window = find_hyprland_client() if hyprctl else None
-                    x11_windows = x11_window_evidence(process.pid) if args.backend == "x11" else None
-                    fail(f"Terminal state did not adopt requested 91x31 resize: state={resized_state!r}, Hyprland client={actual_window!r}, X11 windows={x11_windows!r}", log_path)
+                for columns, rows in ((63, 17), (91, 31)):
+                    expect_ok(f"RESIZE:{columns}:{rows}")
+                    deadline = time.monotonic() + 10
+                    resized_state = None
+                    while time.monotonic() < deadline:
+                        resized_state = json.loads(command("GET_STATE"))
+                        if int(resized_state.get("rows", 0)) == rows and int(resized_state.get("cols", 0)) == columns:
+                            break
+                        if process.poll() is not None:
+                            fail(f"Dotty exited before grid resize appeared (exit {process.returncode}): {resized_state!r}", log_path)
+                        time.sleep(0.1)
+                    if resized_state is None or int(resized_state.get("rows", 0)) != rows or int(resized_state.get("cols", 0)) != columns:
+                        actual_window = find_hyprland_client() if hyprctl else None
+                        x11_windows = x11_window_evidence(process.pid) if args.backend == "x11" else None
+                        fail(f"Terminal state did not adopt requested {columns}x{rows} resize: state={resized_state!r}, Hyprland client={actual_window!r}, X11 windows={x11_windows!r}", log_path)
 
                 expect_ok("ACTION:SplitVertical")
                 state = json.loads(command("GET_STATE"))

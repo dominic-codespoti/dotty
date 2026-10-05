@@ -239,8 +239,6 @@ internal static class DottyWindowHost
         _window.FramebufferResize += OnFramebufferResize;
         _window.FocusChanged += OnWindowFocusChanged;
         _window.Closing += OnClosing;
-        if (_customFrameActive)
-            InstallCustomFrame();
         _window.Run();
         return _exitCode;
     }
@@ -271,6 +269,14 @@ internal static class DottyWindowHost
             _window.Native!.Win32!.Value.Hwnd,
             _customFrameHitTestCallback,
             _customFrameHoverCallback);
+    }
+
+    private static void SetWindowClientSize(Vector2D<int> size)
+    {
+        if (_customFrameActive)
+            Win32WindowFrame.SetClientSize(size.X, size.Y);
+        else
+            _window.Size = size;
     }
 
     private static void PublishCustomFrameHitTestGeometry(
@@ -421,9 +427,11 @@ internal static class DottyWindowHost
             _initialCommandSession = initialTab.Session;
         _keybindings.RegisterDefaults();
         _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
+        if (_customFrameActive)
+            InstallCustomFrame();
         int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
         float topOffset = barRows * _cellHeight * _scale;
-        _window.Size = new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale));
+        SetWindowClientSize(new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale)));
         StartControlServer();
         _luaHost.NotifyGuiStartup();
     }
@@ -1218,7 +1226,7 @@ internal static class DottyWindowHost
         var target = new Vector2D<int>(
             Math.Max(1, (int)MathF.Ceiling(columns * _cellWidth + (float)(padding.Left + padding.Right))),
             Math.Max(1, (int)MathF.Ceiling((rows + barRows) * _cellHeight + (float)(padding.Top + padding.Bottom))));
-        _window.Size = target;
+        SetWindowClientSize(target);
         return "OK";
     }
 

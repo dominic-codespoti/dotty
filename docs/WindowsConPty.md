@@ -25,6 +25,16 @@ The host selects it through PtyFactory; application output, including ANSI/VT
 sequences, is consumed by Dotty's terminal parser rather than a Windows Terminal
 parser. ConPTY supplies the pseudoterminal process and streams.
 
+Child environments preserve inherited variables and apply caller overrides
+case-insensitively, without modifying the caller's dictionary. As on Unix,
+`TERM=xterm-256color` and `COLORTERM=truecolor` are then forced to advertise
+Dotty's terminal capabilities, even when the parent or caller supplies
+`TERM=dumb`. This allows shells and prompts to enable their VT/color support.
+
+The Unicode environment block is sorted case-insensitively and double-NUL
+terminated. Its allocation uses `Marshal.StringToHGlobalUni`, paired with
+`Marshal.FreeHGlobal` after `CreateProcess`, including failed launches.
+
 ## Build and verification
 
 Build the solution on Windows with the .NET 10 SDK:

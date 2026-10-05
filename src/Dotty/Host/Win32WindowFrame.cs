@@ -85,6 +85,26 @@ internal static unsafe partial class Win32WindowFrame
         return true;
     }
 
+    internal static void SetClientSize(int width, int height)
+    {
+        nint hwnd = _windowHandle;
+        if (GetWindowRect(hwnd, out Rect window) == 0 ||
+            GetClientRect(hwnd, out Rect client) == 0)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        // GLFW adjusts for a standard caption, but our WM_NCCALCSIZE handler
+        // replaces it. Use the actual non-client extent, including DPI-scaled borders.
+        int outerWidth = checked(width + (window.Right - window.Left) - (client.Right - client.Left));
+        int outerHeight = checked(height + (window.Bottom - window.Top) - (client.Bottom - client.Top));
+        if (SetWindowPos(hwnd, 0, 0, 0, outerWidth, outerHeight,
+            SwpNoMove | SwpNoZOrder | SwpNoActivate) == 0)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+    }
+
     internal static void Uninstall()
     {
         nint hwnd = _windowHandle;
@@ -315,14 +335,17 @@ internal static unsafe partial class Win32WindowFrame
     [LibraryImport("user32.dll", EntryPoint = "DefWindowProcW")]
     private static partial nint DefWindowProcW(nint hwnd, uint message, nuint wParam, nint lParam);
 
-    [LibraryImport("user32.dll", EntryPoint = "SetWindowPos")]
+    [LibraryImport("user32.dll", EntryPoint = "SetWindowPos", SetLastError = true)]
     private static partial int SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int width, int height, uint flags);
 
     [LibraryImport("dwmapi.dll", EntryPoint = "DwmExtendFrameIntoClientArea")]
     private static partial int DwmExtendFrameIntoClientArea(nint hwnd, in Margins margins);
 
-    [LibraryImport("user32.dll", EntryPoint = "GetWindowRect")]
+    [LibraryImport("user32.dll", EntryPoint = "GetWindowRect", SetLastError = true)]
     private static partial int GetWindowRect(nint hwnd, out Rect rect);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetClientRect", SetLastError = true)]
+    private static partial int GetClientRect(nint hwnd, out Rect rect);
 
     [LibraryImport("user32.dll", EntryPoint = "ScreenToClient")]
     private static partial int ScreenToClient(nint hwnd, ref Point point);

@@ -4,13 +4,13 @@ The desktop application builds and ships the clear-code GLFW IME fork from the c
 
 `scripts/native/build-glfw.py --rid <rid>` builds the native shared library for the current host architecture from that source and writes the platform library to the requested output directory. The .NET project invokes it for both build and publish outputs and overwrites any GLFW library supplied by transitive packages, so app and test runs use the pinned fork. Supported RIDs are `linux-x64`, `linux-arm64`, `win-x64`, `win-arm64`, `osx-x64`, and `osx-arm64`; cross-compiling a different host architecture is not configured.
 
-The build requires CMake and a C compiler. Linux also requires X11 development headers (`xorg-dev`), Wayland development headers and protocols (`libwayland-dev`, `wayland-protocols`), and `libxkbcommon-dev`; Windows requires Visual Studio C/C++ build tools and CMake; macOS requires Xcode Command Line Tools and CMake. CI installs the Linux packages before the .NET builds.
+The build requires CMake and a C compiler. Linux also requires X11 development headers (`xorg-dev`), Wayland development headers and protocols (`libwayland-dev`, `wayland-protocols`), and `libxkbcommon-dev`; Windows requires Visual Studio C/C++ build tools, a Windows SDK, and CMake; macOS requires Xcode Command Line Tools and CMake. CI installs the Linux packages before the .NET builds.
 
 # Native desktop verification and IME composition
 
 ## Running native desktop smoke lanes
 
-`Native desktop smoke` in GitHub Actions is an opt-in `workflow_dispatch` workflow. Choose one `lane`; each lane has a 20-minute job timeout and runs `scripts/native/desktop-smoke.py` against a published host. The smoke waits for the host's loopback control port, checks the actual GLFW-selected window backend, creates a real new tab and vertical split, and requires distinct Unicode-marked child-shell output lines in each PTY (not merely echoed input). It also requests a 91x31 PTY grid resize and checks the reported grid, verifies the focused working directory and tab/pane counts, and confirms a rendered frame was presented. It reports a JSON pass record; failures include the captured host log. It does not synthesize physical keyboard/focus gestures or assert pixels.
+`Native desktop smoke` in GitHub Actions is an opt-in `workflow_dispatch` workflow. Choose one `lane`; each lane has a 20-minute job timeout and runs `scripts/native/desktop-smoke.py` against a published host. The smoke waits for the host's loopback control port, checks the actual GLFW-selected window backend, creates a real new tab and vertical split, and requires distinct Unicode-marked child-shell output lines in each PTY (not merely echoed input). It requests a 63x17 PTY grid followed by 91x31 and checks both reported grids, exercising shrinking and growing the window, then verifies the focused working directory and tab/pane counts and confirms a rendered frame was presented. It reports a JSON pass record; failures include the captured host log. It does not synthesize physical keyboard/focus gestures or assert pixels.
 
 | Lane | Runner/session prerequisite | What it establishes |
 |---|---|---|
@@ -30,6 +30,20 @@ python3 scripts/native/desktop-smoke.py --backend wayland --executable ./publish
 ```
 
 On Windows use `python scripts/native/desktop-smoke.py --backend windows --executable .\publish\dotty.exe` from an interactive desktop. On macOS use `python3 scripts/native/desktop-smoke.py --backend macos --executable ./publish/dotty` from a logged-in WindowServer session. Keep `DOTTY_TEST_PORT` unset externally; the script sets it to `0` to request an ephemeral loopback port and creates isolated config/home directories.
+
+The Windows smoke defaults to `--windows-console owned`: it creates a separate
+console for the host and requires that the GUI has detached from it. A detached
+probe process checks console attachment without disturbing the harness console.
+Run the same command with `--windows-console inherited` from an attached Windows
+console to require that both the harness and host remain attached to that shared
+console. Both modes retain the desktop/PTY checks and report console evidence in
+the JSON result.
+
+Windows custom decorations are installed during the window load callback, after
+the native HWND and rendering resources exist. Programmatic client sizes use
+the HWND's measured outer/client rectangle difference rather than GLFW's standard
+caption adjustment or a fixed caption-height offset. Native decorations and
+non-Windows windows retain GLFW's size setter.
 
 This is deterministic app/host integration coverage. Separate real-user passes are still required for focus transitions, physical key layout/dead keys, mouse capture/selection, clipboard, compositor/window-manager decoration, HiDPI, sleep/resume, and screenshots on each native backend; they are not covered by the control socket. A successful Linux X11 lane is not Wayland or macOS/Windows evidence.
 

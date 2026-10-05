@@ -14,6 +14,12 @@ Dotty accepts options before an optional command:
 
 An invalid option, working directory, or executable is reported before graphics startup and exits nonzero. With no command or explicit shell, Dotty retains its configured/default interactive shell behavior; new tabs and split panes inherit the selected interactive shell and active terminal working directory when available.
 
+On Windows, before GUI startup, Dotty releases a console only when it is the
+console's sole attached process. Desktop and Start-menu launches therefore do not
+leave an extra console alongside the GUI; inherited/shared consoles remain
+attached. Help, version, and launch-validation errors return before this step.
+Redirected standard input, output, and error handles are preserved.
+
 Examples:
 
 ```sh

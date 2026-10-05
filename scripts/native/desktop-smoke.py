@@ -17,6 +17,42 @@ def output_line_matches(line, marker):
     # DUMP serializes the blank continuation cells used by fullwidth glyphs.
     expected = "".join(char + (" " if unicodedata.east_asian_width(char) in ("W", "F") else "") for char in marker)
     return line.rstrip() == expected
+
+
+def windows_console_evidence(pid):
+    # Probe from a detached process so attaching never disturbs the harness console.
+    probe = """
+import ctypes, json, sys
+api = ctypes.WinDLL("kernel32", use_last_error=True)
+api.AttachConsole.argtypes = [ctypes.c_uint32]
+api.AttachConsole.restype = ctypes.c_int
+api.GetConsoleProcessList.argtypes = [ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32]
+api.GetConsoleProcessList.restype = ctypes.c_uint32
+api.FreeConsole.argtypes = []
+api.FreeConsole.restype = ctypes.c_int
+attached = bool(api.AttachConsole(int(sys.argv[1])))
+error = 0 if attached else ctypes.get_last_error()
+processes = []
+try:
+    if attached:
+        capacity = 4
+        while True:
+            ids = (ctypes.c_uint32 * capacity)()
+            count = api.GetConsoleProcessList(ids, capacity)
+            if not count:
+                raise ctypes.WinError(ctypes.get_last_error())
+            if count <= capacity:
+                processes = list(ids[:count])
+                break
+            capacity = count
+finally:
+    if attached and not api.FreeConsole():
+        raise ctypes.WinError(ctypes.get_last_error())
+print(json.dumps({"attached": attached, "error": error, "processes": processes}))
+"""
+    result = subprocess.run([sys.executable, "-c", probe, str(pid)], capture_output=True, text=True, check=True, timeout=5, creationflags=subprocess.DETACHED_PROCESS)
+    return json.loads(result.stdout)
+
 def x11_window_evidence(pid):
     xdotool = shutil.which("xdotool")
     xprop = shutil.which("xprop")
@@ -44,6 +80,7 @@ def main():
     parser.add_argument("--executable", required=True, help="published Dotty executable (.exe on Windows)")
     parser.add_argument("--backend", required=True, choices=("windows", "macos", "x11", "wayland"))
     parser.add_argument("--startup-timeout", type=float, default=30)
+    parser.add_argument("--windows-console", choices=("owned", "inherited"), default="owned", help="Windows launch console ownership to verify")
     args = parser.parse_args()
     executable = pathlib.Path(args.executable).resolve()
     if not executable.is_file():
@@ -82,8 +119,9 @@ def main():
             if os.name != "nt":
                 parser.error("Windows lane must run on an interactive Windows desktop")
 
+        creation_flags = subprocess.CREATE_NEW_CONSOLE if args.backend == "windows" and args.windows_console == "owned" else 0
         with log_path.open("w", encoding="utf-8") as log:
-            process = subprocess.Popen([str(executable)], cwd=str(executable.parent), env=env, stdout=log, stderr=subprocess.STDOUT)
+            process = subprocess.Popen([str(executable)], cwd=str(executable.parent), env=env, stdout=log, stderr=subprocess.STDOUT, creationflags=creation_flags)
             port = None
             try:
                 deadline = time.monotonic() + args.startup_timeout
@@ -100,6 +138,13 @@ def main():
                     time.sleep(0.1)
                 if port is None:
                     fail(f"No DOTTY_TEST_PORT announcement within {args.startup_timeout}s", log_path)
+                console_evidence = windows_console_evidence(process.pid) if args.backend == "windows" else None
+                if console_evidence is not None:
+                    if args.windows_console == "owned":
+                        if console_evidence["attached"] or console_evidence["error"] != 6:
+                            fail(f"GUI launch retained its extra console: {console_evidence!r}", log_path)
+                    elif not console_evidence["attached"] or process.pid not in console_evidence["processes"] or os.getpid() not in console_evidence["processes"]:
+                        fail(f"GUI launch did not preserve its inherited console: {console_evidence!r}", log_path)
                 hyprctl = shutil.which("hyprctl") if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE") else None
                 hypr_client = None
                 if hyprctl:
@@ -188,20 +233,21 @@ def main():
                 expect_ok("KEY:enter")
                 tab_dump = wait_for_output_line(tab_marker)
 
-                expect_ok("RESIZE:91:31")
-                deadline = time.monotonic() + 10
-                resized_state = None
-                while time.monotonic() < deadline:
-                    resized_state = json.loads(command("GET_STATE"))
-                    if int(resized_state.get("rows", 0)) == 31 and int(resized_state.get("cols", 0)) == 91:
-                        break
-                    if process.poll() is not None:
-                        fail(f"Dotty exited before grid resize appeared (exit {process.returncode}): {resized_state!r}", log_path)
-                    time.sleep(0.1)
-                if resized_state is None or int(resized_state.get("rows", 0)) != 31 or int(resized_state.get("cols", 0)) != 91:
-                    actual_window = find_hyprland_client() if hyprctl else None
-                    x11_windows = x11_window_evidence(process.pid) if args.backend == "x11" else None
-                    fail(f"Terminal state did not adopt requested 91x31 resize: state={resized_state!r}, Hyprland client={actual_window!r}, X11 windows={x11_windows!r}", log_path)
+                for columns, rows in ((63, 17), (91, 31)):
+                    expect_ok(f"RESIZE:{columns}:{rows}")
+                    deadline = time.monotonic() + 10
+                    resized_state = None
+                    while time.monotonic() < deadline:
+                        resized_state = json.loads(command("GET_STATE"))
+                        if int(resized_state.get("rows", 0)) == rows and int(resized_state.get("cols", 0)) == columns:
+                            break
+                        if process.poll() is not None:
+                            fail(f"Dotty exited before grid resize appeared (exit {process.returncode}): {resized_state!r}", log_path)
+                        time.sleep(0.1)
+                    if resized_state is None or int(resized_state.get("rows", 0)) != rows or int(resized_state.get("cols", 0)) != columns:
+                        actual_window = find_hyprland_client() if hyprctl else None
+                        x11_windows = x11_window_evidence(process.pid) if args.backend == "x11" else None
+                        fail(f"Terminal state did not adopt requested {columns}x{rows} resize: state={resized_state!r}, Hyprland client={actual_window!r}, X11 windows={x11_windows!r}", log_path)
 
                 expect_ok("ACTION:SplitVertical")
                 state = json.loads(command("GET_STATE"))
@@ -227,7 +273,7 @@ def main():
                     if hypr_client is None or hypr_client.get("floating") is not True or int(hypr_active_window.get("pid", -1)) != process.pid:
                         fail(f"Dotty's PID-scoped Hyprland client lost floating/focus state: client={hypr_client!r}, active={hypr_active_window!r}", log_path)
                 hyprland_window = None if hypr_client is None else {"xwayland": hypr_client["xwayland"], "floating": hypr_client["floating"], "active": int(hypr_active_window.get("pid", -1)) == process.pid, "size": hypr_client["size"]}
-                print(json.dumps({"result": "passed", "backend": stats["windowBackend"], "grid": "91x31", "tabs": stats["tabs"], "panes": after["paneCount"], "workingDirectory": working_directory, "newTabOutput": tab_marker, "splitPaneOutput": pane_marker, "visibleGrid": pane_dump.splitlines()[0], "presentCount": stats["presentCount"], "hyprlandWindow": hyprland_window, "platform": sys.platform}, ensure_ascii=False))
+                print(json.dumps({"result": "passed", "backend": stats["windowBackend"], "grid": "91x31", "tabs": stats["tabs"], "panes": after["paneCount"], "workingDirectory": working_directory, "newTabOutput": tab_marker, "splitPaneOutput": pane_marker, "visibleGrid": pane_dump.splitlines()[0], "presentCount": stats["presentCount"], "hyprlandWindow": hyprland_window, "console": console_evidence, "platform": sys.platform}, ensure_ascii=False))
             finally:
                 if process.poll() is None:
                     try:

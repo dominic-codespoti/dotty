@@ -39,11 +39,14 @@ public class WindowsPtyTests : IDisposable
         return executablePath;
     }
 
-    private async Task<string> StartShellAndReadOutput(string shell, string marker)
+    private async Task<string> StartShellAndReadOutput(
+        string shell,
+        string marker,
+        IDictionary<string, string>? environmentVariables = null)
     {
         Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
         _pty = new Windows.WindowsPty();
-        _pty.Start(shell: shell, columns: 80, rows: 24);
+        _pty.Start(shell: shell, columns: 80, rows: 24, environmentVariables: environmentVariables);
         Stream outputStream = _pty.OutputStream ?? throw new InvalidOperationException("PTY output stream was not created.");
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         var buffer = new byte[4096];
@@ -216,23 +219,29 @@ public class WindowsPtyTests : IDisposable
         PtyTestHelpers.AssertPtyRunning(_pty);
     }
 
-    /// <summary>
-    /// Verifies that WindowsPty can start with environment variables.
-    /// </summary>
-    [Fact]
-    public void WindowsPty_Start_WithEnvironmentVariables()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WindowsPty_Start_AdvertisesTerminalCapabilities(bool withOverrides)
     {
-        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
-        
-        // Arrange
-        _pty = new Windows.WindowsPty();
-        var envVars = PtyTestHelpers.CreateTestEnvironment();
+        IDictionary<string, string>? environment = withOverrides
+            ? new Dictionary<string, string>
+            {
+                ["term"] = "dumb",
+                ["colorterm"] = "monochrome",
+                ["DOTTY_ENV_TEST_VALUE"] = "custom"
+            }
+            : null;
+        string fields = "%TERM%,%COLORTERM%" + (withOverrides ? ",%DOTTY_ENV_TEST_VALUE%" : string.Empty);
+        string marker = "DOTTY_ENV=xterm-256color,truecolor" + (withOverrides ? ",custom" : string.Empty);
 
-        // Act
-        _pty.Start(environmentVariables: envVars);
+        await StartShellAndReadOutput($"cmd.exe /d /c echo DOTTY_ENV={fields}", marker, environment);
 
-        // Assert
-        PtyTestHelpers.AssertPtyRunning(_pty);
+        if (environment != null)
+        {
+            environment["term"].Should().Be("dumb");
+            environment["colorterm"].Should().Be("monochrome");
+        }
     }
 
     /// <summary>

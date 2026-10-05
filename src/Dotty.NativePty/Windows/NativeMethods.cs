@@ -143,26 +143,6 @@ internal static class NativeMethods
 
     #endregion
 
-    #region UserEnv - Environment
-
-    /// <summary>
-    /// Creates an environment block from the specified environment variables.
-    /// </summary>
-    [DllImport("userenv.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool CreateEnvironmentBlock(
-        out IntPtr lpEnvironment,
-        IntPtr hToken,
-        [MarshalAs(UnmanagedType.Bool)] bool bInherit);
-
-    /// <summary>
-    /// Frees environment strings created by CreateEnvironmentBlock.
-    /// </summary>
-    [DllImport("userenv.dll", SetLastError = false)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool DestroyEnvironmentBlock(IntPtr lpEnvironment);
-
-    #endregion
 }
 
 /// <summary>

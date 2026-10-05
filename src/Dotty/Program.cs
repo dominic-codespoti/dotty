@@ -21,6 +21,7 @@ internal static class Program
             }
 
             options.ValidateForLaunch();
+            WindowsConsole.DetachOwnedConsole();
             return DottyWindowHost.Run(options);
         }
         catch (ArgumentException ex)

@@ -370,17 +370,21 @@ public sealed class WindowsPty : IPty
 
             startupInfoEx.lpAttributeList = attributeList;
 
-            // Prepare environment if needed
-            IntPtr environmentPtr = IntPtr.Zero;
-            if (environmentVariables != null && environmentVariables.Count > 0)
+            var inheritedEnv = Environment.GetEnvironmentVariables();
+            var currentEnv = new System.Collections.Hashtable(
+                inheritedEnv.Count + (environmentVariables?.Count ?? 0) + 2,
+                StringComparer.OrdinalIgnoreCase);
+            foreach (System.Collections.DictionaryEntry variable in inheritedEnv)
+                currentEnv[variable.Key] = variable.Value;
+            if (environmentVariables != null)
             {
-                var currentEnv = Environment.GetEnvironmentVariables();
-                foreach (var key in environmentVariables.Keys)
-                {
-                    currentEnv[key] = environmentVariables[key];
-                }
-                environmentPtr = CreateEnvironmentBlock(currentEnv);
+                foreach (var variable in environmentVariables)
+                    currentEnv[variable.Key] = variable.Value;
             }
+            // Match the Unix backend: terminal identity is not inherited or overridden.
+            currentEnv["TERM"] = "xterm-256color";
+            currentEnv["COLORTERM"] = "truecolor";
+            IntPtr environmentPtr = CreateEnvironmentBlock(currentEnv);
 
             try
             {
@@ -416,7 +420,7 @@ public sealed class WindowsPty : IPty
             {
                 if (environmentPtr != IntPtr.Zero)
                 {
-                    NativeMethods.DestroyEnvironmentBlock(environmentPtr);
+                    Marshal.FreeHGlobal(environmentPtr);
                 }
             }
         }
@@ -608,20 +612,18 @@ public sealed class WindowsPty : IPty
         return builder.ToString();
     }
 
-    private IntPtr CreateEnvironmentBlock(System.Collections.IDictionary environment)
+    private static IntPtr CreateEnvironmentBlock(System.Collections.IDictionary environment)
     {
-        // Build environment block
-        var sb = new System.Text.StringBuilder();
-        foreach (System.Collections.DictionaryEntry entry in environment)
-        {
-            sb.Append($"{entry.Key}={entry.Value}\0");
-        }
-        sb.Append('\0'); // Double null terminator
+        var keys = new string[environment.Count];
+        environment.Keys.CopyTo(keys, 0);
+        Array.Sort(keys, StringComparer.OrdinalIgnoreCase);
 
-        var bytes = System.Text.Encoding.Unicode.GetBytes(sb.ToString());
-        var ptr = Marshal.AllocHGlobal(bytes.Length);
-        Marshal.Copy(bytes, 0, ptr, bytes.Length);
-        return ptr;
+        var sb = new StringBuilder();
+        foreach (string key in keys)
+            sb.Append(key).Append('=').Append(environment[key]).Append('\0');
+
+        // The marshaler adds the final NUL after the last entry's separator.
+        return Marshal.StringToHGlobalUni(sb.ToString());
     }
 
     private async Task MonitorProcessExit()

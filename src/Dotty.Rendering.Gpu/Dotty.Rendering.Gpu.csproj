@@ -16,4 +16,13 @@
     <PackageReference Include="SkiaSharp.NativeAssets.macOS" Condition="$([MSBuild]::IsOSPlatform('OSX'))" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Icons\*.svg" LogicalName="Dotty.Rendering.Gpu.Icons.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Icons\LICENSE" LogicalName="Dotty.Rendering.Gpu.Icons.LICENSE" />
+    <EmbeddedResource Include="Icons\provenance.json" LogicalName="Dotty.Rendering.Gpu.Icons.provenance.json" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Icons\LICENSE" Link="ThirdParty\Lucide\LICENSE" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="Icons\provenance.json" Link="ThirdParty\Lucide\provenance.json" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

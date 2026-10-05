@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dotty.Rendering.Gpu;
 using Dotty.Terminal.Adapter;
 using SkiaSharp;
+using static Dotty.Runtime.Rendering.ChromeStyleUtils;
 
 namespace Dotty.Runtime.Search;
 
@@ -24,8 +25,6 @@ public static class SearchQuadBuilder
     public static readonly SgrColorArgb OverlayBoxBg = SgrColorArgb.FromRgb(37, 37, 38);
     public static readonly SgrColorArgb OverlayInputBg = SgrColorArgb.FromRgb(51, 51, 51);
     public static readonly SgrColorArgb OverlayButtonBg = SgrColorArgb.FromRgb(45, 45, 45);
-    public static readonly SgrColorArgb OverlayTextFg = SgrColorArgb.FromRgb(204, 204, 204);
-    public static readonly SgrColorArgb OverlayMutedFg = SgrColorArgb.FromRgb(150, 150, 150);
 
     /// <summary>
     /// Emits highlight quads for search matches visible on the terminal grid.
@@ -100,225 +99,56 @@ public static class SearchQuadBuilder
         return written;
     }
 
-    /// <summary>
-    /// Emits <see cref="CellInstance"/> quads for the floating search box overlay
-    /// into the destination span, placing characters using the provided glyph atlas.
-    /// </summary>
-    /// <param name="layout">Computed search overlay layout.</param>
-    /// <param name="cellWidth">Width of one terminal grid cell in pixels.</param>
-    /// <param name="cellHeight">Height of one terminal grid cell in pixels.</param>
-    /// <param name="atlas">Glyph atlas for text rendering.</param>
-    /// <param name="typeface">Typeface used for atlas lookup.</param>
-    /// <param name="textSize">Text size for atlas lookup.</param>
-    /// <param name="destination">Destination span to receive quad instances.</param>
-    /// <param name="dirtyAtlasRows">Optional tracker for dirty atlas rows.</param>
-    /// <returns>Number of cell instances emitted.</returns>
+    /// <summary>Pixel-bounded search chrome and clipped text/vector icons.</summary>
     public static int BuildOverlayQuads(
-        in SearchOverlayLayout layout,
-        float cellWidth,
-        float cellHeight,
-        GlyphAtlas atlas,
-        SKTypeface typeface,
-        float textSize,
-        Span<CellInstance> destination,
-        HashSet<int>? dirtyAtlasRows = null)
+        in SearchOverlayLayout layout, float cellWidth, float cellHeight, GlyphAtlas atlas,
+        SKTypeface typeface, float textSize, Span<CellInstance> destination,
+        Span<ChromeQuadInstance> chromeDestination, out int chromeWritten,
+        float scale = 1f)
     {
-        if (cellWidth <= 0 || cellHeight <= 0 || destination.IsEmpty)
+        chromeWritten = 0;
+        if (cellWidth <= 0 || cellHeight <= 0 || destination.IsEmpty || layout.Width <= 0 || layout.Height <= 0)
             return 0;
-
         int written = 0;
-
-        // Convert overlay pixel coordinates to cell grid coordinates
-        int startCol = (int)(layout.X / cellWidth);
-        int startRow = (int)(layout.Y / cellHeight);
-        int colSpan = Math.Max(1, (int)MathF.Ceiling(layout.Width / cellWidth));
-        int rowSpan = Math.Max(1, (int)MathF.Ceiling(layout.Height / cellHeight));
-
-        // 1. Emit background box quads for overlay panel
-        for (int r = 0; r < rowSpan; r++)
-        {
-            int gridRow = startRow + r;
-            for (int c = 0; c < colSpan; c++)
-            {
-                if (written >= destination.Length)
-                    return written;
-
-                int gridCol = startCol + c;
-
-                destination[written++] = new CellInstance
-                {
-                    Col = (ushort)gridCol,
-                    Row = (ushort)gridRow,
-                    BgR = OverlayBoxBg.R,
-                    BgG = OverlayBoxBg.G,
-                    BgB = OverlayBoxBg.B,
-                    BgA = 255
-                };
-            }
-        }
-
-        // 2. Render input query text inside the input box
-        int inputStartCol = (int)(layout.InputBoxRect.X / cellWidth);
-        int inputRow = (int)(layout.InputBoxRect.Y / cellHeight);
-        int inputColCount = (int)(layout.InputBoxRect.Width / cellWidth);
-
-        string query = layout.Query;
-        if (!string.IsNullOrEmpty(query))
-        {
-            int queryLen = Math.Min(query.Length, inputColCount);
-            ReadOnlySpan<char> querySpan = query.AsSpan(0, queryLen);
-            for (int i = 0; i < queryLen; i++)
-            {
-                if (written >= destination.Length)
-                    return written;
-
-                EmitTextGlyph(
-                    destination,
-                    ref written,
-                    querySpan,
-                    i,
-                    inputStartCol + i,
-                    inputRow,
-                    OverlayTextFg,
-                    OverlayInputBg,
-                    typeface,
-                    textSize,
-                    atlas,
-                    dirtyAtlasRows);
-            }
-        }
-        // 3. Render match count badge (e.g. "3/42")
-        int badgeStartCol = (int)(layout.MatchCountRect.X / cellWidth);
-        int badgeRow = (int)(layout.MatchCountRect.Y / cellHeight);
-        string badge = layout.MatchBadgeText;
-
-        if (!string.IsNullOrEmpty(badge))
-        {
-            ReadOnlySpan<char> badgeSpan = badge.AsSpan();
-            for (int i = 0; i < badgeSpan.Length; i++)
-            {
-                if (written >= destination.Length)
-                    return written;
-
-                EmitTextGlyph(
-                    destination,
-                    ref written,
-                    badgeSpan,
-                    i,
-                    badgeStartCol + i,
-                    badgeRow,
-                    OverlayMutedFg,
-                    OverlayBoxBg,
-                    typeface,
-                    textSize,
-                    atlas,
-                    dirtyAtlasRows);
-            }
-        }
-
-        // 4. Render control buttons: Prev (▲), Next (▼), Close (×)
-
-        RenderButtonGlyph(destination, ref written, layout.PrevButtonRect, "▲", OverlayTextFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
-        RenderButtonGlyph(destination, ref written, layout.NextButtonRect, "▼", OverlayTextFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
-        RenderButtonGlyph(destination, ref written, layout.CloseButtonRect, "×", OverlayTextFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
-
+        var panel = new SKRect(layout.X, layout.Y, layout.X + layout.Width, layout.Y + layout.Height);
+        EmitOverlayBox(chromeDestination, ref chromeWritten, panel, OverlayBoxBg);
+        var input = ToRect(layout.InputBoxRect);
+        EmitOverlayBox(chromeDestination, ref chromeWritten, input, OverlayInputBg);
+        EmitUiText(destination, ref written, layout.Query, input, panel, 0xFFCCCCCC,
+            atlas, typeface, textSize, cellWidth, cellHeight);
+        EmitUiText(destination, ref written, layout.MatchBadgeText, ToRect(layout.MatchCountRect),
+            panel, 0xFF969696, atlas, typeface, textSize, cellWidth, cellHeight);
+        EmitButton(destination, ref written, chromeDestination, ref chromeWritten,
+            layout.PrevButtonRect, UiIcon.ChevronUp, panel, atlas, cellWidth, cellHeight, scale);
+        EmitButton(destination, ref written, chromeDestination, ref chromeWritten,
+            layout.NextButtonRect, UiIcon.ChevronDown, panel, atlas, cellWidth, cellHeight, scale);
+        EmitButton(destination, ref written, chromeDestination, ref chromeWritten,
+            layout.CloseButtonRect, UiIcon.Close, panel, atlas, cellWidth, cellHeight, scale);
         return written;
     }
-    private static void EmitTextGlyph(
-        Span<CellInstance> destination,
-        ref int written,
-        ReadOnlySpan<char> text,
-        int index,
-        int col,
-        int row,
-        SgrColorArgb fg,
-        SgrColorArgb bg,
-        SKTypeface typeface,
-        float textSize,
-        GlyphAtlas atlas,
-        HashSet<int>? dirtyAtlasRows)
+
+    private static SKRect ToRect(OverlayRect rect) =>
+        new(rect.X, rect.Y, rect.X + rect.Width, rect.Y + rect.Height);
+
+    private static void EmitButton(Span<CellInstance> destination, ref int written,
+        Span<ChromeQuadInstance> chromeDestination, ref int chromeWritten, OverlayRect rect,
+        UiIcon icon, SKRect clip, GlyphAtlas atlas, float cellWidth, float cellHeight,
+        float scale)
     {
-        string grapheme = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(text, index, 1);
-        var key = new GlyphKey(grapheme, typeface, textSize, false);
-        int countBefore = atlas.EntryCount;
-        bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
-        if (!glyphOk)
-            glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-        if (!glyphOk)
-            return;
-
-        if (atlas.EntryCount > countBefore)
-            dirtyAtlasRows?.Add(row);
-
-        destination[written++] = new CellInstance
-        {
-            Col = (ushort)col,
-            Row = (ushort)row,
-            OffX = (short)glyphInfo.LeftBearing,
-            OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
-            GlyphX = (short)glyphInfo.X,
-            GlyphY = (short)glyphInfo.Y,
-            GlyphW = (short)glyphInfo.Width,
-            GlyphH = (short)glyphInfo.Height,
-            FgR = fg.R,
-            FgG = fg.G,
-            FgB = fg.B,
-            FgA = 255,
-            Flags = glyphInfo.IsColor ? CellFlags.ColorGlyph : (byte)0,
-            BgG = bg.G,
-            BgB = bg.B,
-            BgA = 255
-        };
+        var box = ToRect(rect);
+        EmitOverlayBox(chromeDestination, ref chromeWritten, box, OverlayButtonBg);
+        EmitUiIcon(destination, ref written, icon, box, clip, 0xFFCCCCCC, atlas,
+            cellWidth, cellHeight, 16f * scale);
     }
 
-    private static void RenderButtonGlyph(
-        Span<CellInstance> destination,
-        ref int written,
-        OverlayRect rect,
-        string glyphText,
-        SgrColorArgb fg,
-        float cellWidth,
-        float cellHeight,
-        SKTypeface typeface,
-        float textSize,
-        GlyphAtlas atlas,
-        HashSet<int>? dirtyAtlasRows)
+    private static void EmitOverlayBox(Span<ChromeQuadInstance> destination, ref int written,
+        SKRect rect, SgrColorArgb color)
     {
-        if (written >= destination.Length || string.IsNullOrEmpty(glyphText))
-            return;
-
-        int col = (int)(rect.X / cellWidth);
-        int row = (int)(rect.Y / cellHeight);
-
-        var key = new GlyphKey(glyphText, typeface, textSize, false);
-        int countBefore = atlas.EntryCount;
-        bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
-        if (!glyphOk)
-            glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-        if (glyphOk)
+        EmitChrome(destination, ref written, new ChromeQuadInstance
         {
-            if (atlas.EntryCount > countBefore)
-                dirtyAtlasRows?.Add(row);
-
-            destination[written++] = new CellInstance
-            {
-                Col = (ushort)col,
-                Row = (ushort)row,
-                OffX = (short)glyphInfo.LeftBearing,
-                OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
-                GlyphX = (short)glyphInfo.X,
-                GlyphY = (short)glyphInfo.Y,
-                GlyphW = (short)glyphInfo.Width,
-                GlyphH = (short)glyphInfo.Height,
-                FgR = fg.R,
-                FgG = fg.G,
-                FgB = fg.B,
-                FgA = 255,
-                Flags = glyphInfo.IsColor ? CellFlags.ColorGlyph : (byte)0,
-                BgG = OverlayButtonBg.G,
-                BgB = OverlayButtonBg.B,
-                BgA = 255
-            };
-        }
+            X = rect.Left, Y = rect.Top, W = rect.Width, H = rect.Height,
+            TopR = color.R / 255f, TopG = color.G / 255f, TopB = color.B / 255f, TopA = 1f,
+            BottomR = color.R / 255f, BottomG = color.G / 255f, BottomB = color.B / 255f, BottomA = 1f
+        });
     }
 }

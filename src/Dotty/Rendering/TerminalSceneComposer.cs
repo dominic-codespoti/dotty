@@ -42,6 +42,8 @@ public sealed class TerminalSceneFrame
     public int ScrollbarChromeStart { get; private set; }
     public int MenuInstanceStart { get; private set; }
     public int MenuChromeStart { get; private set; }
+    public int SearchInstanceStart { get; private set; }
+    public int SearchChromeStart { get; private set; }
     public bool IsIncomplete { get; private set; }
     /// <summary>Framebuffer-pixel text caret anchor for native IME candidate UI.</summary>
     public SKRect ImeCaretBounds { get; private set; }
@@ -58,11 +60,13 @@ public sealed class TerminalSceneFrame
         int scrollbarChromeStart = -1,
         bool isIncomplete = false,
         SKRect imeCaretBounds = default,
-        bool imeCaretBoundsValid = false)
+        bool imeCaretBoundsValid = false,
+        int searchInstanceStart = -1,
+        int searchChromeStart = -1)
     {
         Update(instances, instanceCount, dirtyAtlasRows, chromeQuads, chromeQuadCount,
             menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete,
-            imeCaretBounds, imeCaretBoundsValid);
+            imeCaretBounds, imeCaretBoundsValid, searchInstanceStart, searchChromeStart);
     }
 
     internal void Update(
@@ -76,7 +80,9 @@ public sealed class TerminalSceneFrame
         int scrollbarChromeStart,
         bool isIncomplete,
         SKRect imeCaretBounds,
-        bool imeCaretBoundsValid)
+        bool imeCaretBoundsValid,
+        int searchInstanceStart,
+        int searchChromeStart)
     {
         Instances = instances;
         InstanceCount = instanceCount;
@@ -86,6 +92,8 @@ public sealed class TerminalSceneFrame
         MenuInstanceStart = menuInstanceStart;
         MenuChromeStart = menuChromeStart;
         ScrollbarChromeStart = scrollbarChromeStart;
+        SearchInstanceStart = searchInstanceStart;
+        SearchChromeStart = searchChromeStart;
         IsIncomplete = isIncomplete;
         ImeCaretBounds = imeCaretBounds;
         ImeCaretBoundsValid = imeCaretBoundsValid;
@@ -118,8 +126,8 @@ public sealed class TerminalSceneComposer
     private float _cachedMenuY;
     private float _cachedMenuViewportWidth;
     private float _cachedMenuViewportHeight;
-    private float _cachedMenuCellWidth;
-    private float _cachedMenuCellHeight;
+    private float _cachedMenuScale;
+    private float _cachedMenuScrollOffset;
     private ContextMenuItem[] _cachedMenuItemSnapshot = Array.Empty<ContextMenuItem>();
     private int _cachedMenuItemCount = -1;
     private sealed class LeafRowCache
@@ -172,6 +180,7 @@ public sealed class TerminalSceneComposer
         _atlas = atlas ?? throw new ArgumentNullException(nameof(atlas));
         _typeface = typeface ?? throw new ArgumentNullException(nameof(typeface));
         _fontSize = fontSize;
+        _cachedMenuLayout = null;
     }
 
     public TerminalSceneFrame Compose(
@@ -226,6 +235,8 @@ public sealed class TerminalSceneComposer
         int scrollbarChromeStart = -1;
         int menuInstanceStart = -1;
         int menuChromeStart = -1;
+        int searchInstanceStart = -1;
+        int searchChromeStart = -1;
         bool skippedLeaf = false;
         SKRect imeCaretBounds = default;
         bool imeCaretBoundsValid = false;
@@ -538,15 +549,30 @@ public sealed class TerminalSceneComposer
             chromeQuadCount += chromeQuadsWritten;
         }
 
+        // Scrollbars are collected separately while panes are rendered so they
+        // can be appended after all base chrome/glyphs and before the menu.
+        if (scrollbarChromeCount > 0)
+        {
+            scrollbarChromeStart = chromeQuadCount;
+            EnsureChromeScratchCapacity(chromeQuadCount + scrollbarChromeCount);
+            _scrollbarScratch.AsSpan(0, scrollbarChromeCount)
+                .CopyTo(_chromeScratch.AsSpan(chromeQuadCount));
+            chromeQuadCount += scrollbarChromeCount;
+        }
         if (searchOverlay.IsActive)
         {
+            searchInstanceStart = instanceCount;
+            searchChromeStart = chromeQuadCount;
             var overlayLayout = SearchOverlayLayout.Compute(
                 framebufferWidth,
                 framebufferHeight,
                 searchOverlay.Query,
                 searchOverlay.ActiveMatchIndex,
-                searchOverlay.TotalMatches);
+                searchOverlay.TotalMatches,
+                scale: scale,
+                minimumHeight: _fontSize + 12f * scale);
             EnsureScratchCapacity(instanceCount + 1024);
+            EnsureChromeScratchCapacity(chromeQuadCount + 5);
             int overlayQuads = SearchQuadBuilder.BuildOverlayQuads(
                 in overlayLayout,
                 cellWidth * scale,
@@ -555,8 +581,11 @@ public sealed class TerminalSceneComposer
                 _typeface,
                 _fontSize,
                 _frameScratch.AsSpan(instanceCount),
-                _dirtyAtlasRows);
+                _chromeScratch.AsSpan(chromeQuadCount),
+                out int overlayChromeCount,
+                scale);
             instanceCount += overlayQuads;
+            chromeQuadCount += overlayChromeCount;
             if (searchOverlay.QueryCursorIndex >= 0 && (activeContextMenu == null || !activeContextMenu.IsVisible))
             {
                 float scaledWidth = cellWidth * scale;
@@ -603,16 +632,6 @@ public sealed class TerminalSceneComposer
             }
         }
 
-        // Scrollbars are collected separately while panes are rendered so they
-        // can be appended after all base chrome/glyphs and before the menu.
-        if (scrollbarChromeCount > 0)
-        {
-            scrollbarChromeStart = chromeQuadCount;
-            EnsureChromeScratchCapacity(chromeQuadCount + scrollbarChromeCount);
-            _scrollbarScratch.AsSpan(0, scrollbarChromeCount)
-                .CopyTo(_chromeScratch.AsSpan(chromeQuadCount));
-            chromeQuadCount += scrollbarChromeCount;
-        }
 
 
         if (activeContextMenu != null && activeContextMenu.IsVisible)
@@ -623,8 +642,7 @@ public sealed class TerminalSceneComposer
                 activeContextMenu,
                 framebufferWidth,
                 framebufferHeight,
-                cellWidth * scale,
-                cellHeight * scale);
+                scale);
             EnsureScratchCapacity(instanceCount + 1024);
             EnsureChromeScratchCapacity(chromeQuadCount + activeContextMenu.Items.Count * 2 + 8);
             int menuQuads = ContextMenuQuadBuilder.Build(
@@ -638,9 +656,7 @@ public sealed class TerminalSceneComposer
                 cellHeight * scale,
                 _frameScratch.AsSpan(instanceCount),
                 _chromeScratch.AsSpan(chromeQuadCount),
-                out int menuChromeWritten,
-                padLeft,
-                padTop);
+                out int menuChromeWritten);
             instanceCount += menuQuads;
             chromeQuadCount += menuChromeWritten;
         }
@@ -653,14 +669,16 @@ public sealed class TerminalSceneComposer
             _cachedFrame = new TerminalSceneFrame(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid,
+                searchInstanceStart, searchChromeStart);
         }
         else
         {
             _cachedFrame.Update(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid,
+                searchInstanceStart, searchChromeStart);
         }
         return _cachedFrame;
     }
@@ -839,12 +857,11 @@ public sealed class TerminalSceneComposer
             _leafRowCaches[i]?.Cache.InvalidateAll();
     }
 
-    private ContextMenuLayout GetContextMenuLayout(
+    public ContextMenuLayout GetContextMenuLayout(
         ContextMenuModel model,
         float viewportWidth,
         float viewportHeight,
-        float cellWidth,
-        float cellHeight)
+        float scale)
     {
         var items = model.Items;
         bool sameItems = items.Count == _cachedMenuItemCount;
@@ -867,12 +884,13 @@ public sealed class TerminalSceneComposer
             && model.Y == _cachedMenuY
             && viewportWidth == _cachedMenuViewportWidth
             && viewportHeight == _cachedMenuViewportHeight
-            && cellWidth == _cachedMenuCellWidth
-            && cellHeight == _cachedMenuCellHeight
+            && scale == _cachedMenuScale
+            && model.ScrollOffset == _cachedMenuScrollOffset
+            && !model.RevealFocusedItem
             && _cachedMenuLayout != null)
             return _cachedMenuLayout;
 
-        var layout = ContextMenuLayout.Calculate(model, viewportWidth, viewportHeight, cellWidth, cellHeight);
+        var layout = ContextMenuLayout.Calculate(model, viewportWidth, viewportHeight, _typeface, _fontSize, scale);
         if (_cachedMenuItemSnapshot.Length < items.Count)
         {
             int capacity = Math.Max(items.Count, _cachedMenuItemSnapshot.Length == 0 ? 8 : _cachedMenuItemSnapshot.Length * 2);
@@ -888,8 +906,8 @@ public sealed class TerminalSceneComposer
         _cachedMenuY = model.Y;
         _cachedMenuViewportWidth = viewportWidth;
         _cachedMenuViewportHeight = viewportHeight;
-        _cachedMenuCellWidth = cellWidth;
-        _cachedMenuCellHeight = cellHeight;
+        _cachedMenuScale = scale;
+        _cachedMenuScrollOffset = model.ScrollOffset;
         _cachedMenuLayout = layout;
         return layout;
     }

@@ -18,7 +18,7 @@ public static class ContextMenuHitTester
     /// </returns>
     public static int HitTest(ContextMenuLayout layout, float x, float y)
     {
-        if (layout == null || !layout.Bounds.Contains(x, y))
+        if (layout == null || !layout.ContentBounds.Contains(x, y))
         {
             return -1;
         }
@@ -42,7 +42,7 @@ public static class ContextMenuHitTester
     public static bool TryHitInteractiveItem(ContextMenuLayout layout, float x, float y, out int itemIndex)
     {
         itemIndex = -1;
-        if (layout == null || !layout.Bounds.Contains(x, y))
+        if (layout == null || !layout.ContentBounds.Contains(x, y))
         {
             return false;
         }

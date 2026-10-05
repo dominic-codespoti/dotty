@@ -23,6 +23,10 @@ public sealed class ContextMenuModel
     /// <summary>Whether the context menu is currently visible and receiving interaction.</summary>
     public bool IsVisible { get; set; }
 
+    /// <summary>Vertical content offset in framebuffer pixels.</summary>
+    public float ScrollOffset { get; set; }
+    public bool RevealFocusedItem { get; internal set; }
+
     public ContextMenuModel(float x = 0f, float y = 0f, IReadOnlyList<ContextMenuItem>? items = null)
     {
         X = x;
@@ -39,6 +43,8 @@ public sealed class ContextMenuModel
         Y = y;
         Items = items ?? Array.Empty<ContextMenuItem>();
         HoveredIndex = -1;
+        ScrollOffset = 0f;
+        RevealFocusedItem = false;
         IsVisible = Items.Count > 0;
     }
 
@@ -68,6 +74,7 @@ public sealed class ContextMenuModel
             if (IsActionable(index))
             {
                 HoveredIndex = index;
+                RevealFocusedItem = true;
                 return true;
             }
         }
@@ -111,6 +118,7 @@ public sealed class ContextMenuModel
                 if (IsActionable(i))
                 {
                     HoveredIndex = i;
+                    RevealFocusedItem = true;
                     return true;
                 }
             }
@@ -122,6 +130,7 @@ public sealed class ContextMenuModel
                 if (IsActionable(i))
                 {
                     HoveredIndex = i;
+                    RevealFocusedItem = true;
                     return true;
                 }
             }

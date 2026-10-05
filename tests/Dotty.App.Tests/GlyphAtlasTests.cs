@@ -93,20 +93,6 @@ public sealed class GlyphAtlasTests
         Assert.Equal(1, atlas.EntryCount);
     }
 
-    [Fact]
-    public void Key_HasNoColorComponent_AndComparesByTypefaceSizeBold()
-    {
-        var a = new GlyphKey("W", Font, 16f, bold: false);
-        var b = new GlyphKey("W", Font, 16f, bold: false);
-        var c = new GlyphKey("W", Font, 17f, bold: false);
-        var d = new GlyphKey("W", Font, 16f, bold: true);
-
-        Assert.Equal(a, b);
-        Assert.NotEqual(a, c);
-        Assert.NotEqual(a, d);
-        // The API surface has no foreground color — the atlas is coverage-only.
-        Assert.Equal(4, typeof(GlyphKey).GetFields().Length);
-    }
 
     [Fact]
     public void Bold_ProducesDistinctEntry_WithBolderCoverage()

@@ -76,6 +76,27 @@ by those reserved regions. Empty tab/button rectangles do not accept pointer
 hits; the strip's bottom edge belongs to terminal content, not the caption.
 Unused space between tabs and custom caption controls remains draggable.
 
+## Popup geometry and icons
+
+`ContextMenuLayout` measures labels and shortcuts with the same hinted font
+used to draw them. Columns keep their full text when the framebuffer has room;
+constrained columns ellipsize and crop their ink rather than drawing outside
+the panel. Popup rows, padding, and icon sizes follow framebuffer scale, while
+row height also accommodates the configured font metrics.
+
+Menus clamp their position and size to the framebuffer. Tall menus scroll
+inside a bounded content area; mouse hit-testing uses the same scrolled rows
+as rendering. Keyboard focus reveals offscreen actions. The search overlay
+also constrains its input and navigation controls to the framebuffer, with
+pixel-positioned chrome and clipped query text above the terminal grid.
+
+Popup icons use bundled Lucide vector outlines, not emoji or font-specific
+symbols. `GlyphAtlas.EnsureIcon` rasterizes an outline at the requested pixel
+size into the shared monochrome atlas, so foreground color and hover tint
+remain renderer-controlled. Upstream SVGs, license, source revision, and hashes
+live in `src/Dotty.Rendering.Gpu/Icons`; publish output includes the license
+and provenance under `ThirdParty/Lucide`.
+
 ## Font and scale behavior
 
 `FontMetricsService.ResolveTypeface` tries each comma-separated family in order

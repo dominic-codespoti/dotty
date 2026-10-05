@@ -146,9 +146,18 @@ public static class SearchQuadBuilder
     {
         EmitChrome(destination, ref written, new ChromeQuadInstance
         {
-            X = rect.Left, Y = rect.Top, W = rect.Width, H = rect.Height,
-            TopR = color.R / 255f, TopG = color.G / 255f, TopB = color.B / 255f, TopA = 1f,
-            BottomR = color.R / 255f, BottomG = color.G / 255f, BottomB = color.B / 255f, BottomA = 1f
+            X = rect.Left,
+            Y = rect.Top,
+            W = rect.Width,
+            H = rect.Height,
+            TopR = color.R / 255f,
+            TopG = color.G / 255f,
+            TopB = color.B / 255f,
+            TopA = 1f,
+            BottomR = color.R / 255f,
+            BottomG = color.G / 255f,
+            BottomB = color.B / 255f,
+            BottomA = 1f
         });
     }
 }

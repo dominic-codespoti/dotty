@@ -311,13 +311,18 @@ public static class ChromeStyleUtils
         ExtractRgb(color, out byte r, out byte g, out byte b);
         destination[written++] = new CellInstance
         {
-            Col = (ushort)col, Row = (ushort)row,
+            Col = (ushort)col,
+            Row = (ushort)row,
             OffX = (short)MathF.Round(gridX - col * cellWidth),
             OffY = (short)MathF.Round(gridY - row * cellHeight),
             GlyphX = (short)(info.X + clippedLeft - left),
             GlyphY = (short)(info.Y + clippedTop - top),
-            GlyphW = (short)(right - clippedLeft), GlyphH = (short)(bottom - clippedTop),
-            FgR = r, FgG = g, FgB = b, FgA = 255,
+            GlyphW = (short)(right - clippedLeft),
+            GlyphH = (short)(bottom - clippedTop),
+            FgR = r,
+            FgG = g,
+            FgB = b,
+            FgA = 255,
             Flags = info.IsColor ? CellFlags.ColorGlyph : (byte)0
         };
     }

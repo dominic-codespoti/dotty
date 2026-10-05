@@ -31,6 +31,14 @@ python3 scripts/native/desktop-smoke.py --backend wayland --executable ./publish
 
 On Windows use `python scripts/native/desktop-smoke.py --backend windows --executable .\publish\dotty.exe` from an interactive desktop. On macOS use `python3 scripts/native/desktop-smoke.py --backend macos --executable ./publish/dotty` from a logged-in WindowServer session. Keep `DOTTY_TEST_PORT` unset externally; the script sets it to `0` to request an ephemeral loopback port and creates isolated config/home directories.
 
+The Windows smoke defaults to `--windows-console owned`: it creates a separate
+console for the host and requires that the GUI has detached from it. A detached
+probe process checks console attachment without disturbing the harness console.
+Run the same command with `--windows-console inherited` from an attached Windows
+console to require that both the harness and host remain attached to that shared
+console. Both modes retain the desktop/PTY checks and report console evidence in
+the JSON result.
+
 Windows custom decorations are installed during the window load callback, after
 the native HWND and rendering resources exist. Programmatic client sizes use
 the HWND's measured outer/client rectangle difference rather than GLFW's standard

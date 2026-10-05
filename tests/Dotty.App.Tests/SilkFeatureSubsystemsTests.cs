@@ -58,9 +58,15 @@ public class TabBarSubsystemTests
             statusWidth: statusWidth, captionButtonsWidth: captionWidth);
         float lastTabRight = layout.Tabs[tabCount - 1].TabBounds.Right;
         TabRect plus = layout.NewTabButtonBounds;
-        Assert.InRange(plus.Left - lastTabRight, 0f, 8f);
+        Assert.Equal(lastTabRight, plus.Left);
+        Assert.Equal(layout.BarBounds.Top, plus.Top);
+        Assert.Equal(layout.BarBounds.Bottom, plus.Bottom);
         Assert.Equal(TabBarHitType.NewTab,
             TabBarHitTester.HitTest(plus.Left + plus.Width * 0.5f, 16f,
+                1200f, tabCount, 0, out _, statusWidth: statusWidth,
+                captionButtonsWidth: captionWidth));
+        Assert.Equal(TabBarHitType.NewTab,
+            TabBarHitTester.HitTest(lastTabRight, plus.Bottom - 0.5f,
                 1200f, tabCount, 0, out _, statusWidth: statusWidth,
                 captionButtonsWidth: captionWidth));
 
@@ -89,6 +95,9 @@ public class TabBarSubsystemTests
         }
         Assert.Equal(1, visibleTabs);
         Assert.True(layout.Tabs[2].TabBounds.Width > 0f);
+        Assert.Equal(layout.Tabs[2].TabBounds.Right, layout.NewTabButtonBounds.Left);
+        Assert.Equal(layout.BarBounds.Top, layout.NewTabButtonBounds.Top);
+        Assert.Equal(layout.BarBounds.Bottom, layout.NewTabButtonBounds.Bottom);
     }
 
     [Fact]

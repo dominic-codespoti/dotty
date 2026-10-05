@@ -101,10 +101,10 @@ public static class TabBarLayout
     public const float CaptionButtonWidth = 46f;
     public const int CaptionButtonCount = 3;
     private const float HardMinTabWidth = 56f;
-    private const float NewTabGap = 4f;
+    private const float StatusGap = 4f;
     private const float RightPadding = 6f;
-    private const float ButtonPaddingTop = 2f;
-    private const float ButtonPaddingBottom = 4f;
+    private const float StatusPaddingTop = 2f;
+    private const float StatusPaddingBottom = 4f;
 
     // Calls are consumed synchronously by the renderer and hit tester. Keep a
     // reusable result per thread so concurrent UI/render threads cannot mutate
@@ -194,7 +194,7 @@ public static class TabBarLayout
         float tabHeight = Math.Max(0f, barHeight);
         float tabAreaWidth = Math.Max(
             0f,
-            windowWidth - captionButtonsWidth - NewTabButtonWidth - NewTabGap - RightPadding - statusWidth - (statusWidth > 0f ? NewTabGap : 0f));
+            windowWidth - captionButtonsWidth - NewTabButtonWidth - RightPadding - statusWidth - (statusWidth > 0f ? StatusGap : 0f));
         int maxVisibleTabs = Math.Max(
             1,
             (int)MathF.Floor((tabAreaWidth + TabSpacing) / (HardMinTabWidth + TabSpacing)));
@@ -245,7 +245,7 @@ public static class TabBarLayout
         return ClampNewTabBounds(
             windowWidth,
             barHeight,
-            Math.Max(0f, currentX - TabSpacing + NewTabGap),
+            Math.Max(0f, currentX - TabSpacing),
             statusWidth,
             captionButtonsWidth);
     }
@@ -257,15 +257,15 @@ public static class TabBarLayout
         float statusWidth,
         float captionButtonsWidth)
     {
-        float height = Math.Max(0f, barHeight - ButtonPaddingTop - ButtonPaddingBottom);
+        float height = Math.Max(0f, barHeight);
         float width = Math.Max(0f, windowWidth);
         if (width <= 0f)
-            return new TabRect(0f, ButtonPaddingTop, 0f, height);
+            return new TabRect(0f, 0f, 0f, height);
 
-        float maxRight = Math.Max(0f, width - captionButtonsWidth - RightPadding - statusWidth - (statusWidth > 0f ? NewTabGap : 0f));
+        float maxRight = Math.Max(0f, width - captionButtonsWidth - RightPadding - statusWidth - (statusWidth > 0f ? StatusGap : 0f));
         float x = Math.Clamp(preferredX, 0f, Math.Max(0f, maxRight - NewTabButtonWidth));
         float buttonWidth = Math.Min(NewTabButtonWidth, Math.Max(0f, maxRight - x));
-        return new TabRect(x, ButtonPaddingTop, buttonWidth, height);
+        return new TabRect(x, 0f, buttonWidth, height);
     }
 
     private static TabRect GetStatusBounds(
@@ -274,11 +274,11 @@ public static class TabBarLayout
         float statusWidth,
         float captionButtonsWidth)
     {
-        float height = Math.Max(0f, barHeight - ButtonPaddingTop - ButtonPaddingBottom);
+        float height = Math.Max(0f, barHeight - StatusPaddingTop - StatusPaddingBottom);
         if (statusWidth <= 0f)
-            return new TabRect(windowWidth - captionButtonsWidth, ButtonPaddingTop, 0f, height);
+            return new TabRect(windowWidth - captionButtonsWidth, StatusPaddingTop, 0f, height);
         float width = Math.Min(statusWidth, Math.Max(0f, windowWidth - captionButtonsWidth));
-        return new TabRect(Math.Max(0f, windowWidth - captionButtonsWidth - RightPadding - width), ButtonPaddingTop, width, height);
+        return new TabRect(Math.Max(0f, windowWidth - captionButtonsWidth - RightPadding - width), StatusPaddingTop, width, height);
     }
 
     private static void GetCaptionButtonBounds(

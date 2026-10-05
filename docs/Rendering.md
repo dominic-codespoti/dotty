@@ -67,8 +67,9 @@ controls keep their insets inside those surfaces. Terminal `window.padding`
 does not inset the strip. Flat tab surfaces do not add an outer rounded-pill
 gutter or an elevation shadow.
 
-The new-tab button follows the last visible tab with a small gap, rather than
-tracking the viewport's right edge. Status text and custom Windows caption
+The new-tab button meets the last visible tab with no gap and fills the same
+strip height with a square-edged surface. It does not track the viewport's right
+edge. Status text and custom Windows caption
 controls remain right-aligned. When space is constrained, the visible tab range
 keeps the active tab in view and the new-tab button stays inside the space left
 by those reserved regions. Empty tab/button rectangles do not accept pointer

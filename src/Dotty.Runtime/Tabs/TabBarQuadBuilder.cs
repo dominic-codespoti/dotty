@@ -152,7 +152,7 @@ public static class TabBarQuadBuilder
             bool newTabHovered = hoveredHitType == TabBarHitType.NewTab;
             EmitSolid(chromeDestination, ref chromeWritten,
                 newTab.X, newTab.Y, newTab.Width, newTab.Height,
-                metrics.RadiusSmall,
+                0f,
                 newTabHovered ? palette.SurfaceHover : palette.Surface);
 
             int newTabRow = (int)Math.Floor(newTab.Top / cellHeight);

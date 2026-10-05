@@ -107,8 +107,9 @@ reports incomplete metrics.
 | `style` | string | `Pill` |
 
 Tab surfaces fill the strip height, with labels and close controls inset inside.
-The new-tab button follows the last visible tab; status text and custom Windows
-caption controls stay right-aligned. The desktop renderer currently uses one
+The new-tab button sits flush against the last visible tab, with the same strip
+height and square edges. Status text and custom Windows caption controls stay
+right-aligned. The desktop renderer currently uses one
 chrome style; the stored `style` value does not select a different appearance.
 
 ### `cursor`

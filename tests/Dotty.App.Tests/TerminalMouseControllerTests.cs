@@ -82,6 +82,10 @@ public sealed class TerminalMouseControllerTests
             Rows: 24,
             ShowTabBar: true);
 
+        public ContextMenuLayout GetContextMenuLayout(ContextMenuModel model) =>
+            ContextMenuLayout.Calculate(model, Geometry.FramebufferWidth,
+                Geometry.FramebufferHeight, scale: Geometry.Scale);
+
         public bool Ctrl { get; set; }
         public bool Shift { get; set; }
         public bool Alt { get; set; }

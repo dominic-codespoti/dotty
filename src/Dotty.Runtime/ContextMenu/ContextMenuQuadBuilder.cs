@@ -34,9 +34,7 @@ public static class ContextMenuQuadBuilder
         float cellHeight,
         Span<CellInstance> destination,
         Span<ChromeQuadInstance> chromeDestination,
-        out int chromeWritten,
-        float paddingLeft = 0f,
-        float paddingTop = 0f)
+        out int chromeWritten)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(layout);
@@ -54,7 +52,7 @@ public static class ContextMenuQuadBuilder
         int written = 0;
 
         var palette = ResolvePalette(theme);
-        var metrics = ResolveMetrics(cellHeight);
+        var metrics = ResolveMetrics(20f * layout.Scale);
         uint itemFgColor = palette.TextPrimary;
         uint disabledFgColor = palette.TextMuted;
         uint shortcutFgColor = palette.TextSecondary;
@@ -125,17 +123,20 @@ public static class ContextMenuQuadBuilder
         {
             var itemLayout = layout.Items[i];
             var item = items[i];
+            var visible = IntersectUiRect(itemLayout.Bounds.ToSKRect(), layout.ContentBounds.ToSKRect());
+            if (visible.Width <= 0f || visible.Height <= 0f) continue;
 
             if (itemLayout.IsSeparator)
             {
                 var (sepR, sepG, sepB, sepA) = ToFloatColor(palette.Divider, 0.86f);
-                float sepInset = metrics.Scale * 8f;
+                float sepInset = layout.Scale * 8f;
                 float sepY = itemLayout.Bounds.Top + itemLayout.Bounds.Height * 0.5f;
+                if (sepY < visible.Top || sepY + metrics.Hairline > visible.Bottom) continue;
                 EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
                 {
                     X = itemLayout.Bounds.Left + sepInset,
                     Y = sepY,
-                    W = Math.Max(metrics.Hairline, itemLayout.Bounds.Width - sepInset * 2f),
+                    W = Math.Max(0f, itemLayout.Bounds.Width - sepInset * 2f),
                     H = metrics.Hairline,
                     Radius = 0f,
                     Blur = 0f,
@@ -159,10 +160,10 @@ public static class ContextMenuQuadBuilder
                 var (hR, hG, hB, hA) = ToFloatColor(palette.SurfaceHover, 1f);
                 EmitChrome(chromeDestination, ref chromeWritten, new ChromeQuadInstance
                 {
-                    X = itemLayout.Bounds.Left,
-                    Y = itemLayout.Bounds.Top,
-                    W = itemLayout.Bounds.Width,
-                    H = itemLayout.Bounds.Height,
+                    X = visible.Left,
+                    Y = visible.Top,
+                    W = visible.Width,
+                    H = visible.Height,
                     Radius = metrics.Radius,
                     Blur = 0f,
                     TopR = hR,
@@ -177,136 +178,35 @@ public static class ContextMenuQuadBuilder
             }
 
             uint fgColor = item.IsDisabled ? disabledFgColor : itemFgColor;
-            uint iconColor = item.IsDisabled
-                ? disabledFgColor
+            uint iconColor = item.IsDisabled ? disabledFgColor
                 : (isHovered ? palette.Accent : palette.TextSecondary);
-            float boxTop = itemLayout.Bounds.Top - paddingTop;
-            int itemRow = (int)Math.Floor(boxTop / cellHeight);
-            float itemOffsetY = ComputeCenteredOffsetY(typeface, fontSize, itemRow, cellHeight, boxTop, itemLayout.Bounds.Height);
+            var clip = layout.ContentBounds.ToSKRect();
+            EmitUiIcon(destination, ref written, item.Icon, itemLayout.IconBounds.ToSKRect(), clip,
+                iconColor, atlas, cellWidth, cellHeight, 16f * layout.Scale);
+            EmitUiText(destination, ref written, item.Label, itemLayout.LabelBounds.ToSKRect(), clip,
+                fgColor, atlas, typeface, fontSize, cellWidth, cellHeight);
+            EmitUiText(destination, ref written, item.Shortcut, itemLayout.ShortcutBounds.ToSKRect(), clip,
+                item.IsDisabled ? disabledFgColor : shortcutFgColor, atlas, typeface, fontSize,
+                cellWidth, cellHeight);
+        }
 
-            // Icon
-            if (!string.IsNullOrEmpty(item.Icon) && itemLayout.IconBounds.Width > 0)
-            {
-                EmitString(
-                    destination,
-                    ref written,
-                    item.Icon,
-                    itemLayout.IconBounds.Left - paddingLeft,
-                    itemRow,
-                    iconColor,
-                    isBold: false,
-                    cellWidth,
-                    typeface,
-                    fontSize,
-                    atlas,
-                    itemOffsetY);
-            }
-
-            // Label
-            if (!string.IsNullOrEmpty(item.Label))
-            {
-                EmitString(
-                    destination,
-                    ref written,
-                    item.Label,
-                    itemLayout.LabelBounds.Left - paddingLeft,
-                    itemRow,
-                    fgColor,
-                    isBold: false,
-                    cellWidth,
-                    typeface,
-                    fontSize,
-                    atlas,
-                    itemOffsetY);
-            }
-
-            // Shortcut
-            if (!string.IsNullOrEmpty(item.Shortcut) && itemLayout.ShortcutBounds.Width > 0)
-            {
-                uint scFg = item.IsDisabled ? disabledFgColor : shortcutFgColor;
-                EmitString(
-                    destination,
-                    ref written,
-                    item.Shortcut,
-                    itemLayout.ShortcutBounds.Left - paddingLeft,
-                    itemRow,
-                    scFg,
-                    isBold: false,
-                    cellWidth,
-                    typeface,
-                    fontSize,
-                    atlas,
-                    itemOffsetY);
-            }
+        if (layout.MaximumScrollOffset > 0f)
+        {
+            float indicatorHeight = layout.ContentBounds.Top - layout.Bounds.Top;
+            var clip = layout.Bounds.ToSKRect();
+            if (model.ScrollOffset > 0f)
+                EmitUiIcon(destination, ref written, UiIcon.ChevronUp,
+                    new SKRect(layout.X, layout.Y, layout.Bounds.Right, layout.ContentBounds.Top),
+                    clip, shortcutFgColor, atlas, cellWidth, cellHeight,
+                    indicatorHeight);
+            if (model.ScrollOffset < layout.MaximumScrollOffset)
+                EmitUiIcon(destination, ref written, UiIcon.ChevronDown,
+                    new SKRect(layout.X, layout.ContentBounds.Bottom, layout.Bounds.Right, layout.Bounds.Bottom),
+                    clip, shortcutFgColor, atlas, cellWidth, cellHeight,
+                    indicatorHeight);
         }
 
         return written;
     }
 
-    private static void EmitString(
-        Span<CellInstance> destination,
-        ref int written,
-        string text,
-        float startPxX,
-        float baselineRow,
-        uint fgColor,
-        bool isBold,
-        float cellWidth,
-        SKTypeface typeface,
-        float fontSize,
-        GlyphAtlas atlas,
-        float extraOffsetY = 0f)
-    {
-        if (string.IsNullOrEmpty(text)) return;
-        ExtractRgb(fgColor, out byte fgR, out byte fgG, out byte fgB);
-
-        ReadOnlySpan<char> span = text.AsSpan();
-        float curX = startPxX;
-        for (int i = 0; i < span.Length;)
-        {
-            if (written >= destination.Length) break;
-
-            int len = i + 1 < span.Length && char.IsSurrogatePair(span[i], span[i + 1]) ? 2 : 1;
-            string grapheme = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(span, i, len);
-            i += len;
-
-            if (char.IsWhiteSpace(span[i - len]))
-            {
-                curX += cellWidth;
-                continue;
-            }
-
-            var key = new GlyphKey(grapheme, typeface, fontSize, isBold);
-            if (!atlas.EnsureGlyph(key, out var glyphInfo)
-                && !atlas.TryGetFallbackGlyph(out glyphInfo))
-            {
-                curX += cellWidth;
-                continue;
-            }
-
-            int col = (int)Math.Round(curX / cellWidth);
-            int row = (int)baselineRow;
-            int pixelColOffset = (int)(curX - (col * cellWidth));
-
-            destination[written++] = new CellInstance
-            {
-                Col = (ushort)Math.Max(0, col),
-                Row = (ushort)Math.Max(0, row),
-                OffX = (short)(glyphInfo.LeftBearing + pixelColOffset),
-                OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing + extraOffsetY),
-                GlyphX = (short)glyphInfo.X,
-                GlyphY = (short)glyphInfo.Y,
-                GlyphW = (short)glyphInfo.Width,
-                GlyphH = (short)glyphInfo.Height,
-                FgR = fgR,
-                FgG = fgG,
-                FgB = fgB,
-                FgA = 255,
-                Flags = (byte)((isBold ? CellFlags.Bold : 0) | (glyphInfo.IsColor ? CellFlags.ColorGlyph : 0)),
-                BgA = 0
-            };
-
-            curX += glyphInfo.Advance > 0 ? glyphInfo.Advance : cellWidth;
-        }
-    }
 }

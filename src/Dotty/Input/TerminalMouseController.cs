@@ -33,6 +33,7 @@ public interface ITerminalMouseHost
     TerminalTab? ActiveTab { get; }
     ContextMenuModel? ActiveContextMenu { get; set; }
     TerminalMouseGeometry Geometry { get; }
+    ContextMenuLayout GetContextMenuLayout(ContextMenuModel model);
     bool Ctrl { get; }
     bool Shift { get; }
     bool Alt { get; }
@@ -228,8 +229,7 @@ public sealed class TerminalMouseController
         var activeContextMenu = _host.ActiveContextMenu;
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
-            var menuLayout = ContextMenuLayout.Calculate(activeContextMenu, geom.FramebufferWidth, geom.FramebufferHeight,
-                geom.CellWidth * geom.Scale, geom.CellHeight * geom.Scale);
+            var menuLayout = _host.GetContextMenuLayout(activeContextMenu);
             int hitItemIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
             activeContextMenu.HoveredIndex = hitItemIndex;
             if (hitItemIndex >= 0) activeContextMenu.ExecuteHovered();
@@ -450,8 +450,7 @@ public sealed class TerminalMouseController
         var activeContextMenu = _host.ActiveContextMenu;
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
-            var menuLayout = ContextMenuLayout.Calculate(activeContextMenu, geom.FramebufferWidth, geom.FramebufferHeight,
-                geom.CellWidth * geom.Scale, geom.CellHeight * geom.Scale);
+            var menuLayout = _host.GetContextMenuLayout(activeContextMenu);
             bool actionable = ContextMenuHitTester.TryHitInteractiveItem(menuLayout, physX, physY, out int item) &&
                 item >= 0 && item < activeContextMenu.Items.Count && activeContextMenu.Items[item].Action != null;
             activeContextMenu.HoveredIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
@@ -552,6 +551,15 @@ public sealed class TerminalMouseController
     public void HandleMouseScroll(IMouse mouse, ScrollWheel wheel)
     {
         if (wheel.Y == 0f) return;
+        if (_host.ActiveContextMenu is { IsVisible: true } menu)
+        {
+            var layout = _host.GetContextMenuLayout(menu);
+            menu.ScrollOffset = Math.Clamp(menu.ScrollOffset - wheel.Y * layout.ItemHeight,
+                0f, layout.MaximumScrollOffset);
+            menu.HoveredIndex = -1;
+            _host.GetContextMenuLayout(menu);
+            return;
+        }
 
         var activeTab = _host.ActiveTab;
         if (activeTab == null) return;

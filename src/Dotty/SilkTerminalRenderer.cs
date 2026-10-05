@@ -44,6 +44,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private int _drawMenuCount;
     private int _instanceBufferCapacityBytes;
     private int _stagedMenuInstanceStart = -1;
+    private int _stagedSearchInstanceStart = -1;
     private int[] _sourceOutputStarts = Array.Empty<int>();
     private int[] _sourceOutputCounts = Array.Empty<int>();
     private int[] _dirtyInstanceRanges = Array.Empty<int>();
@@ -308,7 +309,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         int barRows = 0,
         int scrollbarChromeStart = -1,
         int menuInstanceStart = -1,
-        int menuChromeStart = -1)
+        int menuChromeStart = -1,
+        int searchInstanceStart = -1,
+        int searchChromeStart = -1)
     {
         EnsureNotDisposed();
 
@@ -323,6 +326,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             _fullInstanceUpload = true;
         }
         if (menuInstanceStart != _stagedMenuInstanceStart)
+        {
+            _instanceBufferDirty = true;
+            _fullInstanceUpload = true;
+        }
+        if (searchInstanceStart != _stagedSearchInstanceStart)
         {
             _instanceBufferDirty = true;
             _fullInstanceUpload = true;
@@ -361,7 +369,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             chromeQuads,
             scrollbarChromeStart,
             menuInstanceStart,
-            menuChromeStart);
+            menuChromeStart,
+            searchInstanceStart,
+            searchChromeStart);
     }
     private void CaptureInstances(
         ReadOnlySpan<CellInstance> instances,
@@ -517,7 +527,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         ReadOnlySpan<ChromeQuadInstance> chromeQuads,
         int scrollbarChromeStart,
         int menuInstanceStart,
-        int menuChromeStart)
+        int menuChromeStart,
+        int searchInstanceStart,
+        int searchChromeStart)
     {
         int cellCount = _lastInstanceCount;
         if (cellCount > 0 && _instanceBufferDirty)
@@ -556,7 +568,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 {
                     ref readonly var instance = ref _lastInstances[i];
                     WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
-                        cellW, cellH, paddingLeft, paddingTop, barRows);
+                        cellW, cellH, paddingLeft, paddingTop, barRows,
+                        (searchInstanceStart >= 0 && i >= searchInstanceStart) ||
+                        (menuInstanceStart >= 0 && i >= menuInstanceStart));
                 }
             }
             else
@@ -569,7 +583,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                     {
                         ref readonly var instance = ref _lastInstances[i];
                         WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
-                            cellW, cellH, paddingLeft, paddingTop, barRows);
+                            cellW, cellH, paddingLeft, paddingTop, barRows,
+                            (searchInstanceStart >= 0 && i >= searchInstanceStart) ||
+                            (menuInstanceStart >= 0 && i >= menuInstanceStart));
                     }
                 }
             }
@@ -632,6 +648,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             if (_drawMenuStart >= 0)
                 EnsureMenuInstanceAttribs(_drawMenuStart);
             _stagedMenuInstanceStart = menuInstanceStart;
+            _stagedSearchInstanceStart = searchInstanceStart;
             _stagedCellW = cellW;
             _stagedCellH = cellH;
             _stagedPaddingLeft = paddingLeft;
@@ -648,6 +665,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             _drawMenuCount = 0;
             _stagedOutputInstanceCount = 0;
             _stagedMenuInstanceStart = menuInstanceStart;
+            _stagedSearchInstanceStart = searchInstanceStart;
             _stagedCellW = cellW;
             _stagedCellH = cellH;
             _stagedPaddingLeft = paddingLeft;
@@ -666,10 +684,16 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         int menuChromeFirst = hasMenuOverlay
             ? Math.Clamp(menuChromeStart, 0, chromeQuads.Length)
             : chromeQuads.Length;
+        bool hasSearchOverlay = searchInstanceStart >= 0 && searchChromeStart >= 0 &&
+            searchInstanceStart <= cellCount;
+        int searchOutputStart = !hasSearchOverlay ? -1 :
+            searchInstanceStart == cellCount ? _drawInstanceCount : _sourceOutputStarts[searchInstanceStart];
+        int searchChromeFirst = hasSearchOverlay ? Math.Clamp(searchChromeStart, 0, menuChromeFirst) : menuChromeFirst;
         int scrollbarChromeFirst = scrollbarChromeStart >= 0
-            ? Math.Clamp(scrollbarChromeStart, 0, menuChromeFirst)
-            : menuChromeFirst;
-        int baseInstanceCount = hasMenuOverlay ? _drawMenuStart : _drawInstanceCount;
+            ? Math.Clamp(scrollbarChromeStart, 0, searchChromeFirst)
+            : searchChromeFirst;
+        int baseInstanceCount = hasSearchOverlay ? searchOutputStart :
+            hasMenuOverlay ? _drawMenuStart : _drawInstanceCount;
 
         UploadChrome(chromeQuads, menuChromeStart);
 
@@ -683,11 +707,20 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         }
 
         DrawCellRange(0, baseInstanceCount, pass: 1, menuVao: false);
-        int scrollbarCount = menuChromeFirst - scrollbarChromeFirst;
+        int scrollbarCount = searchChromeFirst - scrollbarChromeFirst;
         if (scrollbarCount > 0)
         {
             EnsureMenuChromeAttribs(scrollbarChromeFirst);
             DrawChromeRange(scrollbarChromeFirst, scrollbarCount, menuVao: true);
+        }
+
+        if (hasSearchOverlay)
+        {
+            EnsureMenuChromeAttribs(searchChromeFirst);
+            DrawChromeRange(searchChromeFirst, menuChromeFirst - searchChromeFirst, menuVao: true);
+            int searchEnd = hasMenuOverlay ? _drawMenuStart : _drawInstanceCount;
+            EnsureMenuInstanceAttribs(searchOutputStart);
+            DrawCellRange(searchOutputStart, searchEnd - searchOutputStart, pass: 1, menuVao: true);
         }
 
         int menuChromeCount = chromeQuads.Length - menuChromeFirst;
@@ -699,6 +732,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
 
         if (hasMenuOverlay && _drawMenuCount > 0)
         {
+            EnsureMenuInstanceAttribs(_drawMenuStart);
             DrawCellRange(_drawMenuStart, _drawMenuCount, pass: 1, menuVao: true);
         }
     }
@@ -711,10 +745,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         float cellH,
         float paddingLeft,
         float paddingTop,
-        int barRows)
+        int barRows,
+        bool pixelPositioned)
     {
-        float x = cell.Row >= barRows ? paddingLeft + cell.Col * cellW : cell.Col * cellW;
-        float y = cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH;
+        float x = !pixelPositioned && cell.Row >= barRows ? paddingLeft + cell.Col * cellW : cell.Col * cellW;
+        float y = !pixelPositioned && cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH;
         int offset = outputIndex * FloatsPerInstance;
         staging[offset] = x;
         staging[offset + 1] = y;

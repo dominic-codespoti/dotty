@@ -4,7 +4,7 @@ namespace Dotty.Runtime.Search;
 
 /// <summary>
 /// Layout descriptor for the floating search overlay dialog.
-/// Positioned at the top-right corner of the terminal view ($320\text{px} \times 36\text{px}$).
+/// Positioned at the top-right, constrained to the framebuffer and scaled with the device.
 /// </summary>
 public readonly record struct SearchOverlayLayout
 {
@@ -62,13 +62,13 @@ public readonly record struct SearchOverlayLayout
     /// <summary>Match counter badge bounding rect (X, Y, Width, Height).</summary>
     public OverlayRect MatchCountRect { get; init; }
 
-    /// <summary>Previous match button (▲) bounding rect.</summary>
+    /// <summary>Previous match button bounding rect.</summary>
     public OverlayRect PrevButtonRect { get; init; }
 
-    /// <summary>Next match button (▼) bounding rect.</summary>
+    /// <summary>Next match button bounding rect.</summary>
     public OverlayRect NextButtonRect { get; init; }
 
-    /// <summary>Close button (×) bounding rect.</summary>
+    /// <summary>Close button bounding rect.</summary>
     public OverlayRect CloseButtonRect { get; init; }
 
     /// <summary>Current query text.</summary>
@@ -99,37 +99,33 @@ public readonly record struct SearchOverlayLayout
         float width = DefaultWidth,
         float height = DefaultHeight,
         float marginRight = DefaultMarginRight,
-        float marginTop = DefaultMarginTop)
+        float marginTop = DefaultMarginTop,
+        float scale = 1f,
+        float minimumHeight = 0f)
     {
-        float x = Math.Max(0f, viewportWidth - width - marginRight);
-        float y = marginTop;
-
+        width = Math.Min(Math.Max(0f, viewportWidth), width * scale);
+        height = Math.Min(Math.Max(0f, viewportHeight), Math.Max(height * scale, minimumHeight));
+        float x = Math.Clamp(viewportWidth - width - marginRight * scale, 0f, Math.Max(0f, viewportWidth - width));
+        float y = Math.Clamp(marginTop * scale, 0f, Math.Max(0f, viewportHeight - height));
         string badge = GetBadgeText(query, activeMatchIndex, totalMatches);
-
-        // Internal layout:
-        // [ Input text area (~160px) | Match Badge (~60px) | Prev ▲ (24px) | Next ▼ (24px) | Close × (28px) ]
-        // Padding: 4px top/bottom/left/right
-        float pad = 4f;
-        float innerH = height - (pad * 2);
+        float pad = Math.Min(4f * scale, Math.Min(width, height) / 4f);
+        float innerW = Math.Max(0f, width - pad * 2f);
+        float innerH = Math.Max(0f, height - pad * 2f);
+        float controlScale = Math.Min(scale, innerW / 224f);
+        float gap = 4f * controlScale;
+        float btnW = 24f * controlScale;
+        float closeW = 28f * controlScale;
+        float badgeW = 64f * controlScale;
+        float inputW = Math.Max(0f, innerW - badgeW - btnW * 2f - closeW - gap * 4f);
         float curX = x + pad;
-
-        float btnW = 24f;
-        float closeW = 28f;
-        float badgeW = 64f;
-        float inputW = Math.Max(60f, width - (pad * 2) - badgeW - (btnW * 2) - closeW - (pad * 4));
-
         var inputRect = new OverlayRect(curX, y + pad, inputW, innerH);
-        curX += inputW + pad;
-
+        curX += inputW + gap;
         var badgeRect = new OverlayRect(curX, y + pad, badgeW, innerH);
-        curX += badgeW + pad;
-
+        curX += badgeW + gap;
         var prevRect = new OverlayRect(curX, y + pad, btnW, innerH);
-        curX += btnW + pad;
-
+        curX += btnW + gap;
         var nextRect = new OverlayRect(curX, y + pad, btnW, innerH);
-        curX += btnW + pad;
-
+        curX += btnW + gap;
         var closeRect = new OverlayRect(curX, y + pad, closeW, innerH);
 
         return new SearchOverlayLayout

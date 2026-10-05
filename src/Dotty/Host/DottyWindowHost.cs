@@ -1693,7 +1693,9 @@ internal static class DottyWindowHost
                 barRows,
                 frame.ScrollbarChromeStart,
                 frame.MenuInstanceStart,
-                frame.MenuChromeStart);
+                frame.MenuChromeStart,
+                frame.SearchInstanceStart,
+                frame.SearchChromeStart);
             _window.SwapBuffers();
             _lastPresentTimestampMs = GetClockMilliseconds();
             _presentCount++;
@@ -2065,6 +2067,10 @@ internal static class DottyWindowHost
                 _nativeTextInput?.SetFocus((_lastWindowFocus ?? _initialWindowInputFocus) && value?.IsVisible != true);
             }
         }
+
+        public ContextMenuLayout GetContextMenuLayout(ContextMenuModel model) =>
+            _sceneComposer.GetContextMenuLayout(model, _window.FramebufferSize.X,
+                _window.FramebufferSize.Y, _scale);
 
         public TerminalMouseGeometry Geometry
         {

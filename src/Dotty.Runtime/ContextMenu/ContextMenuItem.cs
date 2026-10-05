@@ -1,4 +1,5 @@
 using System;
+using Dotty.Rendering.Gpu;
 
 namespace Dotty.Runtime.ContextMenu;
 
@@ -13,7 +14,7 @@ public sealed class ContextMenuItem
     public Action? Action { get; init; }
     public bool IsSeparator { get; init; }
     public bool IsDisabled { get; init; }
-    public string? Icon { get; init; }
+    public UiIcon Icon { get; init; }
 
     public ContextMenuItem(
         string id,
@@ -22,7 +23,7 @@ public sealed class ContextMenuItem
         Action? action = null,
         bool isSeparator = false,
         bool isDisabled = false,
-        string? icon = null)
+        UiIcon icon = UiIcon.None)
     {
         Id = id ?? string.Empty;
         Label = label ?? string.Empty;
@@ -47,7 +48,7 @@ public sealed class ContextMenuItem
         string label,
         Action? action,
         string? shortcut = null,
-        string? icon = null,
+        UiIcon icon = UiIcon.None,
         bool isDisabled = false) =>
         new(id, label, shortcut, action, isSeparator: false, isDisabled, icon);
 }

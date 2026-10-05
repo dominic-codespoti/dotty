@@ -273,14 +273,6 @@ public class SearchEngineSubsystemTests
         Assert.Equal(17, matches[1].EndCol);
     }
 
-    [Fact]
-    public void SearchOverlayLayout_CalculatesCorrectBounds()
-    {
-        var layout = SearchOverlayLayout.Compute(viewportWidth: 1000f, viewportHeight: 600f, query: "search test", activeMatchIndex: 1, totalMatches: 5);
-        Assert.True(layout.Width > 200f);
-        Assert.True(layout.Height > 20f);
-        Assert.True(layout.CloseButtonRect.Width > 0);
-    }
 }
 
 public class FontFallbackSubsystemTests

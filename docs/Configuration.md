@@ -213,6 +213,10 @@ Ctrl, is treated as text composition rather than shortcut dispatch, so its
 text can be entered into the query (or terminal). Ordinary Ctrl/Alt-modified
 text is not inserted as query text.
 
+The search panel scales with the framebuffer and stays within the available
+window area. Long query text is clipped to its input field; navigation and
+close controls use bundled vector icons rather than terminal-font symbols.
+
 ## Pointer controls and mouse reporting
 
 Pointer operations target the pane under the pointer. A wheel event activates
@@ -233,6 +237,15 @@ into that pane. Holding `Ctrl` and left-clicking a detected hyperlink opens it;
 the link is resolved from a fresh buffer snapshot at click time rather than
 from a stale hover result. A reporting pane can receive that click as a
 terminal mouse event instead, unless `Shift` is held.
+
+Right-click opens a context menu for the tab or terminal pane. Menu labels and
+shortcuts use the configured font; geometry follows the font metrics and
+framebuffer scale. Narrow menus ellipsize text, and tall menus scroll within
+the window. While a menu is open, the wheel scrolls its rows instead of the
+terminal. `Up`/`Down` move among enabled actions, `Home`/`End` focus the first
+or last action and reveal it, `Enter` executes it, and `Escape` dismisses the
+menu. Popup icons are bundled Lucide vectors, independent of the selected
+font's emoji or symbol coverage.
 
 ## Lua and theme paths
 

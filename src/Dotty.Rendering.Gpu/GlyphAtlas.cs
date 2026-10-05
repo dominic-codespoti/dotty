@@ -52,15 +52,28 @@ public readonly struct GlyphKey : IEquatable<GlyphKey>
     public readonly float TextSize;
     public readonly bool Bold;
 
+    public readonly UiIcon Icon;
+
     public GlyphKey(string grapheme, SKTypeface typeface, float textSize, bool bold)
     {
         Grapheme = grapheme ?? string.Empty;
         Typeface = typeface ?? SKTypeface.Default;
         TextSize = textSize;
         Bold = bold;
+        Icon = UiIcon.None;
+    }
+
+    public GlyphKey(UiIcon icon, float pixelSize)
+    {
+        Grapheme = string.Empty;
+        Typeface = SKTypeface.Default;
+        TextSize = pixelSize;
+        Bold = false;
+        Icon = icon;
     }
 
     public bool Equals(GlyphKey other) =>
+        Icon == other.Icon &&
         string.Equals(Grapheme, other.Grapheme, StringComparison.Ordinal) &&
         ReferenceEquals(Typeface, other.Typeface) &&
         TextSize.Equals(other.TextSize) &&
@@ -69,7 +82,7 @@ public readonly struct GlyphKey : IEquatable<GlyphKey>
     public override bool Equals(object? obj) => obj is GlyphKey other && Equals(other);
 
     public override int GetHashCode() =>
-        HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Bold);
+        HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Bold, Icon);
 }
 /// <summary>One changed rectangle in an atlas page bitmap.</summary>
 public readonly struct AtlasDirtyRegion
@@ -375,6 +388,58 @@ public sealed class GlyphAtlas : IDisposable
         {
             return CommitRasterizedGlyph(key, raster, out info, out added);
         }
+    }
+
+    /// <summary>
+    /// Ensures a font-independent vector icon is packed into the monochrome
+    /// atlas. The entry is a square of ceil(pixelSize) pixels with zero bearings
+    /// and baseline offset; its advance is the requested pixel size.
+    /// </summary>
+    public bool EnsureIcon(UiIcon icon, float pixelSize, out GlyphInfo info)
+    {
+        info = default;
+        if (icon == UiIcon.None || !float.IsFinite(pixelSize)
+            || pixelSize <= 0f || pixelSize > MaxGlyphDimension)
+        {
+            return false;
+        }
+
+        var key = new GlyphKey(icon, pixelSize);
+        if (Volatile.Read(ref _publishedMap).TryGetValue(key, out info))
+            return true;
+
+        lock (_lock)
+        {
+            if (_map.TryGetValue(key, out info))
+                return true;
+        }
+
+        int size = (int)MathF.Ceiling(pixelSize);
+        // Borrow the shared immutable path: only the canvas transform is scaled,
+        // and the atlas never mutates or disposes the asset.
+        var path = UiIcons.GetPath(icon);
+        using var surface = SKSurface.Create(new SKImageInfo(size, size, SKColorType.Alpha8, SKAlphaType.Premul));
+        if (surface == null)
+            return false;
+
+        using var paint = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 2f,
+            StrokeCap = SKStrokeCap.Round,
+            StrokeJoin = SKStrokeJoin.Round,
+        };
+        var canvas = surface.Canvas;
+        canvas.Clear(SKColors.Transparent);
+        canvas.Scale(pixelSize / 24f);
+        canvas.DrawPath(path, paint);
+        canvas.Flush();
+
+        using var image = surface.Snapshot();
+        var raster = new GlyphRaster(image, 0, 0, size, size, pixelSize, 0f, 0f, 0f);
+        return CommitRasterizedGlyph(key, raster, out info, out _);
     }
 
     /// <summary>

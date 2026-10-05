@@ -1,0 +1,21 @@
+{
+  "upstream": "https://github.com/lucide-icons/lucide",
+  "commit": "500620a2e8123f8d1db191538886dc0c223f69a9",
+  "defaultBranch": "main",
+  "files": {
+    "icons/copy.svg": "ea80e566c7a12628a447cb53179b19aea4f60b9143e2becd0d0f20bf260e5718",
+    "icons/copy-check.svg": "43cbf371628e30e66841ce076ec21531111023672d36e47473589bdfc09789f5",
+    "icons/arrow-up.svg": "8c22c25874c80bb062bef985d207d8f1d4a4d7847237d0a8cf720a3235968518",
+    "icons/arrow-down.svg": "2b641c7a59d39450edfed72067fcc9940a1a316a737346af23b4b9103c0689f2",
+    "icons/clipboard-paste.svg": "d2e4e6df0b2fecf97a95ef244f9031fb7c1deae0c9401df2a11d93379e8d361f",
+    "icons/square-dashed.svg": "bb7958e30d2658e90c3eaaa01d4808fa7a7427bc1ae1744a0fe016ddda258b2a",
+    "icons/columns-2.svg": "bddf3348a9c82d111a060d118299c90755b1ae8411bd16ea1d5ddb83c5f98a27",
+    "icons/rows-2.svg": "92f8d9962230c2d2a93ff1d9f40cde8d969b3e4f9890fabf741593a8c83835f4",
+    "icons/plus.svg": "7f6af73bf1ff6c4bca3f18351c8d1bdec6749c0c2530c4de5da85d520c21df17",
+    "icons/x.svg": "4a9cdab38fbb96162e7dace28e33f4ca0e49d8963a6162abc3d4691b7d675117",
+    "icons/eraser.svg": "838d4355dd49340523c38a22a2d23f1aca72ef42f8eba79f6a0c84bf6e27b929",
+    "icons/chevron-up.svg": "d09f13fcbef3c493ead7e4663b5ee91804fec38d5edb5e7cc3acfbd547641cf4",
+    "icons/chevron-down.svg": "66ea878e72ed3488bb3b464c39dfdccee8d1f78e560dccea40e5e12da0e87e87"
+  },
+  "licenseSha256": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57"
+}

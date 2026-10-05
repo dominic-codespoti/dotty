@@ -66,7 +66,12 @@ public static class ChromeStyleUtils
 
         public CachedFont(SKTypeface typeface, float size)
         {
-            Font = new SKFont(typeface, size);
+            Font = new SKFont(typeface, size)
+            {
+                Edging = SKFontEdging.Antialias,
+                Subpixel = false,
+                Hinting = SKFontHinting.Full
+            };
             var metrics = Font.Metrics;
             Ascent = MathF.Abs(metrics.Ascent);
             Descent = MathF.Abs(metrics.Descent);
@@ -232,6 +237,94 @@ public static class ChromeStyleUtils
         float naturalBaselineY = row * cellHeight + font.Ascent;
         float targetBaselineY = boxCenter + (font.Ascent - font.Descent) * 0.5f;
         return targetBaselineY - naturalBaselineY;
+    }
+
+    public static float MeasureUiText(string? text, SKTypeface typeface, float fontSize) =>
+        string.IsNullOrEmpty(text) ? 0f : GetCachedSKFont(typeface, fontSize).MeasureText(text);
+
+    /// <summary>Draws proportional UI text, ellipsizing columns and cropping ink to the popup viewport.</summary>
+    public static void EmitUiText(Span<CellInstance> destination, ref int written, string? text,
+        SKRect box, SKRect clip, uint color, GlyphAtlas atlas, SKTypeface typeface, float fontSize,
+        float cellWidth, float cellHeight)
+    {
+        if (string.IsNullOrEmpty(text) || box.Width <= 0f || box.Height <= 0f) return;
+        var font = GetCachedSKFont(typeface, fontSize);
+        var metrics = GetFontMetrics(typeface, fontSize);
+        float baseline = box.MidY + (metrics.Ascent - metrics.Descent) * 0.5f;
+        float usedWidth = 0f;
+        const float widthTolerance = 0.01f;
+        float ellipsisWidth = font.MeasureText("…");
+        bool truncated = font.MeasureText(text) > box.Width + widthTolerance;
+        float textWidth = box.Width - (truncated ? ellipsisWidth : 0f);
+        var span = text.AsSpan();
+        for (int i = 0; i < span.Length;)
+        {
+            int length = i + 1 < span.Length && char.IsSurrogatePair(span[i], span[i + 1]) ? 2 : 1;
+            string glyph = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(span, i, length);
+            float advance = font.MeasureText(glyph);
+            if (usedWidth + advance > textWidth + widthTolerance) break;
+            float x = box.Left + usedWidth;
+            if (!char.IsWhiteSpace(span[i]) &&
+                (atlas.EnsureGlyph(new GlyphKey(glyph, typeface, fontSize, false), out var info) ||
+                 atlas.TryGetFallbackGlyph(out info)))
+                EmitUiGlyph(destination, ref written, info, x + info.LeftBearing,
+                    baseline + info.TopBearing, IntersectUiRect(box, clip), color,
+                    cellWidth, cellHeight);
+            usedWidth += advance;
+            i += length;
+        }
+        if (truncated && ellipsisWidth <= box.Width &&
+            atlas.EnsureGlyph(new GlyphKey("…", typeface, fontSize, false), out var ellipsis))
+            EmitUiGlyph(destination, ref written, ellipsis, box.Left + usedWidth + ellipsis.LeftBearing,
+                baseline + ellipsis.TopBearing, IntersectUiRect(box, clip), color,
+                cellWidth, cellHeight);
+    }
+
+    public static void EmitUiIcon(Span<CellInstance> destination, ref int written, UiIcon icon,
+        SKRect box, SKRect clip, uint color, GlyphAtlas atlas, float cellWidth, float cellHeight,
+        float maximumSize = 16f)
+    {
+        float size = MathF.Floor(Math.Min(maximumSize, Math.Min(box.Width, box.Height)));
+        if (size <= 0f || icon == UiIcon.None || !atlas.EnsureIcon(icon, size, out var info)) return;
+        EmitUiGlyph(destination, ref written, info, box.MidX - info.Width * 0.5f,
+            box.MidY - info.Height * 0.5f, IntersectUiRect(box, clip), color,
+            cellWidth, cellHeight);
+    }
+
+    public static SKRect IntersectUiRect(SKRect a, SKRect b) => new(
+        Math.Max(a.Left, b.Left), Math.Max(a.Top, b.Top),
+        Math.Min(a.Right, b.Right), Math.Min(a.Bottom, b.Bottom));
+
+    private static void EmitUiGlyph(Span<CellInstance> destination, ref int written, GlyphInfo info,
+        float x, float y, SKRect clip, uint color, float cellWidth, float cellHeight)
+    {
+        if (written >= destination.Length) return;
+        int left = (int)MathF.Round(x), top = (int)MathF.Round(y);
+        int clippedLeft = Math.Max(left, (int)MathF.Ceiling(clip.Left));
+        int clippedTop = Math.Max(top, (int)MathF.Ceiling(clip.Top));
+        int right = Math.Min(left + info.Width, (int)MathF.Floor(clip.Right));
+        int bottom = Math.Min(top + info.Height, (int)MathF.Floor(clip.Bottom));
+        if (right <= clippedLeft || bottom <= clippedTop) return;
+        float gridX = clippedLeft, gridY = clippedTop;
+        int col = Math.Max(0, (int)MathF.Floor(gridX / cellWidth));
+        int row = Math.Max(0, (int)MathF.Floor(gridY / cellHeight));
+        ExtractRgb(color, out byte r, out byte g, out byte b);
+        destination[written++] = new CellInstance
+        {
+            Col = (ushort)col,
+            Row = (ushort)row,
+            OffX = (short)MathF.Round(gridX - col * cellWidth),
+            OffY = (short)MathF.Round(gridY - row * cellHeight),
+            GlyphX = (short)(info.X + clippedLeft - left),
+            GlyphY = (short)(info.Y + clippedTop - top),
+            GlyphW = (short)(right - clippedLeft),
+            GlyphH = (short)(bottom - clippedTop),
+            FgR = r,
+            FgG = g,
+            FgB = b,
+            FgA = 255,
+            Flags = info.IsColor ? CellFlags.ColorGlyph : (byte)0
+        };
     }
 
     /// <summary>Appends a chrome quad if <paramref name="destination"/> has room.</summary>

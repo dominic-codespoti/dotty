@@ -93,7 +93,7 @@ reports incomplete metrics.
 
 | Property | Type | Default | Notes |
 |---|---|---|---|
-| `padding.left` / `top` / `right` / `bottom` | number | `14`, `8`, `14`, `8` | Inner window padding. |
+| `padding.left` / `top` / `right` / `bottom` | number | `14`, `8`, `14`, `8` | Terminal content padding; tab-bar backgrounds remain flush with the client edges. |
 | `opacity` | number | `1` | |
 | `title` | string | `Dotty` | |
 | `decorations` | string | `custom` | Windows only: `custom` removes the native title bar and draws the tab-bar caption controls; `native` keeps native decorations. Other platforms retain native decorations regardless of this option. The custom caption strip remains visible when `tabBar.show` is false. |
@@ -106,7 +106,11 @@ reports incomplete metrics.
 | `height` | number | `38` |
 | `style` | string | `Pill` |
 
-Supported styles are `Pill`, `Compact`, and `Minimal`.
+Tab surfaces fill the strip height, with labels and close controls inset inside.
+The new-tab button sits flush against the last visible tab, with the same strip
+height and square edges. Status text and custom Windows caption controls stay
+right-aligned. The desktop renderer currently uses one
+chrome style; the stored `style` value does not select a different appearance.
 
 ### `cursor`
 

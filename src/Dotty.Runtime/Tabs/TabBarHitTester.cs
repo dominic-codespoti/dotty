@@ -50,7 +50,7 @@ public static class TabBarHitTester
         float statusWidth = 0f,
         float captionButtonsWidth = 0f)
     {
-        if (x < 0 || x >= windowWidth || y < 0 || y > barHeight || windowWidth <= 0 || tabCount < 0)
+        if (x < 0 || x >= windowWidth || y < 0 || y >= barHeight || windowWidth <= 0 || tabCount < 0)
         {
             return new TabBarHitResult.None();
         }
@@ -111,7 +111,7 @@ public static class TabBarHitTester
     {
         tabIndex = -1;
 
-        if (x < 0 || x >= windowWidth || y < 0 || y > barHeight || windowWidth <= 0 || tabCount < 0)
+        if (x < 0 || x >= windowWidth || y < 0 || y >= barHeight || windowWidth <= 0 || tabCount < 0)
         {
             return TabBarHitType.None;
         }

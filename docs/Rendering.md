@@ -59,6 +59,23 @@ owning pane and invalidates presentation on every changed offset or active
 selection row. The cursor is deliberately suppressed while a pane is scrolled
 away from the bottom; it is drawn only for the active pane at offset zero.
 
+## Tab-strip geometry
+
+`TabBarLayout` is shared by rendering and both hit-testing routes. Tab surfaces
+start at the client area's left edge and fill the strip height; label and close
+controls keep their insets inside those surfaces. Terminal `window.padding`
+does not inset the strip. Flat tab surfaces do not add an outer rounded-pill
+gutter or an elevation shadow.
+
+The new-tab button meets the last visible tab with no gap and fills the same
+strip height with a square-edged surface. It does not track the viewport's right
+edge. Status text and custom Windows caption
+controls remain right-aligned. When space is constrained, the visible tab range
+keeps the active tab in view and the new-tab button stays inside the space left
+by those reserved regions. Empty tab/button rectangles do not accept pointer
+hits; the strip's bottom edge belongs to terminal content, not the caption.
+Unused space between tabs and custom caption controls remains draggable.
+
 ## Font and scale behavior
 
 `FontMetricsService.ResolveTypeface` tries each comma-separated family in order

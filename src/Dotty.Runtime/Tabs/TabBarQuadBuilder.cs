@@ -84,20 +84,9 @@ public static class TabBarQuadBuilder
 
             if (isActive)
             {
-                // A restrained shadow gives the active tab elevation without
-                // changing the interaction geometry.
-                EmitSolid(chromeDestination, ref chromeWritten,
-                    bounds.X - metrics.Scale,
-                    bounds.Y + metrics.Scale,
-                    bounds.Width + metrics.Scale * 2f,
-                    bounds.Height + metrics.Scale * 2f,
-                    metrics.Radius,
-                    palette.Shadow,
-                    0.28f,
-                    metrics.ShadowBlur);
                 EmitSolid(chromeDestination, ref chromeWritten,
                     bounds.X, bounds.Y, bounds.Width, bounds.Height,
-                    metrics.Radius, palette.SurfaceRaised);
+                    0f, palette.SurfaceRaised);
 
                 // Crisp accent indicator at the active tab's lower edge.
                 EmitSolid(chromeDestination, ref chromeWritten,
@@ -109,7 +98,7 @@ public static class TabBarQuadBuilder
             {
                 EmitSolid(chromeDestination, ref chromeWritten,
                     bounds.X, bounds.Y, bounds.Width, bounds.Height,
-                    metrics.RadiusSmall,
+                    0f,
                     tabHovered ? palette.SurfaceHover : palette.Surface);
             }
 
@@ -163,7 +152,7 @@ public static class TabBarQuadBuilder
             bool newTabHovered = hoveredHitType == TabBarHitType.NewTab;
             EmitSolid(chromeDestination, ref chromeWritten,
                 newTab.X, newTab.Y, newTab.Width, newTab.Height,
-                metrics.RadiusSmall,
+                0f,
                 newTabHovered ? palette.SurfaceHover : palette.Surface);
 
             int newTabRow = (int)Math.Floor(newTab.Top / cellHeight);

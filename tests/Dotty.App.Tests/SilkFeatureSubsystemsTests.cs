@@ -17,17 +17,59 @@ namespace Dotty.App.Tests;
 
 public class TabBarSubsystemTests
 {
-    [Fact]
-    public void TabBarLayout_SingleTab_FillsAvailableWidth()
+    [Theory]
+    [InlineData(1000f, 1, 0)]
+    [InlineData(120f, 8, 4)]
+    public void TabBarLayout_FirstVisibleTabFillsStripEdgeAndKeepsContentInset(
+        float windowWidth, int tabCount, int activeIndex)
     {
-        var layout = TabBarLayout.Calculate(windowWidth: 1000f, tabCount: 1, activeIndex: 0);
-        Assert.NotNull(layout);
-        Assert.Single(layout.Tabs);
-        Assert.True(layout.Tabs[0].TabBounds.Width > 0);
-        Assert.True(layout.NewTabButtonBounds.Width > 0);
-        Assert.Equal(
-            TabBarLayout.PaddingBottom,
-            layout.BarBounds.Bottom - layout.Tabs[0].TabBounds.Bottom);
+        const float barHeight = 48f;
+        var layout = TabBarLayout.Calculate(windowWidth, tabCount, activeIndex, barHeight);
+        TabLayoutItem firstVisible = default;
+        foreach (var tab in layout.Tabs)
+        {
+            if (tab.TabBounds.Width <= 0f)
+                continue;
+            firstVisible = tab;
+            break;
+        }
+
+        Assert.Equal(0f, firstVisible.TabBounds.Left);
+        Assert.Equal(0f, firstVisible.TabBounds.Top);
+        Assert.Equal(barHeight, firstVisible.TabBounds.Bottom);
+        Assert.True(firstVisible.TextBounds.Left > firstVisible.TabBounds.Left);
+        Assert.True(firstVisible.TextBounds.Right < firstVisible.CloseButtonBounds.Left);
+        Assert.True(firstVisible.CloseButtonBounds.Right <= firstVisible.TabBounds.Right);
+        Assert.True(firstVisible.CloseButtonBounds.Top >= firstVisible.TabBounds.Top);
+        Assert.True(firstVisible.CloseButtonBounds.Bottom <= firstVisible.TabBounds.Bottom);
+        Assert.Equal(TabBarHitType.SelectTab,
+            TabBarHitTester.HitTest(0.5f, 1f, windowWidth, tabCount, activeIndex,
+                out int hitIndex, barHeight));
+        Assert.Equal(firstVisible.Index, hitIndex);
+    }
+
+    [Theory]
+    [InlineData(1, 0f, 0f)]
+    [InlineData(3, 138f, 80f)]
+    public void TabBarLayout_NewTabFollowsLastTabWhenWindowGrows(
+        int tabCount, float captionWidth, float statusWidth)
+    {
+        var layout = TabBarLayout.Calculate(1200f, tabCount, 0,
+            statusWidth: statusWidth, captionButtonsWidth: captionWidth);
+        float lastTabRight = layout.Tabs[tabCount - 1].TabBounds.Right;
+        TabRect plus = layout.NewTabButtonBounds;
+        Assert.InRange(plus.Left - lastTabRight, 0f, 8f);
+        Assert.Equal(TabBarHitType.NewTab,
+            TabBarHitTester.HitTest(plus.Left + plus.Width * 0.5f, 16f,
+                1200f, tabCount, 0, out _, statusWidth: statusWidth,
+                captionButtonsWidth: captionWidth));
+
+        layout = TabBarLayout.Calculate(1600f, tabCount, 0,
+            statusWidth: statusWidth, captionButtonsWidth: captionWidth);
+        Assert.Equal(lastTabRight, layout.Tabs[tabCount - 1].TabBounds.Right);
+        Assert.Equal(plus.Left, layout.NewTabButtonBounds.Left);
+        if (statusWidth > 0f)
+            Assert.True(layout.NewTabButtonBounds.Right <= layout.StatusBounds.Left);
     }
 
     [Fact]
@@ -50,24 +92,27 @@ public class TabBarSubsystemTests
     }
 
     [Fact]
-    public void TabBarLayout_CustomCaptionButtons_ReserveRightSideOnlyWhenRequested()
+    public void TabBarLayout_CaptionControlsStayRightWithoutMovingTabsOrPlus()
     {
         const float windowWidth = 1000f;
         const float captionWidth = TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount;
         var nativeLayout = TabBarLayout.Calculate(windowWidth, tabCount: 2, activeIndex: 0);
         float nativeMinimizeWidth = nativeLayout.MinimizeButtonBounds.Width;
-        float nativeNewTabRight = nativeLayout.NewTabButtonBounds.Right;
+        float nativeLastTabRight = nativeLayout.Tabs[1].TabBounds.Right;
+        float nativePlusLeft = nativeLayout.NewTabButtonBounds.Left;
         var customLayout = TabBarLayout.Calculate(
             windowWidth, tabCount: 2, activeIndex: 0, captionButtonsWidth: captionWidth);
 
         Assert.Equal(0f, nativeMinimizeWidth);
         Assert.Equal(windowWidth, customLayout.CloseButtonBounds.Right);
-        Assert.True(customLayout.NewTabButtonBounds.Right < nativeNewTabRight);
-        Assert.Equal(captionWidth / TabBarLayout.CaptionButtonCount, customLayout.MinimizeButtonBounds.Width);
         Assert.Equal(customLayout.MinimizeButtonBounds.Right, customLayout.MaximizeButtonBounds.Left);
         Assert.Equal(customLayout.MaximizeButtonBounds.Right, customLayout.CloseButtonBounds.Left);
-        Assert.True(customLayout.Tabs[0].TabBounds.Right <= customLayout.MinimizeButtonBounds.Left);
+        Assert.Equal(nativeLastTabRight, customLayout.Tabs[1].TabBounds.Right);
+        Assert.Equal(nativePlusLeft, customLayout.NewTabButtonBounds.Left);
         Assert.True(customLayout.NewTabButtonBounds.Right <= customLayout.MinimizeButtonBounds.Left);
+        Assert.Equal(TabBarHitType.Caption,
+            TabBarHitTester.HitTest(customLayout.NewTabButtonBounds.Right + 20f,
+                16f, windowWidth, 2, 0, out _, captionButtonsWidth: captionWidth));
     }
 
     [Fact]
@@ -88,6 +133,28 @@ public class TabBarSubsystemTests
         Assert.Equal(windowWidth / TabBarLayout.CaptionButtonCount, minimizeWidth);
         Assert.Equal(0f, newTabWidth);
         Assert.Equal(TabBarHitType.Close, closeHit);
+    }
+
+    [Fact]
+    public void TabBarHitTester_HiddenTabsAndPlusDoNotConsumeStatusClicks()
+    {
+        var result = TabBarHitTester.HitTest(
+            0f, 10f, 200f, tabCount: 1, activeIndex: 0, statusWidth: 200f);
+        Assert.IsType<TabBarHitResult.None>(result);
+        Assert.Equal(TabBarHitType.None,
+            TabBarHitTester.HitTest(0f, 10f, 200f, 1, 0, out _, statusWidth: 200f));
+    }
+
+    [Fact]
+    public void TabBarHitTester_DoesNotExtendIntoContentBelowStrip()
+    {
+        const float barHeight = 48f;
+        Assert.IsType<TabBarHitResult.None>(
+            TabBarHitTester.HitTest(20f, barHeight, 1000f, 1, 0,
+                barHeight, captionButtonsWidth: 138f));
+        Assert.Equal(TabBarHitType.None,
+            TabBarHitTester.HitTest(20f, barHeight, 1000f, 1, 0, out _,
+                barHeight, captionButtonsWidth: 138f));
     }
 
     [Fact]

@@ -1,24 +1,26 @@
 # Dotty
 
-A high-performance terminal emulator for .NET, built with Silk.NET, OpenGL,
-and a cell-preserving terminal core.
+A cross-platform desktop terminal emulator built with .NET 10, Silk.NET,
+GLFW, OpenGL 3.3, and SkiaSharp.
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](License.md)
 
 ## Overview
 
-*Last updated: 2026-10-03*
-
 Dotty is a modern terminal emulator composed of:
 - **Dotty** — Silk.NET/OpenGL desktop host.
-- **Dotty.Terminal** — High-performance terminal core with zero-allocation parsing.
+- **Dotty.Rendering.Gpu** — Glyph atlases, shaders, and instanced quad rendering.
+- **Dotty.Runtime** — Sessions, tabs, split panes, configuration, and Lua scripting.
+- **Dotty.Terminal** — ANSI/VT parsing, cell buffers, and scrollback.
 - **Dotty.NativePty** — Unix helper and Windows ConPTY backends.
 - **Dotty.Abstractions** — Platform-neutral contracts.
 
 ### Key Features
 
 - Hardware-accelerated OpenGL rendering with SkiaSharp font shaping
+- Multiple tabs, split panes, per-tab search, and configurable keyboard shortcuts
+- Custom JSON themes and Lua startup configuration, tab titles, and status text
 - Native PTY support on Linux, macOS, and Windows
 - Efficient cell-preserving buffer and scrollback reflow
 - Ligature support via HarfBuzz font shaping
@@ -33,11 +35,15 @@ Dotty is a modern terminal emulator composed of:
 
 ## Install
 
-Prebuilt self-contained archives are published only for explicitly requested
-versioned releases. See the [release policy](docs/Releasing.md) for current
-version, release status, and the process for stable and prerelease tags. The
-legacy nightly prerelease may still exist on GitHub but is no longer updated.
-Release signing and a graphical installer are not currently provided.
+For the latest merged code, [build `main` from source](#build) and
+[publish a self-contained executable](#publish). A merge does not publish a new
+release, and the historical `nightly` archive is no longer updated.
+
+Versioned self-contained archives are published on
+[GitHub Releases](https://github.com/dominic-codespoti/dotty/releases) only when a
+release is explicitly requested. See the [release policy](docs/Releasing.md) for
+versioning and publication. Release signing and a graphical installer are not
+currently provided.
 
 Linux x64:
 
@@ -70,8 +76,16 @@ self-contained; no .NET installation is needed. Windows requires build 17763+
 ### Prerequisites
 
 - .NET SDK 10.0.100+; [global.json](global.json) allows .NET 10 feature-band roll-forward. A runtime alone is not enough to build.
-- Desktop OpenGL 3.3 core support
-- Linux/macOS source builds additionally require `make` and `gcc` or `clang`
+- Python 3 and CMake on `PATH`: build and publish compile the checked-in GLFW fork automatically.
+- Desktop OpenGL 3.3 core support.
+- **Windows:** Visual Studio 2022 C/C++ build tools and a Windows SDK, including the native import libraries. ConPTY itself is supplied by Windows; GLFW and NativeAOT still require the native toolchain.
+- **Linux:** a C compiler, `make`, `pkg-config`, X11/Wayland development headers and protocols, and `libxkbcommon` development headers. NativeAOT publishing additionally requires Clang and zlib development headers.
+- **macOS:** Xcode Command Line Tools (`clang` and `make`).
+
+See [native desktop build prerequisites](docs/NativeDesktopAndIme.md#native-glfw-dependency)
+for the GLFW dependency and platform packages.
+The compiler requirements for publishing are also covered by Microsoft's
+[NativeAOT prerequisites](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/#prerequisites).
 
 ### Supported Platforms
 
@@ -87,6 +101,13 @@ coverage promotes them to supported release targets.
 A green build or headless test run does not establish native desktop behavior: CI's Xvfb smoke is X11-only; Wayland, macOS, Windows, and physical-input checks require native interactive sessions. See [native desktop verification](docs/NativeDesktopAndIme.md).
 
 ### Build
+
+Start from the latest merged branch rather than the historical nightly:
+
+```bash
+git clone --branch main https://github.com/dominic-codespoti/dotty.git
+cd dotty
+```
 
 On Linux or macOS, build the POSIX helper first:
 
@@ -113,6 +134,35 @@ For a published executable, use `dotty -d DIR -- COMMAND ARG...` or
 `dotty --shell PATH`. `dotty --help` and `dotty --version` do not initialize
 graphics. With no arguments, the interactive shell starts in the invocation
 directory. See [command-line usage](docs/CommandLine.md) for details.
+
+On Windows, a standalone Desktop/Start-menu launch releases its startup console
+before opening the GUI. Launches from an existing console keep that console
+attached, and redirected standard handles are preserved.
+
+### Publish
+
+Publish builds a self-contained NativeAOT executable with the portable CPU
+baseline. Keep the entire output directory together; the executable still needs
+the included native libraries and, on Unix, `pty-helper`.
+
+Windows x64:
+
+```powershell
+dotnet publish src/Dotty/Dotty.csproj -c Release -r win-x64 --self-contained true -o publish/win-x64
+.\publish\win-x64\dotty.exe
+# Select PowerShell 7 explicitly when it is installed:
+.\publish\win-x64\dotty.exe --shell "C:\Program Files\PowerShell\7\pwsh.exe" -d "$HOME"
+```
+
+Linux x64 (after building the POSIX helper above):
+
+```bash
+dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained true -p:RequireUnixPtyHelper=true -o publish/linux-x64
+./publish/linux-x64/dotty
+```
+
+For macOS, replace `linux-x64` with `osx-x64` (Intel) or `osx-arm64` (Apple
+Silicon) in both paths. Build and publish on the target OS and architecture.
 
 Clipboard writes requested by terminal applications through OSC 52 require
 `"clipboard": { "allowOsc52Write": true }` in `config.json`. This permission
@@ -209,6 +259,7 @@ src/
   Dotty.Runtime/     — Sessions, tabs, input, config, scripting
   Dotty.NativePty/   — Unix helper and Windows ConPTY backends
   Dotty.Abstractions/ — Shared platform-neutral contracts
+  Dotty.Rendering.Gpu/ — Glyph atlases, shaders, and GPU quad batching
 tests/               — Unit, native PTY, and rendering tests
 docs/                — Architecture and platform guides
 ```

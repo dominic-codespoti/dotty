@@ -35,7 +35,9 @@ when creating later tabs or panes.
   "font": {
     "family": "JetBrains Mono, Cascadia Code, Liberation Mono, monospace",
     "size": 14,
-    "lineHeight": 1.25
+    "lineHeight": 1.25,
+    "features": ["calt", "liga=0"],
+    "symbolMap": ["U+2500-U+257F: Symbols Nerd Font Mono"]
   },
   "window": {
     "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 },
@@ -84,10 +86,21 @@ trailing commas/comments are accepted by the JSON parser.
 | `family` | string | platform-neutral fallback stack | Comma-separated family names; first installed family wins. |
 | `size` | number | `14` | Font size in points; non-finite or non-positive values are normalized. |
 | `lineHeight` | number | `1.25` | Line-height multiplier; values below `0.1` are clamped. |
+| `features` | string[] | `[]` | OpenType feature tags applied when shaping (e.g. `"calt"`, `"liga=0"`, `"ss01"`). Unparseable entries are ignored. |
+| `symbolMap` | string[] | `[]` | Per-range font overrides (`"U+2500-U+257F: Symbols Nerd Font Mono"`). Checked before the generic fallback chain. |
 
 The renderer measures the selected typeface at the current framebuffer scale.
 Cell width and height remain finite and positive even when a platform font
 reports incomplete metrics.
+
+### `theme`, `themeLight`, `themeDark`, `themeAuto`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `theme` | string | `"DarkPlus"` | Explicit theme; also the dark fallback when `themeAuto` is true. `DOTTY_THEME` env overrides everything. |
+| `themeLight` | string | `"LightPlus"` | Theme used when `themeAuto` is true and the OS reports light. |
+| `themeDark` | string | theme value | Theme used when `themeAuto` is true and the OS reports dark. |
+| `themeAuto` | boolean | `false` | Follow the OS light/dark color scheme (Windows registry, macOS defaults, GNOME gtk-theme), re-resolved at most every 5 s. Unknown OS scheme keeps the explicit theme. |
 
 ### `window`
 

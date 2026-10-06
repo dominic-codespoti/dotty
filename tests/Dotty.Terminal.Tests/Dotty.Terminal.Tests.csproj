@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dotty.Terminal\Dotty.Terminal.csproj" />
+    <ProjectReference Include="..\..\src\Dotty.Rendering.Gpu\Dotty.Rendering.Gpu.csproj" />
   </ItemGroup>
 
   <ItemGroup>

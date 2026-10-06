@@ -27,25 +27,15 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | Field | Lua type | Default |
 |---|---|---|
 | `theme` | string | `"DarkPlus"` |
+| `theme_light` | string or `nil` | `nil` (LightPlus when auto) |
+| `theme_dark` | string or `nil` | `nil` (theme value when auto) |
+| `theme_auto` | boolean | `false` |
 | `selection_color` | string or `nil` | `nil` |
 | `font.family` | string | `"JetBrainsMono Nerd Font Mono, JetBrains Mono, Fira Code, Cascadia Code, monospace"` |
 | `font.size` | number | `14` |
 | `font.line_height` | number | `1.25` |
-| `window.opacity` | number | `1` |
-| `window.title` | string | `"Dotty"` |
-| `window.padding.left` | number | `14` |
-| `window.padding.top` | number | `8` |
-| `window.padding.right` | number | `14` |
-| `window.padding.bottom` | number | `8` |
-| `tab_bar.show` | boolean | `true` |
-| `tab_bar.height` | number | `38` |
-| `tab_bar.style` | string | `"Pill"` |
-| `cursor.shape` | string | `"Block"` |
-| `cursor.blink` | boolean | `true` |
-| `cursor.blink_interval_ms` | integer | `500` |
-| `panes.divider_thickness` | number | `2` |
-| `panes.active_border` | boolean | `true` |
-| `keybindings` | table mapping chords to action names | empty map |
+| `font.features` | array of strings | empty |
+| `font.symbol_map` | array of strings | empty |
 
 Nested reads and writes work directly. `dotty.config.apply_table(table)` and its alias `dotty.config.apply(table)` apply recognized values recursively. Assigning a table to a nested section applies its fields; assigning a table to `keybindings` replaces the map. Reads of `keybindings` return a copy. Unknown fields are ignored.
 

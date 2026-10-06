@@ -106,7 +106,13 @@ public sealed class PaneTree : IDisposable
         var session = new TerminalSession(rows: Math.Max(1, target.Rows), columns: Math.Max(1, target.Columns));
         var newPane = new LeafPane(session);
         Subscribe(newPane);
-        if (!string.IsNullOrEmpty(effectiveWorkingDirectory) || !string.IsNullOrEmpty(effectiveShell))
+        // Only inherit-and-start when the target is already running (or the
+        // caller explicitly requested a shell). Otherwise Split would spawn a
+        // live PTY for headless/unstarted panes, making render unit tests race
+        // with async shell output (see Compose_RendersEachLeafUsingItsPreservedScrollOffset).
+        bool explicitlyRequested = !string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell);
+        if ((!string.IsNullOrEmpty(effectiveWorkingDirectory) || !string.IsNullOrEmpty(effectiveShell))
+            && (explicitlyRequested || target.Session.IsStarted))
         {
             session.StartWithOptions(
                 shell: effectiveShell,

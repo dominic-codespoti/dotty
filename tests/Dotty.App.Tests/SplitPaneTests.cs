@@ -109,6 +109,24 @@ public class SplitPaneTests
     }
 
     [Fact]
+    public void PaneTree_Split_DoesNotStartSessionForUnstartedTarget()
+    {
+        // Regression: Split used to spawn a live PTY for headless panes because
+        // the inherited working directory is never null, racing render tests
+        // with async shell output (Compose_RendersEachLeafUsingItsPreservedScrollOffset
+        // failed on Windows with 18 instead of 46 instances: the live shell held
+        // the buffer lock so the second leaf was skipped).
+        using var tree = new PaneTree(rows: 4, columns: 20);
+        var first = tree.ActivePane;
+        Assert.False(first.Session.IsStarted);
+
+        var second = tree.Split(first, SplitDirection.Vertical);
+
+        Assert.False(first.Session.IsStarted);
+        Assert.False(second.Session.IsStarted);
+    }
+
+    [Fact]
     public void PaneTree_PublicOperations_RejectUseAfterDispose()
     {
         var tree = new PaneTree(rows: 24, columns: 80);

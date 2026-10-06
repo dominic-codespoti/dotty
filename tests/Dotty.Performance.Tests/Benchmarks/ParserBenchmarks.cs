@@ -30,6 +30,8 @@ public class ParserBenchmarks : PerformanceTestBase
     private byte[] _shellSession = null!;
     private byte[] _mouseEvents = null!;
     private byte[] _oscSequences = null!;
+    private byte[] _throughputPlain = null!;
+    private byte[] _throughputAnsi = null!;
 
     // GlobalSetup inherited from PerformanceTestBase
     public override void GlobalSetup()
@@ -56,6 +58,8 @@ public class ParserBenchmarks : PerformanceTestBase
         _shellSession = TestDataGenerator.GenerateShellSession(20);
         _mouseEvents = TestDataGenerator.GenerateMouseEvents(1000);
         _oscSequences = TestDataGenerator.GenerateOscSequences(100);
+        _throughputPlain = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.XLarge);
+        _throughputAnsi = TestDataGenerator.GenerateBasicAnsiText(TestDataGenerator.Sizes.XLarge, 0.1);
 
         // Warmup
         Warmup(() => _parser.Feed(_plainTextSmall), 5);
@@ -125,20 +129,18 @@ public class ParserBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Throughput - Plain Text 1MB", OperationsPerInvoke = 10)]
     public void Throughput_PlainText_1MB()
     {
-        var data = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.XLarge);
         for (int i = 0; i < 10; i++)
         {
-            _parser.Feed(data);
+            _parser.Feed(_throughputPlain);
         }
     }
 
     [Benchmark(Description = "Throughput - ANSI Text 1MB", OperationsPerInvoke = 10)]
     public void Throughput_AnsiText_1MB()
     {
-        var data = TestDataGenerator.GenerateBasicAnsiText(TestDataGenerator.Sizes.XLarge, 0.1);
         for (int i = 0; i < 10; i++)
         {
-            _parser.Feed(data);
+            _parser.Feed(_throughputAnsi);
         }
     }
 

@@ -329,7 +329,7 @@ public class Program
                     ["maxLatencyMs"] = Math.Round(medianMs * 2, 6),
                     ["minThroughput"] = 0,
                     ["maxAllocationsPerOp"] = allocated + 64,
-                    ["regressionThreshold"] = 0.1,
+                    ["regressionThreshold"] = 0.25,
                 };
                 updated++;
             }

@@ -217,6 +217,21 @@ public class ParserMicroBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Parse OSC: Window Title")]
     public void ParseOsc_WindowTitle() => _parser.Feed("\u001b]0;Terminal\u0007"u8);
 
+    [Benchmark(Description = "Parse Query: DECRQM set/reset")]
+    public void ParseQuery_Decrqm() => _parser.Feed("\u001b[?1$p\u001b[?2004$p"u8);
+
+    [Benchmark(Description = "Parse Query: XTGETTCAP TN")]
+    public void ParseQuery_Xtgettcap() => _parser.Feed("\u001bP+q544E\u001b\\"u8);
+
+    [Benchmark(Description = "Parse Query: modifyOtherKeys negotiate")]
+    public void ParseQuery_ModifyOtherKeys() => _parser.Feed("\u001b[>4;1m\u001b[>4;0m"u8);
+
+    [Benchmark(Description = "Parse OSC 4: palette set + query")]
+    public void ParseOsc4_PaletteSetQuery() => _parser.Feed("\u001b]4;1;#ff0000\u0007\u001b]4;1;?\u0007"u8);
+
+    [Benchmark(Description = "Parse OSC 10: dynamic color set + query")]
+    public void ParseOsc10_DynamicSetQuery() => _parser.Feed("\u001b]10;#112233\u0007\u001b]10;?\u0007"u8);
+
     [Benchmark(Description = "Parse Unicode: 2-byte")]
     public void ParseUnicode_2Byte() => _parser.Feed("\u00e4\u00f6\u00fc"u8);
 

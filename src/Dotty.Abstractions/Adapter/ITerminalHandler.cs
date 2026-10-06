@@ -89,6 +89,10 @@ namespace Dotty.Abstractions.Adapter
         // Capability query (XTGETTCAP - DCS + q hex ST)
         void OnQueryCapability(string requestHex) { }
 
+        // Span fast path for the same query; default bridges to the string
+        // form for external implementors.
+        void OnQueryCapability(ReadOnlySpan<char> requestHex) => OnQueryCapability(requestHex.ToString());
+
         // XTerm modifyOtherKeys (CSI > 4 ; Pv m)
         void OnSetModifyOtherKeys(int level) { }
 

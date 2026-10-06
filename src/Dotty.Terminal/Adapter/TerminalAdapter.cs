@@ -293,7 +293,9 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
                 return;
             if (colorField.Length == 1 && colorField[0] == '?')
             {
-                SendColorReply(4, ToPaletteQuery(index).AsSpan());
+                Span<char> query = stackalloc char[8];
+                WritePaletteQuery(index, query);
+                SendColorReply(4, query[..7]);
                 continue;
             }
             if (!TryParseColorSpec(colorField, out uint argb))
@@ -318,12 +320,15 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         PaletteChanged?.Invoke();
         RequestRender();
     }
-    private static string ToPaletteQuery(int index)
+    private static void WritePaletteQuery(int index, Span<char> destination)
     {
         uint argb = index is >= 0 and < 16
             ? SgrColorArgb.GetAnsiPaletteSnapshot()[index]
             : SgrColorArgb.From256(index).Argb;
-        return $"#{argb & 0xFFFFFF:X6}";
+        const string digits = "0123456789ABCDEF";
+        destination[0] = '#';
+        for (int i = 0; i < 6; i++)
+            destination[1 + i] = digits[(int)((argb >> (20 - 4 * i)) & 0xF)];
     }
 
     private static bool TryParsePaletteIndex(ReadOnlySpan<char> field, out int index)
@@ -424,7 +429,8 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     {
         >= '0' and <= '9' => c - '0',
         >= 'a' and <= 'f' => c - 'a' + 10,
-        _ => c - 'A' + 10,
+        >= 'A' and <= 'F' => c - 'A' + 10,
+        _ => -1,
     };
 
     // OSC 10/11/12: a '?' payload queries the live color; any other payload
@@ -896,72 +902,80 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         // XTGETTCAP: answer only capabilities Dotty actually implements.
         // Unknown keys get no reply so applications fall back instead of
         // trusting a claim this terminal cannot honor.
+        OnQueryCapability(requestHex.AsSpan());
+    }
+
+    internal void OnQueryCapability(ReadOnlySpan<char> requestHex)
+    {
         var handler = ReplyRequested;
-        if (handler is null || string.IsNullOrEmpty(requestHex))
+        if (handler is null || requestHex.IsEmpty)
             return;
-        string? valueHex = DecodeCapabilityKey(requestHex) switch
-        {
-            "TN" => EncodeAsciiHex("dotty"),
-            "Co" => EncodeAsciiHex("256"),
-            "RGB" => EncodeAsciiHex("8/8/8"),
-            "kitty-keyboard" => EncodeAsciiHex(KittyKeyboardFlags.ToString()),
-            _ => null,
-        };
-        if (valueHex is null)
+        Span<char> valueHex = stackalloc char[64];
+        int valueLength = GetCapabilityValueHex(requestHex, valueHex);
+        if (valueLength < 0)
             return;
-        int total = 5 + requestHex.Length + 1 + valueHex.Length + 2;
+        int total = 5 + requestHex.Length + 1 + valueLength + 2;
         Span<char> reply = total <= 128 ? stackalloc char[128] : new char[total];
         "\x1bP1$r".AsSpan().CopyTo(reply);
         int length = 5;
-        requestHex.AsSpan().CopyTo(reply[length..]);
+        requestHex.CopyTo(reply[length..]);
         length += requestHex.Length;
         reply[length++] = '=';
-        valueHex.AsSpan().CopyTo(reply[length..]);
-        length += valueHex.Length;
+        valueHex[..valueLength].CopyTo(reply[length..]);
+        length += valueLength;
         reply[length++] = '\x1b';
         reply[length++] = '\\';
         handler(reply[..length]);
     }
 
+    // Writes the hex-encoded capability value into destination. Returns the
+    // length, or -1 for unknown keys / malformed requests (no reply).
+    private int GetCapabilityValueHex(ReadOnlySpan<char> requestHex, Span<char> destination)
+    {
+        if (requestHex.IsEmpty || (requestHex.Length & 1) != 0)
+            return -1;
+        Span<char> key = stackalloc char[32];
+        if (requestHex.Length / 2 > key.Length)
+            return -1;
+        for (int i = 0; i < requestHex.Length / 2; i++)
+        {
+            int hi = HexNibble(requestHex[2 * i]);
+            int lo = HexNibble(requestHex[2 * i + 1]);
+            if (hi < 0 || lo < 0)
+                return -1;
+            key[i] = (char)((hi << 4) | lo);
+        }
+        ReadOnlySpan<char> decoded = key[..(requestHex.Length / 2)];
+        ReadOnlySpan<char> value = decoded switch
+        {
+            _ when decoded.SequenceEqual("TN") => "dotty",
+            _ when decoded.SequenceEqual("Co") => "256",
+            _ when decoded.SequenceEqual("RGB") => "8/8/8",
+            _ => ReadOnlySpan<char>.Empty,
+        };
+        bool isKittyKeyboard = decoded.SequenceEqual("kitty-keyboard");
+        if (value.IsEmpty && !isKittyKeyboard)
+            return -1;
+        if (isKittyKeyboard)
+        {
+            if (!KittyKeyboardFlags.TryFormat(destination, out int written))
+                return -1;
+            return written;
+        }
+        const string digits = "0123456789ABCDEF";
+        if (destination.Length < value.Length * 2)
+            return -1;
+        for (int i = 0; i < value.Length; i++)
+        {
+            destination[2 * i] = digits[(value[i] >> 4) & 0xF];
+            destination[2 * i + 1] = digits[value[i] & 0xF];
+        }
+        return value.Length * 2;
+    }
+
     public void OnSetModifyOtherKeys(int level)
     {
         ModifyOtherKeysLevel = level is >= 0 and <= 2 ? level : ModifyOtherKeysLevel;
-    }
-
-    private static string DecodeCapabilityKey(string requestHex)
-    {
-        if ((requestHex.Length & 1) != 0)
-            return string.Empty;
-        char[] chars = new char[requestHex.Length / 2];
-        for (int i = 0; i < chars.Length; i++)
-        {
-            int hi = HexValue(requestHex[2 * i]);
-            int lo = HexValue(requestHex[2 * i + 1]);
-            if (hi < 0 || lo < 0)
-                return string.Empty;
-            chars[i] = (char)((hi << 4) | lo);
-        }
-        return new string(chars);
-    }
-
-    private static int HexValue(char c) => c switch
-    {
-        >= '0' and <= '9' => c - '0',
-        >= 'a' and <= 'f' => c - 'a' + 10,
-        >= 'A' and <= 'F' => c - 'A' + 10,
-        _ => -1,
-    };
-
-    private static string EncodeAsciiHex(string value)
-    {
-        char[] hex = new char[value.Length * 2];
-        const string digits = "0123456789ABCDEF";
-        for (int i = 0; i < value.Length; i++)
-        {
-            hex[2 * i] = digits[(value[i] >> 4) & 0xF];
-            hex[2 * i + 1] = digits[value[i] & 0xF];
-        }
-        return new string(hex);
     }
 
     public void OnMouseEvent(int button, int col, int row, bool isPress)

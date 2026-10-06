@@ -178,7 +178,6 @@ public class ParserMicroBenchmarks : PerformanceTestBase
     private BasicAnsiParser _parser = null!;
     private TerminalAdapter _adapter = null!;
 
-    [GlobalSetup]
     public override void GlobalSetup()
     {
         base.GlobalSetup();

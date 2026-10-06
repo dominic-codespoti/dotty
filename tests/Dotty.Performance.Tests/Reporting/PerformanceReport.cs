@@ -20,10 +20,30 @@ public class PerformanceReport
     {
         _outputDirectory = outputDirectory;
         _baselineComparer = new BaselineComparer(
-            baselineFile ?? Path.Combine(outputDirectory, "baselines.json"),
+            ResolveBaselineFile(baselineFile, outputDirectory),
             regressionThreshold: 0.10);
 
         Directory.CreateDirectory(outputDirectory);
+    }
+
+    private static string ResolveBaselineFile(string? baselineFile, string outputDirectory)
+    {
+        if (!string.IsNullOrEmpty(baselineFile) && File.Exists(baselineFile))
+            return baselineFile;
+        // baselines.json ships next to the test binary (csproj CopyToOutput);
+        // fall back to the project source path for in-place runs.
+        string outputCopy = Path.Combine(AppContext.BaseDirectory, "baselines.json");
+        if (File.Exists(outputCopy))
+            return outputCopy;
+        string? assemblyDir = Path.GetDirectoryName(typeof(PerformanceReport).Assembly.Location);
+        if (!string.IsNullOrEmpty(assemblyDir))
+        {
+            string projectDir = Path.GetFullPath(Path.Combine(assemblyDir, "..", "..", ".."));
+            string checkedIn = Path.Combine(projectDir, "baselines.json");
+            if (File.Exists(checkedIn))
+                return checkedIn;
+        }
+        return Path.Combine(outputDirectory, "baselines.json");
     }
 
     /// <summary>
@@ -145,19 +165,19 @@ public class PerformanceReport
                 Type = r.BenchmarkCase.Descriptor.Type.Name,
                 Method = r.BenchmarkCase.Descriptor.WorkloadMethod.Name,
                 Parameters = r.BenchmarkCase.Parameters?.PrintInfo ?? "",
-                MeanMs = r.ResultStatistics?.Mean ?? 0,
-                StdDevMs = r.ResultStatistics?.StandardDeviation ?? 0,
-                MinMs = r.ResultStatistics?.Min ?? 0,
-                MaxMs = r.ResultStatistics?.Max ?? 0,
-                Q1Ms = r.ResultStatistics?.Q1 ?? 0,
-                Q3Ms = r.ResultStatistics?.Q3 ?? 0,
-                P50Ms = r.ResultStatistics?.Median ?? 0,
+                MeanMs = (r.ResultStatistics?.Mean ?? 0) / 1_000_000.0,
+                StdDevMs = (r.ResultStatistics?.StandardDeviation ?? 0) / 1_000_000.0,
+                MinMs = (r.ResultStatistics?.Min ?? 0) / 1_000_000.0,
+                MaxMs = (r.ResultStatistics?.Max ?? 0) / 1_000_000.0,
+                Q1Ms = (r.ResultStatistics?.Q1 ?? 0) / 1_000_000.0,
+                Q3Ms = (r.ResultStatistics?.Q3 ?? 0) / 1_000_000.0,
+                P50Ms = (r.ResultStatistics?.Median ?? 0) / 1_000_000.0,
                 P95Ms = r.AllMeasurements?.Any() == true ?
                     r.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(r.AllMeasurements.Count * 0.95)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
                 P99Ms = r.AllMeasurements?.Any() == true ?
                     r.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(r.AllMeasurements.Count * 0.99)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
-                ThroughputOpsPerSec = r.ResultStatistics != null ?
-                    1.0 / (r.ResultStatistics.Mean / 1000.0) : 0,
+                ThroughputOpsPerSec = r.ResultStatistics != null && r.ResultStatistics.Mean > 0 ?
+                    1_000_000_000.0 / r.ResultStatistics.Mean : 0,
                 AllocatedBytesPerOp = (double)(r.GcStats.GetTotalAllocatedBytes(false) ?? 0L),
                 Gen0Collections = r.GcStats.Gen0Collections,
                 Gen1Collections = r.GcStats.Gen1Collections,
@@ -276,17 +296,19 @@ public class PerformanceReport
 
     private BenchmarkResult ExtractResult(BenchmarkReport report)
     {
+        // BenchmarkDotNet ResultStatistics are nanoseconds; baselines are ms.
+        const double NsPerMs = 1_000_000.0;
         return new BenchmarkResult
         {
-            MeanMs = report.ResultStatistics?.Mean ?? 0,
-            P50Ms = report.ResultStatistics?.Median ?? 0,
+            MeanMs = (report.ResultStatistics?.Mean ?? 0) / NsPerMs,
+            P50Ms = (report.ResultStatistics?.Median ?? 0) / NsPerMs,
             P95Ms = report.AllMeasurements?.Any() == true ?
-                report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.95)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
+                report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.95)).FirstOrDefault().Nanoseconds / NsPerMs : 0,
             P99Ms = report.AllMeasurements?.Any() == true ?
-                report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.99)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
-            StdDevMs = report.ResultStatistics?.StandardDeviation ?? 0,
-            ThroughputOpsPerSec = report.ResultStatistics != null ?
-                1.0 / (report.ResultStatistics.Mean / 1000.0) : 0,
+                report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.99)).FirstOrDefault().Nanoseconds / NsPerMs : 0,
+            StdDevMs = (report.ResultStatistics?.StandardDeviation ?? 0) / NsPerMs,
+            ThroughputOpsPerSec = report.ResultStatistics != null && report.ResultStatistics.Mean > 0 ?
+                1_000_000_000.0 / report.ResultStatistics.Mean : 0,
             AllocatedBytesPerOp = (double)(report.GcStats.GetTotalAllocatedBytes(false) ?? 0L),
             Gen0Collections = report.GcStats.Gen0Collections,
             Gen1Collections = report.GcStats.Gen1Collections,

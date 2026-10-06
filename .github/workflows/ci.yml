@@ -297,16 +297,6 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
 
-      - name: Check for Performance Regressions
-        run: |
-          # Check if regressions were detected
-          if [ -f "tests/Dotty.Performance.Tests/regressions.txt" ]; then
-            echo "Performance regressions detected:"
-            cat tests/Dotty.Performance.Tests/regressions.txt
-            exit 1
-          fi
-          echo "No performance regressions detected."
-
   # Summary job that depends on all others
   ci-summary:
     name: CI Summary

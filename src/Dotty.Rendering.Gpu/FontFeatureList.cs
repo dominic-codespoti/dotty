@@ -70,9 +70,21 @@ public static class FontFeatureList
         Feature[] parsed = Parse(entries);
         if (parsed.Length == 0)
             return string.Empty;
+        // Format managed-side: Feature.ToString() P/Invokes libHarfBuzzSharp,
+        // which is absent from test-host outputs without native assets.
         var parts = new string[parsed.Length];
         for (int i = 0; i < parsed.Length; i++)
-            parts[i] = parsed[i].ToString();
+        {
+            uint tagValue = parsed[i].Tag;
+            string tagText = new string(new[]
+            {
+                (char)((tagValue >> 24) & 0xFF),
+                (char)((tagValue >> 16) & 0xFF),
+                (char)((tagValue >> 8) & 0xFF),
+                (char)(tagValue & 0xFF),
+            });
+            parts[i] = parsed[i].Value == 1 ? tagText : $"{tagText}={parsed[i].Value}";
+        }
         Array.Sort(parts, StringComparer.Ordinal);
         return string.Join(",", parts);
     }

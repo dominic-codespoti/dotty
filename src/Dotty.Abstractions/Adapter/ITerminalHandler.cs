@@ -15,6 +15,7 @@ namespace Dotty.Abstractions.Adapter
         event Action<string>? RenderRequested;
         event Action<string>? ClipboardWriteRequested;
         event Action<string>? TitleChanged;
+        event Action? PaletteChanged;
         void OnHyperlink(string uri);
         void RequestRenderExtern();
         void ResizeBuffer(int rows, int cols);
@@ -80,6 +81,16 @@ namespace Dotty.Abstractions.Adapter
 
         // Device attributes
         void OnSendDeviceAttributes(int daType); // DA - CSI c / CSI > c
+        // DA3 (CSI = c) is intentionally silent; no reply is sent.
+
+        // Mode status (DECRQM - CSI ? Ps $ p / CSI Ps $ p)
+        void OnRequestMode(int mode, bool isPrivate) { } // Default no-op for external implementors.
+
+        // Capability query (XTGETTCAP - DCS + q hex ST)
+        void OnQueryCapability(string requestHex) { }
+
+        // XTerm modifyOtherKeys (CSI > 4 ; Pv m)
+        void OnSetModifyOtherKeys(int level) { }
 
         // Mouse support
         void OnMouseEvent(int button, int col, int row, bool isPress);

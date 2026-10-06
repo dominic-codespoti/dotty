@@ -201,6 +201,34 @@ public readonly record struct SgrColorArgb(uint Argb)
         return true;
     }
 
+    // OSC 4 override for indices 16-255 (the xterm color cube/ramp).
+    // Stored sparsely so the static ramp stays the default for untouched
+    // entries; ResetExtendedPalette restores the stock ramp (RIS/theme).
+    private static readonly ConcurrentDictionary<int, uint> s_extendedOverrides = new();
+
+    public static void SetExtendedPalette(int index, uint argb)
+    {
+        if (index is < 16 or > 255)
+            return;
+        if (_palette256[index].Argb == argb)
+        {
+            s_extendedOverrides.TryRemove(index, out _);
+            return;
+        }
+        _palette256[index] = new SgrColorArgb(argb);
+        s_extendedOverrides[index] = argb;
+    }
+
+    public static void ResetExtendedPalette()
+    {
+        if (s_extendedOverrides.IsEmpty)
+            return;
+        SgrColorArgb[] stock = InitializePalette256();
+        foreach (int index in s_extendedOverrides.Keys)
+            _palette256[index] = stock[index];
+        s_extendedOverrides.Clear();
+    }
+
     /// <summary>
     /// Converts to hex string for backward compatibility (renders, etc).
     /// Use sparingly - creates string allocation.

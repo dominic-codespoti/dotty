@@ -142,6 +142,7 @@ public partial class TerminalSession : IDisposable
     public event Action<string>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
     public event Action? RenderScheduled;
+    public event Action? PaletteChanged;
     public event Action<int>? ProcessExited;
 
 
@@ -197,6 +198,7 @@ public partial class TerminalSession : IDisposable
         Adapter.ReplyRequested += OnAdapterReplyRequested;
         Adapter.ClipboardWriteRequested += text => ClipboardWriteRequested?.Invoke(text);
         Adapter.TitleChanged += title => TitleChanged?.Invoke(title);
+        Adapter.PaletteChanged += () => PaletteChanged?.Invoke();
     }
 
     public void Start()

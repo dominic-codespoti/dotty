@@ -157,7 +157,8 @@ public class TerminalInputEncoder
         TerminalKeyModifiers modifiers,
         Span<byte> destination,
         bool keypadApplicationMode = false,
-        bool applicationCursorKeys = false)
+        bool applicationCursorKeys = false,
+        int modifyOtherKeysLevel = 0)
     {
         if (TryEncodeKeypad(key, modifiers, keypadApplicationMode, destination, out int keypadLength))
             return keypadLength;
@@ -299,6 +300,9 @@ public class TerminalInputEncoder
                 destination[0] = control;
                 return 1;
             }
+            int fallback = EncodeModifyOtherKeysFallback(key, modifiers, modifyOtherKeysLevel, destination);
+            if (fallback != 0)
+                return fallback;
             return 0;
         }
 
@@ -369,6 +373,61 @@ public class TerminalInputEncoder
     private static int WriteLiteral(Span<byte> destination, ReadOnlySpan<char> text) =>
         Encoding.ASCII.GetBytes(text, destination);
 
+    // XTerm modifyOtherKeys level 1/2 fallback for Ctrl+key combinations that
+    // have no legacy control encoding. Level 1 emits ESC[27;mod;code~, level 2
+    // uses the raw codepoint form. Only reachable when legacy encoding fails.
+    private static int EncodeModifyOtherKeysFallback(
+        TerminalKey key,
+        TerminalKeyModifiers modifiers,
+        int modifyOtherKeysLevel,
+        Span<byte> destination)
+    {
+        if (modifyOtherKeysLevel is not (1 or 2))
+            return 0;
+        if ((modifiers & TerminalKeyModifiers.Control) == 0)
+            return 0;
+        int codepoint = ModifyOtherKeysCodepoint(key);
+        if (codepoint <= 0)
+            return 0;
+        int mod = GetModifier(modifiers);
+        int offset = WriteLiteral(destination, "\x1b[27;");
+        offset = WriteNumber(destination, offset, mod);
+        destination[offset++] = (byte)';';
+        offset = WriteNumber(destination, offset, codepoint);
+        destination[offset++] = (byte)'~';
+        return offset;
+    }
+
+    private static int ModifyOtherKeysCodepoint(TerminalKey key)
+    {
+        if (key >= TerminalKey.A && key <= TerminalKey.Z)
+            return 'a' + (key - TerminalKey.A);
+        if (key >= TerminalKey.Number0 && key <= TerminalKey.Number9)
+            return '0' + (key - TerminalKey.Number0);
+        return key switch
+        {
+            TerminalKey.Space => 32,
+            TerminalKey.Minus => '-',
+            TerminalKey.Equal => '=',
+            TerminalKey.LeftBracket => '[',
+            TerminalKey.RightBracket => ']',
+            TerminalKey.BackSlash => '\\',
+            TerminalKey.Semicolon => ';',
+            TerminalKey.Quote => '\'',
+            TerminalKey.GraveAccent => '`',
+            TerminalKey.Comma => ',',
+            TerminalKey.Period => '.',
+            TerminalKey.Slash => '/',
+            TerminalKey.Enter => 13,
+            TerminalKey.Tab => 9,
+            TerminalKey.Escape => 27,
+            TerminalKey.F1 => 57364,
+            TerminalKey.F2 => 57365,
+            TerminalKey.F3 => 57366,
+            TerminalKey.F4 => 57367,
+            _ => 0,
+        };
+    }
 
     private static bool IsDisambiguationKey(TerminalKey key) => key is
         TerminalKey.Escape or TerminalKey.Enter or TerminalKey.Tab or TerminalKey.Backspace or

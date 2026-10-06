@@ -284,10 +284,11 @@ The parser supports OSC sequences for:
 | 0 | Set icon name and window title | `OnOperatingSystemCommand(0, title)` |
 | 1 | Set icon name | `OnOperatingSystemCommand(1, name)` |
 | 2 | Set window title | `OnOperatingSystemCommand(2, title)` |
-| 4 | Set/read color palette | (future) |
+| 4 | Set/query color palette (`index ; spec` pairs, `?` queries) | `TerminalAdapter.HandleOscPalette` — indices 0-15 remap ANSI styles, 16-255 override the xterm ramp; `rgb:RR/GG/BB`, `#RGB`, `#RRGGBB` specs; malformed entries skipped; RIS and theme changes restore stock |
 | 8 | Hyperlink (OSC 8) | `OnOperatingSystemCommand(8, params)` |
 | 9 | iTerm2 notifications | (future) |
-| 10-19 | Set foreground/background/highlight colors | (future) |
+| 10-12 | Set/query dynamic colors (fg/bg/cursor) | `TerminalAdapter.HandleOscDynamicColor` — `?` queries live values, set reports back; fg/bg sets invalidate rows and notify the host |
+| 13-19 | Set foreground/background/highlight colors | (future) |
 | 52 | Manipulate selection/data | (future) |
 | 777 | rxvt extension notifications | (future) |
 | 1337 | PromptMark (shell integration) | `OnPromptMark(level)` — tracks shell prompt start/end via `OSC 1337 ; A` / `OSC 1337 ; B` |
@@ -509,9 +510,9 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-06 | P0/P1: DECRQM (`CSI ? Ps $ p` / `CSI Ps $ p`), XTGETTCAP (`DCS + q`), modifyOtherKeys (`CSI > 4 ; Pv m`), OSC 4 palette set/query, OSC 10/11/12 set/query |
 | 2026-06-17 | Updated OSC table: OSC 1337 PromptMark (shell integration) |
 | 2026-06-05 | Updated DECSTBM/DECOM interaction with alternate screen and origin mode |
 | 2026-06-05 | Documented PromptMark OSC 1337 sequence support |
-
 *Document version: 1.1*  
 *Last updated: 2026-06-17*

@@ -130,6 +130,9 @@ public static class SilkConfig
     public static void ApplyAnsiPalette(IColorScheme? theme = null)
     {
         var palette = ResolveAnsiPalette(theme);
+        // A theme change reasserts the full stock palette, discarding any
+        // OSC 4 runtime overrides (both ANSI and extended entries).
+        SgrColorArgb.ResetExtendedPalette();
         SgrColorArgb.SetAnsiPalette(palette);
     }
 

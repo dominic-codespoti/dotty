@@ -91,6 +91,7 @@ internal static class DottyWindowHost
     private static readonly Dictionary<TerminalSession, Action> _renderSubscriptions = new();
     private static readonly Dictionary<TerminalSession, Action> _renderCallbackCache = new();
     private static readonly Dictionary<TerminalSession, Action<string>> _clipboardSubscriptions = new();
+    private static readonly Dictionary<TerminalSession, Action> _paletteSubscriptions = new();
     private static readonly Dictionary<TerminalTab, (Action TopologyChanged, Action<LeafPane, LeafPane> ActivePaneChanged)> _paneSubscriptions = new();
     private sealed class TabTitleCache
     {
@@ -664,6 +665,11 @@ internal static class DottyWindowHost
                 leaf.Session.RenderScheduled += callback;
                 _renderSubscriptions.Add(leaf.Session, callback);
             }
+            if (!_paletteSubscriptions.ContainsKey(leaf.Session))
+            {
+                leaf.Session.PaletteChanged += OnSessionPaletteChanged;
+                _paletteSubscriptions.Add(leaf.Session, OnSessionPaletteChanged);
+            }
         }
         _visibleLeafCount = leaves.Count;
 
@@ -678,6 +684,8 @@ internal static class DottyWindowHost
             var session = _staleSessionScratch[i];
             session.RenderScheduled -= _renderSubscriptions[session];
             _renderSubscriptions.Remove(session);
+            if (_paletteSubscriptions.Remove(session))
+                session.PaletteChanged -= OnSessionPaletteChanged;
         }
 
         _staleLeafScratch.Clear();
@@ -698,6 +706,9 @@ internal static class DottyWindowHost
 
     private static void OnSessionRenderScheduled() =>
         WindowPresentationGate.Invalidate(WindowFrameReason.Content);
+
+    private static void OnSessionPaletteChanged() =>
+        WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
     private static float _cellFontSizePx()
     {
         float size = EffectiveFontSize();

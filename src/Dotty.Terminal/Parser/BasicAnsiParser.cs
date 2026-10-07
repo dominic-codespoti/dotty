@@ -16,6 +16,9 @@ namespace Dotty.Terminal.Parser
         // small; OSC strings need room for long hyperlinks and titles.
         private const int MaxCsiParameterBytes = 256;
         private const int MaxOscPayloadBytes = 64 * 1024;
+        // DCS payload capture exists only for short queries (XTGETTCAP + q).
+        // Longer DCS strings are consumed without dispatch.
+        private const int MaxDcsPayloadBytes = 4 * 1024;
 
         private enum SequenceState : byte
         {
@@ -287,6 +290,7 @@ namespace Dotty.Terminal.Parser
                     _sequenceState = SequenceState.Osc;
                     break;
                 case (byte)'P':
+                    _leftoverLen = 0;
                     _sequenceState = SequenceState.Dcs;
                     break;
                 case (byte)'c':
@@ -419,7 +423,14 @@ namespace Dotty.Terminal.Parser
             }
             else if (b == 0x9C || b == 0x18 || b == 0x1A)
             {
+                HandleDcsPayload(_leftover.AsSpan(0, _leftoverLen));
                 ResetSequence();
+            }
+            else if (!AppendSequenceByte(b, MaxDcsPayloadBytes))
+            {
+                // Query payloads are short; longer DCS strings keep consuming
+                // until ST without dispatch.
+                BeginDiscard(SequenceState.Dcs);
             }
         }
 
@@ -427,13 +438,22 @@ namespace Dotty.Terminal.Parser
         {
             if (b == (byte)'\\' || b == 0x9C || b == 0x18 || b == 0x1A)
             {
+                HandleDcsPayload(_leftover.AsSpan(0, _leftoverLen));
                 ResetSequence();
             }
-            else if (b != ESC)
+            else if (b == ESC)
             {
-                // A non-ST ESC is part of the discarded DCS payload. A second
-                // ESC remains pending in case it introduces the terminator.
+                // A second ESC may introduce the ST terminator; the payload
+                // stays captured until ST, CAN, SUB, or ST-as-0x9C.
+            }
+            else
+            {
+                // A non-ST ESC is part of the DCS payload, not a new sequence.
                 _sequenceState = SequenceState.Dcs;
+                if (!AppendSequenceByte(ESC, MaxDcsPayloadBytes))
+                    BeginDiscard(SequenceState.Dcs);
+                else
+                    ProcessDcsByte(b);
             }
         }
 
@@ -548,6 +568,10 @@ namespace Dotty.Terminal.Parser
                 Handler?.OnSendDeviceAttributes(paramBytes[0] == '>' ? 2 : paramBytes[0] == '=' ? 3 : 1);
                 return;
             }
+            if (final == 'p' && TryHandleDecrqm(paramBytes))
+                return;
+            if (final == 'm' && TryHandleModifyOtherKeys(paramBytes))
+                return;
 
             if (final == 'm' && (paramBytes.IsEmpty || paramBytes[0] != '<'))
             {
@@ -796,6 +820,76 @@ namespace Dotty.Terminal.Parser
             if (!secondField.IsEmpty && !TryParseAsciiInt(secondField, out second)) return false;
             hasSecond = true;
             return first >= 0 && second >= 0;
+        }
+
+        private bool TryHandleDecrqm(ReadOnlySpan<byte> parameters)
+        {
+            // DECRQM: CSI ? Ps $ p (private) or CSI Ps $ p (ANSI).
+            if (parameters.IsEmpty || parameters[^1] != (byte)'$')
+                return false;
+            ReadOnlySpan<byte> body = parameters[..^1];
+            bool isPrivate = body.Length > 0 && body[0] == (byte)'?';
+            if (isPrivate)
+                body = body[1..];
+            if (body.IsEmpty || !TryParseAsciiInt(body, out int mode) || mode < 0)
+                return true;
+            Handler?.OnRequestMode(mode, isPrivate);
+            return true;
+        }
+
+        private bool TryHandleModifyOtherKeys(ReadOnlySpan<byte> parameters)
+        {
+            // XTerm modifyOtherKeys: CSI > 4 ; Pv m. Only the exact two-field
+            // form dispatches; other '>' SGR-adjacent forms fall through.
+            if (parameters.Length < 4 || parameters[0] != (byte)'>')
+                return false;
+            ReadOnlySpan<byte> body = parameters[1..];
+            int semi = body.IndexOf((byte)';');
+            if (semi < 0 || body[(semi + 1)..].IndexOf((byte)';') >= 0)
+                return false;
+            if (!TryParseAsciiInt(body[..semi], out int first) || first != 4)
+                return false;
+            if (!TryParseAsciiInt(body[(semi + 1)..], out int level) || level is < 0 or > 2)
+                return true;
+            Handler?.OnSetModifyOtherKeys(level);
+            return true;
+        }
+
+        private void HandleDcsPayload(ReadOnlySpan<byte> payloadBytes)
+        {
+            // XTGETTCAP: DCS + q <hex> ST. Only dispatch the exact query form;
+            // all other DCS strings remain consumed without reply.
+            if (payloadBytes.Length >= 2 && payloadBytes[0] == (byte)'+' && payloadBytes[1] == (byte)'q')
+            {
+                ReadOnlySpan<byte> request = payloadBytes[2..];
+                if (!request.IsEmpty && (request.Length & 1) == 0 && IsHexDigits(request))
+                {
+                    Span<char> hex = GetScratch(request.Length, out char[]? rented);
+                    try
+                    {
+                        for (int i = 0; i < request.Length; i++)
+                            hex[i] = (char)request[i];
+                        Handler?.OnQueryCapability(new string(hex[..request.Length]));
+                    }
+                    finally
+                    {
+                        ReturnScratch(rented);
+                    }
+                }
+            }
+        }
+
+        private static bool IsHexDigits(ReadOnlySpan<byte> bytes)
+        {
+            foreach (byte b in bytes)
+            {
+                bool digit = b >= (byte)'0' && b <= (byte)'9';
+                bool lower = b >= (byte)'a' && b <= (byte)'f';
+                bool upper = b >= (byte)'A' && b <= (byte)'F';
+                if (!digit && !lower && !upper)
+                    return false;
+            }
+            return true;
         }
 
         private void HandlePrivateMode(int code, bool enabled)

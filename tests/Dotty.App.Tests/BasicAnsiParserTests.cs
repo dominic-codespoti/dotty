@@ -148,6 +148,7 @@ public class BasicAnsiParserTests
             add { }
             remove { }
         }
+        event Action? ITerminalHandler.PaletteChanged { add { } remove { } }
         void ITerminalHandler.OnHyperlink(string uri) { }
         // add { } remove { } }
 

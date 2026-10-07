@@ -425,6 +425,19 @@ public class TerminalInputEncoderTests
         var encoder = new TerminalInputEncoder();
         Assert.Null(encoder.Encode(TerminalKey.Unknown, TerminalKeyModifiers.None));
     }
+
+    [Fact]
+    public void Encode_ModifyOtherKeysFallback_EmitsXtermSequence()
+    {
+        var encoder = new TerminalInputEncoder();
+        // Ctrl+, has no legacy control encoding; without a level it stays unsupported.
+        Assert.Null(encoder.Encode(TerminalKey.Comma, TerminalKeyModifiers.Control));
+        Assert.Equal("\x1b[27;5;44~", Encoding.ASCII.GetString(encoder.Encode(
+            TerminalKey.Comma, TerminalKeyModifiers.Control, modifyOtherKeysLevel: 1)!));
+        // Legacy Ctrl+letter keeps its control byte even when a level is negotiated.
+        Assert.Equal("\x17", Encoding.ASCII.GetString(encoder.Encode(
+            TerminalKey.W, TerminalKeyModifiers.Control, modifyOtherKeysLevel: 2)!));
+    }
 }
 
 internal static class TerminalInputEncoderTestExtensions
@@ -434,10 +447,11 @@ internal static class TerminalInputEncoderTestExtensions
         TerminalKey key,
         TerminalKeyModifiers modifiers,
         bool keypadApplicationMode = false,
-        bool applicationCursorKeys = false)
+        bool applicationCursorKeys = false,
+        int modifyOtherKeysLevel = 0)
     {
         Span<byte> buffer = stackalloc byte[64];
-        int length = encoder.Encode(key, modifiers, buffer, keypadApplicationMode, applicationCursorKeys);
+        int length = encoder.Encode(key, modifiers, buffer, keypadApplicationMode, applicationCursorKeys, modifyOtherKeysLevel);
         return length == 0 ? null : buffer[..length].ToArray();
     }
 

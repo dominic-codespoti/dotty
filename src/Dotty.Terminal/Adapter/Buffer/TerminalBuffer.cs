@@ -755,6 +755,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         MarkAllRowsDirty();
     }
 
+    public bool OriginMode => _originMode;
+
     public void MoveCursorBy(int dRow, int dCol)
     {
         int newRow = _cursor.Row + dRow;
@@ -1079,6 +1081,12 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         }
         unchecked { _globalGeneration += (ulong)Rows; }
     }
+
+    /// <summary>
+    /// Invalidates cached row composition after a palette change (OSC 4/10/11).
+    /// Cell content is unchanged; only resolved colors differ.
+    /// </summary>
+    public void InvalidateRowsForPaletteChange() => MarkAllRowsDirty();
 
 
     /// <summary>

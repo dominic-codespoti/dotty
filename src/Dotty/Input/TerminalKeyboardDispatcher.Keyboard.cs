@@ -217,7 +217,8 @@ public sealed partial class TerminalKeyboardDispatcher
 
         int length = SilkKeyMapper.Encode(key, _host.Ctrl, _host.Shift, _host.Alt,
             tab.Session.Adapter.KeypadApplicationMode, bytes, super: _host.Super,
-            applicationCursorKeys: tab.Session.Adapter.ApplicationCursorKeysEnabled);
+            applicationCursorKeys: tab.Session.Adapter.ApplicationCursorKeysEnabled,
+            modifyOtherKeysLevel: tab.Session.Adapter.ModifyOtherKeysLevel);
         if (length != 0)
             _host.WriteInput(tab, bytes[..length]);
     }

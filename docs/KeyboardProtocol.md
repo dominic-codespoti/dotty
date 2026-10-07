@@ -11,7 +11,7 @@ Dotty accepts Kitty keyboard negotiation in the CSI `=`, `>`, `<`, and `?` forms
 
 Supported flags are 1 (disambiguate keys), 2 (report press/repeat/release event types), 4 (report shifted/base alternate key data when available), 8 (report all keys as escape sequences), and 16 (associate committed text with encoded press/repeat events). Kitty fields are emitted in key-code, modifier/phase, then text order; associated text is not repeated on key release. Unselected ordinary text remains UTF-8 text input; unselected keys continue using legacy terminal sequences. Shifted-layout text is reported when known, while the physical key's base-layout codepoint is reported independently when it differs from the primary codepoint.
 Committed scalars without a physical-key association use key code 0 and an empty modifier field (for example, `CSI 0;;229u`); this also preserves additional scalars committed by one physical key. C0 and C1 controls are not emitted as associated text codepoints.
-Unsupported DCS strings are consumed through ST or canceled by CAN/SUB without being displayed; Dotty does not implement XTGETTCAP capability replies.
+XTGETTCAP (`DCS + q <hex> ST`) answers `TN`, `Co`, `RGB`, and `kitty-keyboard`; unknown keys get no reply so applications fall back instead of trusting an unimplemented claim.
 
 Native GLFW key callbacks preserve physical key identity and scancode, and native action 1/2/0 drives press/repeat/release without software key-repeat timers. Committed Unicode callbacks preserve each delivered scalar, including supplementary scalars; this does not implement full IME composition or preedit text. GLFW-provided Caps Lock and Num Lock state is encoded as Kitty modifier bits 64 and 128. Key bindings and Dotty UI shortcuts consume their keys before terminal encoding, including the matching release. Committed text is associated with the most recently active held physical key where possible.
 
@@ -28,3 +28,9 @@ This keeps DA2 identity replies separate from Kitty keyboard capability negotiat
 ## Compatibility behavior
 
 With no Kitty flags enabled, key presses retain xterm-compatible legacy encoding and plain committed text remains UTF-8. The F25 key maps to Kitty codepoint 57388 and legacy `CSI 46~`. Existing application cursor, keypad application, focus-reporting, and mouse modes remain independent. Applications can probe the actual running terminal with `CSI ? u` and DA requests; a probe must read replies from the PTY rather than infer support from the executable name.
+
+## Mode queries and modifyOtherKeys
+
+DECRQM (`CSI ? Ps $ p` private, `CSI Ps $ p` ANSI) reports `1` (set) or `2` (reset) for modes Dotty tracks — DECCKM 1, DECOM 6, DECAWM 7 (ANSI form), DECTCEM 25, mouse 1000/1002/1003/1006, focus 1004, alt-screen 1049, bracketed paste 2004, synchronized update 2026 — and `0` (not recognized) for everything else. DA3 (`CSI = c`) stays intentionally silent.
+
+XTerm modifyOtherKeys (`CSI > 4 ; Pv m`, levels 0-2) is negotiated per session and reset by RIS. Levels 1/2 add a `CSI 27 ; mod ; code ~` fallback for Ctrl+key combinations with no legacy control encoding; every combination that already has a legacy encoding keeps it.

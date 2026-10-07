@@ -48,6 +48,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public MouseMode CurrentMouseMode { get; private set; } = MouseMode.None;
     public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
     public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
+    public int ModifyOtherKeysLevel { get; private set; }
 
     public TerminalAdapter(int rows = 24, int columns = 80, int scrollbackCapacity = 10000, TimeProvider? timeProvider = null)
     {
@@ -58,6 +59,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public event Action<string>? RenderRequested;
     public event Action<string>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
+    public event Action? PaletteChanged;
     public event Action? Bell;
 
     public void OnHyperlink(string uri) => _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri);
@@ -238,6 +240,10 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
             TitleChanged?.Invoke(_windowTitle);
             RequestRender();
         }
+        else if (code == 4)
+        {
+            HandleOscPalette(payload);
+        }
         else if (code == 8)
         {
             int semiIdx = payload.IndexOf(';');
@@ -265,14 +271,207 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         }
         else if (code == 10 || code == 11 || code == 12)
         {
-            var hex = code switch
-            {
-                10 => _defaultFgHex,
-                11 => _defaultBgHex,
-                _ => "#FFFFFF",
-            };
-            SendColorReply(code, hex.AsSpan());
+            HandleOscDynamicColor(code, payload);
         }
+    }
+
+    // OSC 4 ; index ; spec pairs: set entries (remapping existing styles and
+    // firing AnsiPaletteChanged) or query with '?' (replying the live entry).
+    // Indices 0-15 target the ANSI palette; 16-255 target the xterm ramp.
+    private void HandleOscPalette(ReadOnlySpan<char> payload)
+    {
+        int pos = 0;
+        while (pos < payload.Length)
+        {
+            int semi = payload[pos..].IndexOf(';');
+            ReadOnlySpan<char> indexField = semi < 0 ? payload[pos..] : payload.Slice(pos, semi);
+            pos = semi < 0 ? payload.Length : pos + semi + 1;
+            int colorSemi = payload[pos..].IndexOf(';');
+            ReadOnlySpan<char> colorField = colorSemi < 0 ? payload[pos..] : payload.Slice(pos, colorSemi);
+            pos = colorSemi < 0 ? payload.Length : pos + colorSemi + 1;
+            if (!TryParsePaletteIndex(indexField, out int index))
+                return;
+            if (colorField.Length == 1 && colorField[0] == '?')
+            {
+                SendColorReply(4, ToPaletteQuery(index).AsSpan());
+                continue;
+            }
+            if (!TryParseColorSpec(colorField, out uint argb))
+                continue;
+            SetPaletteEntry(index, argb);
+        }
+    }
+
+    private void SetPaletteEntry(int index, uint argb)
+    {
+        if (index is >= 0 and < 16)
+        {
+            uint[] palette = SgrColorArgb.GetAnsiPaletteSnapshot();
+            if (palette[index] == argb)
+                return;
+            palette[index] = argb;
+            ApplyAnsiPalette(palette);
+            return;
+        }
+        SgrColorArgb.SetExtendedPalette(index, argb);
+        _buffer.InvalidateRowsForPaletteChange();
+        PaletteChanged?.Invoke();
+        RequestRender();
+    }
+    private static string ToPaletteQuery(int index)
+    {
+        uint argb = index is >= 0 and < 16
+            ? SgrColorArgb.GetAnsiPaletteSnapshot()[index]
+            : SgrColorArgb.From256(index).Argb;
+        return $"#{argb & 0xFFFFFF:X6}";
+    }
+
+    private static bool TryParsePaletteIndex(ReadOnlySpan<char> field, out int index)
+    {
+        index = 0;
+        if (field.IsEmpty || field.Length > 3)
+            return false;
+        for (int i = 0; i < field.Length; i++)
+        {
+            if (field[i] < '0' || field[i] > '9')
+                return false;
+            index = index * 10 + (field[i] - '0');
+        }
+        return index is >= 0 and < 256;
+    }
+
+    // Parses rgb:RR/GG/BB, #RGB, #RRGGBB. Rejects anything else so a
+    // malformed spec skips one entry instead of corrupting the palette.
+    private static bool TryParseColorSpec(ReadOnlySpan<char> spec, out uint argb)
+    {
+        argb = 0;
+        if (spec.StartsWith("rgb:", StringComparison.OrdinalIgnoreCase))
+        {
+            ReadOnlySpan<char> body = spec.Slice(4);
+            int first = body.IndexOf('/');
+            int second = body[(first + 1)..].IndexOf('/');
+            if (first <= 0 || second <= 0)
+                return false;
+            second += first + 1;
+            if (body[(second + 1)..].IndexOf('/') >= 0)
+                return false;
+            if (!TryParseHexComponent(body[..first], out byte r) ||
+                !TryParseHexComponent(body.Slice(first + 1, second - first - 1), out byte g) ||
+                !TryParseHexComponent(body[(second + 1)..], out byte b))
+                return false;
+            argb = 0xFF000000u | ((uint)r << 16) | ((uint)g << 8) | b;
+            return true;
+        }
+        ReadOnlySpan<char> hex = spec;
+        if (hex.Length > 0 && hex[0] == '#')
+            hex = hex[1..];
+        if (hex.Length is not (3 or 6))
+            return false;
+        foreach (char c in hex)
+        {
+            if (!IsHexChar(c))
+                return false;
+        }
+        int stride = hex.Length / 3;
+        byte rByte = ExpandHex(hex[..stride]);
+        byte gByte = ExpandHex(hex.Slice(stride, stride));
+        byte bByte = ExpandHex(hex.Slice(2 * stride, stride));
+        argb = 0xFF000000u | ((uint)rByte << 16) | ((uint)gByte << 8) | bByte;
+        return true;
+    }
+
+    private static bool TryParseHexComponent(ReadOnlySpan<char> component, out byte value)
+    {
+        value = 0;
+        if (component.IsEmpty || component.Length > 4)
+            return false;
+        foreach (char c in component)
+        {
+            if (!IsHexChar(c))
+                return false;
+        }
+        // Scale 1-4 hex digits to 8 bits (xterm: replicate top digit down).
+        uint parsed = 0;
+        for (int i = 0; i < component.Length; i++)
+            parsed = (parsed << 4) | (uint)HexNibble(component[i]);
+        uint scaled = component.Length switch
+        {
+            1 => (parsed << 4) | parsed,
+            2 => parsed,
+            3 => parsed >> 4,
+            _ => parsed >> 8,
+        };
+        value = (byte)(scaled & 0xFF);
+        return true;
+    }
+
+    private static byte ExpandHex(ReadOnlySpan<char> digits)
+    {
+        uint parsed = 0;
+        for (int i = 0; i < digits.Length; i++)
+            parsed = (parsed << 4) | (uint)HexNibble(digits[i]);
+        if (digits.Length == 1)
+            return (byte)((parsed << 4) | parsed);
+        if (digits.Length == 2)
+            return (byte)parsed;
+        return (byte)(parsed >> 4);
+    }
+
+    private static bool IsHexChar(char c) =>
+        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+
+    private static int HexNibble(char c) => c switch
+    {
+        >= '0' and <= '9' => c - '0',
+        >= 'a' and <= 'f' => c - 'a' + 10,
+        _ => c - 'A' + 10,
+    };
+
+    // OSC 10/11/12: a '?' payload queries the live color; any other payload
+    // sets the default and reports it back, matching xterm behavior.
+    private void HandleOscDynamicColor(int code, ReadOnlySpan<char> payload)
+    {
+        if (payload.Length == 1 && payload[0] == '?')
+        {
+            SendColorReply(code, CurrentDynamicColor(code).AsSpan());
+            return;
+        }
+        if (!TryParseColorSpec(payload, out uint argb))
+        {
+            SendColorReply(code, CurrentDynamicColor(code).AsSpan());
+            return;
+        }
+        string hex = $"#{argb & 0xFFFFFF:X6}";
+        if (code == 10)
+            _defaultFgHex = hex;
+        else if (code == 11)
+            _defaultBgHex = hex;
+        SendColorReply(code, hex.AsSpan());
+        if (code is 10 or 11)
+        {
+            _buffer.InvalidateRowsForPaletteChange();
+            PaletteChanged?.Invoke();
+            RequestRender();
+        }
+    }
+
+    private string CurrentDynamicColor(int code) => code switch
+    {
+        10 => _defaultFgHex,
+        11 => _defaultBgHex,
+        _ => "#FFFFFF",
+    };
+
+    // Applies a full 16-entry palette through the theme path so existing
+    // styles remap and the change event fires for host invalidation.
+    private void ApplyAnsiPalette(uint[] palette)
+    {
+        uint[] previous = SgrColorArgb.GetAnsiPaletteSnapshot();
+        SgrColorArgb.SetAnsiPalette(palette);
+        _buffer.StyleSet.RemapAnsiPalette(previous, palette);
+        _buffer.InvalidateRowsForPaletteChange();
+        PaletteChanged?.Invoke();
+        RequestRender();
     }
 
     public void OnSaveCursor()
@@ -561,6 +760,8 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         CursorShape = 0;
         KeypadApplicationMode = false;
         ApplicationCursorKeysEnabled = false;
+        ModifyOtherKeysLevel = 0;
+        SgrColorArgb.ResetExtendedPalette();
         ResetKittyKeyboardState();
         RequestRender();
     }
@@ -643,6 +844,124 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
                 break;
                 // DA3 (CSI = c) is not implemented; do not claim an identity/capability.
         }
+    }
+
+    public void OnRequestMode(int mode, bool isPrivate)
+    {
+        // DECRQM: 1=set, 2=reset, 3=permanently set, 4=permanently reset, 0=not recognized.
+        // Only modes Dotty actually tracks report set/reset; everything else is 0.
+        int state = (mode, isPrivate) switch
+        {
+            (1, true) => ApplicationCursorKeysEnabled ? 1 : 2, // DECCKM
+            (6, true) => _buffer.OriginMode ? 1 : 2, // DECOM
+            (7, false) => _buffer.AutoWrap ? 1 : 2, // DECAWM (ANSI form)
+            (25, true) => _buffer.CursorVisible ? 1 : 2, // DECTCEM
+            (1000, true) => CurrentMouseMode == MouseMode.Normal ? 1 : 2,
+            (1002, true) => CurrentMouseMode == MouseMode.ButtonEvent ? 1 : 2,
+            (1003, true) => CurrentMouseMode == MouseMode.AnyEvent ? 1 : 2,
+            (1004, true) => FocusReportingEnabled ? 1 : 2,
+            (1006, true) => CurrentMouseEncoding == MouseEncoding.SGR ? 1 : 2,
+            (1049, true) => _buffer.IsAlternateScreenActive ? 1 : 2,
+            (2004, true) => _buffer.BracketedPasteMode ? 1 : 2,
+            (2026, true) => SynchronizedUpdateActive ? 1 : 2,
+            _ => 0,
+        };
+        var handler = ReplyRequested;
+        if (handler is null)
+            return;
+        Span<char> reply = stackalloc char[32];
+        int length = 0;
+        if (isPrivate)
+        {
+            "\x1b[?".AsSpan().CopyTo(reply);
+            length = 3;
+        }
+        else
+        {
+            "\x1b[".AsSpan().CopyTo(reply);
+            length = 2;
+        }
+        mode.TryFormat(reply[length..], out int written);
+        length += written;
+        reply[length++] = ';';
+        state.TryFormat(reply[length..], out written);
+        length += written;
+        reply[length++] = '$';
+        reply[length++] = 'y';
+        handler(reply[..length]);
+    }
+
+    public void OnQueryCapability(string requestHex)
+    {
+        // XTGETTCAP: answer only capabilities Dotty actually implements.
+        // Unknown keys get no reply so applications fall back instead of
+        // trusting a claim this terminal cannot honor.
+        var handler = ReplyRequested;
+        if (handler is null || string.IsNullOrEmpty(requestHex))
+            return;
+        string? valueHex = DecodeCapabilityKey(requestHex) switch
+        {
+            "TN" => EncodeAsciiHex("dotty"),
+            "Co" => EncodeAsciiHex("256"),
+            "RGB" => EncodeAsciiHex("8/8/8"),
+            "kitty-keyboard" => EncodeAsciiHex(KittyKeyboardFlags.ToString()),
+            _ => null,
+        };
+        if (valueHex is null)
+            return;
+        int total = 5 + requestHex.Length + 1 + valueHex.Length + 2;
+        Span<char> reply = total <= 128 ? stackalloc char[128] : new char[total];
+        "\x1bP1$r".AsSpan().CopyTo(reply);
+        int length = 5;
+        requestHex.AsSpan().CopyTo(reply[length..]);
+        length += requestHex.Length;
+        reply[length++] = '=';
+        valueHex.AsSpan().CopyTo(reply[length..]);
+        length += valueHex.Length;
+        reply[length++] = '\x1b';
+        reply[length++] = '\\';
+        handler(reply[..length]);
+    }
+
+    public void OnSetModifyOtherKeys(int level)
+    {
+        ModifyOtherKeysLevel = level is >= 0 and <= 2 ? level : ModifyOtherKeysLevel;
+    }
+
+    private static string DecodeCapabilityKey(string requestHex)
+    {
+        if ((requestHex.Length & 1) != 0)
+            return string.Empty;
+        char[] chars = new char[requestHex.Length / 2];
+        for (int i = 0; i < chars.Length; i++)
+        {
+            int hi = HexValue(requestHex[2 * i]);
+            int lo = HexValue(requestHex[2 * i + 1]);
+            if (hi < 0 || lo < 0)
+                return string.Empty;
+            chars[i] = (char)((hi << 4) | lo);
+        }
+        return new string(chars);
+    }
+
+    private static int HexValue(char c) => c switch
+    {
+        >= '0' and <= '9' => c - '0',
+        >= 'a' and <= 'f' => c - 'a' + 10,
+        >= 'A' and <= 'F' => c - 'A' + 10,
+        _ => -1,
+    };
+
+    private static string EncodeAsciiHex(string value)
+    {
+        char[] hex = new char[value.Length * 2];
+        const string digits = "0123456789ABCDEF";
+        for (int i = 0; i < value.Length; i++)
+        {
+            hex[2 * i] = digits[(value[i] >> 4) & 0xF];
+            hex[2 * i + 1] = digits[value[i] & 0xF];
+        }
+        return new string(hex);
     }
 
     public void OnMouseEvent(int button, int col, int row, bool isPress)

@@ -105,6 +105,61 @@ public sealed class P0TerminalCompatibilityTests
     }
 
     [Fact]
+    public void Decrqm_ReportsSetResetAndUnrecognized()
+    {
+        var adapter = new TerminalAdapter(rows: 2, columns: 8);
+        var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
+        var replies = new List<string>();
+        adapter.ReplyRequested += reply => replies.Add(reply.ToString());
+
+        parser.Feed("\x1b[?1h"u8); // DECCKM set
+        parser.Feed("\x1b[?1$p"u8);
+        parser.Feed("\x1b[?6$p"u8); // DECOM reset
+        parser.Feed("\x1b[?2004$p"u8); // bracketed paste reset
+        parser.Feed("\x1b[?9999$p"u8); // unrecognized
+        parser.Feed("\x1b[7$p"u8); // DECAWM ANSI form, default set
+
+        Assert.Equal(new[]
+        {
+            "\x1b[?1;1$y",
+            "\x1b[?6;2$y",
+            "\x1b[?2004;2$y",
+            "\x1b[?9999;0$y",
+            "\x1b[7;1$y",
+        }, replies);
+    }
+
+    [Fact]
+    public void Xtgettcap_AnswersKnownKeysAndIgnoresUnknown()
+    {
+        var adapter = new TerminalAdapter(rows: 2, columns: 8);
+        var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
+        var replies = new List<string>();
+        adapter.ReplyRequested += reply => replies.Add(reply.ToString());
+
+        parser.Feed("\x1bP+q544E\x1b\\"u8); // TN
+        parser.Feed("\x1bP+qQuestions\x1b\\"u8); // unknown key, no reply
+
+        Assert.Single(replies);
+        Assert.Equal("\x1bP1$r544E=646F747479\x1b\\", replies[0]);
+    }
+
+    [Fact]
+    public void ModifyOtherKeys_NegotiatesAndEncodesFallback()
+    {
+        var adapter = new TerminalAdapter(rows: 2, columns: 8);
+        var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
+        parser.Feed("\x1b[>4;1m"u8);
+        Assert.Equal(1, adapter.ModifyOtherKeysLevel);
+        parser.Feed("\x1b[>4;0m"u8);
+        Assert.Equal(0, adapter.ModifyOtherKeysLevel);
+
+        parser.Feed("\u001bc"u8); // RIS resets the level
+        parser.Feed("\x1b[>4;2m"u8);
+        Assert.Equal(2, adapter.ModifyOtherKeysLevel);
+    }
+
+    [Fact]
     public void SuperModifierUsesMetaModifierAndUnknownKeyIsUnsupported()
     {
         Assert.Equal("\x1b[1;9A", EncodeLegacy(SilkKey.Up, super: true));

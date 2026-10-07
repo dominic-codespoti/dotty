@@ -25,12 +25,12 @@ Both Ghostty and Wezterm are written in low-level systems programming languages 
 
 ## 2. Rendering Mechanisms & GPU Acceleration
 
-*   **Dotty:** Uses a Silk.NET/GLFW host with an OpenGL 3.3 core renderer. SkiaSharp and the shared glyph-atlas/shaping pipeline prepare glyph coverage; `TerminalSceneComposer` emits instanced cell and chrome quads.
+*   **Dotty:** Uses a Silk.NET/GLFW host with an OpenGL 3.3 core renderer. SkiaSharp rasterizes individual graphemes into the shared glyph atlas; `TerminalSceneComposer` emits instanced cell and chrome quads.
 *   **Ghostty:** Features a custom, highly optimized GPU renderer (Metal/Vulkan/OpenGL) designed for absolute minimum latency (sub-millisecond frame dispatch) and custom font rasterization. 
 *   **Wezterm:** Uses a native OpenGL/EGL hardware-accelerated rendering pipeline. It heavily supports complex text shaping (Harfbuzz), ligatures, and fallback fonts.
 
 **Where Dotty Differs/Misses:**
-*   **Complex Text Layout (CTL):** Dotty now supports programming ligatures via HarfBuzz (`TextShaper`/`ShapedRun`) for patterns like `=>`, `!=`, `::`. Arabic/Indic script shaping and color emoji fallback remain areas for improvement compared to Wezterm and Ghostty.
+*   **Complex Text Layout (CTL):** Dotty does not support OpenType features or programming ligatures; the renderer draws one grapheme per terminal cell. Arabic/Indic shaping and cross-cell ligatures are not available.
 *   **Underline Styles:** Dotty now supports undercurl (wavy), dotted, and dashed underline styles in addition to standard underline — matching the rendering capabilities of Wezterm and Ghostty for editor diagnostics.
 *   **Rounded Corners:** Dotty's OpenGL chrome shader computes rounded terminal-frame geometry directly; this is a modern terminal-window feature also present in Ghostty and kitty.
 *   **Direct GPU Control:** Dotty's current host submits directly to an OpenGL 3.3 context through Silk.NET. Ghostty and Wezterm interface even closer to their platform GPU APIs, allowing specialized shaders and tighter platform-specific latency control.
@@ -63,13 +63,13 @@ If Dotty aims to compete or find a specific niche against these giants, it shoul
 
 | Date | Change |
 |------|--------|
-| 2026-06-17 | Updated CTL section: ligatures via HarfBuzz now implemented; added underline styles and rounded corners to comparison |
-| 2026-06-15 | Updated roadmap: ligature item re-scoped to emoji/script shaping |
+| 2026-06-17 | Updated underline styles and rounded-corner comparison |
+| 2026-06-15 | Updated roadmap wording |
 
 ---
 
 1.  **Exploiting the .NET Ecosystem:** Offer deep integrations for .NET developers (e.g., built-in structured logging parsing, intelligent C# repl integrations, MSBuild hot-links).
 2.  **Native host polish:** Continue improving platform-specific graphics, input, and accessibility behavior while preserving the shared terminal core.
-3.  **Emoji & Script Shaping:** Build on the existing HarfBuzz integration to support color emoji and complex script (Arabic/Indic) shaping, further closing the visual gap with Wezterm.
+3.  **Emoji & Script Shaping:** Improve color emoji rendering; complex-script shaping is not currently supported.
 
 *Last updated: 2026-06-17*

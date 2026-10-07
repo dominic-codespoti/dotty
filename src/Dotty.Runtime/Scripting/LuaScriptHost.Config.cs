@@ -36,7 +36,6 @@ public sealed partial class LuaScriptHost
         ["font.family"] = new(ConfigValueKind.String, c => c.Font.Family, (c, v) => c.Font.Family = (string)v!),
         ["font.size"] = new(ConfigValueKind.Number, c => c.Font.Size, (c, v) => c.Font.Size = (double)v!),
         ["font.line_height"] = new(ConfigValueKind.Number, c => c.Font.LineHeight, (c, v) => c.Font.LineHeight = (double)v!),
-        ["font.features"] = new(ConfigValueKind.StringList, c => c.Font.Features, (c, v) => c.Font.Features = (System.Collections.Generic.List<string>)v!),
         ["font.symbol_map"] = new(ConfigValueKind.StringList, c => c.Font.SymbolMap, (c, v) => c.Font.SymbolMap = (System.Collections.Generic.List<string>)v!),
         ["window.opacity"] = new(ConfigValueKind.Number, c => c.Window.Opacity, (c, v) => c.Window.Opacity = (double)v!),
         ["window.decorations"] = new(ConfigValueKind.String, c => c.Window.Decorations, (c, v) => c.Window.Decorations = (string)v!),

@@ -163,7 +163,16 @@ public sealed class GlyphAtlas : IDisposable
     public FontFallbackChain? FallbackChain
     {
         get => Volatile.Read(ref _fallbackChain);
-        set => Volatile.Write(ref _fallbackChain, value);
+        set
+        {
+            var previous = Interlocked.Exchange(ref _fallbackChain, value);
+            if (ReferenceEquals(previous, value))
+                return;
+            if (previous != null)
+                previous.SymbolMapChanged -= OnSymbolMapChanged;
+            if (value != null)
+                value.SymbolMapChanged += OnSymbolMapChanged;
+        }
     }
     public int Width => Volatile.Read(ref _width);
     public int Height => Volatile.Read(ref _height);
@@ -298,7 +307,7 @@ public sealed class GlyphAtlas : IDisposable
                 MathF.Ceiling(-metrics.Ascent) + 1f +
                 MathF.Ceiling(metrics.Descent) + 1f);
         }
-        _fallbackChain = fallbackChain;
+        FallbackChain = fallbackChain;
         int size = Math.Clamp(initialSize, 64, MaxAtlasSize);
         _bitmap = CreateAtlasBitmap(size);
         _width = size;
@@ -414,6 +423,40 @@ public sealed class GlyphAtlas : IDisposable
         }
     }
 
+    private void OnSymbolMapChanged(object? sender, EventArgs args)
+    {
+        lock (_lock)
+        {
+            if (_disposed)
+                return;
+            _map.Clear();
+            _publishedMap = GlyphMapSnapshot.Empty;
+            _glyphMapDirty = false;
+            _shelves.Clear();
+            _nextShelfY = 0;
+            _canvas.Clear(SKColors.Transparent);
+            _dirtyRegions.Clear();
+            _contentVersion++;
+            _fullUploadRequired = true;
+            _colorShelves.Clear();
+            _colorNextShelfY = 0;
+            _colorDirtyRegions.Clear();
+            if (_colorBitmap != null)
+            {
+                _colorBitmap.Erase(SKColors.Transparent);
+                _colorContentVersion++;
+                _colorFullUploadRequired = true;
+            }
+            _hasFallbackGlyph = false;
+            var fallbackKey = new GlyphKey(FallbackGrapheme, _typeface, _textSize, bold: false);
+            if (EnsureGlyph(fallbackKey, out var fallbackGlyph))
+            {
+                _fallbackGlyph = fallbackGlyph;
+                Volatile.Write(ref _hasFallbackGlyph, true);
+            }
+            PublishPendingGlyphs();
+        }
+    }
     /// <summary>
     /// Publishes all glyphs committed since the previous publication in one
     /// copy-on-write snapshot. Call after a frame/batch has ensured its glyphs.
@@ -906,8 +949,9 @@ public sealed class GlyphAtlas : IDisposable
     {
         lock (_lock)
         {
-            if (_disposed) return;
             _disposed = true;
+            if (_fallbackChain != null)
+                _fallbackChain.SymbolMapChanged -= OnSymbolMapChanged;
             _canvas.Dispose();
             _bitmap.Dispose();
             _colorCanvas?.Dispose();

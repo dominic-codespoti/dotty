@@ -58,18 +58,16 @@ public class LuaScriptingTests : IDisposable
         Assert.False(_config.Clipboard.AllowOsc52Write);
     }
 
-    /// <summary>Verifies Lua can set font features, symbol map, and auto themes.</summary>
+    /// <summary>Verifies Lua can set the symbol map and auto themes.</summary>
     [Fact]
-    public void LuaConfig_SetsFontFeaturesSymbolMapAndAutoTheme()
+    public void LuaConfig_SetsSymbolMapAndAutoTheme()
     {
         Assert.True(_host.ExecuteString(@"
             local d=require('dotty');
-            d.config.font.features={'calt','liga=0'};
             d.config.font.symbol_map={'U+2500-U+257F: BoxFont'};
             d.config.theme_auto=true; d.config.theme_dark='OneDark'; d.config.theme_light='OneLight';
-            assert(d.config.font.features[1]=='calt' and d.config.font.symbol_map[1]=='U+2500-U+257F: BoxFont');
+            assert(d.config.font.symbol_map[1]=='U+2500-U+257F: BoxFont');
             assert(d.config.theme_auto==true and d.config.theme_dark=='OneDark' and d.config.theme_light=='OneLight')"));
-        Assert.Equal(new[] { "calt", "liga=0" }, _config.Font.Features);
         Assert.Equal(new[] { "U+2500-U+257F: BoxFont" }, _config.Font.SymbolMap);
         Assert.True(_config.ThemeAuto);
         Assert.Equal("OneDark", _config.ThemeDark);

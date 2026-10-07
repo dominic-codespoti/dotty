@@ -70,19 +70,10 @@ public sealed class FontUserConfig
     [JsonPropertyName("lineHeight")]
     public double LineHeight { get; set; } = 1.25;
 
-    /// <summary>
-    /// OpenType feature tags applied when shaping (e.g. "calt", "liga=0", "ss01").
-    /// Entries that fail to parse are ignored.
-    /// </summary>
-    [JsonPropertyName("features")]
-    public System.Collections.Generic.List<string> Features { get; set; } = new();
-
-    /// <summary>
-    /// Per-range font overrides ("U+2500-U+257F: Symbols Nerd Font Mono").
-    /// Checked before the generic fallback chain during glyph resolution.
-    /// </summary>
+    /// <summary>Per-range font overrides, checked before the generic fallback chain.</summary>
     [JsonPropertyName("symbolMap")]
     public System.Collections.Generic.List<string> SymbolMap { get; set; } = new();
+
 }
 
 public sealed class WindowUserConfig

@@ -1,137 +1,141 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using SkiaSharp;
 
 namespace Dotty.Rendering.Gpu;
 
-/// <summary>
-/// Parses symbol-map entries ("U+2500-U+257F: Family, U+E000: Other") into
-/// codepoint ranges with preferred families. Malformed entries are dropped.
-/// Resolution order: explicit range match first, then the generic chain.
-/// </summary>
+/// <summary>Per-range font-family preferences. The first installed family wins.</summary>
 public sealed class SymbolMap
 {
-    public readonly struct Entry
+    public readonly struct Entry : IEquatable<Entry>
     {
         public readonly int Start;
         public readonly int End;
-        public readonly string Family;
+        public readonly IReadOnlyList<string> Families;
+        public string Family => Families.Count == 0 ? string.Empty : Families[0];
 
-        public Entry(int start, int end, string family)
+        public Entry(int start, int end, IEnumerable<string> families)
         {
             Start = start;
             End = end;
-            Family = family;
+            Families = Array.AsReadOnly(new List<string>(families).ToArray());
+        }
+
+        public bool Equals(Entry other) => Start == other.Start && End == other.End && Families.SequenceEqual(other.Families, StringComparer.OrdinalIgnoreCase);
+        public override bool Equals(object? obj) => obj is Entry other && Equals(other);
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(Start);
+            hash.Add(End);
+            foreach (string family in Families)
+                hash.Add(family, StringComparer.OrdinalIgnoreCase);
+            return hash.ToHashCode();
         }
     }
 
     private readonly List<Entry> _entries = new();
-    private readonly Dictionary<string, SKTypeface> _familyCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SKTypeface?> _familyCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
 
-    public int Count
-    {
-        get { lock (_lock) return _entries.Count; }
-    }
+    public int Count { get { lock (_lock) return _entries.Count; } }
 
     public static SymbolMap Parse(IEnumerable<string>? lines)
     {
         var map = new SymbolMap();
-        if (lines == null)
-            return map;
-        foreach (string line in lines)
-            map.AddLine(line);
+        if (lines != null)
+            foreach (string line in lines)
+                map.AddLine(line);
         return map;
     }
 
     public void AddLine(string? line)
     {
-        if (!TryParseLine(line, out int start, out int end, out string? family) || family == null)
+        if (!TryParseLine(line, out int start, out int end, out string[] families))
             return;
         lock (_lock)
-            _entries.Add(new Entry(start, end, family));
+            _entries.Add(new Entry(start, end, families));
+    }
+
+    public bool HasSameEntries(SymbolMap? other)
+    {
+        if (ReferenceEquals(this, other)) return true;
+        if (other == null) return false;
+        Entry[] left, right;
+        lock (_lock) left = _entries.ToArray();
+        lock (other._lock) right = other._entries.ToArray();
+        return left.SequenceEqual(right);
     }
 
     public bool TryResolveFamily(int codepoint, out string? family)
     {
         lock (_lock)
-        {
             foreach (var entry in _entries)
-            {
                 if (codepoint >= entry.Start && codepoint <= entry.End)
                 {
                     family = entry.Family;
                     return true;
                 }
-            }
-        }
         family = null;
         return false;
     }
 
     public SKTypeface? ResolveTypeface(int codepoint)
     {
-        if (!TryResolveFamily(codepoint, out string? family) || string.IsNullOrEmpty(family))
-            return null;
+        Entry? match = null;
         lock (_lock)
+            foreach (var entry in _entries)
+                if (codepoint >= entry.Start && codepoint <= entry.End)
+                {
+                    match = entry;
+                    break;
+                }
+        if (match is not Entry matched) return null;
+
+        foreach (string family in matched.Families)
         {
-            if (_familyCache.TryGetValue(family, out var cached))
-                return cached;
-        }
-        SKTypeface? matched = null;
-        try
-        {
-            matched = SKFontManager.Default.MatchFamily(family);
-        }
-        catch
-        {
-            return null;
-        }
-        if (matched == null)
-            return null;
-        lock (_lock)
-        {
-            if (_familyCache.TryGetValue(family, out var existing))
+            lock (_lock)
             {
-                if (!ReferenceEquals(existing, matched))
-                    matched.Dispose();
-                return existing;
+                if (_familyCache.TryGetValue(family, out var cached))
+                {
+                    if (cached != null) return cached;
+                    continue;
+                }
+                SKTypeface? typeface;
+                try { typeface = SKFontManager.Default.MatchFamily(family); }
+                catch { typeface = null; }
+                _familyCache.Add(family, typeface);
+                if (typeface != null) return typeface;
             }
-            _familyCache[family] = matched;
-            return matched;
         }
+        return null;
     }
 
     public static bool TryParseLine(string? line, out int start, out int end, out string? family)
     {
+        bool ok = TryParseLine(line, out start, out end, out string[] families);
+        family = ok ? families[0] : null;
+        return ok;
+    }
+
+    public static bool TryParseLine(string? line, out int start, out int end, out string[] families)
+    {
         start = end = 0;
-        family = null;
-        if (string.IsNullOrWhiteSpace(line))
-            return false;
+        families = Array.Empty<string>();
+        if (string.IsNullOrWhiteSpace(line)) return false;
         int colon = line.IndexOf(':');
-        if (colon <= 0)
-            return false;
+        if (colon <= 0) return false;
         string range = line.Substring(0, colon).Trim();
-        string name = line.Substring(colon + 1).Trim().Trim(',', ';');
-        if (name.Length == 0)
-            return false;
-        // Allow comma-separated families; the first matchable wins at resolve time.
-        int comma = name.IndexOf(',');
-        if (comma >= 0)
-            name = name.Substring(0, comma).Trim();
-        if (name.Length == 0)
-            return false;
+        string familyList = line.Substring(colon + 1).Trim().Trim(',', ';');
+        string[] names = familyList.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (names.Length == 0) return false;
         int dash = range.IndexOf('-');
         string first = dash < 0 ? range : range.Substring(0, dash).Trim();
         string last = dash < 0 ? range : range.Substring(dash + 1).Trim();
-        if (!TryParseCodepoint(first, out start))
+        if (!TryParseCodepoint(first, out start) || !TryParseCodepoint(last, out end) || start > end)
             return false;
-        end = start;
-        if (dash >= 0 && !TryParseCodepoint(last, out end))
-            return false;
-        if (end < start || start < 0 || end > 0x10FFFF)
-            return false;
-        family = name;
+        families = names;
         return true;
     }
 
@@ -139,20 +143,9 @@ public sealed class SymbolMap
     {
         codepoint = 0;
         text = text.Trim();
-        if (text.StartsWith("U+", StringComparison.OrdinalIgnoreCase))
-            text = text.Substring(2);
-        else if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            text = text.Substring(2);
-        if (text.Length == 0 || text.Length > 6)
-            return false;
-        try
-        {
-            codepoint = Convert.ToInt32(text, 16);
-            return codepoint is >= 0 and <= 0x10FFFF;
-        }
-        catch
-        {
-            return false;
-        }
+        if (text.StartsWith("U+", StringComparison.OrdinalIgnoreCase)) text = text.Substring(2);
+        else if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) text = text.Substring(2);
+        return int.TryParse(text, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out codepoint)
+            && codepoint >= 0 && codepoint <= 0x10FFFF;
     }
 }

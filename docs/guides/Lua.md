@@ -34,9 +34,8 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `font.family` | string | `"JetBrainsMono Nerd Font Mono, JetBrains Mono, Fira Code, Cascadia Code, monospace"` |
 | `font.size` | number | `14` |
 | `font.line_height` | number | `1.25` |
-| `font.features` | array of strings | empty |
 | `font.symbol_map` | array of strings | empty |
-
+`font.symbol_map` entries use `U+START-END: Preferred Font, Fallback Font`; the first installed family that contains the glyph wins. OpenType features and ligatures are not supported: rendering is one grapheme per terminal cell.
 Nested reads and writes work directly. `dotty.config.apply_table(table)` and its alias `dotty.config.apply(table)` apply recognized values recursively. Assigning a table to a nested section applies its fields; assigning a table to `keybindings` replaces the map. Reads of `keybindings` return a copy. Unknown fields are ignored.
 
 ```lua

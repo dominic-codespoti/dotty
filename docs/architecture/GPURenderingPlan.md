@@ -94,9 +94,9 @@ The implementation lives in `src/Dotty.Rendering.Gpu/GlyphAtlas.cs` and
   `QuadFrameBuilder`; a full atlas uses the reserved fallback glyph.
 - Atlas growth is capped at 4096² A8 pixels and service-level retention is
   reference-counted and budgeted.
-- `EnsureGlyphShaped` can rasterize a pre-shaped `SKTextBlob`, preserving glyph
-  positions for ligature-aware callers even though the cell builder currently
-  resolves individual graphemes.
+- `EnsureGlyphShaped` accepts externally supplied `SKTextBlob` data, but Dotty
+  has no text-shaping pipeline or callers for it. The terminal renderer draws one
+  grapheme per cell; OpenType features and programming ligatures are unsupported.
 
 The atlas exposes its backing bitmap only under its lock; the OpenGL texture
 manager uploads a stable version and refreshes after atlas growth.
@@ -182,7 +182,7 @@ framework-specific presentation step is implied.
 | Use A8 coverage keyed without foreground color | `GlyphAtlas` key and packing contract |
 | Keep scene composition separate from OpenGL submission | `TerminalSceneComposer` produces host-neutral instances |
 | Capture visible rows before CPU/GPU work | `RenderSnapshot.CaptureVisible` and `IRenderSource` contract |
-| Keep shaped-blob rasterization available at the atlas boundary | `EnsureGlyphShaped` preserves pre-shaped glyph positions |
+| OpenType shaping and ligatures | Not supported; terminal rendering remains one grapheme per cell |
 
 ## 9. Open questions
 

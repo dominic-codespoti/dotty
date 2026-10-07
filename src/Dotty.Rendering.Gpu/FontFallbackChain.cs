@@ -70,13 +70,27 @@ public sealed class FontFallbackChain : IDisposable
 
     /// <summary>
     /// Optional per-range overrides checked before the generic chain.
-    /// Replacing the map clears resolution caches.
+    /// Replacing the map clears resolution caches and notifies atlas owners when entries change.
     /// </summary>
     public SymbolMap? SymbolMap
     {
         get { lock (_lock) return _symbolMap; }
-        set { lock (_lock) { _symbolMap = value; _resolutionCache.Clear(); _singleRuneResolutionCache.Clear(); } }
+        set
+        {
+            bool changed;
+            lock (_lock)
+            {
+                changed = !(_symbolMap?.HasSameEntries(value) ?? value == null);
+                if (!changed)
+                    return;
+                _symbolMap = value;
+                _resolutionCache.Clear();
+                _singleRuneResolutionCache.Clear();
+            }
+            SymbolMapChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
+    public event EventHandler? SymbolMapChanged;
     private SymbolMap? _symbolMap;
     /// <summary>
     /// Gets the primary (index 0) typeface in the chain.

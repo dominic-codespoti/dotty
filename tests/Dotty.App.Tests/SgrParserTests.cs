@@ -1,3 +1,4 @@
+using System;
 using Dotty.Terminal.Adapter;
 using Xunit;
 
@@ -5,26 +6,29 @@ namespace Dotty.App.Tests;
 
 public class SgrParserTests
 {
+    private static TerminalPalette Palette() => new();
+
     [Fact]
     public void EmptyParameters_ResetToDefault()
     {
-        var current = new CellAttributes { Bold = true, Foreground = SgrColorArgb.FromAnsiCode(37) };
-        var updated = SgrParserArgb.Apply(ReadOnlySpan<char>.Empty, current);
+        var palette = Palette();
+        var current = new CellAttributes { Bold = true, Foreground = SgrColorArgb.FromAnsiCode(37, palette) };
+        var updated = SgrParserArgb.Apply(ReadOnlySpan<char>.Empty, current, palette);
         Assert.Equal(CellAttributes.Default, updated);
     }
 
     [Fact]
     public void ExtendedAttributes_SetAndClear()
     {
-        var updated = SgrParserArgb.Apply("5;8;9;21;53".AsSpan(), CellAttributes.Default);
+        var palette = Palette();
+        var updated = SgrParserArgb.Apply("5;8;9;21;53".AsSpan(), CellAttributes.Default, palette);
         Assert.True(updated.SlowBlink);
         Assert.True(updated.Invisible);
         Assert.True(updated.Strikethrough);
         Assert.True(updated.DoubleUnderline);
         Assert.True(updated.Overline);
-
-        var cleared = SgrParserArgb.Apply("24;25;28;29;55".AsSpan(), updated);
-        Assert.False(cleared.Underline); // 24 clears Underline and DoubleUnderline
+        var cleared = SgrParserArgb.Apply("24;25;28;29;55".AsSpan(), updated, palette);
+        Assert.False(cleared.Underline);
         Assert.False(cleared.DoubleUnderline);
         Assert.False(cleared.SlowBlink);
         Assert.False(cleared.Invisible);
@@ -35,13 +39,13 @@ public class SgrParserTests
     [Fact]
     public void BasicAttributes_SetAndClear()
     {
-        var updated = SgrParserArgb.Apply("1;3;4;7".AsSpan(), CellAttributes.Default);
+        var palette = Palette();
+        var updated = SgrParserArgb.Apply("1;3;4;7".AsSpan(), CellAttributes.Default, palette);
         Assert.True(updated.Bold);
         Assert.True(updated.Italic);
         Assert.True(updated.Underline);
         Assert.True(updated.Inverse);
-
-        var cleared = SgrParserArgb.Apply("22;23;24;27".AsSpan(), updated);
+        var cleared = SgrParserArgb.Apply("22;23;24;27".AsSpan(), updated, palette);
         Assert.False(cleared.Bold);
         Assert.False(cleared.Italic);
         Assert.False(cleared.Underline);
@@ -51,15 +55,15 @@ public class SgrParserTests
     [Fact]
     public void StandardColors_Applied()
     {
-        var updated = SgrParserArgb.Apply("31;44".AsSpan(), CellAttributes.Default);
-        Assert.Equal(0xFFAA0000u, updated.Foreground.Argb); // Red
-        Assert.Equal(0xFF0000AAu, updated.Background.Argb); // 44 -> 34 -> blue background
+        var updated = SgrParserArgb.Apply("31;44".AsSpan(), CellAttributes.Default, Palette());
+        Assert.Equal(0xFFAA0000u, updated.Foreground.Argb);
+        Assert.Equal(0xFF0000AAu, updated.Background.Argb);
     }
 
     [Fact]
     public void ExtendedTrueColor_Applied()
     {
-        var updated = SgrParserArgb.Apply("38;2;10;20;30;48;2;1;2;3".AsSpan(), CellAttributes.Default);
+        var updated = SgrParserArgb.Apply("38;2;10;20;30;48;2;1;2;3".AsSpan(), CellAttributes.Default, Palette());
         Assert.Equal(0xFF0A141Eu, updated.Foreground.Argb);
         Assert.Equal(0xFF010203u, updated.Background.Argb);
     }
@@ -67,10 +71,10 @@ public class SgrParserTests
     [Fact]
     public void Extended256Color_Applied()
     {
-        var updated = SgrParserArgb.Apply("38;5;196;48;5;123;58;5;45".AsSpan(), CellAttributes.Default);
-        Assert.Equal(0xFFFF0000u, updated.Foreground.Argb); // idx 196
-        Assert.Equal(0xFF87FFFFu, updated.Background.Argb); // idx 123
-        Assert.Equal(0xFF00D7FFu, updated.UnderlineColor.Argb); // idx 45
+        var updated = SgrParserArgb.Apply("38;5;196;48;5;123;58;5;45".AsSpan(), CellAttributes.Default, Palette());
+        Assert.Equal(0xFFFF0000u, updated.Foreground.Argb);
+        Assert.Equal(0xFF87FFFFu, updated.Background.Argb);
+        Assert.Equal(0xFF00D7FFu, updated.UnderlineColor.Argb);
     }
 
     [Fact]
@@ -82,8 +86,7 @@ public class SgrParserTests
             Background = SgrColorArgb.FromRgb(0x22, 0x22, 0x22),
             UnderlineColor = SgrColorArgb.FromRgb(0x33, 0x33, 0x33),
         };
-
-        var updated = SgrParserArgb.Apply("39;49;59".AsSpan(), current);
+        var updated = SgrParserArgb.Apply("39;49;59".AsSpan(), current, Palette());
         Assert.True(updated.Foreground.IsEmpty);
         Assert.True(updated.Background.IsEmpty);
         Assert.True(updated.UnderlineColor.IsEmpty);

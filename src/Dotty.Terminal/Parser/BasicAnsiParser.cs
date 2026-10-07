@@ -32,6 +32,7 @@ namespace Dotty.Terminal.Parser
             DcsEscape,
             DiscardCsi,
             DiscardOsc,
+            DiscardDcs,
         }
 
         private byte[] _leftover = new byte[32];
@@ -274,6 +275,10 @@ namespace Dotty.Terminal.Parser
                         _sequenceState = SequenceState.Escape;
                     }
                     break;
+                case SequenceState.DiscardDcs:
+                    if (b == 0x18 || b == 0x1A || b == 0x9C) ResetSequence();
+                    else if (b == ESC) _sequenceState = SequenceState.DcsEscape;
+                    break;
             }
         }
 
@@ -421,7 +426,11 @@ namespace Dotty.Terminal.Parser
             {
                 _sequenceState = SequenceState.DcsEscape;
             }
-            else if (b == 0x9C || b == 0x18 || b == 0x1A)
+            else if (b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (b == 0x9C)
             {
                 HandleDcsPayload(_leftover.AsSpan(0, _leftoverLen));
                 ResetSequence();
@@ -430,17 +439,18 @@ namespace Dotty.Terminal.Parser
             {
                 // Query payloads are short; longer DCS strings keep consuming
                 // until ST without dispatch.
-                BeginDiscard(SequenceState.Dcs);
+                BeginDiscard(SequenceState.DiscardDcs);
             }
         }
 
         private void ProcessDcsEscapeByte(byte b)
         {
-            if (b == (byte)'\\' || b == 0x9C || b == 0x18 || b == 0x1A)
+            if (b == (byte)'\\' || b == 0x9C)
             {
                 HandleDcsPayload(_leftover.AsSpan(0, _leftoverLen));
                 ResetSequence();
             }
+            else if (b == 0x18 || b == 0x1A) ResetSequence();
             else if (b == ESC)
             {
                 // A second ESC may introduce the ST terminator; the payload
@@ -451,7 +461,7 @@ namespace Dotty.Terminal.Parser
                 // A non-ST ESC is part of the DCS payload, not a new sequence.
                 _sequenceState = SequenceState.Dcs;
                 if (!AppendSequenceByte(ESC, MaxDcsPayloadBytes))
-                    BeginDiscard(SequenceState.Dcs);
+                    BeginDiscard(SequenceState.DiscardDcs);
                 else
                     ProcessDcsByte(b);
             }
@@ -839,18 +849,20 @@ namespace Dotty.Terminal.Parser
 
         private bool TryHandleModifyOtherKeys(ReadOnlySpan<byte> parameters)
         {
-            // XTerm modifyOtherKeys: CSI > 4 ; Pv m. Only the exact two-field
-            // form dispatches; other '>' SGR-adjacent forms fall through.
-            if (parameters.Length < 4 || parameters[0] != (byte)'>')
-                return false;
+            // Consume all CSI > ... m forms; only parameter 4 negotiates this mode.
+            if (parameters.IsEmpty || parameters[0] != (byte)'>') return false;
             ReadOnlySpan<byte> body = parameters[1..];
             int semi = body.IndexOf((byte)';');
-            if (semi < 0 || body[(semi + 1)..].IndexOf((byte)';') >= 0)
-                return false;
-            if (!TryParseAsciiInt(body[..semi], out int first) || first != 4)
-                return false;
-            if (!TryParseAsciiInt(body[(semi + 1)..], out int level) || level is < 0 or > 2)
+            if (body.IsEmpty) { Handler?.OnSetModifyOtherKeys(0); return true; }
+            if (semi < 0)
+            {
+                if (TryParseAsciiInt(body, out int reset) && reset == 4) Handler?.OnSetModifyOtherKeys(0);
                 return true;
+            }
+            if (body[(semi + 1)..].IndexOf((byte)';') >= 0) return true;
+            if (!TryParseAsciiInt(body[..semi], out int first)) return true;
+            if (first != 4) return true;
+            if (!TryParseAsciiInt(body[(semi + 1)..], out int level) || level is < 0 or > 2) return true;
             Handler?.OnSetModifyOtherKeys(level);
             return true;
         }
@@ -859,25 +871,27 @@ namespace Dotty.Terminal.Parser
         {
             // XTGETTCAP: DCS + q <hex> ST. Only dispatch the exact query form;
             // all other DCS strings remain consumed without reply.
-            if (payloadBytes.Length >= 2 && payloadBytes[0] == (byte)'+' && payloadBytes[1] == (byte)'q')
+            if (payloadBytes.Length < 2 || payloadBytes[0] != (byte)'+' || payloadBytes[1] != (byte)'q') return;
             {
                 ReadOnlySpan<byte> request = payloadBytes[2..];
-                if (!request.IsEmpty && (request.Length & 1) == 0 && IsHexDigits(request))
+                int names = 0;
+                while (!request.IsEmpty && names++ < 32)
                 {
-                    Span<char> hex = GetScratch(request.Length, out char[]? rented);
-                    try
+                    int separator = request.IndexOf((byte)';');
+                    ReadOnlySpan<byte> name = separator < 0 ? request : request[..separator];
+                    if (!name.IsEmpty && (name.Length & 1) == 0 && IsHexDigits(name))
                     {
-                        for (int i = 0; i < request.Length; i++)
-                            hex[i] = (char)request[i];
-                        if (Handler is Terminal.Adapter.TerminalAdapter adapter)
-                            adapter.OnQueryCapability(hex[..request.Length]);
-                        else
-                            Handler?.OnQueryCapability(new string(hex[..request.Length]));
+                        Span<char> hex = GetScratch(name.Length, out char[]? rented);
+                        try
+                        {
+                            for (int i = 0; i < name.Length; i++) hex[i] = (char)name[i];
+                            if (Handler is Terminal.Adapter.TerminalAdapter adapter) adapter.OnQueryCapability(hex[..name.Length]);
+                            else Handler?.OnQueryCapability(new string(hex[..name.Length]));
+                        }
+                        finally { ReturnScratch(rented); }
                     }
-                    finally
-                    {
-                        ReturnScratch(rented);
-                    }
+                    if (separator < 0) break;
+                    request = request[(separator + 1)..];
                 }
             }
         }

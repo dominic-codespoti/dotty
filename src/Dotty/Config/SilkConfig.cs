@@ -1,64 +1,67 @@
+using System;
+using System.Threading;
 using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Themes;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.Themes;
 using Dotty.Terminal.Adapter;
+
 namespace Dotty.Silk.Config;
 
-/// <summary>
-/// Configuration and theme helper for Dotty.Silk host.
-/// Resolves active theme, color values, ANSI palette, and applies them to the terminal runtime.
-/// </summary>
+/// <summary>Configuration and theme helper for the Dotty.Silk host.</summary>
 public static class SilkConfig
 {
     private static IColorScheme? _cachedTheme;
     private static string? _cachedThemeName;
+    private static int _systemPrefersDark = -1;
 
-    /// <summary>
-    /// Gets the active theme name checking the DOTTY_THEME environment variable,
-    /// falling back to DottyDefaults.DefaultThemeName ("DarkPlus").
-    /// </summary>
+    internal static Func<bool?> SystemThemeProbe { get; set; } = SystemThemeDetector.DetectIsDark;
+
+    /// <summary>The last system color-scheme preference; null means unknown.</summary>
+    public static bool? SystemPrefersDark
+    {
+        get => Volatile.Read(ref _systemPrefersDark) switch { 0 => false, 1 => true, _ => null };
+        private set => Volatile.Write(ref _systemPrefersDark, value switch { false => 0, true => 1, _ => -1 });
+    }
+
+    /// <summary>Refreshes the system preference. Must be called off the UI thread.</summary>
+    public static bool RefreshSystemTheme()
+    {
+        bool? previous = SystemPrefersDark;
+        bool? current = SystemThemeProbe();
+        SystemPrefersDark = current;
+        return previous != current;
+    }
+
     public static string GetActiveThemeName()
     {
         var envTheme = Environment.GetEnvironmentVariable("DOTTY_THEME");
-        if (!string.IsNullOrWhiteSpace(envTheme))
-        {
-            return envTheme.Trim();
-        }
-
-        return ResolveConfiguredThemeName(UserConfigService.Current);
+        return !string.IsNullOrWhiteSpace(envTheme)
+            ? envTheme.Trim()
+            : ResolveConfiguredThemeName(UserConfigService.Current);
     }
 
-    /// <summary>
-    /// Resolves the effective theme name for a config: explicit
-    /// <c>theme</c> unless <c>themeAuto</c> selects the dark/light pair from
-    /// the OS color scheme. Unknown OS scheme keeps the explicit theme.
-    /// </summary>
+    /// <summary>Resolves themeAuto using only the last-known system preference.</summary>
     public static string ResolveConfiguredThemeName(DottyUserConfig config)
     {
         if (config == null)
             return DottyDefaults.DefaultThemeName;
         if (!config.ThemeAuto)
             return string.IsNullOrWhiteSpace(config.Theme) ? DottyDefaults.DefaultThemeName : config.Theme;
-        bool? isDark = SystemThemeDetector.DetectIsDark();
-        if (isDark == false)
+        if (SystemPrefersDark == false)
             return string.IsNullOrWhiteSpace(config.ThemeLight) ? "LightPlus" : config.ThemeLight!;
         string dark = string.IsNullOrWhiteSpace(config.ThemeDark) ? config.Theme : config.ThemeDark!;
         return string.IsNullOrWhiteSpace(dark) ? DottyDefaults.DefaultThemeName : dark;
     }
 
-    /// <summary>
-    /// Loads the active theme based on DOTTY_THEME environment variable or default fallback.
-    /// Supports both built-in themes and user-defined themes loaded via ThemeRegistry.
-    /// </summary>
     public static IColorScheme LoadActiveTheme()
     {
-        var themeName = GetActiveThemeName();
-
+        var envTheme = Environment.GetEnvironmentVariable("DOTTY_THEME");
+        var themeName = !string.IsNullOrWhiteSpace(envTheme)
+            ? envTheme.Trim()
+            : ResolveConfiguredThemeName(UserConfigService.Current);
         if (_cachedTheme != null && string.Equals(_cachedThemeName, themeName, StringComparison.OrdinalIgnoreCase))
-        {
             return _cachedTheme;
-        }
 
         IColorScheme theme;
         try
@@ -70,126 +73,66 @@ public static class SilkConfig
         {
             theme = BuiltInThemes.GetByName(themeName);
         }
-
         _cachedTheme = theme;
         _cachedThemeName = themeName;
         return theme;
     }
 
-    /// <summary>
-    /// Drops the cached theme so the next <see cref="LoadActiveTheme"/> call
-    /// re-resolves (used when polling the OS color scheme for auto themes).
-    /// </summary>
     public static void ClearThemeCache()
     {
         _cachedTheme = null;
         _cachedThemeName = null;
     }
 
-    /// <summary>
-    /// Resolves the foreground color of the specified (or active) theme as SgrColorArgb.
-    /// </summary>
     public static SgrColorArgb ResolveForeground(IColorScheme? theme = null)
     {
         theme ??= LoadActiveTheme();
         return new SgrColorArgb(theme.Foreground);
     }
 
-    /// <summary>
-    /// Resolves the background color of the specified (or active) theme as SgrColorArgb.
-    /// </summary>
     public static SgrColorArgb ResolveBackground(IColorScheme? theme = null)
     {
         theme ??= LoadActiveTheme();
         return new SgrColorArgb(theme.Background);
     }
 
-    /// <summary>
-    /// Resolves the selection color of the specified (or active) theme / defaults as SgrColorArgb.
-    /// </summary>
     public static SgrColorArgb ResolveSelectionColor(IColorScheme? theme = null)
     {
         var config = UserConfigService.Current;
         if (!string.IsNullOrWhiteSpace(config.SelectionColor))
         {
-            try
-            {
-                return new SgrColorArgb(ColorSchemeBase.FromHex(config.SelectionColor));
-            }
-            catch
-            {
-            }
+            try { return new SgrColorArgb(ColorSchemeBase.FromHex(config.SelectionColor)); }
+            catch { }
         }
-
         return new SgrColorArgb(DottyDefaults.SelectionColor);
     }
 
-    /// <summary>
-    /// Resolves the 16-color ANSI palette for the specified (or active) theme.
-    /// </summary>
     public static uint[] ResolveAnsiPalette(IColorScheme? theme = null)
     {
         theme ??= LoadActiveTheme();
-
         return new uint[16]
         {
-            theme.AnsiBlack,
-            theme.AnsiRed,
-            theme.AnsiGreen,
-            theme.AnsiYellow,
-            theme.AnsiBlue,
-            theme.AnsiMagenta,
-            theme.AnsiCyan,
-            theme.AnsiWhite,
-            theme.AnsiBrightBlack,
-            theme.AnsiBrightRed,
-            theme.AnsiBrightGreen,
-            theme.AnsiBrightYellow,
-            theme.AnsiBrightBlue,
-            theme.AnsiBrightMagenta,
-            theme.AnsiBrightCyan,
-            theme.AnsiBrightWhite
+            theme.AnsiBlack, theme.AnsiRed, theme.AnsiGreen, theme.AnsiYellow,
+            theme.AnsiBlue, theme.AnsiMagenta, theme.AnsiCyan, theme.AnsiWhite,
+            theme.AnsiBrightBlack, theme.AnsiBrightRed, theme.AnsiBrightGreen, theme.AnsiBrightYellow,
+            theme.AnsiBrightBlue, theme.AnsiBrightMagenta, theme.AnsiBrightCyan, theme.AnsiBrightWhite
         };
     }
 
-    /// <summary>
-    /// Applies the theme's 16-color ANSI palette to SgrColorArgb globally.
-    /// </summary>
-    public static void ApplyAnsiPalette(IColorScheme? theme = null)
-    {
-        var palette = ResolveAnsiPalette(theme);
-        // A theme change reasserts the full stock palette, discarding any
-        // OSC 4 runtime overrides (both ANSI and extended entries).
-        SgrColorArgb.ResetExtendedPalette();
-        SgrColorArgb.SetAnsiPalette(palette);
-    }
-
-    /// <summary>
-    /// Applies the default foreground and background colors to a TerminalAdapter.
-    /// </summary>
     public static void ApplyThemeToAdapter(TerminalAdapter adapter, IColorScheme? theme = null)
     {
         if (adapter == null) return;
         theme ??= LoadActiveTheme();
-
-        string fgHex = $"#{theme.Foreground & 0xFFFFFF:X6}";
-        string bgHex = $"#{theme.Background & 0xFFFFFF:X6}";
-        adapter.SetDefaultColors(fgHex, bgHex);
+        adapter.SetPaletteBaseline(ResolveAnsiPalette(theme));
+        adapter.SetDefaultColors($"#{theme.Foreground & 0xFFFFFF:X6}", $"#{theme.Background & 0xFFFFFF:X6}");
     }
 
-    /// <summary>
-    /// Initializes theme system by applying ANSI palette and resolving initial colors.
-    /// </summary>
-    public static (SgrColorArgb Foreground, SgrColorArgb Background) InitializeTheme(TerminalAdapter? adapter = null)
+    public static (SgrColorArgb Foreground, SgrColorArgb Background) InitializeTheme(
+        TerminalAdapter? adapter = null, IColorScheme? theme = null)
     {
-        var theme = LoadActiveTheme();
-        ApplyAnsiPalette(theme);
-
+        theme ??= LoadActiveTheme();
         if (adapter != null)
-        {
             ApplyThemeToAdapter(adapter, theme);
-        }
-
         return (ResolveForeground(theme), ResolveBackground(theme));
     }
 }

@@ -13,6 +13,7 @@ namespace Dotty.Performance.Tests.Benchmarks;
 [BenchmarkCategory("Memory")]
 public class MemoryBenchmarks : PerformanceTestBase
 {
+    private readonly TerminalPalette _sgrPalette = new();
     #region Grid Allocations
 
 
@@ -181,19 +182,19 @@ public class MemoryBenchmarks : PerformanceTestBase
 
     [Benchmark(Description = "SGR Parse: Simple")]
     public CellAttributes Sgr_ParseSimple() =>
-        SgrParserArgb.Apply("1;31", CellAttributes.Default);
+        SgrParserArgb.Apply("1;31", CellAttributes.Default, _sgrPalette);
 
     [Benchmark(Description = "SGR Parse: 256 Color")]
     public CellAttributes Sgr_Parse256Color() =>
-        SgrParserArgb.Apply("38;5;196", CellAttributes.Default);
+        SgrParserArgb.Apply("38;5;196", CellAttributes.Default, _sgrPalette);
 
     [Benchmark(Description = "SGR Parse: TrueColor")]
     public CellAttributes Sgr_ParseTrueColor() =>
-        SgrParserArgb.Apply("38;2;255;100;50", CellAttributes.Default);
+        SgrParserArgb.Apply("38;2;255;100;50", CellAttributes.Default, _sgrPalette);
 
     [Benchmark(Description = "SGR Parse: Complex")]
     public CellAttributes Sgr_ParseComplex() =>
-        SgrParserArgb.Apply("1;3;4;38;2;255;0;0;48;2;0;0;255", CellAttributes.Default);
+        SgrParserArgb.Apply("1;3;4;38;2;255;0;0;48;2;0;0;255", CellAttributes.Default, _sgrPalette);
 
     #endregion
 }

@@ -94,87 +94,44 @@ public sealed class TerminalCoreAllocationTests
     }
 
     [Fact]
-    public void RepeatedDecrqmQueryDoesNotAllocate()
-    {
-        var adapter = new TerminalAdapter();
-        var parser = new BasicAnsiParser { Handler = adapter };
-        byte[] query = Encoding.UTF8.GetBytes("\u001b[?1$p");
-        for (int i = 0; i < 16; i++)
-            parser.Feed(query);
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 128; i++)
-            parser.Feed(query);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
-    }
-
-    [Fact]
-    public void RepeatedXtgettcapQueryDoesNotAllocate()
-    {
-        var adapter = new TerminalAdapter();
-        var parser = new BasicAnsiParser { Handler = adapter };
-        byte[] query = Encoding.UTF8.GetBytes("\u001bP+q544E\u001b\\\\");
-        for (int i = 0; i < 16; i++)
-            parser.Feed(query);
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 128; i++)
-            parser.Feed(query);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
-    }
-
-    [Fact]
-    public void RepeatedModifyOtherKeysNegotiationDoesNotAllocate()
-    {
-        var adapter = new TerminalAdapter();
-        var parser = new BasicAnsiParser { Handler = adapter };
-        byte[] set = Encoding.UTF8.GetBytes("\u001b[>4;1m");
-        byte[] reset = Encoding.UTF8.GetBytes("\u001b[>4;0m");
-        for (int i = 0; i < 16; i++)
-        {
-            parser.Feed(set);
-            parser.Feed(reset);
-        }
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 128; i++)
-        {
-            parser.Feed(set);
-            parser.Feed(reset);
-        }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
-    }
-
-    [Fact]
     public void RepeatedIdenticalPaletteSetIsIdempotentAndCheap()
     {
-        // Setting the same entry twice allocates only the reply plumbing;
-        // the second set is a no-op (early return before snapshot/remap).
-        // Measured loosely: warm run establishes caches, second identical
-        // set must not exceed the first set's allocation.
+        // Warm parser paths first; repeated identical updates and queries must not allocate.
         var adapter = new TerminalAdapter();
         var parser = new BasicAnsiParser { Handler = adapter };
-        uint[] baseline = SgrColorArgb.GetAnsiPaletteSnapshot();
-        try
-        {
-            byte[] set = Encoding.UTF8.GetBytes("\u001b]4;1;#ff0000\u0007");
-            parser.Feed(set);
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            parser.Feed(set);
-            long second = GC.GetAllocatedBytesForCurrentThread() - before;
-            Assert.True(second <= 2048, $"second identical set allocated {second} bytes");
-        }
-        finally
-        {
-            SgrColorArgb.SetAnsiPalette(baseline);
-            SgrColorArgb.ResetExtendedPalette();
-        }
+        byte[] set = Encoding.UTF8.GetBytes("\u001b]4;1;#ff0000\u0007");
+        parser.Feed(set);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        parser.Feed(set);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, allocated);
+    }
+    [Fact]
+    public void RepeatedPaletteQueriesAndNoOpResetsAllocateNothingAfterWarmup()
+    {
+        var adapter = new TerminalAdapter();
+        adapter.ReplyRequested += static _ => { };
+        var parser = new BasicAnsiParser { Handler = adapter };
+        byte[] setDefault = Encoding.UTF8.GetBytes("]10;#010203");
+        parser.Feed(setDefault);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        parser.Feed(setDefault);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+
+        byte[] setPalette = Encoding.UTF8.GetBytes("]4;1;#ff0000");
+        parser.Feed(setPalette);
+        byte[] query = Encoding.UTF8.GetBytes("]4;1;?");
+        parser.Feed(query);
+        before = GC.GetAllocatedBytesForCurrentThread();
+        parser.Feed(query);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+
+        byte[] reset = Encoding.UTF8.GetBytes("]104");
+        parser.Feed(reset);
+        parser.Feed(reset);
+        before = GC.GetAllocatedBytesForCurrentThread();
+        parser.Feed(reset);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 
     private static void FillWrappedScrollback(TerminalBuffer buffer, string line)

@@ -1,5 +1,10 @@
 using System;
-using System.Runtime.InteropServices;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
 
 namespace Dotty.Silk.Config;
 
@@ -9,20 +14,17 @@ namespace Dotty.Silk.Config;
 /// </summary>
 public static class SystemThemeDetector
 {
+    private static readonly IThemeProcessRunner ProcessRunner = new ThemeProcessRunner();
+
     public static bool? DetectIsDark()
     {
         try
         {
-            if (OperatingSystem.IsWindows())
-                return DetectWindows();
-            if (OperatingSystem.IsMacOS())
-                return DetectMacOS();
-            if (OperatingSystem.IsLinux())
-                return DetectLinux();
+            if (OperatingSystem.IsWindows()) return DetectWindows();
+            if (OperatingSystem.IsMacOS()) return DetectMacOS(ProcessRunner);
+            if (OperatingSystem.IsLinux()) return DetectLinux(ProcessRunner);
         }
-        catch
-        {
-        }
+        catch { }
         return null;
     }
 
@@ -33,77 +35,135 @@ public static class SystemThemeDetector
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
                 @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
             object? value = key?.GetValue("AppsUseLightTheme");
-            if (value is int i)
-                return i == 0;
+            if (value is int i) return i == 0;
         }
-        catch
+        catch { }
+        return null;
+    }
+
+    internal static bool? DetectMacOS(IThemeProcessRunner runner)
+    {
+        ProcessResult result = RunWithinDeadline(runner, "defaults", new[] { "read", "-g", "AppleInterfaceStyle" },
+            Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.9));
+        if (!result.Completed) return null;
+        if (result.ExitCode != 0) return false;
+        return string.Equals(result.StandardOutput.Trim(), "Dark", StringComparison.OrdinalIgnoreCase) ? true : null;
+    }
+
+    internal static bool? DetectLinux(IThemeProcessRunner runner)
+    {
+        long deadline = Stopwatch.GetTimestamp() + (long)(Stopwatch.Frequency * 0.9);
+        string[] tools = { "busctl", "gdbus", "dbus-send" };
+        string[][] args =
         {
+            new[] { "--user", "call", "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings", "Read", "ss", "org.freedesktop.appearance", "color-scheme" },
+            new[] { "call", "--session", "--dest", "org.freedesktop.portal.Desktop", "--object-path", "/org/freedesktop/portal/desktop", "--method", "org.freedesktop.portal.Settings.Read", "org.freedesktop.appearance", "color-scheme" },
+            new[] { "--session", "--print-reply", "--dest=org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings.Read", "string:org.freedesktop.appearance", "string:color-scheme" },
+        };
+        for (int i = 0; i < tools.Length; i++)
+        {
+            ProcessResult result = RunWithinDeadline(runner, tools[i], args[i], deadline);
+            if (TryPortalScheme(result, out int scheme) && scheme != 0) return scheme == 1;
+        }
+
+        ProcessResult colorScheme = RunWithinDeadline(runner, "gsettings",
+            new[] { "get", "org.gnome.desktop.interface", "color-scheme" }, deadline);
+        if (colorScheme.Completed && colorScheme.ExitCode == 0)
+        {
+            string value = Unquote(colorScheme.StandardOutput);
+            if (string.Equals(value, "prefer-dark", StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(value, "prefer-light", StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        ProcessResult gtkTheme = RunWithinDeadline(runner, "gsettings",
+            new[] { "get", "org.gnome.desktop.interface", "gtk-theme" }, deadline);
+        if (gtkTheme.Completed && gtkTheme.ExitCode == 0)
+        {
+            string value = Unquote(gtkTheme.StandardOutput);
+            if (value.Contains("dark", StringComparison.OrdinalIgnoreCase)) return true;
+            if (value.EndsWith("light", StringComparison.OrdinalIgnoreCase)) return false;
         }
         return null;
     }
 
-    private static bool? DetectMacOS()
+    private static ProcessResult RunWithinDeadline(IThemeProcessRunner runner, string executable, string[] args, long deadline)
     {
-        try
-        {
-            var psi = new System.Diagnostics.ProcessStartInfo("defaults", "read -g AppleInterfaceStyle")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            using var process = System.Diagnostics.Process.Start(psi);
-            if (process == null)
-                return null;
-            string output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(2000);
-            if (process.ExitCode == 0 && output.Trim().Equals("Dark", StringComparison.OrdinalIgnoreCase))
-                return true;
-            // Exit code nonzero with no value means Light (key absent); exit 0
-            // without "Dark" is unexpected, treat as unknown.
-            return process.ExitCode != 0 ? false : (bool?)null;
-        }
-        catch
-        {
-            return null;
-        }
+        long remainingTicks = deadline - Stopwatch.GetTimestamp();
+        if (remainingTicks <= 0) return ProcessResult.Failure;
+        TimeSpan remaining = TimeSpan.FromSeconds((double)remainingTicks / Stopwatch.Frequency);
+        TimeSpan timeout = remaining < TimeSpan.FromMilliseconds(170) ? remaining : TimeSpan.FromMilliseconds(170);
+        try { return runner.Run(executable, args, timeout); }
+        catch { return ProcessResult.Failure; }
     }
 
-    private static bool? DetectLinux()
+    private static bool TryPortalScheme(ProcessResult result, out int scheme)
     {
-        // Freedesktop org.freedesktop.appearance color-scheme: 0=no-preference,
-        // 1=prefer-dark, 2=prefer-light.
-        string? sessionBus = Environment.GetEnvironmentVariable("DBUS_SESSION_BUS_ADDRESS");
-        string? xdgRuntime = Environment.GetEnvironmentVariable("XDG_RUNTIME_DIR");
-        bool hasBus = !string.IsNullOrWhiteSpace(sessionBus) ||
-            (!string.IsNullOrWhiteSpace(xdgRuntime) &&
-                System.IO.File.Exists(System.IO.Path.Combine(xdgRuntime, "bus")));
-        if (!hasBus)
-            return null;
-        try
+        scheme = -1;
+        if (!result.Completed || result.ExitCode != 0) return false;
+        string text = result.StandardOutput;
+        int end = text.Length - 1;
+        while (end >= 0 && !char.IsDigit(text[end])) end--;
+        if (end < 0) return false;
+        int start = end;
+        while (start >= 0 && char.IsDigit(text[start])) start--;
+        if (!int.TryParse(text.AsSpan(start + 1, end - start), NumberStyles.None, CultureInfo.InvariantCulture, out int value)) return false;
+        scheme = value;
+        return value is 0 or 1 or 2;
+    }
+
+    private static string Unquote(string value) => value.Trim().Trim('\'', '"');
+}
+
+internal readonly record struct ProcessResult(bool Completed, int ExitCode, string StandardOutput)
+{
+    internal static ProcessResult Failure => new(false, -1, string.Empty);
+}
+
+internal interface IThemeProcessRunner
+{
+    ProcessResult Run(string executable, IReadOnlyList<string> arguments, TimeSpan timeout);
+}
+
+internal sealed class ThemeProcessRunner : IThemeProcessRunner
+{
+    private const int MaxOutputCharacters = 4096;
+
+    public ProcessResult Run(string executable, IReadOnlyList<string> arguments, TimeSpan timeout)
+    {
+        var startInfo = new ProcessStartInfo(executable)
         {
-            var psi = new System.Diagnostics.ProcessStartInfo("gsettings", "get org.gnome.desktop.interface gtk-theme")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-            };
-            using var process = System.Diagnostics.Process.Start(psi);
-            if (process == null)
-                return null;
-            string output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(2000);
-            if (process.ExitCode != 0)
-                return null;
-            string theme = output.Trim().Trim('\'', '"').ToLowerInvariant();
-            if (theme.Contains("dark"))
-                return true;
-            if (theme.Length > 0)
-                return false;
-        }
-        catch
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        for (int i = 0; i < arguments.Count; i++) startInfo.ArgumentList.Add(arguments[i]);
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start()) return ProcessResult.Failure;
+        Task<string> stdout = ReadBoundedAsync(process.StandardOutput);
+        Task<string> stderr = ReadBoundedAsync(process.StandardError);
+        int milliseconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalMilliseconds));
+        if (!process.WaitForExit(milliseconds))
         {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            process.WaitForExit();
+            try { Task.WaitAll(stdout, stderr); } catch (AggregateException) { }
+            return ProcessResult.Failure;
         }
-        return null;
+        process.WaitForExit();
+        Task.WaitAll(stdout, stderr);
+        return new ProcessResult(true, process.ExitCode, stdout.GetAwaiter().GetResult());
+    }
+
+    private static async Task<string> ReadBoundedAsync(StreamReader reader)
+    {
+        char[] buffer = new char[512];
+        var output = new StringBuilder(512);
+        int read;
+        while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) != 0)
+        {
+            int append = Math.Min(read, MaxOutputCharacters - output.Length);
+            if (append > 0) output.Append(buffer, 0, append);
+        }
+        return output.ToString();
     }
 }

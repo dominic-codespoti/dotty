@@ -8,7 +8,7 @@ namespace Dotty.Terminal.Adapter;
 /// </summary>
 public static class SgrParserArgb
 {
-    public static CellAttributes Apply(ReadOnlySpan<char> parameters, in CellAttributes current)
+    public static CellAttributes Apply(ReadOnlySpan<char> parameters, in CellAttributes current, TerminalPalette palette)
     {
         if (parameters.IsEmpty)
         {
@@ -127,7 +127,7 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 38:
-                    hasMore = TryParseExtendedColor(ref enumerator, out var fg);
+                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var fg);
                     if (hasMore || !fg.IsEmpty)
                     {
                         if (!fg.IsEmpty) attributes.Foreground = fg;
@@ -138,7 +138,7 @@ public static class SgrParserArgb
                     }
                     break;
                 case 48:
-                    hasMore = TryParseExtendedColor(ref enumerator, out var bg);
+                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var bg);
                     if (hasMore || !bg.IsEmpty)
                     {
                         if (!bg.IsEmpty) attributes.Background = bg;
@@ -149,7 +149,7 @@ public static class SgrParserArgb
                     }
                     break;
                 case 58:
-                    hasMore = TryParseExtendedColor(ref enumerator, out var ul);
+                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var ul);
                     if (hasMore || !ul.IsEmpty)
                     {
                         if (!ul.IsEmpty) attributes.UnderlineColor = ul;
@@ -160,12 +160,12 @@ public static class SgrParserArgb
                     }
                     break;
                 default:
-                    var fgColor = SgrColorArgb.FromAnsiCode(code);
+                    var fgColor = SgrColorArgb.FromAnsiCode(code, palette);
                     if (!fgColor.IsEmpty)
                     {
                         attributes.Foreground = fgColor;
                     }
-                    else if (SgrColorArgb.TryFromBackgroundCode(code, out var bgColor))
+                    else if (SgrColorArgb.TryFromBackgroundCode(code, palette, out var bgColor))
                     {
                         attributes.Background = bgColor;
                     }
@@ -177,7 +177,7 @@ public static class SgrParserArgb
         return attributes;
     }
 
-    private static bool TryParseExtendedColor(ref ParametersEnumerator enumerator, out SgrColorArgb color)
+    private static bool TryParseExtendedColor(ref ParametersEnumerator enumerator, TerminalPalette palette, out SgrColorArgb color)
     {
         color = default;
         if (!enumerator.MoveNext()) return false;
@@ -207,7 +207,7 @@ public static class SgrParserArgb
             if (enumerator.MoveNext())
             {
                 int idx = enumerator.Current;
-                color = SgrColorArgb.From256(idx);
+                color = SgrColorArgb.From256(idx, palette);
                 return enumerator.MoveNext();
             }
             return false;

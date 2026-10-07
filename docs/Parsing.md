@@ -284,14 +284,19 @@ The parser supports OSC sequences for:
 | 0 | Set icon name and window title | `OnOperatingSystemCommand(0, title)` |
 | 1 | Set icon name | `OnOperatingSystemCommand(1, name)` |
 | 2 | Set window title | `OnOperatingSystemCommand(2, title)` |
-| 4 | Set/query color palette (`index ; spec` pairs, `?` queries) | `TerminalAdapter.HandleOscPalette` — indices 0-15 remap ANSI styles, 16-255 override the xterm ramp; `rgb:RR/GG/BB`, `#RGB`, `#RRGGBB` specs; malformed entries skipped; RIS and theme changes restore stock |
+| 4 | Set/query session palette (index ; spec pairs; ? queries) | OSC 4 sets are silent; replies are ESC ] 4 ; index ; rgb:RRRR/GGGG/BBBB ESC backslash with 16-bit components; malformed colors are ignored. ANSI indices 0-15 remap existing ANSI-colored styles in this session; indices 16-255 affect later SGR lookups. |
 | 8 | Hyperlink (OSC 8) | `OnOperatingSystemCommand(8, params)` |
 | 9 | iTerm2 notifications | (future) |
-| 10-12 | Set/query dynamic colors (fg/bg/cursor) | `TerminalAdapter.HandleOscDynamicColor` — `?` queries live values, set reports back; fg/bg sets invalidate rows and notify the host |
+| 10-12 | Query dynamic foreground/background/cursor colors | OSC 10/11 queries return rgb:RRRR/GGGG/BBBB ESC backslash; sets store per-session foreground/background overrides without replying. OSC 12 queries reply in the same format; set/reset are accepted but cursor color is not rendered. |
 | 13-19 | Set foreground/background/highlight colors | (future) |
 | 52 | Manipulate selection/data | (future) |
 | 777 | rxvt extension notifications | (future) |
 | 1337 | PromptMark (shell integration) | `OnPromptMark(level)` — tracks shell prompt start/end via `OSC 1337 ; A` / `OSC 1337 ; B` |
+| 104 | Reset palette entries | No payload resets all OSC 4 overrides; index ; ... resets listed indices, ignoring invalid and empty tokens. |
+| 110/111 | Reset dynamic foreground/background | Clear the session's OSC 10/11 override; no reply. |
+| 112 | Reset cursor color | Accepted without effect; cursor color is not rendered. |
+
+Palette overrides and dynamic-color overrides are scoped to one terminal adapter/session. OSC 4/10/11 set requests never reply; only ? queries do. OSC 104 resets to the current ANSI theme baseline and stock xterm ramp. RIS (ESC c) clears all palette and OSC 10/11 overrides to their baselines. Changing the theme ANSI baseline also clears OSC 4 overrides; reapplying an identical baseline is a no-op and preserves them.
 
 **Implementation details:**
 
@@ -510,9 +515,10 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
-| 2026-10-06 | P0/P1: DECRQM (`CSI ? Ps $ p` / `CSI Ps $ p`), XTGETTCAP (`DCS + q`), modifyOtherKeys (`CSI > 4 ; Pv m`), OSC 4 palette set/query, OSC 10/11/12 set/query |
+| 2026-10-07 | Palette behavior: adapter-local ANSI/xterm palette and dynamic-color overrides; OSC 4/10/11 set requests are silent, queries use rgb:RRRR/GGGG/BBBB and ST; OSC 104/110/111/112 resets and RIS restore overrides. |
+| 2026-10-06 | P0/P1: DECRQM (CSI ? Ps $ p / CSI Ps $ p), XTGETTCAP (DCS + q), modifyOtherKeys (CSI > 4 ; Pv m), OSC 4/10/11/12 behavior |
 | 2026-06-17 | Updated OSC table: OSC 1337 PromptMark (shell integration) |
 | 2026-06-05 | Updated DECSTBM/DECOM interaction with alternate screen and origin mode |
 | 2026-06-05 | Documented PromptMark OSC 1337 sequence support |
 *Document version: 1.1*  
-*Last updated: 2026-06-17*
+*Last updated: 2026-10-07*

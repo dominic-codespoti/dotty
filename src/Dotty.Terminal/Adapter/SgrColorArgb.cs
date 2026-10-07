@@ -1,240 +1,95 @@
 using System;
-using System.Collections.Concurrent;
 
 namespace Dotty.Terminal.Adapter;
 
-public sealed class AnsiPaletteChangedEventArgs : EventArgs
-{
-    public AnsiPaletteChangedEventArgs(uint[] previousPalette, uint[] currentPalette)
-    {
-        PreviousPalette = previousPalette;
-        CurrentPalette = currentPalette;
-    }
-
-    public uint[] PreviousPalette { get; }
-
-    public uint[] CurrentPalette { get; }
-}
-
-/// <summary>
-/// Zero-allocation SGR color representation using uint ARGB values instead of hex strings.
-/// Avoids string allocations and provides O(1) equality checks.
-/// </summary>
+/// <summary>Zero-allocation SGR color representation using ARGB values.</summary>
 public readonly record struct SgrColorArgb(uint Argb)
 {
-    private static readonly object s_paletteLock = new();
-
     public bool IsEmpty => Argb == 0;
-
     public byte A => (byte)(Argb >> 24);
     public byte R => (byte)(Argb >> 16);
     public byte G => (byte)(Argb >> 8);
     public byte B => (byte)Argb;
 
-    public static SgrColorArgb FromRgb(byte r, byte g, byte b)
-    {
-        return new SgrColorArgb(0xFF000000u | (uint)(r << 16) | (uint)(g << 8) | b);
-    }
+    public static SgrColorArgb FromRgb(byte r, byte g, byte b) =>
+        new(0xFF000000u | (uint)(r << 16) | (uint)(g << 8) | b);
 
-    public static SgrColorArgb FromAnsiCode(int code)
+    public static SgrColorArgb FromAnsiCode(int code, TerminalPalette palette)
     {
-        return code switch
+        int index = code switch
         {
-            30 => _palette256[0],   // Black - uses theme!
-            31 => _palette256[1],    // Red
-            32 => _palette256[2],    // Green
-            33 => _palette256[3],    // Yellow
-            34 => _palette256[4],    // Blue
-            35 => _palette256[5],    // Magenta
-            36 => _palette256[6],    // Cyan
-            37 => _palette256[7],    // White
-            90 => _palette256[8],    // Bright Black
-            91 => _palette256[9],    // Bright Red
-            92 => _palette256[10],   // Bright Green - uses theme!
-            93 => _palette256[11],   // Bright Yellow
-            94 => _palette256[12],   // Bright Blue
-            95 => _palette256[13],   // Bright Magenta
-            96 => _palette256[14],   // Bright Cyan
-            97 => _palette256[15],   // Bright White
-            _ => default,
+            >= 30 and <= 37 => code - 30,
+            >= 90 and <= 97 => code - 90 + 8,
+            _ => -1,
         };
+        return index < 0 ? default : new SgrColorArgb(palette[index]);
     }
 
-    public static bool TryFromBackgroundCode(int code, out SgrColorArgb color)
+    public static bool TryFromBackgroundCode(int code, TerminalPalette palette, out SgrColorArgb color)
     {
-        if (code is >= 40 and <= 47)
-        {
-            color = FromAnsiCode(code - 10);
-            return !color.IsEmpty;
-        }
-        if (code is >= 100 and <= 107)
-        {
-            color = FromAnsiCode(code - 10);
-            return !color.IsEmpty;
-        }
-
+        if (code is >= 40 and <= 47) { color = FromAnsiCode(code - 10, palette); return true; }
+        if (code is >= 100 and <= 107) { color = FromAnsiCode(code - 10, palette); return true; }
         color = default;
         return false;
     }
 
-    // 256-color palette cache - lazily initialized, but first 16 can be overridden with theme colors
-    private static SgrColorArgb[] _palette256 = InitializePalette256();
+    public static SgrColorArgb From256(int index, TerminalPalette palette) =>
+        (uint)index < 256 ? new SgrColorArgb(palette[index]) : default;
 
-    public static event EventHandler<AnsiPaletteChangedEventArgs>? AnsiPaletteChanged;
-
-    public static uint[] GetAnsiPaletteSnapshot()
+    public static bool TryFrom256(int index, TerminalPalette palette, out SgrColorArgb color)
     {
-        lock (s_paletteLock)
-        {
-            var snapshot = new uint[16];
-            for (int i = 0; i < 16; i++)
-            {
-                snapshot[i] = _palette256[i].Argb;
-            }
-
-            return snapshot;
-        }
-    }
-
-    /// <summary>
-    /// Sets the first 16 ANSI colors (indices 0-15) from a theme palette.
-    /// Call this during app startup to apply the user's color theme.
-    /// </summary>
-    /// <param name="ansiColors">Array of 16 ARGB colors: 0-7 normal, 8-15 bright</param>
-    public static void SetAnsiPalette(uint[] ansiColors)
-    {
-        if (ansiColors?.Length != 16)
-            throw new ArgumentException("ANSI palette must have exactly 16 colors", nameof(ansiColors));
-
-        uint[] previousPalette;
-        bool changed = false;
-
-        lock (s_paletteLock)
-        {
-            previousPalette = new uint[16];
-            for (int i = 0; i < 16; i++)
-            {
-                previousPalette[i] = _palette256[i].Argb;
-                changed |= previousPalette[i] != ansiColors[i];
-            }
-
-            if (!changed)
-            {
-                return;
-            }
-
-            // Update the first 16 entries with theme colors
-            for (int i = 0; i < 16; i++)
-            {
-                _palette256[i] = new SgrColorArgb(ansiColors[i]);
-            }
-        }
-
-        AnsiPaletteChanged?.Invoke(
-            null,
-            new AnsiPaletteChangedEventArgs(previousPalette, (uint[])ansiColors.Clone()));
-    }
-
-    private static SgrColorArgb[] InitializePalette256()
-    {
-        var palette = new SgrColorArgb[256];
-
-        // First 16 colors are standard ANSI (will be overridden by SetAnsiPalette if theme is set)
-        // Normal colors (indices 0-7)
-        palette[0] = new SgrColorArgb(0xFF000000u);  // Black
-        palette[1] = new SgrColorArgb(0xFFAA0000u);  // Red
-        palette[2] = new SgrColorArgb(0xFF00AA00u);  // Green
-        palette[3] = new SgrColorArgb(0xFFAA5500u);  // Yellow
-        palette[4] = new SgrColorArgb(0xFF0000AAu);  // Blue
-        palette[5] = new SgrColorArgb(0xFFAA00AAu);  // Magenta
-        palette[6] = new SgrColorArgb(0xFF00AAAAu);  // Cyan
-        palette[7] = new SgrColorArgb(0xFFAAAAAAu);  // White
-
-        // Bright colors (indices 8-15)
-        palette[8] = new SgrColorArgb(0xFF555555u);   // Bright Black
-        palette[9] = new SgrColorArgb(0xFFFF5555u);   // Bright Red
-        palette[10] = new SgrColorArgb(0xFF55FF55u); // Bright Green
-        palette[11] = new SgrColorArgb(0xFFFFFF55u); // Bright Yellow
-        palette[12] = new SgrColorArgb(0xFF5555FFu); // Bright Blue
-        palette[13] = new SgrColorArgb(0xFFFF55FFu); // Bright Magenta
-        palette[14] = new SgrColorArgb(0xFF55FFFFu); // Bright Cyan
-        palette[15] = new SgrColorArgb(0xFFFFFFFFu); // Bright White
-
-        // 16-231: 6x6x6 color cube
-        for (int idx = 16; idx <= 231; idx++)
-        {
-            int c = idx - 16;
-            int r = c / 36;
-            int g = (c / 6) % 6;
-            int b = c % 6;
-            int R = r == 0 ? 0 : 55 + r * 40;
-            int G = g == 0 ? 0 : 55 + g * 40;
-            int B = b == 0 ? 0 : 55 + b * 40;
-            palette[idx] = FromRgb((byte)R, (byte)G, (byte)B);
-        }
-
-        // 232-255: Grayscale ramp
-        for (int idx = 232; idx < 256; idx++)
-        {
-            int gray = 8 + (idx - 232) * 10;
-            gray = Math.Clamp(gray, 0, 255);
-            palette[idx] = FromRgb((byte)gray, (byte)gray, (byte)gray);
-        }
-
-        return palette;
-    }
-
-    public static SgrColorArgb From256(int idx)
-    {
-        if ((uint)idx > 255) return default;
-        return _palette256[idx];
-    }
-
-    public static bool TryFrom256(int idx, out SgrColorArgb color)
-    {
-        if ((uint)idx > 255)
-        {
-            color = default;
-            return false;
-        }
-        color = _palette256[idx];
+        if ((uint)index >= 256) { color = default; return false; }
+        color = new SgrColorArgb(palette[index]);
         return true;
     }
 
-    // OSC 4 override for indices 16-255 (the xterm color cube/ramp).
-    // Stored sparsely so the static ramp stays the default for untouched
-    // entries; ResetExtendedPalette restores the stock ramp (RIS/theme).
-    private static readonly ConcurrentDictionary<int, uint> s_extendedOverrides = new();
-
-    public static void SetExtendedPalette(int index, uint argb)
+    internal static uint[] CreateStockPalette()
     {
-        if (index is < 16 or > 255)
-            return;
-        if (_palette256[index].Argb == argb)
+        var palette = new uint[256];
+        uint[] ansi =
+        [
+            0xFF000000u, 0xFFAA0000u, 0xFF00AA00u, 0xFFAA5500u,
+            0xFF0000AAu, 0xFFAA00AAu, 0xFF00AAAAu, 0xFFAAAAAAu,
+            0xFF555555u, 0xFFFF5555u, 0xFF55FF55u, 0xFFFFFF55u,
+            0xFF5555FFu, 0xFFFF55FFu, 0xFF55FFFFu, 0xFFFFFFFFu,
+        ];
+        ansi.CopyTo(palette, 0);
+        for (int index = 16; index <= 231; index++)
         {
-            s_extendedOverrides.TryRemove(index, out _);
-            return;
+            int c = index - 16;
+            int r = c / 36, g = (c / 6) % 6, b = c % 6;
+            palette[index] = FromRgb((byte)(r == 0 ? 0 : 55 + r * 40),
+                (byte)(g == 0 ? 0 : 55 + g * 40), (byte)(b == 0 ? 0 : 55 + b * 40)).Argb;
         }
-        _palette256[index] = new SgrColorArgb(argb);
-        s_extendedOverrides[index] = argb;
+        for (int index = 232; index < 256; index++)
+        {
+            byte gray = (byte)Math.Clamp(8 + (index - 232) * 10, 0, 255);
+            palette[index] = FromRgb(gray, gray, gray).Argb;
+        }
+        return palette;
     }
 
-    public static void ResetExtendedPalette()
+    internal static uint StockColorAt(int index)
     {
-        if (s_extendedOverrides.IsEmpty)
-            return;
-        SgrColorArgb[] stock = InitializePalette256();
-        foreach (int index in s_extendedOverrides.Keys)
-            _palette256[index] = stock[index];
-        s_extendedOverrides.Clear();
+        if ((uint)index >= 256) return 0;
+        if (index < 16)
+        {
+            return index switch
+            {
+                0 => 0xFF000000u, 1 => 0xFFAA0000u, 2 => 0xFF00AA00u, 3 => 0xFFAA5500u,
+                4 => 0xFF0000AAu, 5 => 0xFFAA00AAu, 6 => 0xFF00AAAAu, 7 => 0xFFAAAAAAu,
+                8 => 0xFF555555u, 9 => 0xFFFF5555u, 10 => 0xFF55FF55u, 11 => 0xFFFFFF55u,
+                12 => 0xFF5555FFu, 13 => 0xFFFF55FFu, 14 => 0xFF55FFFFu, _ => 0xFFFFFFFFu,
+            };
+        }
+        if (index < 232)
+        {
+            int c = index - 16, r = c / 36, g = (c / 6) % 6, b = c % 6;
+            return FromRgb((byte)(r == 0 ? 0 : 55 + r * 40), (byte)(g == 0 ? 0 : 55 + g * 40), (byte)(b == 0 ? 0 : 55 + b * 40)).Argb;
+        }
+        byte gray = (byte)Math.Clamp(8 + (index - 232) * 10, 0, 255);
+        return FromRgb(gray, gray, gray).Argb;
     }
 
-    /// <summary>
-    /// Converts to hex string for backward compatibility (renders, etc).
-    /// Use sparingly - creates string allocation.
-    /// </summary>
-    public string ToHexString()
-    {
-        return $"#{R:X2}{G:X2}{B:X2}";
-    }
+    public string ToHexString() => $"#{R:X2}{G:X2}{B:X2}";
 }

@@ -276,6 +276,16 @@ public class TerminalInputEncoder
                 return offset;
             }
         }
+        // At level 2 xterm reports every modified ordinary key, even when the
+        // key has a legacy encoding. Shifted letters use uppercase; shifted
+        // punctuation and digits use the unshifted base key because this API
+        // receives TerminalKey rather than the produced character.
+        if (modifyOtherKeysLevel == 2 && (ctrl || alt))
+        {
+            int codepoint = ModifyOtherKeysCodepoint(key, shift);
+            if (codepoint > 0)
+                return WriteModifyOtherKeys(destination, modifiers, codepoint);
+        }
 
         if (ctrl && !alt)
         {
@@ -373,23 +383,26 @@ public class TerminalInputEncoder
     private static int WriteLiteral(Span<byte> destination, ReadOnlySpan<char> text) =>
         Encoding.ASCII.GetBytes(text, destination);
 
-    // XTerm modifyOtherKeys level 1/2 fallback for Ctrl+key combinations that
-    // have no legacy control encoding. Level 1 emits ESC[27;mod;code~, level 2
-    // uses the raw codepoint form. Only reachable when legacy encoding fails.
+    // Level 1 applies only when Ctrl has no legacy control encoding.
     private static int EncodeModifyOtherKeysFallback(
         TerminalKey key,
         TerminalKeyModifiers modifiers,
         int modifyOtherKeysLevel,
         Span<byte> destination)
     {
-        if (modifyOtherKeysLevel is not (1 or 2))
+        if (modifyOtherKeysLevel != 1)
             return 0;
         if ((modifiers & TerminalKeyModifiers.Control) == 0)
             return 0;
-        int codepoint = ModifyOtherKeysCodepoint(key);
+        int codepoint = ModifyOtherKeysCodepoint(key, shifted: false);
         if (codepoint <= 0)
             return 0;
-        int mod = GetModifier(modifiers);
+        return WriteModifyOtherKeys(destination, modifiers, codepoint);
+    }
+
+    private static int WriteModifyOtherKeys(Span<byte> destination, TerminalKeyModifiers modifiers, int codepoint)
+    {
+        int mod = GetModifier(modifiers & (TerminalKeyModifiers.Shift | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Control));
         int offset = WriteLiteral(destination, "\x1b[27;");
         offset = WriteNumber(destination, offset, mod);
         destination[offset++] = (byte)';';
@@ -398,10 +411,10 @@ public class TerminalInputEncoder
         return offset;
     }
 
-    private static int ModifyOtherKeysCodepoint(TerminalKey key)
+    private static int ModifyOtherKeysCodepoint(TerminalKey key, bool shifted)
     {
         if (key >= TerminalKey.A && key <= TerminalKey.Z)
-            return 'a' + (key - TerminalKey.A);
+            return (shifted ? 'A' : 'a') + (key - TerminalKey.A);
         if (key >= TerminalKey.Number0 && key <= TerminalKey.Number9)
             return '0' + (key - TerminalKey.Number0);
         return key switch
@@ -414,17 +427,10 @@ public class TerminalInputEncoder
             TerminalKey.BackSlash => '\\',
             TerminalKey.Semicolon => ';',
             TerminalKey.Quote => '\'',
-            TerminalKey.GraveAccent => '`',
+            TerminalKey.GraveAccent => 96,
             TerminalKey.Comma => ',',
             TerminalKey.Period => '.',
             TerminalKey.Slash => '/',
-            TerminalKey.Enter => 13,
-            TerminalKey.Tab => 9,
-            TerminalKey.Escape => 27,
-            TerminalKey.F1 => 57364,
-            TerminalKey.F2 => 57365,
-            TerminalKey.F3 => 57366,
-            TerminalKey.F4 => 57367,
             _ => 0,
         };
     }

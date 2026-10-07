@@ -129,8 +129,9 @@ internal static class DottyWindowHost
     private static bool _cursorBlinkVisible = true;
     private static long _lastCursorBlinkTimestampMs;
     private static long _lastLuaStatusRefreshTimestampMs;
-    private static long _lastSystemThemePollTimestampMs;
-    private static string? _lastAppliedAutoThemeName;
+    private static CancellationTokenSource? _systemThemeRefreshCancellation;
+    private static Task? _systemThemeRefreshTask;
+    private static int _themeApplyPending;
     private static LeafPane[] _visibleLeaves = Array.Empty<LeafPane>();
     private static int _visibleLeafCount;
     private static readonly HashSet<TerminalSession> _sessionScratch = new();
@@ -200,6 +201,7 @@ internal static class DottyWindowHost
         _initialCommandSession = null;
         _exitCode = 0;
         _closed = false;
+        Volatile.Write(ref _themeApplyPending, 0);
         _lastWindowFocus = null;
         _focusedPane = null;
         _lastPresentTimestampMs = 0;
@@ -208,6 +210,8 @@ internal static class DottyWindowHost
         UserConfigService.CallbackDispatcher = action => _lifecycle.TryEnqueue(action);
         UserConfigService.ConfigChanged += OnConfigChanged;
         UserConfigService.Load();
+        if (UserConfigService.Current.ThemeAuto)
+            SilkConfig.RefreshSystemTheme();
         SetCustomFrameMode(UserConfigService.Current.Window.Decorations);
 
         // Select GLFW directly instead of Silk's reflection-based backend discovery.
@@ -357,7 +361,7 @@ internal static class DottyWindowHost
             CreateLuaTab,
             SplitLuaPane,
             action => _keyboardDispatcher?.Actions.TryExecute(action) ?? false,
-            () => ApplyConfigOnly(UserConfigService.Current),
+            () => _lifecycle.TryEnqueue(() => ApplyConfigOnly(UserConfigService.Current)),
             InvalidateLuaPresentation);
         _luaHost = new LuaScriptHost(luaServices, _tabManager);
         _luaHost.ScriptFileChanged += UserConfigService.RequestReload;
@@ -365,7 +369,7 @@ internal static class DottyWindowHost
         InvalidateLuaPresentation();
         _showTabBar = UserConfigService.Current.TabBar.Show;
         _activeTheme = SilkConfig.LoadActiveTheme();
-        (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme();
+        (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme(theme: _activeTheme);
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
 
         _gl = _window.CreateOpenGL();
@@ -426,6 +430,7 @@ internal static class DottyWindowHost
             shell: _launchOptions.Shell,
             command: _launchOptions.Command,
             shellIsExecutable: _launchOptions.Shell != null);
+        SilkConfig.ApplyThemeToAdapter(initialTab.Session.Adapter, _activeTheme);
         if (_launchOptions.Command != null)
             _initialCommandSession = initialTab.Session;
         _keybindings.RegisterDefaults();
@@ -436,6 +441,7 @@ internal static class DottyWindowHost
         float topOffset = barRows * _cellHeight * _scale;
         SetWindowClientSize(new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale)));
         StartControlServer();
+        StartSystemThemeRefresher();
         _luaHost.NotifyGuiStartup();
     }
 
@@ -989,33 +995,39 @@ internal static class DottyWindowHost
         if (size.X > 0 && size.Y > 0) ApplyFramebufferLayout(size);
         SilkConfig.ClearThemeCache();
         _activeTheme = SilkConfig.LoadActiveTheme();
-        (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme();
+        foreach (var tab in _tabManager.Tabs)
+            foreach (var pane in tab.PaneTree.Leaves)
+                SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter, _activeTheme);
+        (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme(theme: _activeTheme);
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
-        _lastAppliedAutoThemeName = config.ThemeAuto ? SilkConfig.GetActiveThemeName() : null;
-        _lastSystemThemePollTimestampMs = GetClockMilliseconds();
+    }
+    private static void StartSystemThemeRefresher()
+    {
+        _systemThemeRefreshCancellation = new CancellationTokenSource();
+        var token = _systemThemeRefreshCancellation.Token;
+        _systemThemeRefreshTask = Task.Run(async () =>
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
+                {
+                    if (_closed || !UserConfigService.Current.ThemeAuto) continue;
+                    if (!SilkConfig.RefreshSystemTheme()) continue;
+                    if (Interlocked.CompareExchange(ref _themeApplyPending, 1, 0) != 0) continue;
+                    if (!_lifecycle.TryEnqueue(() =>
+                    {
+                        Volatile.Write(ref _themeApplyPending, 0);
+                        if (!_closed) ApplyConfigOnly(UserConfigService.Current);
+                    }))
+                        Volatile.Write(ref _themeApplyPending, 0);
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        }, token);
     }
 
-    // Polls the OS color scheme for themeAuto configs (at most every 5 s).
-    // A changed effective theme name re-runs the config apply path so the
-    // palette, defaults, and cached theme all follow the OS switch.
-    private static void PollSystemTheme(long now)
-    {
-        if (_closed || _tabManager == null)
-            return;
-        if (now - _lastSystemThemePollTimestampMs < 5000)
-            return;
-        _lastSystemThemePollTimestampMs = now;
-        var config = UserConfigService.Current;
-        if (!config.ThemeAuto)
-        {
-            _lastAppliedAutoThemeName = null;
-            return;
-        }
-        string effective = SilkConfig.ResolveConfiguredThemeName(config);
-        if (string.Equals(effective, _lastAppliedAutoThemeName, StringComparison.OrdinalIgnoreCase))
-            return;
-        ApplyConfigOnly(config);
-    }
+
     private static TerminalTab CreateLuaTab(string? workingDirectory, string? shell)
     {
         var activeSession = _tabManager.ActiveTab?.Session;
@@ -1521,7 +1533,6 @@ internal static class DottyWindowHost
         long now = GetClockMilliseconds();
         if (now - _lastLuaStatusRefreshTimestampMs >= 1000)
             RefreshLuaStatus();
-        PollSystemTheme(now);
         // While a synchronized update (CSI 2026, used by nvim for every
         // redraw) is held, presents are withheld by design. Sleep instead of
         // spinning: the gate below used to burn 100% of a core here, starving
@@ -2021,6 +2032,13 @@ internal static class DottyWindowHost
         _nativeTextInput?.Dispose();
         _nativeTextInput = null;
         _closed = true;
+        _systemThemeRefreshCancellation?.Cancel();
+        try { _systemThemeRefreshTask?.GetAwaiter().GetResult(); }
+        catch (OperationCanceledException) { }
+        _systemThemeRefreshCancellation?.Dispose();
+        _systemThemeRefreshCancellation = null;
+        _systemThemeRefreshTask = null;
+        Volatile.Write(ref _themeApplyPending, 0);
         Win32WindowFrame.Uninstall();
         _customFrameActive = false;
         _customFrameHitTestGeometryValid = false;

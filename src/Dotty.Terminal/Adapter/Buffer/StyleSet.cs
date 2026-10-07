@@ -79,9 +79,9 @@ public class StyleSet
         return state.IdToStyle;
     }
 
-    public bool RemapAnsiPalette(uint[] previousPalette, uint[] currentPalette)
+    public bool RemapAnsiPalette(ReadOnlySpan<uint> previousPalette, ReadOnlySpan<uint> currentPalette)
     {
-        if (previousPalette == null || currentPalette == null || previousPalette.Length != 16 || currentPalette.Length != 16)
+        if (previousPalette.Length != 16 || currentPalette.Length != 16)
         {
             throw new ArgumentException("ANSI palettes must contain exactly 16 colors.");
         }
@@ -122,7 +122,7 @@ public class StyleSet
 
         return true;
     }
-    private static CellAttributes RemapAnsiPalette(in CellAttributes style, uint[] previousPalette, uint[] currentPalette)
+    private static CellAttributes RemapAnsiPalette(in CellAttributes style, ReadOnlySpan<uint> previousPalette, ReadOnlySpan<uint> currentPalette)
     {
         var remapped = style;
         remapped.Foreground = RemapAnsiColor(style.Foreground, previousPalette, currentPalette);
@@ -131,7 +131,7 @@ public class StyleSet
         return remapped;
     }
 
-    private static SgrColorArgb RemapAnsiColor(SgrColorArgb color, uint[] previousPalette, uint[] currentPalette)
+    private static SgrColorArgb RemapAnsiColor(SgrColorArgb color, ReadOnlySpan<uint> previousPalette, ReadOnlySpan<uint> currentPalette)
     {
         if (color.IsEmpty)
         {

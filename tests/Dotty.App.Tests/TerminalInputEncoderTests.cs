@@ -426,17 +426,71 @@ public class TerminalInputEncoderTests
         Assert.Null(encoder.Encode(TerminalKey.Unknown, TerminalKeyModifiers.None));
     }
 
-    [Fact]
-    public void Encode_ModifyOtherKeysFallback_EmitsXtermSequence()
+    [Theory]
+    [InlineData(TerminalKey.C, TerminalKeyModifiers.Control, 0, "\x03")]
+    [InlineData(TerminalKey.C, TerminalKeyModifiers.Control, 1, "\x03")]
+    [InlineData(TerminalKey.C, TerminalKeyModifiers.Control, 2, "\x1b[27;5;99~")]
+    [InlineData(TerminalKey.W, TerminalKeyModifiers.Control, 0, "\x17")]
+    [InlineData(TerminalKey.W, TerminalKeyModifiers.Control, 1, "\x17")]
+    [InlineData(TerminalKey.W, TerminalKeyModifiers.Control, 2, "\x1b[27;5;119~")]
+    [InlineData(TerminalKey.Comma, TerminalKeyModifiers.Control, 0, null)]
+    [InlineData(TerminalKey.Comma, TerminalKeyModifiers.Control, 1, "\x1b[27;5;44~")]
+    [InlineData(TerminalKey.Comma, TerminalKeyModifiers.Control, 2, "\x1b[27;5;44~")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Alt, 0, "\u001ba")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Alt, 1, "\u001ba")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Alt, 2, "\x1b[27;3;97~")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Control | TerminalKeyModifiers.Shift, 0, "\x01")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Control | TerminalKeyModifiers.Shift, 1, "\x01")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Control | TerminalKeyModifiers.Shift, 2, "\x1b[27;6;65~")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Control | TerminalKeyModifiers.Alt, 0, "\x1b\x01")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Control | TerminalKeyModifiers.Alt, 1, "\x1b\x01")]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Control | TerminalKeyModifiers.Alt, 2, "\x1b[27;7;97~")]
+    // Shift-only characters use the text path, not the key encoder.
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Shift, 0, null)]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Shift, 1, null)]
+    [InlineData(TerminalKey.A, TerminalKeyModifiers.Shift, 2, null)]
+    [InlineData(TerminalKey.Number1, TerminalKeyModifiers.Control, 0, null)]
+    [InlineData(TerminalKey.Number1, TerminalKeyModifiers.Control, 1, "\x1b[27;5;49~")]
+    [InlineData(TerminalKey.Number1, TerminalKeyModifiers.Control, 2, "\x1b[27;5;49~")]
+    [InlineData(TerminalKey.Space, TerminalKeyModifiers.Control, 0, "\x00")]
+    [InlineData(TerminalKey.Space, TerminalKeyModifiers.Control, 1, "\x00")]
+    [InlineData(TerminalKey.Space, TerminalKeyModifiers.Control, 2, "\x1b[27;5;32~")]
+    [InlineData(TerminalKey.Enter, TerminalKeyModifiers.Control, 0, "\r")]
+    [InlineData(TerminalKey.Enter, TerminalKeyModifiers.Control, 1, "\r")]
+    [InlineData(TerminalKey.Enter, TerminalKeyModifiers.Control, 2, "\r")]
+    [InlineData(TerminalKey.Tab, TerminalKeyModifiers.Control, 0, "\t")]
+    [InlineData(TerminalKey.Tab, TerminalKeyModifiers.Control, 1, "\t")]
+    [InlineData(TerminalKey.Tab, TerminalKeyModifiers.Control, 2, "\t")]
+    [InlineData(TerminalKey.Escape, TerminalKeyModifiers.Control, 0, "\x1b")]
+    [InlineData(TerminalKey.Escape, TerminalKeyModifiers.Control, 1, "\x1b")]
+    [InlineData(TerminalKey.Escape, TerminalKeyModifiers.Control, 2, "\x1b")]
+    [InlineData(TerminalKey.Backspace, TerminalKeyModifiers.Control, 0, "\x17")]
+    [InlineData(TerminalKey.Backspace, TerminalKeyModifiers.Control, 1, "\x17")]
+    [InlineData(TerminalKey.Backspace, TerminalKeyModifiers.Control, 2, "\x17")]
+    [InlineData(TerminalKey.F1, TerminalKeyModifiers.Control, 0, "\x1b[1;5P")]
+    [InlineData(TerminalKey.F1, TerminalKeyModifiers.Control, 1, "\x1b[1;5P")]
+    [InlineData(TerminalKey.F1, TerminalKeyModifiers.Control, 2, "\x1b[1;5P")]
+    [InlineData(TerminalKey.F2, TerminalKeyModifiers.Control, 0, "\x1b[1;5Q")]
+    [InlineData(TerminalKey.F2, TerminalKeyModifiers.Control, 1, "\x1b[1;5Q")]
+    [InlineData(TerminalKey.F2, TerminalKeyModifiers.Control, 2, "\x1b[1;5Q")]
+    [InlineData(TerminalKey.F3, TerminalKeyModifiers.Control, 0, "\x1b[1;5R")]
+    [InlineData(TerminalKey.F3, TerminalKeyModifiers.Control, 1, "\x1b[1;5R")]
+    [InlineData(TerminalKey.F3, TerminalKeyModifiers.Control, 2, "\x1b[1;5R")]
+    [InlineData(TerminalKey.F4, TerminalKeyModifiers.Control, 0, "\x1b[1;5S")]
+    [InlineData(TerminalKey.F4, TerminalKeyModifiers.Control, 1, "\x1b[1;5S")]
+    [InlineData(TerminalKey.F4, TerminalKeyModifiers.Control, 2, "\x1b[1;5S")]
+    // Keypad input uses its dedicated event/text path, not this encoder path.
+    [InlineData(TerminalKey.Keypad0, TerminalKeyModifiers.Control, 0, null)]
+    [InlineData(TerminalKey.Keypad0, TerminalKeyModifiers.Control, 1, null)]
+    [InlineData(TerminalKey.Keypad0, TerminalKeyModifiers.Control, 2, null)]
+    public void Encode_ModifyOtherKeys_UsesXtermLevelSemantics(
+        TerminalKey key, TerminalKeyModifiers modifiers, int level, string? expected)
     {
         var encoder = new TerminalInputEncoder();
-        // Ctrl+, has no legacy control encoding; without a level it stays unsupported.
-        Assert.Null(encoder.Encode(TerminalKey.Comma, TerminalKeyModifiers.Control));
-        Assert.Equal("\x1b[27;5;44~", Encoding.ASCII.GetString(encoder.Encode(
-            TerminalKey.Comma, TerminalKeyModifiers.Control, modifyOtherKeysLevel: 1)!));
-        // Legacy Ctrl+letter keeps its control byte even when a level is negotiated.
-        Assert.Equal("\x17", Encoding.ASCII.GetString(encoder.Encode(
-            TerminalKey.W, TerminalKeyModifiers.Control, modifyOtherKeysLevel: 2)!));
+        var bytes = encoder.Encode(key, modifiers, modifyOtherKeysLevel: level);
+        Assert.Equal(expected, bytes is null ? null : Encoding.ASCII.GetString(bytes));
+        if (bytes is not null)
+            Assert.DoesNotContain(bytes, value => value >= 0x80);
     }
 }
 

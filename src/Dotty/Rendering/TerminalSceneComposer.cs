@@ -124,6 +124,9 @@ public sealed class TerminalSceneComposer
     private int _cachedMenuItemCount = -1;
     private sealed class LeafRowCache
     {
+        public SgrColorArgb Foreground;
+        public SgrColorArgb Background;
+        public bool HasColors;
         public LeafPane? Owner;
         public readonly QuadRowCache Cache = new();
     }
@@ -274,16 +277,20 @@ public sealed class TerminalSceneComposer
                 skippedLeaf = true;
                 continue;
             }
-
             using (leafSnapshot)
             {
                 int startInstanceIndex = instanceCount;
                 int paneRows = leafSnapshot.Rows;
                 int paneColumns = leafSnapshot.Columns;
                 EnsureScratchCapacity(instanceCount + checked(paneRows * paneColumns * 2 + 1024));
+                var adapter = leaf.Session.Adapter;
+                var leafForeground = adapter.DefaultForegroundOverrideArgb is uint foregroundOverride
+                    ? new SgrColorArgb(foregroundOverride) : themeForeground;
+                var leafBackground = adapter.DefaultBackgroundOverrideArgb is uint backgroundOverride
+                    ? new SgrColorArgb(backgroundOverride) : new SgrColorArgb(theme.Background);
                 int written = AppendCachedLeafRows(
                     leafIndex, leaf, leafSnapshot, _frameScratch.AsSpan(startInstanceIndex),
-                    paneRows, paneColumns, themeForeground, new SgrColorArgb(theme.Background));
+                    paneRows, paneColumns, leafForeground, leafBackground);
                 int startColumnOffset = (int)Math.Round(leaf.Bounds.X / (cellWidth * scale));
                 int startRowOffset = (int)Math.Round(leaf.Bounds.Y / (cellHeight * scale)) + barRows;
                 for (int i = 0; i < written; i++)
@@ -379,9 +386,9 @@ public sealed class TerminalSceneComposer
 
                         if (leafSnapshot.CursorShape == TerminalCursorShape.Block)
                         {
-                            instance.BgR = themeForeground.R;
-                            instance.BgG = themeForeground.G;
-                            instance.BgB = themeForeground.B;
+                            instance.BgR = leafForeground.R;
+                            instance.BgG = leafForeground.G;
+                            instance.BgB = leafForeground.B;
                             instance.BgA = 128;
                         }
                         else if (leafSnapshot.CursorShape == TerminalCursorShape.Underline)
@@ -763,6 +770,13 @@ public sealed class TerminalSceneComposer
         {
             slot.Owner = leaf;
             slot.Cache.InvalidateAll();
+        }
+        if (!slot.HasColors || slot.Foreground != foreground || slot.Background != background)
+        {
+            slot.Cache.InvalidateAll();
+            slot.Foreground = foreground;
+            slot.Background = background;
+            slot.HasColors = true;
         }
 
         var cache = slot.Cache;

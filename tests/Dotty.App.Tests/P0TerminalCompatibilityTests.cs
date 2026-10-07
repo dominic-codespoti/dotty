@@ -117,7 +117,7 @@ public sealed class P0TerminalCompatibilityTests
         parser.Feed("\x1b[?6$p"u8); // DECOM reset
         parser.Feed("\x1b[?2004$p"u8); // bracketed paste reset
         parser.Feed("\x1b[?9999$p"u8); // unrecognized
-        parser.Feed("\x1b[7$p"u8); // DECAWM ANSI form, default set
+        parser.Feed("\x1b[7$p"u8); // ANSI mode 7 is not recognized
 
         Assert.Equal(new[]
         {
@@ -125,7 +125,7 @@ public sealed class P0TerminalCompatibilityTests
             "\x1b[?6;2$y",
             "\x1b[?2004;2$y",
             "\x1b[?9999;0$y",
-            "\x1b[7;1$y",
+            "\x1b[7;0$y",
         }, replies);
     }
 
@@ -141,7 +141,7 @@ public sealed class P0TerminalCompatibilityTests
         parser.Feed("\x1bP+qQuestions\x1b\\"u8); // unknown key, no reply
 
         Assert.Single(replies);
-        Assert.Equal("\x1bP1$r544E=646F747479\x1b\\", replies[0]);
+        Assert.Equal("\x1bP1+r544E=646F747479\x1b\\", replies[0]);
     }
 
     [Fact]
@@ -155,8 +155,16 @@ public sealed class P0TerminalCompatibilityTests
         Assert.Equal(0, adapter.ModifyOtherKeysLevel);
 
         parser.Feed("\u001bc"u8); // RIS resets the level
+        parser.Feed("\x1b[>4m"u8);
+        Assert.Equal(0, adapter.ModifyOtherKeysLevel);
         parser.Feed("\x1b[>4;2m"u8);
         Assert.Equal(2, adapter.ModifyOtherKeysLevel);
+        parser.Feed("\x1b[>m"u8);
+        Assert.Equal(0, adapter.ModifyOtherKeysLevel);
+
+        parser.Feed("\x1b[>4;2m"u8);
+        parser.Feed("\u001bc"u8);
+        Assert.Equal(0, adapter.ModifyOtherKeysLevel);
     }
 
     [Fact]

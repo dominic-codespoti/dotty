@@ -25,7 +25,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
       - name: Install X11 and software OpenGL prerequisites
         run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0 cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
       - name: Build native PTY helper and publish host
@@ -46,7 +47,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
       - name: Build native PTY helper and publish host
         shell: bash
         run: |
@@ -66,7 +68,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
       - name: Publish Windows host
         shell: pwsh
         run: dotnet publish src/Dotty/Dotty.csproj -c Release -r win-x64 --self-contained false -p:PublishAot=false -o .native-smoke
@@ -82,7 +85,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
       - name: Build native PTY helper and publish macOS host
         shell: bash
         run: |

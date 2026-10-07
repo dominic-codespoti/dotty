@@ -18,7 +18,7 @@ native PTY and desktop smoke runs on native arm64 hosts. See [Release Policy](Re
 
 ## Requirements
 
-All platforms require the .NET 10 SDK for source builds and an OpenGL 3.3 core
+All platforms require the .NET 11 SDK for source builds and an OpenGL 3.3 core
 capable driver for the desktop host. Release artifacts are self-contained.
 
 Linux and macOS source builds also require a C compiler and `make` for the POSIX

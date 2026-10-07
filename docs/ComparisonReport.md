@@ -15,7 +15,7 @@ included the then-current Avalonia host; that architecture is historical. The
 
 | Feature | Dotty | Ghostty | Wezterm |
 | :--- | :--- | :--- | :--- |
-| **Core Language** | C# (.NET 10) | Zig | Rust |
+| **Core Language** | C# (.NET 11) | Zig | Rust |
 | **Memory Management** | Managed (Garbage Collected with `Span<T>`/`ref struct` optimizations) | Manual / Arenas | Borrow Checker / Safe Manual |
 | **UI Framework** | Silk.NET/GLFW windowing with an OpenGL 3.3 renderer | Custom / Native (AppKit/GTK) | Custom Windowing (Mux/GUI split) |
 | **Configuration** | JSON with atomic hot reload plus a Lua startup script API for configuration, keybindings, tabs/panes, and event hooks | Plain text configuration | Lua scripting engine |

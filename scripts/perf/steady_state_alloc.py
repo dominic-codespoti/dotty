@@ -9,7 +9,7 @@ subtracted. Pass --trace to also record a gc-verbose EventPipe trace (JIT
 apphost only; NativeAOT does not emit allocation ticks).
 
 Example:
-  python3 scripts/perf/steady_state_alloc.py --app src/Dotty/bin/Release/net10.0/dotty
+  python3 scripts/perf/steady_state_alloc.py --app src/Dotty/bin/Release/net11.0/dotty
 """
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ def scenarios(d: Dotty, repeat: int = 1):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--app", default="src/Dotty/bin/Release/net10.0/dotty")
+    parser.add_argument("--app", default="src/Dotty/bin/Release/net11.0/dotty")
     parser.add_argument("--no-lua", action="store_true", help="run without the Lua title/status/event hooks")
     parser.add_argument("--trace", type=Path, help="also record a gc-verbose nettrace to this path")
     parser.add_argument("--repeat", type=int, default=1,

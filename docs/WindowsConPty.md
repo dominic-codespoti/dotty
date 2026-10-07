@@ -9,7 +9,7 @@ are the canonical references for backend behavior and supported targets.
 
 ConPTY requires Windows 10 build 17763 (version 1809) or later. Dotty's promoted
 Windows release target is x64; Windows arm64 is a build-only candidate, not a
-promoted release target. Source builds use the .NET 10 SDK, and the desktop host
+promoted release target. Source builds use the .NET 11 SDK, and the desktop host
 requires a working OpenGL 3.3 driver. See the current [support matrix](PlatformSupport.md#support-matrix).
 
 ## Backend implementation
@@ -37,7 +37,7 @@ terminated. Its allocation uses `Marshal.StringToHGlobalUni`, paired with
 
 ## Build and verification
 
-Build the solution on Windows with the .NET 10 SDK:
+Build the solution on Windows with the .NET 11 SDK:
 
 ```powershell
 dotnet build Dotty.slnx -c Release --nologo

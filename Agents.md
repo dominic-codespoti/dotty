@@ -50,7 +50,7 @@ Read the relevant document before changing a subsystem:
    X11 smoke described in [E2E Testing](./docs/E2ETesting.md), or with the
    loopback control interface (`DOTTY_TEST_PORT`).
 5. Keep public contracts in `src/Dotty.Abstractions/` free of host-specific
-   types; that project is published as a NuGet package.
+   types; they are shared between the host projects.
 
 ## Documentation maintenance
 
@@ -63,8 +63,9 @@ Read the relevant document before changing a subsystem:
 
 ## Project guardrails
 
-- `src/Dotty.Abstractions` is published; removing or renaming a public type
-  there is a breaking change and needs an explicit decision.
+- `src/Dotty.Abstractions` is an internal project, not a NuGet package
+  (scripting goes through Lua), so its public types may be changed or
+  renamed freely as long as every in-repo caller is updated.
 - Unix PTY startup requires the `pty-helper` binary beside the host; Windows
   uses ConPTY and requires build 17763 or newer.
 - Do not reintroduce Avalonia: the desktop host is Silk.NET/OpenGL only.

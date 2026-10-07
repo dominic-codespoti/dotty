@@ -206,13 +206,13 @@ older published binary:
 make -C src/Dotty.NativePty
 dotnet build src/Dotty/Dotty.csproj -c Release
 python3 scripts/perf/eval_suite.py nvim-scroll \
-  --app src/Dotty/bin/Release/net10.0/dotty \
+  --app src/Dotty/bin/Release/net11.0/dotty \
   --include dotty,ghostty,kitty --lines 1000000 --cols 200 --rows 60 \
   --runs 5 --warmup-runs 1 --profile plain --capture auto --sample-hz 60 \
   --startup-timeout 30 --run-timeout 1800 --timeout 86400
 ```
 
-Requires Neovim 0.10+, .NET 10, Python 3, the desired terminals, and a Linux
+Requires Neovim 0.10+, .NET 11, Python 3, the desired terminals, and a Linux
 display: Hyprland with `hyprctl`/`grim`, or X11 with `xdotool`. Neovim's experimental
 `nvim__redraw` API is used per step with `valid=true`, `statusline=true`, and
 `flush=true`; record the Neovim version because behavior can change. Use

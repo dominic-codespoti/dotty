@@ -9,7 +9,7 @@ This skill lets you benchmark the Dotty terminal emulator using three complement
 
 ## Prerequisites
 
-- .NET 10 SDK installed
+- .NET 11 SDK installed
 - Python 3 (for harness scripts)
 - `make`, `gcc`/`clang` (for native PTY helper)
 - .NET diagnostics tools installed and on `PATH`: `dotnet-trace`, `dotnet-counters`, and `dotnet-gcdump`
@@ -107,13 +107,13 @@ avoids accidentally measuring an older published binary:
 make -C src/Dotty.NativePty
 dotnet build src/Dotty/Dotty.csproj -c Release
 python3 scripts/perf/eval_suite.py nvim-scroll \
-  --app src/Dotty/bin/Release/net10.0/dotty \
+  --app src/Dotty/bin/Release/net11.0/dotty \
   --include dotty,ghostty,kitty --lines 1000000 --cols 200 --rows 60 \
   --runs 5 --warmup-runs 1 --profile plain --capture auto --sample-hz 60 \
   --startup-timeout 30 --run-timeout 1800 --timeout 86400
 ```
 
-Requires Neovim 0.10+, .NET 10, Python 3, desired terminals, and Linux Hyprland
+Requires Neovim 0.10+, .NET 11, Python 3, desired terminals, and Linux Hyprland
 with `hyprctl`/`grim` or X11 with `xdotool`. Each step calls experimental
 `nvim__redraw` with `valid=true`, `statusline=true`, and `flush=true`; record the
 Neovim version because API behavior may change. `--profile syntax` enables the
@@ -421,11 +421,11 @@ Microbenchmarks always run under the JIT. The cross-terminal harness can test ei
 ```bash
 # JIT build
 dotnet build src/Dotty/Dotty.csproj -c Release
-python3 scripts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/dotty
+python3 scripts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net11.0/dotty
 
 # R2R publish
 dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained true -p:PublishReadyToRun=true
-python3 scripts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net10.0/linux-x64/publish/dotty
+python3 scripts/perf/terminal_output_bench.py --app src/Dotty/bin/Release/net11.0/linux-x64/publish/dotty
 ```
 
 The harness auto-detects the R2R binary if present.

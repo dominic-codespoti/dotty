@@ -4,12 +4,12 @@ Thanks for your interest in contributing. This guide covers local development; t
 
 ## Prerequisites
 
-- .NET SDK 10.0.100 or a later .NET 10 feature-band SDK. The repository's [global.json](global.json) pins 10.0.100 and allows roll-forward within .NET 10; .NET 9 is not sufficient for the net10.0 projects.
+- .NET SDK 11.0.100-rc.1 or later. The repository's [global.json](global.json) pins the 11.0.100-rc.1 SDK and allows prerelease roll-forward within .NET 11. The projects target net11.0; .NET 10 is not sufficient.
 - On Linux and macOS, a C compiler and `make` to build the POSIX PTY helper.
 - Git.
 - For running the desktop application, a supported desktop environment and OpenGL 3.3-capable driver. Headless builds and tests do not demonstrate physical GUI behavior; see [native desktop verification](docs/NativeDesktopAndIme.md).
 
-Install .NET 10 from the [official download page](https://dotnet.microsoft.com/download/dotnet/10.0). On Windows, no separate PTY helper is needed; the app uses ConPTY.
+Install .NET 11 from the [official download page](https://dotnet.microsoft.com/download/dotnet/11.0). On Windows, no separate PTY helper is needed; the app uses ConPTY.
 
 ## Build and run
 
@@ -36,7 +36,7 @@ Release configuration enables Native AOT for applicable targets. Publishing and 
 
 ## Tests
 
-The repository uses Microsoft.Testing.Platform via global.json. Run the suite with the .NET 10 SDK:
+The repository uses Microsoft.Testing.Platform via global.json. Run the suite with the .NET 11 SDK:
 
 ```sh
 # Run all solution test projects

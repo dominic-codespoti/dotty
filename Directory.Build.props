@@ -7,11 +7,6 @@
     <Version>0.3.0</Version>
   </PropertyGroup>
 
-  <!-- Performance: enable dynamic PGO (Profile-Guided Optimization) -->
-  <PropertyGroup>
-    <TieredPGO>true</TieredPGO>
-  </PropertyGroup>
-
   <!-- Release build optimizations -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <DebugType>embedded</DebugType>

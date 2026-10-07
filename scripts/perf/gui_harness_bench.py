@@ -13,7 +13,7 @@ from pathlib import Path
 def parse_args():
     root = Path(__file__).resolve().parents[2]
     default_app = (
-        root / "src" / "Dotty.App" / "bin" / "Release" / "net10.0" / "Dotty.App"
+        root / "src" / "Dotty.App" / "bin" / "Release" / "net11.0" / "Dotty.App"
     )
 
     parser = argparse.ArgumentParser(

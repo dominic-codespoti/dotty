@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>dotty</AssemblyName>
@@ -11,9 +11,27 @@
          headless OpenGL initialization smoke test. -->
     <PublishAot>true</PublishAot>
     <IsTrimmable>true</IsTrimmable>
-    <!-- Use the portable NativeAOT CPU baseline. Local benchmarks may opt in
-         explicitly with -p:IlcInstructionSet=native. -->
+    <!-- Use the portable NativeAOT CPU baseline (x86-64-v2 on .NET 11); newer
+         instruction sets such as AVX2 still light up through runtime checks.
+         Measured on .NET 11 RC1 (interleaved 500k-line terminal_output_bench runs):
+         -p:IlcInstructionSet=x86-64-v3 gave no throughput gain and a larger
+         binary, so it is not worth dropping older CPUs. Local benchmarks may opt
+         in explicitly with -p:IlcInstructionSet=native. -->
   </PropertyGroup>
+  <!-- Silk.NET 2.x is not trim/AOT annotated. Its native-library resolver
+       (Silk.NET.Core.Loader.DefaultPathResolver) probes deps.json and
+       Assembly.Location, which do not exist in a NativeAOT binary (IL3000/IL3002),
+       then falls back to the plain library name; Dotty ships its pinned GLFW beside
+       the executable (CopyPinnedGlfwToPublishOutput), and the published binary was
+       verified to start and load it. Only these third-party warnings are silenced,
+       and only for the NativeAOT compile (ILC reads NoWarn when it writes its
+       response file), so the analyzers still report the same diagnostics in
+       Dotty's own code during ordinary builds. -->
+  <Target Name="SuppressSilkAotWarnings" BeforeTargets="WriteIlcRspFileForCompilation">
+    <PropertyGroup>
+      <NoWarn>$(NoWarn);IL2104;IL3000;IL3002</NoWarn>
+    </PropertyGroup>
+  </Target>
   <ItemGroup>
     <PackageReference Include="Silk.NET.Windowing" />
     <PackageReference Include="Silk.NET.Input" />

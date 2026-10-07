@@ -1,24 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <LangVersion>12.0</LangVersion>
-    
-    <!-- NuGet Package Metadata -->
-    <PackageId>Dotty.Abstractions</PackageId>
-    <!-- Version is set in Directory.Build.props -->
-    <Authors>Dominic Codespoti</Authors>
-    <Description>Configuration abstractions and themes for Dotty terminal emulator</Description>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/dominic-codespoti/dotty</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/dominic-codespoti/dotty</PackageProjectUrl>
-    <PackageTags>terminal;console;cli;config;themes;dotty</PackageTags>
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <!-- No separate symbol package: DebugType=embedded (Directory.Build.props)
-         already ships debug info inside the DLL, so no standalone .pdb exists
-         for a .snupkg to contain. -->
+    <!-- Internal contracts shared by the host projects; scripting goes through Lua,
+         so this assembly is no longer published as a NuGet package. -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
   <!-- Embedded resources -->
   <ItemGroup>

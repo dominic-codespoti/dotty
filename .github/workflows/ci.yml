@@ -14,7 +14,7 @@ on:
       - '.github/instructions/**'
 
 env:
-  DOTNET_VERSION: '10.0.x'
+  DOTNET_VERSION: '11.0.x'
   PROJECT_PATH: 'src/Dotty/Dotty.csproj'
   SOLUTION_PATH: 'Dotty.slnx'
 
@@ -60,6 +60,7 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
 
       - name: Install GLFW build prerequisites (Linux)
         if: runner.os == 'Linux'
@@ -194,6 +195,7 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
 
       - name: Install GUI smoke dependencies
         run: sudo apt-get update && sudo apt-get install -y xvfb cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
@@ -237,6 +239,7 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
 
       - name: Restore dependencies
         run: dotnet restore ${{ env.SOLUTION_PATH }}
@@ -260,6 +263,7 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
 
       - name: Cache NuGet packages
         uses: actions/cache@v6

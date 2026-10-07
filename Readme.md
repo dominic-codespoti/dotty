@@ -1,9 +1,9 @@
 # Dotty
 
-A cross-platform desktop terminal emulator built with .NET 10, Silk.NET,
+A cross-platform desktop terminal emulator built with .NET 11, Silk.NET,
 GLFW, OpenGL 3.3, and SkiaSharp.
 
-[![.NET](https://img.shields.io/badge/.NET-10.0-purple.svg)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-11.0_RC-purple.svg)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](License.md)
 
 ## Overview
@@ -75,7 +75,7 @@ self-contained; no .NET installation is needed. Windows requires build 17763+
 
 ### Prerequisites
 
-- .NET SDK 10.0.100+; [global.json](global.json) allows .NET 10 feature-band roll-forward. A runtime alone is not enough to build.
+- .NET SDK 11.0.100-rc.1 or later; [global.json](global.json) pins the 11.0.100-rc.1 SDK and allows prerelease roll-forward within .NET 11. A runtime alone is not enough to build.
 - Python 3 and CMake on `PATH`: build and publish compile the checked-in GLFW fork automatically.
 - Desktop OpenGL 3.3 core support.
 - **Windows:** Visual Studio 2022 C/C++ build tools and a Windows SDK, including the native import libraries. ConPTY itself is supplied by Windows; GLFW and NativeAOT still require the native toolchain.
@@ -171,7 +171,7 @@ override a global denial. See the [clipboard policy](docs/Configuration.md#clipb
 
 ### Test
 
-The repository uses Microsoft.Testing.Platform. Run the solution tests with the .NET 10 SDK:
+The repository uses Microsoft.Testing.Platform. Run the solution tests with the .NET 11 SDK:
 
 ```bash
 dotnet test --solution Dotty.slnx -c Release

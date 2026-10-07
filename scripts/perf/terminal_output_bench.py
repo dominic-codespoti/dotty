@@ -45,7 +45,7 @@ def _positive_float(value):
 
 def default_app(root=None):
     root = Path(root) if root is not None else Path(__file__).resolve().parents[2]
-    release = root / "src" / "Dotty" / "bin" / "Release" / "net10.0"
+    release = root / "src" / "Dotty" / "bin" / "Release" / "net11.0"
     # Keep the lowercase apphost as the convention, while accepting older
     # uppercase artifacts when that is all the build tree contains.
     candidates = (

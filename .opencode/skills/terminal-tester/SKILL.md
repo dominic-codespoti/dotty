@@ -9,7 +9,7 @@ This skill lets you test the Dotty terminal emulator interactively. You can run 
 
 ## Prerequisites
 
-- .NET 10 SDK installed
+- .NET 11 SDK installed
 - `make`, `gcc`/`clang` installed (for native PTY helper)
 - For visual screenshots (optional): `xdotool`, `imagemagick`, `chafa`
 - The skill scripts are in `.opencode/skills/terminal-tester/`
@@ -227,7 +227,7 @@ DOTTY_TEST_STATE_DIR=/tmp/dotty-harness \
 
 Troubleshooting:
 
-- **"dotnet: command not found"**: Install the .NET 10 SDK and add it to PATH.
+- **"dotnet: command not found"**: Install the .NET 11 SDK and add it to PATH.
 - **"make: command not found"**: Install `make` and a C compiler.
 - **"Connection refused"**: Check the per-run `app.log`; the host may have
   failed graphics/PTY startup.

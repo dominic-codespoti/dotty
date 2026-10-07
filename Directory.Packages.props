@@ -14,19 +14,19 @@
   </ItemGroup>
   <!-- Benchmarking -->
   <ItemGroup>
-    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="BenchmarkDotNet.Annotations" Version="0.15.8" />
-    <PackageVersion Include="BenchmarkDotNet.Diagnostics.dotTrace" Version="0.15.8" />
-    <PackageVersion Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.15.8" />
+    <PackageVersion Include="BenchmarkDotNet" Version="0.16.0-preview.2" />
+    <PackageVersion Include="BenchmarkDotNet.Annotations" Version="0.16.0-preview.2" />
+    <PackageVersion Include="BenchmarkDotNet.Diagnostics.dotTrace" Version="0.16.0-preview.2" />
+    <PackageVersion Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.16.0-preview.2" />
   </ItemGroup>
   <!-- Extensions -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.FileExtensions" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.11" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.FileExtensions" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="11.0.0-rc.1.26425.128" />
   </ItemGroup>
   <!-- Testing -->
   <ItemGroup>
@@ -53,10 +53,10 @@
   </ItemGroup>
   <!-- System -->
   <ItemGroup>
-    <PackageVersion Include="System.Diagnostics.PerformanceCounter" Version="10.0.11" />
-    <PackageVersion Include="System.IO.Pipelines" Version="10.0.11" />
+    <PackageVersion Include="System.Diagnostics.PerformanceCounter" Version="11.0.0-rc.1.26425.128" />
+    <PackageVersion Include="System.IO.Pipelines" Version="11.0.0-rc.1.26425.128" />
     <PackageVersion Include="System.Memory" Version="4.6.3" />
-    <PackageVersion Include="System.Text.Json" Version="10.0.11" />
+    <PackageVersion Include="System.Text.Json" Version="11.0.0-rc.1.26425.128" />
   </ItemGroup>
   <!-- Other -->
   <ItemGroup>

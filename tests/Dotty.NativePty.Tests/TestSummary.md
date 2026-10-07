@@ -174,7 +174,8 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
       - name: Build
         run: dotnet build
       - name: Test
@@ -187,7 +188,8 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
       - name: Build Native Helper
         run: cd src/Dotty.NativePty && make
       - name: Build
@@ -202,7 +204,8 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
+          dotnet-quality: 'preview'
       - name: Build Native Helper
         run: cd src/Dotty.NativePty && make
       - name: Build

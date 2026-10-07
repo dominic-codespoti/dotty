@@ -34,7 +34,7 @@ def repository_root() -> Path:
 
 def default_app(root: Path | None = None) -> Path:
     root = root or repository_root()
-    release = root / "src" / "Dotty" / "bin" / "Release" / "net10.0"
+    release = root / "src" / "Dotty" / "bin" / "Release" / "net11.0"
     # Prefer the lowercase apphost convention, with deterministic compatibility
     # for build trees that only contain legacy uppercase apphosts.
     candidates = (

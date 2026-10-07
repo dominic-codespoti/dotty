@@ -118,7 +118,7 @@ class TerminalOutputBenchTests(unittest.TestCase):
     def test_default_app_prefers_lowercase_jit_apphost(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            jit = root / "src" / "Dotty" / "bin" / "Release" / "net10.0" / "dotty"
+            jit = root / "src" / "Dotty" / "bin" / "Release" / "net11.0" / "dotty"
             jit.parent.mkdir(parents=True)
             jit.write_text("app", encoding="utf-8")
             self.assertEqual(bench.default_app(root), jit)
@@ -126,7 +126,7 @@ class TerminalOutputBenchTests(unittest.TestCase):
     def test_default_app_falls_back_to_legacy_uppercase_publish(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            legacy = root / "src" / "Dotty" / "bin" / "Release" / "net10.0" / "linux-x64" / "publish" / "Dotty"
+            legacy = root / "src" / "Dotty" / "bin" / "Release" / "net11.0" / "linux-x64" / "publish" / "Dotty"
             legacy.parent.mkdir(parents=True)
             legacy.write_text("app", encoding="utf-8")
             self.assertEqual(bench.default_app(root), legacy)

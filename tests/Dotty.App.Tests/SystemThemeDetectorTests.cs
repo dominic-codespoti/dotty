@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading;
 using Dotty.Silk.Config;
 using Xunit;
 
@@ -81,16 +80,12 @@ public sealed class SystemThemeDetectorTests
     }
 
     [Fact]
-    public void LinuxProbesShareOneBoundedDeadline()
+    public void LinuxProbeTimeoutsAreBoundedByOneSharedDeadline()
     {
-        var runner = new FakeRunner((_, _) =>
-        {
-            Thread.Sleep(120);
-            return ProcessResult.Failure;
-        });
-        var timer = Stopwatch.StartNew();
+        var runner = new FakeRunner((_, _) => ProcessResult.Failure);
         Assert.Null(SystemThemeDetector.DetectLinux(runner));
-        Assert.True(timer.Elapsed < TimeSpan.FromMilliseconds(1050), $"Detection took {timer.Elapsed}.");
+        Assert.All(runner.Timeouts, timeout => Assert.True(timeout > TimeSpan.Zero));
+        Assert.True(runner.Timeouts.Sum(timeout => timeout.TotalMilliseconds) <= 1000);
         Assert.True(runner.Calls.Count < 6);
     }
 
@@ -109,10 +104,12 @@ public sealed class SystemThemeDetectorTests
     private sealed class FakeRunner(Func<string, IReadOnlyList<string>, ProcessResult> responder) : IThemeProcessRunner
     {
         public List<(string Executable, IReadOnlyList<string> Arguments)> Calls { get; } = new();
+        public List<TimeSpan> Timeouts { get; } = new();
 
         public ProcessResult Run(string executable, IReadOnlyList<string> arguments, TimeSpan timeout)
         {
             Calls.Add((executable, arguments));
+            Timeouts.Add(timeout);
             return responder(executable, arguments);
         }
     }

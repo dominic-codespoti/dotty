@@ -508,44 +508,34 @@ from appearing at the 1,000 ms failsafe before END arrives.
 
 ### Baseline Management
 
-Baselines define acceptable performance thresholds. They are stored in `baselines.json`.
+The BDN gate matches `BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo` to a baseline key using ordinal, exact-name comparison. Description-named benchmarks therefore include BenchmarkDotNet's single quotes in the JSON key (for example, `'Parse SGR: Bold'`). New benchmarks without a baseline are reported as `NEW` and do not fail; keys unused by any benchmark in the selected categories are reported as orphans. The gate prints both lists at the end of a run.
 
-#### Setting Baselines
+The latency gate compares the BenchmarkDotNet median with:
 
-```csharp
-var comparer = new BaselineComparer();
-comparer.SetBaseline(
-    "Parser_PlainText_10KB",
-    expectedMeanMs: 0.05,
-    maxLatencyMs: 0.1,
-    minThroughput: 100000
-);
-comparer.SaveBaselines("baselines.json");
+```text
+allowedMs = baselineMs * (1 + relativeTolerance) + 0.000075
 ```
 
-#### Regression Threshold
+The default relative tolerance is 50%; the 0.000075 ms absolute floor is 75 ns. This uses medians to reduce sensitivity to isolated shared-runner outliers. Example limits:
 
-Default regression threshold is 10%. A benchmark fails if:
-- Mean latency increases >10%
-- Throughput decreases >10%
-- Allocations increase >10%
+| Baseline | Allowed median | Effective multiplier |
+|---:|---:|---:|
+| 0.6 us | 0.975 us | 1.625x |
+| 1 us | 1.575 us | 1.575x |
+| 2 ms | 3.000075 ms | 1.500x |
+| 10 ms | 15.000075 ms | 1.500x |
+
+Allocation values and gate results are **bytes per operation**, obtained from BenchmarkDotNet's `GcStats.GetBytesAllocatedPerOperation(BenchmarkCase)`; they are not total bytes allocated across a run. BenchmarkDotNet includes `OperationsPerInvoke` in its per-operation calculation. If BDN supplies no allocation data (null), reports and baseline updates use 0 bytes/op; baseline updates retain the existing 64 B headroom.
 
 ### CI Integration
 
-In CI mode, benchmarks:
-1. Run with reduced iterations (quick mode)
-2. Compare against baselines
-3. Generate JSON reports
-4. Fail if regressions detected
+In CI mode, benchmarks run with reduced iterations, compare medians and per-operation allocation values against exact-name baselines, and generate JSON reports. Missing and unmatched baseline names are emitted as warnings.
 
 ### Updating Baselines
 
-After intentional performance improvements:
+After reviewing an intentional performance change, run the manual GitHub Actions `recalibrate-baselines.yml` workflow with `workflow_dispatch`; leave the filter empty to cover every category. The workflow writes current medians and per-operation allocation ceilings for benchmarks it ran, removes baseline keys that match no benchmark in the full suite, and preserves matching baselines for unrun categories. Latency baselines are runner-specific and must be reseeded by the user with that workflow after this change lands. Allocation ceilings in the checked-in file were not inferred or invented here; recalibrate them from a current run.
 
-1. Run benchmarks in detailed mode
-2. Review results for consistency
-3. Update baseline values in source code or JSON file
-4. Commit updated baselines
+Use `dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode gate-self-test` for deterministic checks of the threshold boundaries, bytes-per-operation normalization, and exact-name orphan detection.
 
 ### Repeatable baseline snapshots
 

@@ -25,10 +25,16 @@ public class Program
         Console.WriteLine("=== Dotty Terminal Emulator - Performance Test Suite ===");
         Console.WriteLine();
 
-        // Parse command line arguments
         var config = ParseArguments(args);
         var mode = GetBenchmarkMode(args);
         var filter = GetBenchmarkFilter(args);
+        if (mode == "gate-self-test")
+        {
+            RunGateSelfTest();
+            return;
+        }
+
+        // Validate command line arguments
 
         // Validate filter if specified
         if (!string.IsNullOrEmpty(filter))
@@ -267,6 +273,20 @@ public class Program
                 }
             }
         }
+        var executedReports = summaries.Where(s => s != null).SelectMany(s => s.Reports).ToArray();
+        var executedNames = executedReports.Select(r => r.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo).ToHashSet(StringComparer.Ordinal);
+        var suiteNames = GetAllBenchmarkCases()
+            .Select(benchmark => benchmark.Descriptor.WorkloadMethodDisplayInfo).ToHashSet(StringComparer.Ordinal);
+        var coverage = PerformanceReport.GetBaselineCoverage(suiteNames, report.BaselineNames);
+        var missingInRun = coverage.MissingBaselines.Where(executedNames.Contains).ToArray();
+        if (missingInRun.Length != 0 || coverage.UnmatchedBaselines.Length != 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("WARNING: Benchmark baseline name coverage is incomplete.");
+            foreach (string name in missingInRun) Console.WriteLine($"  Benchmark has no baseline: {name}");
+            foreach (string name in coverage.UnmatchedBaselines) Console.WriteLine($"  Baseline matched no benchmark: {name}");
+        }
+
 
         if (allRegressions.Any())
         {
@@ -291,27 +311,18 @@ public class Program
         }
     }
 
-    // Writes fresh baselines.json from this run's medians: expectedMean is
-    // the measured median, maxLatency is 2x median, allocations are the
-    // measured bytes/op rounded up with 64 B headroom. Review the diff
-    // before committing; never update baselines to hide a regression.
+    // Update executed benchmarks, preserve other valid baselines, and remove suite-wide orphans.
     private static void UpdateBaselines(List<BenchmarkDotNet.Reports.Summary> summaries)
     {
         string projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
         string baselinePath = Path.Combine(projectDir, "baselines.json");
-        Dictionary<string, object> baselines = new();
-        if (File.Exists(baselinePath))
-        {
-            try
-            {
-                var existing = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(baselinePath));
-                if (existing != null)
-                    baselines = existing;
-            }
-            catch
-            {
-            }
-        }
+        var baselines = File.Exists(baselinePath)
+            ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, BaselineThreshold>>(File.ReadAllText(baselinePath)) ?? new()
+            : new Dictionary<string, BaselineThreshold>();
+        var suiteCases = GetAllBenchmarkCases().ToArray();
+        var suiteNames = suiteCases.Select(benchmark => benchmark.Descriptor.WorkloadMethodDisplayInfo).ToHashSet(StringComparer.Ordinal);
+        foreach (string orphan in baselines.Keys.Where(key => !suiteNames.Contains(key)).ToArray())
+            baselines.Remove(orphan);
 
         int updated = 0;
         foreach (var summary in summaries)
@@ -322,14 +333,13 @@ public class Program
                 string name = report.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo;
                 double medianMs = (report.ResultStatistics?.Median ?? 0) / 1_000_000.0;
                 if (medianMs <= 0) continue;
-                long allocated = report.GcStats.GetTotalAllocatedBytes(false) ?? 0L;
-                baselines[name] = new Dictionary<string, object>
+                double allocatedPerOp = report.GcStats.GetBytesAllocatedPerOperation(report.BenchmarkCase) ?? 0;
+                baselines[name] = new BaselineThreshold
                 {
-                    ["expectedMeanMs"] = Math.Round(medianMs, 6),
-                    ["maxLatencyMs"] = Math.Round(medianMs * 2, 6),
-                    ["minThroughput"] = 0,
-                    ["maxAllocationsPerOp"] = allocated + 64,
-                    ["regressionThreshold"] = 0.25,
+                    ExpectedMeanMs = Math.Round(medianMs, 6),
+                    MinThroughput = 0,
+                    MaxAllocationsPerOp = Math.Ceiling(allocatedPerOp) + 64,
+                    RegressionThreshold = 0.50,
                 };
                 updated++;
             }
@@ -338,8 +348,58 @@ public class Program
         string json = System.Text.Json.JsonSerializer.Serialize(baselines,
             new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(baselinePath, json + Environment.NewLine);
-        Console.WriteLine($"Updated {updated} baselines in {baselinePath}. Review the diff before committing.");
+        Console.WriteLine($"Updated {updated} baselines in {baselinePath}; valid unrun baselines were retained. Review the diff.");
     }
+
+    private static readonly Type[] BenchmarkTypes =
+    [
+        typeof(ParserBenchmarks), typeof(ParserMicroBenchmarks), typeof(MemoryBenchmarks),
+        typeof(RenderingBenchmarks), typeof(SilkRenderingBenchmarks), typeof(StartupBenchmarks),
+        typeof(ThroughputBenchmarks), typeof(LatencyBenchmarks), typeof(BulkOutputBenchmark)
+    ];
+
+    private static IEnumerable<BenchmarkCase> GetAllBenchmarkCases() =>
+        BenchmarkTypes.SelectMany(type => BenchmarkConverter.TypeToBenchmarks(type).BenchmarksCases);
+    private static void RunGateSelfTest()
+    {
+        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(0.0006) - 0.000975) > 1e-12)
+            throw new InvalidOperationException("Sub-microsecond latency threshold formula changed.");
+        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(0.001) - 0.001575) > 1e-12)
+            throw new InvalidOperationException("One-microsecond latency threshold formula changed.");
+        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(2.0) - 3.000075) > 1e-12)
+            throw new InvalidOperationException("Millisecond latency threshold formula changed.");
+
+        var comparer = new BaselineComparer();
+        comparer.SetBaseline("small", 0.0006);
+        comparer.SetBaseline("large", 2.0);
+        comparer.SetBaseline("allocation", 0);
+        if (comparer.Compare("small", new BenchmarkResult { P50Ms = 0.0013 }).Passed)
+            throw new InvalidOperationException("600 ns baseline accepted 1.3 us.");
+        if (comparer.Compare("large", new BenchmarkResult { P50Ms = 3.01 }).Passed)
+            throw new InvalidOperationException("2 ms baseline accepted 3.01 ms.");
+
+        var allocationGate = new BaselineComparer();
+        allocationGate.SetBaseline("allocation", expectedMeanMs: 0, maxAllocationsPerOp: 100);
+        if (!allocationGate.Compare("allocation", new BenchmarkResult { AllocatedBytesPerOp = BytesPerOperation(1200, 12) }).Passed ||
+            allocationGate.Compare("allocation", new BenchmarkResult { AllocatedBytesPerOp = BytesPerOperation(1212, 12) }).Passed)
+            throw new InvalidOperationException("Per-operation allocation conversion or comparison changed.");
+
+        var parserThroughputName = GetAllBenchmarkCases()
+            .Where(benchmark => benchmark.Descriptor.Categories.Contains("Parser"))
+            .Select(benchmark => benchmark.Descriptor.WorkloadMethodDisplayInfo)
+            .Single(name => name == "'Throughput - ANSI Text 1MB'");
+        var parserCoverage = PerformanceReport.GetBaselineCoverage([parserThroughputName], [parserThroughputName]);
+        if (parserCoverage.MissingBaselines.Length != 0 || parserCoverage.UnmatchedBaselines.Length != 0)
+            throw new InvalidOperationException("Parser-category throughput baseline failed exact-name matching.");
+
+        var coverage = PerformanceReport.GetBaselineCoverage(["'Known'", "'New'"], ["'Known'", "'Orphan'"]);
+        if (!coverage.MissingBaselines.SequenceEqual(["'New'"]) || !coverage.UnmatchedBaselines.SequenceEqual(["'Orphan'"]))
+            throw new InvalidOperationException("Exact-name baseline orphan detection changed.");
+        Console.WriteLine("Performance gate self-check passed.");
+    }
+
+    private static double BytesPerOperation(long allocatedBytes, int operationsPerInvoke) =>
+        (double)allocatedBytes / operationsPerInvoke;
 
     private static IConfig ParseArguments(string[] args)
     {

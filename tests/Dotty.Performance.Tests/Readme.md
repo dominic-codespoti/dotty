@@ -295,26 +295,17 @@ BenchmarkDotNet.Artifacts/performance/
 
 ## Baseline Tracking
 
-Baselines define acceptable performance thresholds. Set baselines with:
+The gate uses the exact ordinal string in `BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo`; for `[Benchmark(Description = ...)]` methods, the key includes the single quotes (for example, `'Parse SGR: Bold'`). New benchmarks with no matching baseline are reported as `NEW`; baseline keys that match no benchmark in the selected categories and benchmarks with no baseline are both listed at the end of a gate run.
 
-```csharp
-var comparer = new BaselineComparer();
-comparer.SetBaseline("Parser_PlainText_1KB", expectedMeanMs: 0.1, maxLatencyMs: 0.5, minThroughput: 10000);
-comparer.SaveBaselines("baselines.json");
-```
+Latency compares the median against `baselineMs * (1 + relativeTolerance) + 0.000075`, with the default relative tolerance of 50% and a 75 ns absolute floor. Effective limits are 0.975 us for a 0.6 us baseline (1.625x), 1.575 us for 1 us (1.575x), and 3.000075 ms for 2 ms (1.5x). The median reduces sensitivity to isolated shared-runner outliers. Parser microbenchmarks batch repeated operations with `OperationsPerInvoke` so each timed invocation covers at least roughly 100 us; reported allocation values are normalized per operation.
 
-### Default Baselines
-
-Default baselines are included for common operations. Regression threshold is 10% by default.
+Allocation figures are bytes per operation from BenchmarkDotNet `GcStats.GetBytesAllocatedPerOperation(BenchmarkCase)`, not aggregate bytes over the run; its per-op calculation respects `OperationsPerInvoke`. If BDN supplies no allocation data (null), reports and updates use 0 bytes/op; baseline updates add 64 B headroom.
 
 ### Updating Baselines
 
-To update baselines after intentional performance improvements:
+Run the manual GitHub Actions `recalibrate-baselines.yml` workflow with `workflow_dispatch`; leave the filter empty to include every category. It updates measurements for categories run, removes stale keys within those categories, and keeps other categories. Latency baselines are runner-specific and must be reseeded by the user after this change lands. The checked-in allocation ceilings were not recalculated by hand; recalibration from a current run is required.
 
-1. Run benchmarks in detailed mode
-2. Review results
-3. Update `BaselineComparer.GetDefaultBaselines()` or the `baselines.json` file
-
+Run `dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode gate-self-test` for deterministic checks of latency boundaries, per-operation allocation normalization, and orphan detection.
 ## CI/CD Integration
 
 ### GitHub Actions
@@ -330,11 +321,7 @@ The project is configured to run in CI with:
 
 ### Performance Regression Detection
 
-In CI mode, the test suite:
-1. Runs benchmarks with reduced iterations
-2. Compares results against baselines
-3. Fails the build if regressions exceed 10%
-4. Generates JSON reports for artifact storage
+In CI quick mode, the gate compares medians and per-operation allocation values with exact-name baselines. Missing baseline names and unused keys in the selected categories are listed as warnings; a new benchmark without a baseline is informational, not a regression failure. JSON reports are generated for artifact storage.
 
 ### Storing Baselines
 

@@ -15,13 +15,14 @@ public class PerformanceReport
 {
     private readonly string _outputDirectory;
     private readonly BaselineComparer _baselineComparer;
+    public IReadOnlyCollection<string> BaselineNames => _baselineComparer.BaselineNames;
 
     public PerformanceReport(string outputDirectory, string? baselineFile = null)
     {
         _outputDirectory = outputDirectory;
         _baselineComparer = new BaselineComparer(
             ResolveBaselineFile(baselineFile, outputDirectory),
-            regressionThreshold: 0.25);
+            regressionThreshold: 0.50);
 
         Directory.CreateDirectory(outputDirectory);
     }
@@ -178,7 +179,7 @@ public class PerformanceReport
                     r.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(r.AllMeasurements.Count * 0.99)).FirstOrDefault().Nanoseconds / 1000000.0 : 0,
                 ThroughputOpsPerSec = r.ResultStatistics != null && r.ResultStatistics.Mean > 0 ?
                     1_000_000_000.0 / r.ResultStatistics.Mean : 0,
-                AllocatedBytesPerOp = (double)(r.GcStats.GetTotalAllocatedBytes(false) ?? 0L),
+                AllocatedBytesPerOp = r.GcStats.GetBytesAllocatedPerOperation(r.BenchmarkCase) ?? 0,
                 Gen0Collections = r.GcStats.Gen0Collections,
                 Gen1Collections = r.GcStats.Gen1Collections,
                 Gen2Collections = r.GcStats.Gen2Collections,
@@ -294,6 +295,14 @@ public class PerformanceReport
         return !hasRegressions;
     }
 
+    public static (string[] MissingBaselines, string[] UnmatchedBaselines) GetBaselineCoverage(
+        IEnumerable<string> benchmarkNames, IEnumerable<string> baselineNames)
+    {
+        var names = benchmarkNames.ToHashSet(StringComparer.Ordinal);
+        var baselines = baselineNames.ToHashSet(StringComparer.Ordinal);
+        return (names.Except(baselines, StringComparer.Ordinal).Order().ToArray(),
+            baselines.Except(names, StringComparer.Ordinal).Order().ToArray());
+    }
     private BenchmarkResult ExtractResult(BenchmarkReport report)
     {
         // BenchmarkDotNet ResultStatistics are nanoseconds; baselines are ms.
@@ -302,14 +311,10 @@ public class PerformanceReport
         {
             MeanMs = (report.ResultStatistics?.Mean ?? 0) / NsPerMs,
             P50Ms = (report.ResultStatistics?.Median ?? 0) / NsPerMs,
-            P95Ms = report.AllMeasurements?.Any() == true ?
-                report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.95)).FirstOrDefault().Nanoseconds / NsPerMs : 0,
-            P99Ms = report.AllMeasurements?.Any() == true ?
-                report.AllMeasurements.OrderBy(m => m.Nanoseconds).Skip((int)(report.AllMeasurements.Count * 0.99)).FirstOrDefault().Nanoseconds / NsPerMs : 0,
             StdDevMs = (report.ResultStatistics?.StandardDeviation ?? 0) / NsPerMs,
             ThroughputOpsPerSec = report.ResultStatistics != null && report.ResultStatistics.Mean > 0 ?
                 1_000_000_000.0 / report.ResultStatistics.Mean : 0,
-            AllocatedBytesPerOp = (double)(report.GcStats.GetTotalAllocatedBytes(false) ?? 0L),
+            AllocatedBytesPerOp = report.GcStats.GetBytesAllocatedPerOperation(report.BenchmarkCase) ?? 0,
             Gen0Collections = report.GcStats.Gen0Collections,
             Gen1Collections = report.GcStats.Gen1Collections,
             Gen2Collections = report.GcStats.Gen2Collections

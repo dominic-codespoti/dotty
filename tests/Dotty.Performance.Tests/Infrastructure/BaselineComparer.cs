@@ -11,13 +11,13 @@ public class BaselineComparer
     private readonly Dictionary<string, BaselineThreshold> _baselines;
     private readonly double _regressionThreshold;
 
-    public BaselineComparer(double regressionThreshold = 0.10)
+    public BaselineComparer(double regressionThreshold = 0.50)
     {
         _baselines = new Dictionary<string, BaselineThreshold>();
         _regressionThreshold = regressionThreshold;
     }
 
-    public BaselineComparer(string baselineFilePath, double regressionThreshold = 0.10)
+    public BaselineComparer(string baselineFilePath, double regressionThreshold = 0.50)
         : this(regressionThreshold)
     {
         LoadBaselines(baselineFilePath);
@@ -26,13 +26,13 @@ public class BaselineComparer
     /// <summary>
     /// Set baseline threshold for a specific benchmark
     /// </summary>
-    public void SetBaseline(string benchmarkName, double expectedMeanMs, double maxLatencyMs = 0, double minThroughput = 0)
+    public void SetBaseline(string benchmarkName, double expectedMeanMs, double minThroughput = 0, double maxAllocationsPerOp = 0)
     {
         _baselines[benchmarkName] = new BaselineThreshold
         {
             ExpectedMeanMs = expectedMeanMs,
-            MaxLatencyMs = maxLatencyMs > 0 ? maxLatencyMs : expectedMeanMs * 2,
             MinThroughput = minThroughput,
+            MaxAllocationsPerOp = maxAllocationsPerOp,
             RegressionThreshold = _regressionThreshold
         };
     }
@@ -101,14 +101,10 @@ public class BaselineComparer
         bool passed = true;
         var messages = new List<string>();
 
-        // Check median latency (robust to single-sample outliers unlike the
-        // mean). A per-benchmark absolute floor absorbs shared-runner jitter
-        // on sub-microsecond benches; the relative threshold catches real
-        // regressions on larger benches.
+        // Median latency avoids single-sample outliers. The fixed 75 ns floor absorbs small shared-runner jitter.
         if (baseline.ExpectedMeanMs > 0)
         {
-            double noiseFloorMs = Math.Max(0.005, baseline.ExpectedMeanMs * 0.5);
-            var maxAllowed = baseline.ExpectedMeanMs * (1 + baseline.RegressionThreshold) + noiseFloorMs;
+            var maxAllowed = GetAllowedLatencyMs(baseline.ExpectedMeanMs, baseline.RegressionThreshold);
             var comparison = new ThresholdComparison
             {
                 Metric = "Median Latency",
@@ -178,43 +174,12 @@ public class BaselineComparer
             Comparisons = comparisons.ToArray()
         };
     }
+    public const double AbsoluteLatencyFloorMs = 0.000075;
 
-    /// <summary>
-    /// Get default baselines for common terminal operations
-    /// </summary>
-    public static Dictionary<string, BaselineThreshold> GetDefaultBaselines()
-    {
-        return new Dictionary<string, BaselineThreshold>
-        {
-            // Parser benchmarks
-            ["Parser_PlainText_1KB"] = new() { ExpectedMeanMs = 0.1, MaxAllocationsPerOp = 1024 },
-            ["Parser_PlainText_10KB"] = new() { ExpectedMeanMs = 0.5, MaxAllocationsPerOp = 4096 },
-            ["Parser_PlainText_100KB"] = new() { ExpectedMeanMs = 5.0, MaxAllocationsPerOp = 16384 },
-            ["Parser_AnsiBasic_1KB"] = new() { ExpectedMeanMs = 0.15, MaxAllocationsPerOp = 2048 },
-            ["Parser_AnsiExtended_1KB"] = new() { ExpectedMeanMs = 0.2, MaxAllocationsPerOp = 3072 },
-            ["Parser_AnsiTrueColor_1KB"] = new() { ExpectedMeanMs = 0.25, MaxAllocationsPerOp = 4096 },
+    public IReadOnlyCollection<string> BaselineNames => _baselines.Keys;
 
-            // Rendering benchmarks
-            ["Render_FullScreen_80x24"] = new() { ExpectedMeanMs = 1.0, MaxLatencyMs = 5.0 },
-            ["Render_FullScreen_120x40"] = new() { ExpectedMeanMs = 2.0, MaxLatencyMs = 10.0 },
-            ["Render_Scroll_LargeBuffer"] = new() { ExpectedMeanMs = 0.5, MaxLatencyMs = 2.0 },
-            ["Render_PartialUpdate"] = new() { ExpectedMeanMs = 0.2, MaxLatencyMs = 1.0 },
-
-            // Memory benchmarks
-            ["Memory_GridAllocation_80x24"] = new() { MaxAllocationsPerOp = 10000 },
-            ["Memory_GridAllocation_120x40"] = new() { MaxAllocationsPerOp = 20000 },
-            ["Memory_BufferResize"] = new() { MaxAllocationsPerOp = 50000 },
-            ["Memory_ScrollbackCompaction"] = new() { MaxAllocationsPerOp = 100000 },
-
-            // Throughput benchmarks
-            ["Throughput_Sustained_10MB"] = new() { MinThroughput = 10000000 }, // 10 MB/s
-            ["Throughput_Peak_ShortBurst"] = new() { MinThroughput = 50000000 }, // 50 MB/s
-
-            // Startup benchmarks
-            ["Startup_Cold"] = new() { ExpectedMeanMs = 500, MaxLatencyMs = 1000 },
-            ["Startup_Warm"] = new() { ExpectedMeanMs = 100, MaxLatencyMs = 200 },
-        };
-    }
+    public static double GetAllowedLatencyMs(double baselineMs, double relativeTolerance = 0.50) =>
+        baselineMs * (1 + relativeTolerance) + AbsoluteLatencyFloorMs;
 }
 
 /// <summary>
@@ -225,8 +190,6 @@ public class BaselineThreshold
     [JsonPropertyName("expectedMeanMs")]
     public double ExpectedMeanMs { get; set; }
 
-    [JsonPropertyName("maxLatencyMs")]
-    public double MaxLatencyMs { get; set; }
 
     [JsonPropertyName("minThroughput")]
     public double MinThroughput { get; set; }
@@ -235,7 +198,7 @@ public class BaselineThreshold
     public double MaxAllocationsPerOp { get; set; }
 
     [JsonPropertyName("regressionThreshold")]
-    public double RegressionThreshold { get; set; } = 0.25;
+    public double RegressionThreshold { get; set; } = 0.50;
 }
 
 /// <summary>
@@ -245,8 +208,6 @@ public class BenchmarkResult
 {
     public double MeanMs { get; set; }
     public double P50Ms { get; set; }
-    public double P95Ms { get; set; }
-    public double P99Ms { get; set; }
     public double StdDevMs { get; set; }
     public double ThroughputOpsPerSec { get; set; }
     public double AllocatedBytesPerOp { get; set; }

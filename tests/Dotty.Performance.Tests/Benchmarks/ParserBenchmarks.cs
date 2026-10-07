@@ -32,6 +32,8 @@ public class ParserBenchmarks : PerformanceTestBase
     private byte[] _oscSequences = null!;
     private byte[] _throughputPlain = null!;
     private byte[] _throughputAnsi = null!;
+    private byte[] _chunkSmall = null!;
+    private byte[] _chunkMedium = null!;
 
     // GlobalSetup inherited from PerformanceTestBase
     public override void GlobalSetup()
@@ -39,7 +41,7 @@ public class ParserBenchmarks : PerformanceTestBase
         base.GlobalSetup();
 
         // Initialize parser and adapter
-        _adapter = new TerminalAdapter(24, 80);
+        _adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
         _parser = new BasicAnsiParser();
         _parser.Handler = _adapter;
 
@@ -60,9 +62,13 @@ public class ParserBenchmarks : PerformanceTestBase
         _oscSequences = TestDataGenerator.GenerateOscSequences(100);
         _throughputPlain = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.XLarge);
         _throughputAnsi = TestDataGenerator.GenerateBasicAnsiText(TestDataGenerator.Sizes.XLarge, 0.1);
+        _chunkSmall = TestDataGenerator.GeneratePlainText(1000);
+        _chunkMedium = TestDataGenerator.GeneratePlainText(10000);
 
-        // Warmup
+        // This setup-generated 1 KB payload includes repeated CSI 2 J full-screen erases.
+        // Pre-feed it here so the timed run measures steady-state mutation of the fixed grid.
         Warmup(() => _parser.Feed(_plainTextSmall), 5);
+        _parser.Feed(_complexAnsi);
     }
 
     #region Plain Text Parsing
@@ -151,21 +157,15 @@ public class ParserBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Parse Chunks - 1KB x 10")]
     public void Chunks_1KBx10()
     {
-        var chunk = TestDataGenerator.GeneratePlainText(1000);
         for (int i = 0; i < 10; i++)
-        {
-            _parser.Feed(chunk);
-        }
+            _parser.Feed(_chunkSmall);
     }
 
     [Benchmark(Description = "Parse Chunks - 10KB x 10")]
     public void Chunks_10KBx10()
     {
-        var chunk = TestDataGenerator.GeneratePlainText(10000);
         for (int i = 0; i < 10; i++)
-        {
-            _parser.Feed(chunk);
-        }
+            _parser.Feed(_chunkMedium);
     }
 
     #endregion
@@ -183,62 +183,117 @@ public class ParserMicroBenchmarks : PerformanceTestBase
     public override void GlobalSetup()
     {
         base.GlobalSetup();
-        _adapter = new TerminalAdapter(24, 80);
+        _adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
         _parser = new BasicAnsiParser();
         _parser.Handler = _adapter;
+        _parser.Feed("\u001b[?1049h\u001b[?1049l"u8);
     }
 
-    [Benchmark(Description = "Parse SGR: Bold")]
-    public void ParseSgr_Bold() => _parser.Feed("\u001b[1mHello\u001b[0m"u8);
+    [Benchmark(Description = "Parse SGR: Bold", OperationsPerInvoke = 64)]
+    public void ParseSgr_Bold()
+    {
+        for (int i = 0; i < 64; i++) _parser.Feed("\u001b[1mHello\u001b[0m"u8);
+    }
 
-    [Benchmark(Description = "Parse SGR: Color (256)")]
-    public void ParseSgr_256Color() => _parser.Feed("\u001b[38;5;196mRed\u001b[0m"u8);
+    [Benchmark(Description = "Parse SGR: Color (256)", OperationsPerInvoke = 64)]
+    public void ParseSgr_256Color()
+    {
+        for (int i = 0; i < 64; i++) _parser.Feed("\u001b[38;5;196mRed\u001b[0m"u8);
+    }
 
-    [Benchmark(Description = "Parse SGR: TrueColor")]
-    public void ParseSgr_TrueColor() => _parser.Feed("\u001b[38;2;255;0;0mRed\u001b[0m"u8);
+    [Benchmark(Description = "Parse SGR: TrueColor", OperationsPerInvoke = 64)]
+    public void ParseSgr_TrueColor()
+    {
+        for (int i = 0; i < 64; i++) _parser.Feed("\u001b[38;2;255;0;0mRed\u001b[0m"u8);
+    }
 
-    [Benchmark(Description = "Parse Cursor: MoveTo")]
-    public void ParseCursor_MoveTo() => _parser.Feed("\u001b[10;20H"u8);
+    [Benchmark(Description = "Parse Cursor: MoveTo", OperationsPerInvoke = 256)]
+    public void ParseCursor_MoveTo()
+    {
+        for (int i = 0; i < 256; i++) _parser.Feed("\u001b[10;20H"u8);
+    }
 
-    [Benchmark(Description = "Parse Cursor: Up/Down")]
-    public void ParseCursor_UpDown() => _parser.Feed("\u001b[5A\u001b[3B"u8);
+    [Benchmark(Description = "Parse Cursor: Up/Down", OperationsPerInvoke = 256)]
+    public void ParseCursor_UpDown()
+    {
+        for (int i = 0; i < 256; i++) _parser.Feed("\u001b[5A\u001b[3B"u8);
+    }
 
-    [Benchmark(Description = "Parse Erase: Line")]
-    public void ParseErase_Line() => _parser.Feed("\u001b[K"u8);
+    [Benchmark(Description = "Parse Erase: Line", OperationsPerInvoke = 64)]
+    public void ParseErase_Line()
+    {
+        for (int i = 0; i < 64; i++) _parser.Feed("\u001b[K"u8);
+    }
 
-    [Benchmark(Description = "Parse Erase: Display")]
-    public void ParseErase_Display() => _parser.Feed("\u001b[2J"u8);
+    [Benchmark(Description = "Parse Erase: Display", OperationsPerInvoke = 16)]
+    public void ParseErase_Display()
+    {
+        for (int i = 0; i < 16; i++) _parser.Feed("\u001b[2J"u8);
+    }
 
-    [Benchmark(Description = "Parse Mode: Alternate Screen")]
-    public void ParseMode_AlternateScreen() => _parser.Feed("\u001b[?1049h\u001b[?1049l"u8);
+    [Benchmark(Description = "Parse Mode: Alternate Screen", OperationsPerInvoke = 64)]
+    public void ParseMode_AlternateScreen()
+    {
+        for (int i = 0; i < 64; i++) _parser.Feed("\u001b[?1049h\u001b[?1049l"u8);
+    }
 
-    [Benchmark(Description = "Parse Mode: Cursor Visibility")]
-    public void ParseMode_CursorVisibility() => _parser.Feed("\u001b[?25l\u001b[?25h"u8);
+    [Benchmark(Description = "Parse Mode: Cursor Visibility", OperationsPerInvoke = 256)]
+    public void ParseMode_CursorVisibility()
+    {
+        for (int i = 0; i < 256; i++) _parser.Feed("\u001b[?25l\u001b[?25h"u8);
+    }
 
-    [Benchmark(Description = "Parse OSC: Window Title")]
-    public void ParseOsc_WindowTitle() => _parser.Feed("\u001b]0;Terminal\u0007"u8);
+    [Benchmark(Description = "Parse OSC: Window Title", OperationsPerInvoke = 256)]
+    public void ParseOsc_WindowTitle()
+    {
+        for (int i = 0; i < 256; i++) _parser.Feed("\u001b]0;Terminal\u0007"u8);
+    }
 
-    [Benchmark(Description = "Parse Query: DECRQM set/reset")]
-    public void ParseQuery_Decrqm() => _parser.Feed("\u001b[?1$p\u001b[?2004$p"u8);
+    [Benchmark(Description = "Parse Query: DECRQM set/reset", OperationsPerInvoke = 256)]
+    public void ParseQuery_Decrqm()
+    {
+        for (int i = 0; i < 256; i++) _parser.Feed("\u001b[?1$p\u001b[?2004$p"u8);
+    }
 
-    [Benchmark(Description = "Parse Query: XTGETTCAP TN")]
-    public void ParseQuery_Xtgettcap() => _parser.Feed("\u001bP+q544E\u001b\\"u8);
+    [Benchmark(Description = "Parse Query: XTGETTCAP TN", OperationsPerInvoke = 256)]
+    public void ParseQuery_Xtgettcap()
+    {
+        for (int i = 0; i < 256; i++) _parser.Feed("\u001bP+q544E\u001b\\"u8);
+    }
 
-    [Benchmark(Description = "Parse Query: modifyOtherKeys negotiate")]
-    public void ParseQuery_ModifyOtherKeys() => _parser.Feed("\u001b[>4;1m\u001b[>4;0m"u8);
+    [Benchmark(Description = "Parse Query: modifyOtherKeys negotiate", OperationsPerInvoke = 256)]
+    public void ParseQuery_ModifyOtherKeys()
+    {
+        for (int i = 0; i < 256; i++) _parser.Feed("\u001b[>4;1m\u001b[>4;0m"u8);
+    }
 
-    [Benchmark(Description = "Parse OSC 4: palette set + query")]
-    public void ParseOsc4_PaletteSetQuery() => _parser.Feed("\u001b]4;1;#ff0000\u0007\u001b]4;1;?\u0007"u8);
+    [Benchmark(Description = "Parse OSC 4: palette set + query", OperationsPerInvoke = 64)]
+    public void ParseOsc4_PaletteSetQuery()
+    {
+        for (int i = 0; i < 64; i++) _parser.Feed("\u001b]4;1;#ff0000\u0007\u001b]4;1;?\u0007"u8);
+    }
 
-    [Benchmark(Description = "Parse OSC 10: dynamic color set + query")]
-    public void ParseOsc10_DynamicSetQuery() => _parser.Feed("\u001b]10;#112233\u0007\u001b]10;?\u0007"u8);
+    [Benchmark(Description = "Parse OSC 10: dynamic color set + query", OperationsPerInvoke = 64)]
+    public void ParseOsc10_DynamicSetQuery()
+    {
+        for (int i = 0; i < 64; i++) _parser.Feed("\u001b]10;#112233\u0007\u001b]10;?\u0007"u8);
+    }
 
-    [Benchmark(Description = "Parse Unicode: 2-byte")]
-    public void ParseUnicode_2Byte() => _parser.Feed("\u00e4\u00f6\u00fc"u8);
+    [Benchmark(Description = "Parse Unicode: 2-byte", OperationsPerInvoke = 16)]
+    public void ParseUnicode_2Byte()
+    {
+        for (int i = 0; i < 16; i++) _parser.Feed("\u00e4\u00f6\u00fc"u8);
+    }
 
-    [Benchmark(Description = "Parse Unicode: 3-byte")]
-    public void ParseUnicode_3Byte() => _parser.Feed("\u4e2d\u6587\u6d4b\u8bd5"u8);
+    [Benchmark(Description = "Parse Unicode: 3-byte", OperationsPerInvoke = 16)]
+    public void ParseUnicode_3Byte()
+    {
+        for (int i = 0; i < 16; i++) _parser.Feed("\u4e2d\u6587\u6d4b\u8bd5"u8);
+    }
 
-    [Benchmark(Description = "Parse Unicode: 4-byte (emoji)")]
-    public void ParseUnicode_4Byte() => _parser.Feed("\ud83d\ude80\ud83d\udc34\ud83c\udf89"u8);
+    [Benchmark(Description = "Parse Unicode: 4-byte (emoji)", OperationsPerInvoke = 16)]
+    public void ParseUnicode_4Byte()
+    {
+        for (int i = 0; i < 16; i++) _parser.Feed("\ud83d\ude80\ud83d\udc34\ud83c\udf89"u8);
+    }
 }

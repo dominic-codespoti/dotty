@@ -76,10 +76,22 @@ public readonly record struct SgrColorArgb(uint Argb)
         {
             return index switch
             {
-                0 => 0xFF000000u, 1 => 0xFFAA0000u, 2 => 0xFF00AA00u, 3 => 0xFFAA5500u,
-                4 => 0xFF0000AAu, 5 => 0xFFAA00AAu, 6 => 0xFF00AAAAu, 7 => 0xFFAAAAAAu,
-                8 => 0xFF555555u, 9 => 0xFFFF5555u, 10 => 0xFF55FF55u, 11 => 0xFFFFFF55u,
-                12 => 0xFF5555FFu, 13 => 0xFFFF55FFu, 14 => 0xFF55FFFFu, _ => 0xFFFFFFFFu,
+                0 => 0xFF000000u,
+                1 => 0xFFAA0000u,
+                2 => 0xFF00AA00u,
+                3 => 0xFFAA5500u,
+                4 => 0xFF0000AAu,
+                5 => 0xFFAA00AAu,
+                6 => 0xFF00AAAAu,
+                7 => 0xFFAAAAAAu,
+                8 => 0xFF555555u,
+                9 => 0xFFFF5555u,
+                10 => 0xFF55FF55u,
+                11 => 0xFFFFFF55u,
+                12 => 0xFF5555FFu,
+                13 => 0xFFFF55FFu,
+                14 => 0xFF55FFFFu,
+                _ => 0xFFFFFFFFu,
             };
         }
         if (index < 232)

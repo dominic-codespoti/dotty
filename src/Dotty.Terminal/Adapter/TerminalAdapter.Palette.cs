@@ -238,8 +238,10 @@ public partial class TerminalAdapter
         {
             int nibble = c switch
             {
-                >= '0' and <= '9' => c - '0', >= 'a' and <= 'f' => c - 'a' + 10,
-                >= 'A' and <= 'F' => c - 'A' + 10, _ => -1,
+                >= '0' and <= '9' => c - '0',
+                >= 'a' and <= 'f' => c - 'a' + 10,
+                >= 'A' and <= 'F' => c - 'A' + 10,
+                _ => -1,
             };
             if (nibble < 0) return false;
             parsed = (parsed << 4) | (uint)nibble;

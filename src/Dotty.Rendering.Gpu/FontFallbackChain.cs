@@ -69,6 +69,16 @@ public sealed class FontFallbackChain : IDisposable
     private bool _disposed;
 
     /// <summary>
+    /// Optional per-range overrides checked before the generic chain.
+    /// Replacing the map clears resolution caches.
+    /// </summary>
+    public SymbolMap? SymbolMap
+    {
+        get { lock (_lock) return _symbolMap; }
+        set { lock (_lock) { _symbolMap = value; _resolutionCache.Clear(); _singleRuneResolutionCache.Clear(); } }
+    }
+    private SymbolMap? _symbolMap;
+    /// <summary>
     /// Gets the primary (index 0) typeface in the chain.
     /// </summary>
     public SKTypeface PrimaryTypeface => _typefaces.Count > 0 ? _typefaces[0] : SKTypeface.Default;
@@ -249,6 +259,16 @@ public sealed class FontFallbackChain : IDisposable
     private SKTypeface ResolveTypefaceCore(string grapheme)
     {
         int firstRune = GetFirstCodepoint(grapheme);
+
+        // 0. Explicit symbol-map override wins over primary and fallbacks.
+        SymbolMap? symbolMap;
+        lock (_lock) { symbolMap = _symbolMap; }
+        if (symbolMap != null && firstRune > 0)
+        {
+            var mapped = symbolMap.ResolveTypeface(firstRune);
+            if (mapped != null && TypefaceContainsGrapheme(mapped, grapheme, firstRune))
+                return mapped;
+        }
 
         // 1. Check primary typeface
         if (_typefaces.Count > 0 && TypefaceContainsGrapheme(_typefaces[0], grapheme, firstRune))

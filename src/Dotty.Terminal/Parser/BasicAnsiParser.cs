@@ -869,7 +869,10 @@ namespace Dotty.Terminal.Parser
                     {
                         for (int i = 0; i < request.Length; i++)
                             hex[i] = (char)request[i];
-                        Handler?.OnQueryCapability(new string(hex[..request.Length]));
+                        if (Handler is Terminal.Adapter.TerminalAdapter adapter)
+                            adapter.OnQueryCapability(hex[..request.Length]);
+                        else
+                            Handler?.OnQueryCapability(new string(hex[..request.Length]));
                     }
                     finally
                     {

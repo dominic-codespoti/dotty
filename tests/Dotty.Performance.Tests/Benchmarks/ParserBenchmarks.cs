@@ -30,6 +30,8 @@ public class ParserBenchmarks : PerformanceTestBase
     private byte[] _shellSession = null!;
     private byte[] _mouseEvents = null!;
     private byte[] _oscSequences = null!;
+    private byte[] _throughputPlain = null!;
+    private byte[] _throughputAnsi = null!;
 
     // GlobalSetup inherited from PerformanceTestBase
     public override void GlobalSetup()
@@ -56,6 +58,8 @@ public class ParserBenchmarks : PerformanceTestBase
         _shellSession = TestDataGenerator.GenerateShellSession(20);
         _mouseEvents = TestDataGenerator.GenerateMouseEvents(1000);
         _oscSequences = TestDataGenerator.GenerateOscSequences(100);
+        _throughputPlain = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.XLarge);
+        _throughputAnsi = TestDataGenerator.GenerateBasicAnsiText(TestDataGenerator.Sizes.XLarge, 0.1);
 
         // Warmup
         Warmup(() => _parser.Feed(_plainTextSmall), 5);
@@ -125,20 +129,18 @@ public class ParserBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Throughput - Plain Text 1MB", OperationsPerInvoke = 10)]
     public void Throughput_PlainText_1MB()
     {
-        var data = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.XLarge);
         for (int i = 0; i < 10; i++)
         {
-            _parser.Feed(data);
+            _parser.Feed(_throughputPlain);
         }
     }
 
     [Benchmark(Description = "Throughput - ANSI Text 1MB", OperationsPerInvoke = 10)]
     public void Throughput_AnsiText_1MB()
     {
-        var data = TestDataGenerator.GenerateBasicAnsiText(TestDataGenerator.Sizes.XLarge, 0.1);
         for (int i = 0; i < 10; i++)
         {
-            _parser.Feed(data);
+            _parser.Feed(_throughputAnsi);
         }
     }
 
@@ -178,7 +180,6 @@ public class ParserMicroBenchmarks : PerformanceTestBase
     private BasicAnsiParser _parser = null!;
     private TerminalAdapter _adapter = null!;
 
-    [GlobalSetup]
     public override void GlobalSetup()
     {
         base.GlobalSetup();
@@ -216,6 +217,21 @@ public class ParserMicroBenchmarks : PerformanceTestBase
 
     [Benchmark(Description = "Parse OSC: Window Title")]
     public void ParseOsc_WindowTitle() => _parser.Feed("\u001b]0;Terminal\u0007"u8);
+
+    [Benchmark(Description = "Parse Query: DECRQM set/reset")]
+    public void ParseQuery_Decrqm() => _parser.Feed("\u001b[?1$p\u001b[?2004$p"u8);
+
+    [Benchmark(Description = "Parse Query: XTGETTCAP TN")]
+    public void ParseQuery_Xtgettcap() => _parser.Feed("\u001bP+q544E\u001b\\"u8);
+
+    [Benchmark(Description = "Parse Query: modifyOtherKeys negotiate")]
+    public void ParseQuery_ModifyOtherKeys() => _parser.Feed("\u001b[>4;1m\u001b[>4;0m"u8);
+
+    [Benchmark(Description = "Parse OSC 4: palette set + query")]
+    public void ParseOsc4_PaletteSetQuery() => _parser.Feed("\u001b]4;1;#ff0000\u0007\u001b]4;1;?\u0007"u8);
+
+    [Benchmark(Description = "Parse OSC 10: dynamic color set + query")]
+    public void ParseOsc10_DynamicSetQuery() => _parser.Feed("\u001b]10;#112233\u0007\u001b]10;?\u0007"u8);
 
     [Benchmark(Description = "Parse Unicode: 2-byte")]
     public void ParseUnicode_2Byte() => _parser.Feed("\u00e4\u00f6\u00fc"u8);

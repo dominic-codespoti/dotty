@@ -59,7 +59,7 @@ public class Program
             // Setup configuration
             var benchmarkConfig = mode switch
             {
-                "quick" or "ci" => CreateQuickConfig(),
+                "quick" or "ci" or "update-baselines" => CreateQuickConfig(),
                 "memory" => CreateMemoryConfig(),
                 "parser" => CreateParserConfig(),
                 "rendering" => CreateRenderingConfig(),
@@ -127,6 +127,13 @@ public class Program
 
             // Generate reports
             GenerateReports(summaries);
+
+            // Refresh checked-in baselines from this run's medians.
+            if (string.Equals(mode, "update-baselines", StringComparison.OrdinalIgnoreCase))
+            {
+                UpdateBaselines(summaries);
+                return;
+            }
 
             // Check for regressions if in CI mode
             if (mode == "ci" || mode == "quick")
@@ -282,6 +289,56 @@ public class Program
             Console.WriteLine();
             Console.WriteLine("All performance thresholds passed.");
         }
+    }
+
+    // Writes fresh baselines.json from this run's medians: expectedMean is
+    // the measured median, maxLatency is 2x median, allocations are the
+    // measured bytes/op rounded up with 64 B headroom. Review the diff
+    // before committing; never update baselines to hide a regression.
+    private static void UpdateBaselines(List<BenchmarkDotNet.Reports.Summary> summaries)
+    {
+        string projectDir = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", ".."));
+        string baselinePath = Path.Combine(projectDir, "baselines.json");
+        Dictionary<string, object> baselines = new();
+        if (File.Exists(baselinePath))
+        {
+            try
+            {
+                var existing = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(baselinePath));
+                if (existing != null)
+                    baselines = existing;
+            }
+            catch
+            {
+            }
+        }
+
+        int updated = 0;
+        foreach (var summary in summaries)
+        {
+            if (summary == null) continue;
+            foreach (var report in summary.Reports)
+            {
+                string name = report.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo;
+                double medianMs = (report.ResultStatistics?.Median ?? 0) / 1_000_000.0;
+                if (medianMs <= 0) continue;
+                long allocated = report.GcStats.GetTotalAllocatedBytes(false) ?? 0L;
+                baselines[name] = new Dictionary<string, object>
+                {
+                    ["expectedMeanMs"] = Math.Round(medianMs, 6),
+                    ["maxLatencyMs"] = Math.Round(medianMs * 2, 6),
+                    ["minThroughput"] = 0,
+                    ["maxAllocationsPerOp"] = allocated + 64,
+                    ["regressionThreshold"] = 0.25,
+                };
+                updated++;
+            }
+        }
+
+        string json = System.Text.Json.JsonSerializer.Serialize(baselines,
+            new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(baselinePath, json + Environment.NewLine);
+        Console.WriteLine($"Updated {updated} baselines in {baselinePath}. Review the diff before committing.");
     }
 
     private static IConfig ParseArguments(string[] args)

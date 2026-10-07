@@ -15,7 +15,8 @@ public sealed partial class LuaScriptHost
         Number,
         Integer,
         Boolean,
-        Map
+        Map,
+        StringList,
     }
 
     private sealed record ConfigField(
@@ -28,10 +29,15 @@ public sealed partial class LuaScriptHost
     private static Dictionary<string, ConfigField> CreateConfigFields() => new(StringComparer.Ordinal)
     {
         ["theme"] = new(ConfigValueKind.String, c => c.Theme, (c, v) => c.Theme = (string)v!),
+        ["theme_light"] = new(ConfigValueKind.String, c => c.ThemeLight, (c, v) => c.ThemeLight = (string?)v),
+        ["theme_dark"] = new(ConfigValueKind.String, c => c.ThemeDark, (c, v) => c.ThemeDark = (string?)v),
+        ["theme_auto"] = new(ConfigValueKind.Boolean, c => c.ThemeAuto, (c, v) => c.ThemeAuto = (bool)v!),
         ["selection_color"] = new(ConfigValueKind.String, c => c.SelectionColor, (c, v) => c.SelectionColor = (string?)v),
         ["font.family"] = new(ConfigValueKind.String, c => c.Font.Family, (c, v) => c.Font.Family = (string)v!),
         ["font.size"] = new(ConfigValueKind.Number, c => c.Font.Size, (c, v) => c.Font.Size = (double)v!),
         ["font.line_height"] = new(ConfigValueKind.Number, c => c.Font.LineHeight, (c, v) => c.Font.LineHeight = (double)v!),
+        ["font.features"] = new(ConfigValueKind.StringList, c => c.Font.Features, (c, v) => c.Font.Features = (System.Collections.Generic.List<string>)v!),
+        ["font.symbol_map"] = new(ConfigValueKind.StringList, c => c.Font.SymbolMap, (c, v) => c.Font.SymbolMap = (System.Collections.Generic.List<string>)v!),
         ["window.opacity"] = new(ConfigValueKind.Number, c => c.Window.Opacity, (c, v) => c.Window.Opacity = (double)v!),
         ["window.decorations"] = new(ConfigValueKind.String, c => c.Window.Decorations, (c, v) => c.Window.Decorations = (string)v!),
         ["window.title"] = new(ConfigValueKind.String, c => c.Window.Title, (c, v) => c.Window.Title = (string)v!),
@@ -235,6 +241,16 @@ public sealed partial class LuaScriptHost
                 }
 
                 break;
+            case ConfigValueKind.StringList:
+                lua.NewTable();
+                int listIndex = 1;
+                foreach (string item in (System.Collections.Generic.List<string>)value!)
+                {
+                    PushLuaString(lua, item);
+                    lua.RawSetInteger(-2, listIndex++);
+                }
+
+                break;
         }
     }
 
@@ -287,6 +303,14 @@ public sealed partial class LuaScriptHost
                 if (valid)
                 {
                     value = ReadKeybindings(lua, index);
+                }
+
+                break;
+            case ConfigValueKind.StringList:
+                valid = type == LuaType.Table;
+                if (valid)
+                {
+                    value = ReadStringList(lua, index);
                 }
 
                 break;
@@ -346,6 +370,26 @@ public sealed partial class LuaScriptHost
         }
 
         return map;
+    }
+
+    private static System.Collections.Generic.List<string> ReadStringList(Lua lua, int index)
+    {
+        var list = new System.Collections.Generic.List<string>();
+        using var stack = new LuaStackScope(lua);
+        int table = lua.AbsIndex(index);
+        lua.PushNil();
+        while (lua.Next(table))
+        {
+            string? value = ReadString(lua, -1);
+            if (value != null)
+            {
+                list.Add(value);
+            }
+
+            lua.Pop(1);
+        }
+
+        return list;
     }
 
     private static string NormalizeConfigKey(string key)

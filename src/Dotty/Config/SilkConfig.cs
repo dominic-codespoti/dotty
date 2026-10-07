@@ -26,7 +26,25 @@ public static class SilkConfig
             return envTheme.Trim();
         }
 
-        return DottyDefaults.DefaultThemeName;
+        return ResolveConfiguredThemeName(UserConfigService.Current);
+    }
+
+    /// <summary>
+    /// Resolves the effective theme name for a config: explicit
+    /// <c>theme</c> unless <c>themeAuto</c> selects the dark/light pair from
+    /// the OS color scheme. Unknown OS scheme keeps the explicit theme.
+    /// </summary>
+    public static string ResolveConfiguredThemeName(DottyUserConfig config)
+    {
+        if (config == null)
+            return DottyDefaults.DefaultThemeName;
+        if (!config.ThemeAuto)
+            return string.IsNullOrWhiteSpace(config.Theme) ? DottyDefaults.DefaultThemeName : config.Theme;
+        bool? isDark = SystemThemeDetector.DetectIsDark();
+        if (isDark == false)
+            return string.IsNullOrWhiteSpace(config.ThemeLight) ? "LightPlus" : config.ThemeLight!;
+        string dark = string.IsNullOrWhiteSpace(config.ThemeDark) ? config.Theme : config.ThemeDark!;
+        return string.IsNullOrWhiteSpace(dark) ? DottyDefaults.DefaultThemeName : dark;
     }
 
     /// <summary>
@@ -56,6 +74,16 @@ public static class SilkConfig
         _cachedTheme = theme;
         _cachedThemeName = themeName;
         return theme;
+    }
+
+    /// <summary>
+    /// Drops the cached theme so the next <see cref="LoadActiveTheme"/> call
+    /// re-resolves (used when polling the OS color scheme for auto themes).
+    /// </summary>
+    public static void ClearThemeCache()
+    {
+        _cachedTheme = null;
+        _cachedThemeName = null;
     }
 
     /// <summary>

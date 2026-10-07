@@ -28,6 +28,29 @@ public sealed class DottyUserConfig
 
     [JsonPropertyName("selectionColor")]
     public string? SelectionColor { get; set; }
+
+    /// <summary>
+    /// Optional light theme name used when <see cref="ThemeAuto"/> is true and
+    /// the OS reports a light color scheme. Defaults to LightPlus.
+    /// </summary>
+    [JsonPropertyName("themeLight")]
+    public string? ThemeLight { get; set; }
+
+    /// <summary>
+    /// Optional dark theme name used when <see cref="ThemeAuto"/> is true and
+    /// the OS reports a dark color scheme. Defaults to <see cref="Theme"/>.
+    /// </summary>
+    [JsonPropertyName("themeDark")]
+    public string? ThemeDark { get; set; }
+
+    /// <summary>
+    /// When true, the host follows the OS light/dark color scheme, selecting
+    /// <see cref="ThemeDark"/> (or <see cref="Theme"/>) vs <see cref="ThemeLight"/>
+    /// (default LightPlus). Explicit theme names always win when false.
+    /// </summary>
+    [JsonPropertyName("themeAuto")]
+    public bool ThemeAuto { get; set; }
+
     [JsonPropertyName("panes")]
     public PanesUserConfig Panes { get; set; } = new();
 
@@ -46,6 +69,20 @@ public sealed class FontUserConfig
 
     [JsonPropertyName("lineHeight")]
     public double LineHeight { get; set; } = 1.25;
+
+    /// <summary>
+    /// OpenType feature tags applied when shaping (e.g. "calt", "liga=0", "ss01").
+    /// Entries that fail to parse are ignored.
+    /// </summary>
+    [JsonPropertyName("features")]
+    public System.Collections.Generic.List<string> Features { get; set; } = new();
+
+    /// <summary>
+    /// Per-range font overrides ("U+2500-U+257F: Symbols Nerd Font Mono").
+    /// Checked before the generic fallback chain during glyph resolution.
+    /// </summary>
+    [JsonPropertyName("symbolMap")]
+    public System.Collections.Generic.List<string> SymbolMap { get; set; } = new();
 }
 
 public sealed class WindowUserConfig

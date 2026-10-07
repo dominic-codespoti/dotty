@@ -508,9 +508,14 @@ public class SilkConfigTests
     public void LoadActiveTheme_Default_ReturnsDarkPlus()
     {
         var originalEnv = Environment.GetEnvironmentVariable("DOTTY_THEME");
+        var originalConfigHome = Environment.GetEnvironmentVariable("DOTTY_CONFIG_HOME");
+        string isolatedHome = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         try
         {
             Environment.SetEnvironmentVariable("DOTTY_THEME", null);
+            Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", isolatedHome);
+            Dotty.Runtime.Config.UserConfigService.Load();
+            SilkConfig.ClearThemeCache();
             var theme = SilkConfig.LoadActiveTheme();
 
             Assert.NotNull(theme);
@@ -519,6 +524,8 @@ public class SilkConfigTests
         finally
         {
             Environment.SetEnvironmentVariable("DOTTY_THEME", originalEnv);
+            Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", originalConfigHome);
+            SilkConfig.ClearThemeCache();
         }
     }
 
@@ -526,8 +533,13 @@ public class SilkConfigTests
     public void GetActiveThemeName_RespectsEnvVariable()
     {
         var originalEnv = Environment.GetEnvironmentVariable("DOTTY_THEME");
+        var originalConfigHome = Environment.GetEnvironmentVariable("DOTTY_CONFIG_HOME");
+        string isolatedHome = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         try
         {
+            Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", isolatedHome);
+            Dotty.Runtime.Config.UserConfigService.Load();
+
             Environment.SetEnvironmentVariable("DOTTY_THEME", "Dracula");
             var name = SilkConfig.GetActiveThemeName();
             Assert.Equal("Dracula", name);
@@ -543,6 +555,8 @@ public class SilkConfigTests
         finally
         {
             Environment.SetEnvironmentVariable("DOTTY_THEME", originalEnv);
+            Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", originalConfigHome);
+            SilkConfig.ClearThemeCache();
         }
     }
 }

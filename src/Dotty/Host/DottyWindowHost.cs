@@ -129,6 +129,8 @@ internal static class DottyWindowHost
     private static bool _cursorBlinkVisible = true;
     private static long _lastCursorBlinkTimestampMs;
     private static long _lastLuaStatusRefreshTimestampMs;
+    private static long _lastSystemThemePollTimestampMs;
+    private static string? _lastAppliedAutoThemeName;
     private static LeafPane[] _visibleLeaves = Array.Empty<LeafPane>();
     private static int _visibleLeafCount;
     private static readonly HashSet<TerminalSession> _sessionScratch = new();
@@ -985,9 +987,34 @@ internal static class DottyWindowHost
         RefreshFontResources();
         var size = _window.FramebufferSize;
         if (size.X > 0 && size.Y > 0) ApplyFramebufferLayout(size);
+        SilkConfig.ClearThemeCache();
         _activeTheme = SilkConfig.LoadActiveTheme();
         (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme();
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
+        _lastAppliedAutoThemeName = config.ThemeAuto ? SilkConfig.GetActiveThemeName() : null;
+        _lastSystemThemePollTimestampMs = GetClockMilliseconds();
+    }
+
+    // Polls the OS color scheme for themeAuto configs (at most every 5 s).
+    // A changed effective theme name re-runs the config apply path so the
+    // palette, defaults, and cached theme all follow the OS switch.
+    private static void PollSystemTheme(long now)
+    {
+        if (_closed || _tabManager == null)
+            return;
+        if (now - _lastSystemThemePollTimestampMs < 5000)
+            return;
+        _lastSystemThemePollTimestampMs = now;
+        var config = UserConfigService.Current;
+        if (!config.ThemeAuto)
+        {
+            _lastAppliedAutoThemeName = null;
+            return;
+        }
+        string effective = SilkConfig.ResolveConfiguredThemeName(config);
+        if (string.Equals(effective, _lastAppliedAutoThemeName, StringComparison.OrdinalIgnoreCase))
+            return;
+        ApplyConfigOnly(config);
     }
     private static TerminalTab CreateLuaTab(string? workingDirectory, string? shell)
     {
@@ -1026,6 +1053,7 @@ internal static class DottyWindowHost
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Atlas);
         var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
+        ApplyConfiguredSymbolMap(newAtlas);
         if (!ReferenceEquals(newAtlas, _atlas))
         {
             var oldAtlas = _atlas;
@@ -1040,6 +1068,26 @@ internal static class DottyWindowHost
         {
             _sceneComposer?.UpdateResources(_atlas, _typeface, _cellFontSizePx());
         }
+    }
+
+    // Parses font.symbolMap entries into the atlas fallback chain. A fresh
+    // map replaces the previous one; an empty list clears overrides.
+    private static void ApplyConfiguredSymbolMap(GlyphAtlas atlas)
+    {
+        if (atlas == null)
+            return;
+        var entries = UserConfigService.Current.Font.SymbolMap;
+        if (entries == null || entries.Count == 0)
+        {
+            var chain = atlas.FallbackChain;
+            if (chain != null)
+                chain.SymbolMap = null;
+            return;
+        }
+        var map = SymbolMap.Parse(entries);
+        var target = atlas.FallbackChain ?? FontFallbackChain.CreateDefault(_typeface);
+        target.SymbolMap = map.Count > 0 ? map : null;
+        atlas.FallbackChain = target;
     }
 
     private static void OnFramebufferResize(Vector2D<int> size)
@@ -1473,6 +1521,7 @@ internal static class DottyWindowHost
         long now = GetClockMilliseconds();
         if (now - _lastLuaStatusRefreshTimestampMs >= 1000)
             RefreshLuaStatus();
+        PollSystemTheme(now);
         // While a synchronized update (CSI 2026, used by nvim for every
         // redraw) is held, presents are withheld by design. Sleep instead of
         // spinning: the gate below used to burn 100% of a core here, starving

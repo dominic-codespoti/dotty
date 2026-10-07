@@ -21,6 +21,8 @@ jobs:
     name: Recalibrate Baselines (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -54,7 +56,7 @@ jobs:
         if: always()
         with:
           name: recalibrated-baselines
-          path: tests/Dotty.Performance.Tests/baselines.json
+          path: ${{ github.workspace }}/tests/Dotty.Performance.Tests/baselines.json
           retention-days: 30
           if-no-files-found: error
 

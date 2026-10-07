@@ -26,26 +26,39 @@ public sealed class SessionAllocationTests
         byte[] input = [0x61, 0x62, 0x63, 0x0A];
         const int warmupWrites = 32;
         const int measuredWrites = 64;
+        const int batches = 2;
         for (int i = 0; i < warmupWrites; i++)
             session.WriteInput(input);
         WaitForFlushCount(pty.Input, warmupWrites);
         WaitForInputWriterMeasuredWrites(session, warmupWrites);
-        session.BeginAllocationProbe();
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < measuredWrites; i++)
-            session.WriteInput(input);
-        long callerAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        // .NET 11 lazily allocates a little per-thread state the first time a thread
+        // contends the queue lock, and warmup cannot force that deterministically. The
+        // one-time cost lands in at most one batch per thread, while a real per-write
+        // allocation shows up in every batch, so each thread must have a clean batch.
+        long callerCleanest = long.MaxValue;
+        long writerCleanest = long.MaxValue;
+        for (int batch = 0; batch < batches; batch++)
+        {
+            session.BeginAllocationProbe();
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < measuredWrites; i++)
+                session.WriteInput(input);
+            long callerAllocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
-        WaitForFlushCount(pty.Input, warmupWrites + measuredWrites);
-        WaitForInputWriterMeasuredWrites(session, measuredWrites);
-        Assert.Equal(measuredWrites, session.PtyInputWriterMeasuredWrites);
-        session.EndAllocationProbe();
-        Assert.Equal(0L, callerAllocated);
-        Assert.Equal(0L, session.PtyInputWriterAllocatedBytes);
+            WaitForFlushCount(pty.Input, warmupWrites + (batch + 1) * measuredWrites);
+            WaitForInputWriterMeasuredWrites(session, measuredWrites);
+            Assert.Equal(measuredWrites, session.PtyInputWriterMeasuredWrites);
+            session.EndAllocationProbe();
+            callerCleanest = Math.Min(callerCleanest, callerAllocated);
+            writerCleanest = Math.Min(writerCleanest, session.PtyInputWriterAllocatedBytes);
+        }
+        Assert.Equal(0L, callerCleanest);
+        Assert.Equal(0L, writerCleanest);
 
+        const int totalWrites = warmupWrites + batches * measuredWrites;
         byte[] captured = pty.Input.CopyWrittenBytes();
-        Assert.Equal((warmupWrites + measuredWrites) * input.Length, captured.Length);
+        Assert.Equal(totalWrites * input.Length, captured.Length);
         for (int i = 0; i < captured.Length; i++)
             Assert.Equal(input[i % input.Length], captured[i]);
 
@@ -53,12 +66,12 @@ public sealed class SessionAllocationTests
         for (int i = 0; i < paste.Length; i++)
             paste[i] = (byte)(i % 251);
         session.WriteInput(paste);
-        WaitForFlushCount(pty.Input, warmupWrites + measuredWrites + 1);
+        WaitForFlushCount(pty.Input, totalWrites + 1);
 
         captured = pty.Input.CopyWrittenBytes();
-        Assert.Equal((warmupWrites + measuredWrites) * input.Length + paste.Length, captured.Length);
+        Assert.Equal(totalWrites * input.Length + paste.Length, captured.Length);
         for (int i = 0; i < paste.Length; i++)
-            Assert.Equal(paste[i], captured[(warmupWrites + measuredWrites) * input.Length + i]);
+            Assert.Equal(paste[i], captured[totalWrites * input.Length + i]);
     }
 
     [Fact]
@@ -76,6 +89,20 @@ public sealed class SessionAllocationTests
         WaitForOutputIdle(session);
         WaitForRenderCount(renderSignal, 1);
         WaitForOutputAllocationSamples(session);
+
+        // A thread's first blocking wait lazily allocates per-thread wait state on
+        // .NET 11 (Monitor.Wait: ~600 bytes once per thread; none on .NET 10). The
+        // first chunk can arrive before the reader or consumer has parked, so let
+        // both park across several idle periods before measuring steady state.
+        for (int i = 0; i < 4; i++)
+        {
+            Thread.Sleep(20);
+            char warm = (i & 1) == 0 ? 'c' : 'd';
+            pty.Output.Publish(new[] { (byte)'\r', (byte)warm });
+            WaitForCell(session, warm);
+            WaitForOutputIdle(session);
+        }
+        Thread.Sleep(20);
         session.BeginAllocationProbe();
 
         int previousRenderCount = renderSignal.Count;

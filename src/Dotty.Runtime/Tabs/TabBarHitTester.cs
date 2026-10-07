@@ -5,7 +5,7 @@ namespace Dotty.Runtime.Tabs;
 /// <summary>
 /// Result of a hit-test operation on the tab bar.
 /// </summary>
-public abstract record TabBarHitResult
+public closed record TabBarHitResult
 {
     public sealed record None : TabBarHitResult;
     public sealed record SelectTab(int Index) : TabBarHitResult;

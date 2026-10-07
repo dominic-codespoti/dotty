@@ -2,9 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
-using System.Text;
-using System.Threading.Tasks;
+using System.Runtime.Versioning;
+using System.Threading;
 
 namespace Dotty.Silk.Config;
 
@@ -28,6 +27,7 @@ public static class SystemThemeDetector
         return null;
     }
 
+    [SupportedOSPlatform("windows")]
     private static bool? DetectWindows()
     {
         try
@@ -125,45 +125,21 @@ internal interface IThemeProcessRunner
 
 internal sealed class ThemeProcessRunner : IThemeProcessRunner
 {
-    private const int MaxOutputCharacters = 4096;
-
     public ProcessResult Run(string executable, IReadOnlyList<string> arguments, TimeSpan timeout)
     {
-        var startInfo = new ProcessStartInfo(executable)
+        using var cancellation = new CancellationTokenSource(timeout);
+        try
         {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-        for (int i = 0; i < arguments.Count; i++) startInfo.ArgumentList.Add(arguments[i]);
-        using var process = new Process { StartInfo = startInfo };
-        if (!process.Start()) return ProcessResult.Failure;
-        Task<string> stdout = ReadBoundedAsync(process.StandardOutput);
-        Task<string> stderr = ReadBoundedAsync(process.StandardError);
-        int milliseconds = Math.Max(1, (int)Math.Ceiling(timeout.TotalMilliseconds));
-        if (!process.WaitForExit(milliseconds))
+            ProcessTextOutput output = Process.RunAndCaptureTextAsync(executable, arguments, cancellation.Token).GetAwaiter().GetResult();
+            return new ProcessResult(true, output.ExitStatus.ExitCode, output.StandardOutput);
+        }
+        catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            process.WaitForExit();
-            try { Task.WaitAll(stdout, stderr); } catch (AggregateException) { }
             return ProcessResult.Failure;
         }
-        process.WaitForExit();
-        Task.WaitAll(stdout, stderr);
-        return new ProcessResult(true, process.ExitCode, stdout.GetAwaiter().GetResult());
-    }
-
-    private static async Task<string> ReadBoundedAsync(StreamReader reader)
-    {
-        char[] buffer = new char[512];
-        var output = new StringBuilder(512);
-        int read;
-        while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) != 0)
+        catch (Exception)
         {
-            int append = Math.Min(read, MaxOutputCharacters - output.Length);
-            if (append > 0) output.Append(buffer, 0, append);
+            return ProcessResult.Failure;
         }
-        return output.ToString();
     }
 }

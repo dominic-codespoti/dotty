@@ -198,59 +198,65 @@ public sealed class PaneTree : IDisposable
 
     private static void LayoutNode(PaneNode node, PaneRect bounds, float cellWidth, float cellHeight, float dividerThickness)
     {
-        if (node is LeafPane leaf)
+        switch (node)
         {
-            leaf.Bounds = bounds;
-            if (cellWidth > 0 && cellHeight > 0)
-            {
-                var cols = Math.Max(1, (int)Math.Floor(bounds.Width / cellWidth));
-                var rows = Math.Max(1, (int)Math.Floor(bounds.Height / cellHeight));
-                if (cols != leaf.Columns || rows != leaf.Rows)
+            case LeafPane leaf:
+                leaf.Bounds = bounds;
+                if (cellWidth > 0 && cellHeight > 0)
                 {
-                    leaf.Columns = cols;
-                    leaf.Rows = rows;
-                    leaf.Session.Resize(cols, rows);
+                    var cols = Math.Max(1, (int)Math.Floor(bounds.Width / cellWidth));
+                    var rows = Math.Max(1, (int)Math.Floor(bounds.Height / cellHeight));
+                    if (cols != leaf.Columns || rows != leaf.Rows)
+                    {
+                        leaf.Columns = cols;
+                        leaf.Rows = rows;
+                        leaf.Session.Resize(cols, rows);
+                    }
                 }
-            }
+                break;
+            case SplitPaneNode split:
+                LayoutSplit(split, bounds, cellWidth, cellHeight, dividerThickness);
+                break;
         }
-        else if (node is SplitPaneNode split)
+    }
+
+    private static void LayoutSplit(SplitPaneNode split, PaneRect bounds, float cellWidth, float cellHeight, float dividerThickness)
+    {
+        float firstWidth, firstHeight, secondWidth, secondHeight;
+        float secondX, secondY;
+        PaneRect divider;
+
+        if (split.Direction == SplitDirection.Horizontal)
         {
-            float firstWidth, firstHeight, secondWidth, secondHeight;
-            float secondX, secondY;
-            PaneRect divider;
+            var availableHeight = Math.Max(0, bounds.Height - dividerThickness);
+            firstWidth = bounds.Width;
+            firstHeight = availableHeight * split.SplitRatio;
+            secondWidth = bounds.Width;
+            secondHeight = availableHeight - firstHeight;
 
-            if (split.Direction == SplitDirection.Horizontal)
-            {
-                var availableHeight = Math.Max(0, bounds.Height - dividerThickness);
-                firstWidth = bounds.Width;
-                firstHeight = availableHeight * split.SplitRatio;
-                secondWidth = bounds.Width;
-                secondHeight = availableHeight - firstHeight;
+            secondX = bounds.X;
+            secondY = bounds.Y + firstHeight + dividerThickness;
 
-                secondX = bounds.X;
-                secondY = bounds.Y + firstHeight + dividerThickness;
-
-                divider = new PaneRect(bounds.X, bounds.Y + firstHeight, bounds.Width, dividerThickness);
-            }
-            else
-            {
-                var availableWidth = Math.Max(0, bounds.Width - dividerThickness);
-                firstWidth = availableWidth * split.SplitRatio;
-                firstHeight = bounds.Height;
-                secondWidth = availableWidth - firstWidth;
-                secondHeight = bounds.Height;
-
-                secondX = bounds.X + firstWidth + dividerThickness;
-                secondY = bounds.Y;
-
-                divider = new PaneRect(bounds.X + firstWidth, bounds.Y, dividerThickness, bounds.Height);
-            }
-
-            split.DividerBounds = divider;
-
-            LayoutNode(split.First, new PaneRect(bounds.X, bounds.Y, firstWidth, firstHeight), cellWidth, cellHeight, dividerThickness);
-            LayoutNode(split.Second, new PaneRect(secondX, secondY, secondWidth, secondHeight), cellWidth, cellHeight, dividerThickness);
+            divider = new PaneRect(bounds.X, bounds.Y + firstHeight, bounds.Width, dividerThickness);
         }
+        else
+        {
+            var availableWidth = Math.Max(0, bounds.Width - dividerThickness);
+            firstWidth = availableWidth * split.SplitRatio;
+            firstHeight = bounds.Height;
+            secondWidth = availableWidth - firstWidth;
+            secondHeight = bounds.Height;
+
+            secondX = bounds.X + firstWidth + dividerThickness;
+            secondY = bounds.Y;
+
+            divider = new PaneRect(bounds.X + firstWidth, bounds.Y, dividerThickness, bounds.Height);
+        }
+
+        split.DividerBounds = divider;
+
+        LayoutNode(split.First, new PaneRect(bounds.X, bounds.Y, firstWidth, firstHeight), cellWidth, cellHeight, dividerThickness);
+        LayoutNode(split.Second, new PaneRect(secondX, secondY, secondWidth, secondHeight), cellWidth, cellHeight, dividerThickness);
     }
 
     public LeafPane? FindPaneAt(float x, float y)
@@ -261,17 +267,11 @@ public sealed class PaneTree : IDisposable
 
     private static LeafPane? FindPaneAtNode(PaneNode node, float x, float y)
     {
-        if (node is LeafPane leaf)
+        return node switch
         {
-            return leaf.Bounds.Contains(x, y) ? leaf : null;
-        }
-
-        if (node is SplitPaneNode split)
-        {
-            return FindPaneAtNode(split.First, x, y) ?? FindPaneAtNode(split.Second, x, y);
-        }
-
-        return null;
+            LeafPane leaf => leaf.Bounds.Contains(x, y) ? leaf : null,
+            SplitPaneNode split => FindPaneAtNode(split.First, x, y) ?? FindPaneAtNode(split.Second, x, y),
+        };
     }
 
     public SplitPaneNode? HitTestDivider(float x, float y, float hitTolerance = 4f)
@@ -358,24 +358,24 @@ public sealed class PaneTree : IDisposable
 
     private static bool ContainsLeafNode(PaneNode node, LeafPane target)
     {
-        if (ReferenceEquals(node, target)) return true;
-        if (node is SplitPaneNode split)
+        return node switch
         {
-            return ContainsLeafNode(split.First, target) || ContainsLeafNode(split.Second, target);
-        }
-        return false;
+            LeafPane leaf => ReferenceEquals(leaf, target),
+            SplitPaneNode split => ContainsLeafNode(split.First, target) || ContainsLeafNode(split.Second, target),
+        };
     }
 
     private static void CollectLeaves(PaneNode node, List<LeafPane> leaves)
     {
-        if (node is LeafPane leaf)
+        switch (node)
         {
-            leaves.Add(leaf);
-        }
-        else if (node is SplitPaneNode split)
-        {
-            CollectLeaves(split.First, leaves);
-            CollectLeaves(split.Second, leaves);
+            case LeafPane leaf:
+                leaves.Add(leaf);
+                break;
+            case SplitPaneNode split:
+                CollectLeaves(split.First, leaves);
+                CollectLeaves(split.Second, leaves);
+                break;
         }
     }
 

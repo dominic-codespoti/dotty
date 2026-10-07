@@ -8,7 +8,7 @@ namespace Dotty.Runtime.Hyperlinks;
 
 /// <summary>
 /// Default implementation of <see cref="IHyperlinkHandler"/> that opens URLs
-/// securely using system utilities (<c>Process.Start</c> / <c>xdg-open</c> / <c>open</c>).
+/// securely using system utilities (<c>Process.Start</c> on Windows and <c>Process.StartAndForget</c> with <c>xdg-open</c> / <c>open</c>).
 /// </summary>
 public class DefaultHyperlinkHandler : IHyperlinkHandler
 {
@@ -93,11 +93,18 @@ public class DefaultHyperlinkHandler : IHyperlinkHandler
                 return Task.FromResult(false);
             }
 
-            using var process = Process.Start(psi);
-            if (process == null)
+            if (OperatingSystem.IsWindows())
             {
-                LastError = "The platform URL launcher returned no process.";
-                return Task.FromResult(false);
+                using var process = Process.Start(psi);
+                if (process == null)
+                {
+                    LastError = "The platform URL launcher returned no process.";
+                    return Task.FromResult(false);
+                }
+            }
+            else
+            {
+                Process.StartAndForget(psi);
             }
             return Task.FromResult(true);
         }

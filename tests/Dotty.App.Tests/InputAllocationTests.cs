@@ -123,6 +123,9 @@ public sealed class InputAllocationTests
         var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
         host.TabManager.SelectTab(tab);
         tab.PaneTree.Layout(800, 480, 10, 20);
+        // ConPTY clears the screen on startup regardless of the shell; wait for that
+        // to settle so it cannot erase the URL the hover assertions depend on.
+        TestShellEnvironment.WaitForStartupOutput(tab.ActivePane.Session);
         tab.ActivePane.Session.Parser.Feed(Encoding.UTF8.GetBytes("https://example.test"));
         host.Ctrl = true;
         var controller = new TerminalMouseController(host);

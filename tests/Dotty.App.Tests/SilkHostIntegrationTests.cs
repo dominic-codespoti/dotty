@@ -20,7 +20,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void CreateTab_InitializesSession_AndAddsToTabList()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         TerminalTab? addedTab = null;
         manager.TabAdded += tab => addedTab = tab;
 
@@ -49,7 +49,7 @@ public class TerminalTabManagerTests
 
         try
         {
-            using (var manager = new TerminalTabManager())
+            using (var manager = new TerminalTabManager(SilentPty.Create))
             {
                 var tab = manager.CreateTab(
                     cols: 80,
@@ -71,7 +71,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void CloseBackgroundTabs_FromSnapshot_PreservesActiveTab()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var first = manager.CreateTab(cols: 80, rows: 24);
         var active = manager.CreateTab(cols: 80, rows: 24);
         var last = manager.CreateTab(cols: 80, rows: 24);
@@ -95,7 +95,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void CloseTab_UpdatesActiveIndex_AndDisposesSession()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab0 = manager.CreateTab(cols: 80, rows: 24);
         var tab1 = manager.CreateTab(cols: 80, rows: 24);
         var tab2 = manager.CreateTab(cols: 80, rows: 24);
@@ -130,7 +130,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void CloseExitedPane_SplitLeafClosesOnlyThatLeaf()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab = manager.CreateTab(cols: 80, rows: 24);
         var exitedLeaf = tab.PaneTree.Split(tab.ActivePane, SplitDirection.Vertical);
 
@@ -143,7 +143,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void CloseExitedPane_SoleLeafClosesTabAndClearsFinalActiveTab()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab = manager.CreateTab(cols: 80, rows: 24);
         TerminalTab? lastActive = tab;
         manager.ActiveTabChanged += changed => lastActive = changed;
@@ -157,7 +157,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void CloseExitedPane_StaleDuplicateExitIsNoOp()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab = manager.CreateTab(cols: 80, rows: 24);
         var leaf = tab.ActivePane;
 
@@ -169,7 +169,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void CloseExitedPane_ClosesBackgroundOwnerWithoutChangingActiveTab()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var background = manager.CreateTab(cols: 80, rows: 24);
         var active = manager.CreateTab(cols: 80, rows: 24);
         manager.SelectTab(active);
@@ -182,7 +182,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void SplitAndClosePane_RaiseTopologyAndActivePaneChangesOnce()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab = manager.CreateTab(cols: 80, rows: 24);
         int topologyChanges = 0;
         var activeChanges = new List<(LeafPane OldPane, LeafPane NewPane)>();
@@ -204,7 +204,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void SelectNextTab_And_SelectPreviousTab_CycleThroughTabs()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab0 = manager.CreateTab(cols: 80, rows: 24);
         var tab1 = manager.CreateTab(cols: 80, rows: 24);
         var tab2 = manager.CreateTab(cols: 80, rows: 24);
@@ -240,7 +240,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void ResizeAll_ResizesAllTabSessions()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab0 = manager.CreateTab(cols: 80, rows: 24);
         var tab1 = manager.CreateTab(cols: 80, rows: 24);
 
@@ -255,7 +255,7 @@ public class TerminalTabManagerTests
     [Fact]
     public void TabTitleChanged_FiresWhenSessionTitleChanges()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab = manager.CreateTab(cols: 80, rows: 24);
 
         TerminalTab? reportedTab = null;

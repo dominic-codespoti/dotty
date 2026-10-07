@@ -35,7 +35,7 @@ public sealed class TerminalSceneComposerTests
         using var tab = new TerminalTab(rows: 4, columns: 20);
         tab.Session.Adapter.Buffer.SetCursor(0, 0);
         tab.Session.Adapter.Buffer.WriteText("hello".AsSpan(), CellAttributes.Default);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -82,7 +82,7 @@ public sealed class TerminalSceneComposerTests
             buffer.WriteText(line, CellAttributes.Default);
         }
 
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 64);
         var cachedComposer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -200,7 +200,7 @@ public sealed class TerminalSceneComposerTests
             buffer.WriteText(line, CellAttributes.Default);
         }
 
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 1024);
         var cachedComposer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var fullComposer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
@@ -272,7 +272,7 @@ public sealed class TerminalSceneComposerTests
     [Fact]
     public void Compose_RendersEachLeafUsingItsPreservedScrollOffset()
     {
-        using var tab = new TerminalTab(rows: 4, columns: 20);
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 20);
         var first = tab.ActivePane;
         var second = tab.PaneTree.Split(first, SplitDirection.Vertical);
         for (int row = 0; row < 4; row++)
@@ -287,7 +287,7 @@ public sealed class TerminalSceneComposerTests
         first.ScrollTo(1, first.Session.Adapter.Buffer.ScrollbackCount);
         second.ScrollTo(2, second.Session.Adapter.Buffer.ScrollbackCount);
 
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -356,7 +356,7 @@ public sealed class TerminalSceneComposerTests
         pane.Session.Adapter.Buffer.SetCursor(0, 0);
         pane.ScrollTo(1, pane.Session.Adapter.Buffer.ScrollbackCount);
 
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -397,7 +397,7 @@ public sealed class TerminalSceneComposerTests
     public void Compose_SearchHighlightsTranslateAndClipVisibleMatches()
     {
         using var tab = new TerminalTab(rows: 4, columns: 8);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -469,7 +469,7 @@ public sealed class TerminalSceneComposerTests
         }
         pane.Session.Adapter.Buffer.ScrollUpLines(1);
         pane.ScrollTo(1, pane.Session.Adapter.Buffer.ScrollbackCount);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -516,11 +516,11 @@ public sealed class TerminalSceneComposerTests
     [Fact]
     public void Compose_SearchHighlightsOnlyActivePaneAtGlobalSplitOffset()
     {
-        using var tab = new TerminalTab(rows: 4, columns: 8);
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
         var first = tab.ActivePane;
         var second = tab.PaneTree.Split(first, SplitDirection.Vertical);
         tab.PaneTree.ActivePane = second;
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -571,7 +571,7 @@ public sealed class TerminalSceneComposerTests
         using var tab = new TerminalTab(rows: 4, columns: 20);
         tab.Session.Adapter.Buffer.SetCursor(0, 0);
         tab.Session.Adapter.Buffer.WriteText("selected".AsSpan(), CellAttributes.Default);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var selection = tab.ActivePane.Selection;
         selection.StartSelection(0, 0);
         selection.UpdateSelection(0, 7);
@@ -622,7 +622,7 @@ public sealed class TerminalSceneComposerTests
         pane.Selection.StartSelection(-1, 7);
         pane.Selection.UpdateSelection(-1, 7);
 
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -656,7 +656,7 @@ public sealed class TerminalSceneComposerTests
     [Fact]
     public void Compose_RendersIndependentSelectionsForInactiveSplitPanes()
     {
-        using var tab = new TerminalTab(rows: 4, columns: 8);
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
         var first = tab.ActivePane;
         var second = tab.PaneTree.Split(first, SplitDirection.Vertical);
         first.Session.Adapter.Buffer.SetCursor(0, 0);
@@ -666,7 +666,7 @@ public sealed class TerminalSceneComposerTests
         first.Selection.StartSelection(0, 0);
         second.Selection.StartSelection(1, 1);
 
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -738,7 +738,7 @@ public sealed class TerminalSceneComposerTests
         }
         pane.Session.Adapter.Buffer.ScrollUpLines(2);
         Assert.Equal(2, pane.Session.Adapter.Buffer.ScrollbackCount);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -776,7 +776,7 @@ public sealed class TerminalSceneComposerTests
     public void Compose_ContextMenuRecordsOverlayRangesAfterBaseScene()
     {
         using var tab = new TerminalTab(rows: 4, columns: 20);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -822,7 +822,7 @@ public sealed class TerminalSceneComposerTests
     public void Compose_PreeditRendersGraphemeClustersAndClipsAtPaneEdgeWithoutChangingTerminal()
     {
         using var tab = new TerminalTab(rows: 4, columns: 10);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;

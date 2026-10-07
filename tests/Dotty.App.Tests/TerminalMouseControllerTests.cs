@@ -65,7 +65,7 @@ public sealed class TerminalMouseControllerTests
 
     internal sealed class FakeTerminalMouseHost : ITerminalMouseHost, IDisposable
     {
-        public TerminalTabManager TabManager { get; } = new();
+        public TerminalTabManager TabManager { get; } = new(SilentPty.Create);
         public TerminalTab? ActiveTab => TabManager.ActiveTab;
         public ContextMenuModel? ActiveContextMenu { get; set; }
 
@@ -116,13 +116,11 @@ public sealed class TerminalMouseControllerTests
 
     private static void EnableMouseMode(LeafPane pane, int mode)
     {
-        TestShellEnvironment.WaitForStartupOutput(pane.Session);
         pane.Session.Parser.Feed(Encoding.ASCII.GetBytes($"\u001b[?{mode}h"));
     }
 
     private static void Feed(LeafPane pane, string text)
     {
-        TestShellEnvironment.WaitForStartupOutput(pane.Session);
         pane.Session.Parser.Feed(Encoding.UTF8.GetBytes(text));
     }
 

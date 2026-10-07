@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using Dotty.Abstractions.Pty;
 using Dotty.Runtime.Sessions;
 
 namespace Dotty.Runtime.Panes;
@@ -13,6 +14,7 @@ public sealed class PaneTree : IDisposable
     private ReadOnlyCollection<LeafPane>? _leavesView;
     private readonly Dictionary<LeafPane, Action<int>> _exitHandlers = new();
     private readonly object _exitLock = new();
+    private readonly Func<IPty>? _ptyFactory;
     private bool _isDisposed;
 
     public event Action<LeafPane, LeafPane>? ActivePaneChanged;
@@ -81,8 +83,14 @@ public sealed class PaneTree : IDisposable
     }
 
     public PaneTree(string? workingDirectory = null, string? shell = null, int rows = 24, int columns = 80)
+        : this(ptyFactory: null, workingDirectory, shell, rows, columns)
     {
-        var session = new TerminalSession(rows: rows, columns: columns);
+    }
+
+    internal PaneTree(Func<IPty>? ptyFactory, string? workingDirectory = null, string? shell = null, int rows = 24, int columns = 80)
+    {
+        _ptyFactory = ptyFactory;
+        var session = CreateSession(rows, columns);
         var initialPane = new LeafPane(session);
         _activePane = initialPane;
         _root = initialPane;
@@ -92,6 +100,11 @@ public sealed class PaneTree : IDisposable
             session.StartWithOptions(shell: shell, workingDirectory: workingDirectory);
         }
     }
+
+    private TerminalSession CreateSession(int rows, int columns) =>
+        _ptyFactory is null
+            ? new TerminalSession(rows: rows, columns: columns)
+            : new TerminalSession(rows, columns, _ptyFactory);
 
     public LeafPane Split(LeafPane target, SplitDirection direction, string? workingDirectory = null, string? shell = null)
     {
@@ -103,7 +116,7 @@ public sealed class PaneTree : IDisposable
         string? effectiveWorkingDirectory = workingDirectory ?? target.Session.CurrentWorkingDirectory;
         string? effectiveShell = shell ?? target.Session.LaunchShell;
         bool effectiveShellIsExecutable = shell is null && target.Session.LaunchShellIsExecutable;
-        var session = new TerminalSession(rows: Math.Max(1, target.Rows), columns: Math.Max(1, target.Columns));
+        var session = CreateSession(Math.Max(1, target.Rows), Math.Max(1, target.Columns));
         var newPane = new LeafPane(session);
         Subscribe(newPane);
         if (!string.IsNullOrEmpty(effectiveWorkingDirectory) || !string.IsNullOrEmpty(effectiveShell))

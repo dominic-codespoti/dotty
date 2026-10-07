@@ -11,7 +11,7 @@ namespace Dotty.App.Tests;
 
 public sealed class LuaPaneApiTests : IDisposable
 {
-    private readonly TerminalTabManager _tabManager = new();
+    private readonly TerminalTabManager _tabManager = new(SilentPty.Create);
     private readonly LuaScriptHost _host;
 
     public LuaPaneApiTests()
@@ -124,7 +124,6 @@ public sealed class LuaPaneApiTests : IDisposable
     public void PaneTextReturnsVisibleAdapterTextWithoutTrailingBlankRows()
     {
         var tab = _tabManager.CreateTab(rows: 3, cols: 8);
-        TestShellEnvironment.WaitForStartupOutput(tab.Session);
         tab.Session.Parser.Feed(Encoding.UTF8.GetBytes("hello   \r\nworld  "));
 
         Assert.True(_host.ExecuteString(@"

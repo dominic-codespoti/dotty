@@ -13,7 +13,7 @@ namespace Dotty.App.Tests;
 public sealed class LuaActionsUtilitiesTests : IDisposable
 {
     private readonly DottyUserConfig _config = new();
-    private readonly TerminalTabManager _tabs = new();
+    private readonly TerminalTabManager _tabs = new(SilentPty.Create);
     private readonly FakeLuaHostServices _services;
     private readonly LuaScriptHost _host;
 

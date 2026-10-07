@@ -1,4 +1,5 @@
 using System;
+using Dotty.Abstractions.Pty;
 using Dotty.Runtime.Panes;
 using Dotty.Runtime.Sessions;
 namespace Dotty.Runtime.Tabs;
@@ -34,10 +35,15 @@ public sealed class TerminalTab : IDisposable
     public event Action<LeafPane, int>? ProcessExited;
 
     public TerminalTab(string? title = null, string? workingDirectory = null, int rows = 24, int columns = 80, string? shell = null, bool deferStart = false, System.Collections.Generic.IReadOnlyList<string>? command = null, bool shellIsExecutable = false)
+        : this(ptyFactory: null, title, workingDirectory, rows, columns, shell, deferStart, command, shellIsExecutable)
+    {
+    }
+
+    internal TerminalTab(Func<IPty>? ptyFactory, string? title = null, string? workingDirectory = null, int rows = 24, int columns = 80, string? shell = null, bool deferStart = false, System.Collections.Generic.IReadOnlyList<string>? command = null, bool shellIsExecutable = false)
     {
         _title = string.IsNullOrWhiteSpace(title) ? "Terminal" : title;
         WorkingDirectory = workingDirectory;
-        PaneTree = new PaneTree(rows: rows, columns: columns);
+        PaneTree = new PaneTree(workingDirectory: null, shell: null, rows: rows, columns: columns, ptyFactory: ptyFactory);
         Session.TitleChanged += OnSessionTitleChanged;
         PaneTree.ProcessExited += OnPaneProcessExited;
         if (!deferStart && (!string.IsNullOrEmpty(workingDirectory) || !string.IsNullOrEmpty(shell) || command is not null))

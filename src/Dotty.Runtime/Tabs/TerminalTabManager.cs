@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Dotty.Abstractions.Pty;
 using Dotty.Runtime.Panes;
 
 namespace Dotty.Runtime.Tabs;
@@ -12,6 +13,18 @@ public sealed class TerminalTabManager : IDisposable
     private readonly Dictionary<TerminalTab, Dictionary<LeafPane, Action>> _bellHandlers = new();
     private int _activeIndex = -1;
     private bool _isDisposed;
+    private readonly Func<IPty>? _ptyFactory;
+
+    public TerminalTabManager()
+    {
+    }
+
+    // Test seam: sessions created through this manager use the given PTY instead
+    // of the platform one, so tests do not depend on a real child process.
+    internal TerminalTabManager(Func<IPty> ptyFactory)
+    {
+        _ptyFactory = ptyFactory ?? throw new ArgumentNullException(nameof(ptyFactory));
+    }
 
     public IReadOnlyList<TerminalTab> Tabs => _tabs;
 
@@ -39,11 +52,15 @@ public sealed class TerminalTabManager : IDisposable
         ThrowIfDisposed();
 
         var tab = new TerminalTab(
+            title: null,
             workingDirectory: workingDirectory,
             rows: rows,
             columns: cols,
             shell: shell,
-            deferStart: true);
+            deferStart: true,
+            command: null,
+            shellIsExecutable: false,
+            ptyFactory: _ptyFactory);
 
         Action<LeafPane, int> exitHandler = (leaf, exitCode) => OnTabProcessExited(tab, leaf, exitCode);
         _exitHandlers.Add(tab, exitHandler);

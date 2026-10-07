@@ -89,7 +89,7 @@ public sealed class ScrollbarAndBellTests
     [Fact]
     public void TabManager_InactiveTabReceivesBell_SetsHasBellAlert()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab1 = manager.CreateTab(cols: 80, rows: 24);
         var tab2 = manager.CreateTab(cols: 80, rows: 24);
 

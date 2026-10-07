@@ -23,7 +23,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_InitialState_HasSingleActiveLeaf()
     {
-        using var tree = new PaneTree(rows: 24, columns: 80);
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
 
         Assert.NotNull(tree.Root);
         Assert.NotNull(tree.ActivePane);
@@ -34,7 +34,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_Split_CreatesSplitNodeAndActivatesNewLeaf()
     {
-        using var tree = new PaneTree(rows: 24, columns: 80);
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
         var initial = tree.ActivePane;
 
         var second = tree.Split(initial, SplitDirection.Vertical);
@@ -54,7 +54,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_Events_ReportTopologyAndActiveChangesOnce()
     {
-        using var tree = new PaneTree(rows: 24, columns: 80);
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
         var first = tree.ActivePane;
         var activeChanges = new List<(LeafPane OldPane, LeafPane NewPane)>();
         var eventOrder = new List<string>();
@@ -111,7 +111,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_PublicOperations_RejectUseAfterDispose()
     {
-        var tree = new PaneTree(rows: 24, columns: 80);
+        var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
         var pane = tree.ActivePane;
         tree.Dispose();
 
@@ -130,7 +130,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_Layout_CalculatesCorrectBounds()
     {
-        using var tree = new PaneTree(rows: 24, columns: 80);
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
         var left = tree.ActivePane;
         var right = tree.Split(left, SplitDirection.Vertical);
 
@@ -151,7 +151,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_FindPaneAt_And_HitTestDivider()
     {
-        using var tree = new PaneTree(rows: 24, columns: 80);
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
         var top = tree.ActivePane;
         var bottom = tree.Split(top, SplitDirection.Horizontal);
 
@@ -170,7 +170,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_NavigateFocus_MovesInCorrectDirection()
     {
-        using var tree = new PaneTree(rows: 24, columns: 80);
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
         var left = tree.ActivePane;
         var right = tree.Split(left, SplitDirection.Vertical);
 
@@ -188,7 +188,7 @@ public class SplitPaneTests
     [Fact]
     public void PaneTree_Close_RemovesLeafAndPromotesSibling()
     {
-        using var tree = new PaneTree(rows: 24, columns: 80);
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: SilentPty.Create);
         var first = tree.ActivePane;
         var second = tree.Split(first, SplitDirection.Vertical);
         var third = tree.Split(second, SplitDirection.Horizontal);

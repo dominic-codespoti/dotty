@@ -30,7 +30,7 @@ public sealed class RenderingAllocationTests
         using var tab = new TerminalTab(rows: 4, columns: 20);
         tab.Session.Adapter.Buffer.SetCursor(0, 0);
         tab.Session.Adapter.Buffer.WriteText("steady state".AsSpan(), CellAttributes.Default);
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -85,7 +85,7 @@ public sealed class RenderingAllocationTests
             buffer.WriteText(line, CellAttributes.Default);
         }
 
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 1024);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
         var theme = BuiltInThemes.DarkPlus;
@@ -148,7 +148,7 @@ public sealed class RenderingAllocationTests
     [Fact]
     public void TabBarBuild_WithStableTitleAndStatusAllocatesNothingAfterWarmup()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         var tab = manager.CreateTab(cols: 20, rows: 4);
         tab.Title = "Stable title";
         var typeface = SKTypeface.Default;
@@ -184,7 +184,7 @@ public sealed class RenderingAllocationTests
     [Fact]
     public void TabBarBuild_AlternatingActiveAndHoveredTabsAllocatesNothingAfterWarmup()
     {
-        using var manager = new TerminalTabManager();
+        using var manager = new TerminalTabManager(SilentPty.Create);
         manager.CreateTab(cols: 20, rows: 4);
         manager.CreateTab(cols: 20, rows: 4);
         manager.CreateTab(cols: 20, rows: 4);

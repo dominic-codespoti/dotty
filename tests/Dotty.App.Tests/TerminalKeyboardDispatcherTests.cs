@@ -16,7 +16,7 @@ public sealed class TerminalKeyboardDispatcherTests
 {
     internal sealed class FakeHost : ITerminalKeyboardHost, IDisposable
     {
-        public TerminalTabManager TabManager { get; } = new();
+        public TerminalTabManager TabManager { get; } = new(SilentPty.Create);
         public TerminalTab? ActiveTab { get; set; }
         public LuaScriptHost LuaHost { get; }
         public KeybindingManager Keybindings { get; } = new();
@@ -75,7 +75,7 @@ public sealed class TerminalKeyboardDispatcherTests
     {
         var host = new FakeHost
         {
-            ActiveTab = new TerminalTab(rows: 24, columns: 80)
+            ActiveTab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 24, columns: 80)
         };
         return host;
     }
@@ -417,7 +417,7 @@ public sealed class TerminalKeyboardDispatcherTests
     {
         using var host = new FakeHost
         {
-            ActiveTab = new TerminalTab(rows: 4, columns: 80)
+            ActiveTab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 80)
         };
         var tab = host.ActiveTab;
         var first = tab!.ActivePane;

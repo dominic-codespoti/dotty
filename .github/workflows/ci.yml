@@ -247,6 +247,9 @@ jobs:
       - name: Check formatting
         run: dotnet format whitespace ${{ env.SOLUTION_PATH }} --verify-no-changes --verbosity detailed
 
+      - name: Run benchmark script tests
+        run: python3 -m unittest discover -s scripts/perf/tests
+
   # Job to run performance benchmarks
   performance-tests:
     name: Performance Tests (Linux)

@@ -103,11 +103,7 @@ processes. See [GUI harness benchmarking](GuiHarnessBenchmarking.md).
 
 ## Native Dotty output benchmark
 
-Use `scripts/perf/dotty_output_bench.py` for the same unprofiled Dotty workload
-on native Windows and POSIX, including NativeAOT apphosts. It requires Python 3,
-`psutil` (`python -m pip install psutil`), a built/published apphost, and a usable
-desktop session. Missing `psutil` is an explicit error; no .NET diagnostics tools
-or competitor terminals are needed.
+Use `scripts/perf/dotty_output_bench.py` for the same unprofiled Dotty workload on native Windows and POSIX, including NativeAOT apphosts. It requires Python 3, `psutil` (`python -m pip install psutil`), a built/published apphost, and a usable desktop session. Missing `psutil` is an explicit error; .NET diagnostics tools and competitor terminals are not needed.
 
 ```bash
 python scripts/perf/dotty_output_bench.py --app /path/to/dotty \
@@ -116,38 +112,18 @@ python scripts/perf/dotty_output_bench.py --app /path/to/dotty \
   --cols 80 --rows 24 --font-family Consolas --font-size 16
 ```
 
-On Windows use `python` and the native `dotty.exe` apphost path; on Linux,
-`python3` and a native `dotty` path. The default geometry/font is 80x24,
-Consolas 16px; override the font if unavailable and keep it fixed across the
-comparison. The harness uses an isolated per-run configuration, not user config.
-Every invocation creates a unique UTC directory with `summary.json`, a concise
-`report.md`, and retained per-run JSON, logs, source-byte acknowledgments, actual
-child/host geometry, binary/script hashes, endpoint observations, and memory
-samples. Warmups are retained but excluded from summary statistics.
+For longer comparisons, use e.g. `--runs 3 --warmup-runs 1 --lines 2000000`. On Windows use `python` and a native `dotty.exe` apphost path; on Linux use `python3` and a native `dotty` path. The default geometry/font is 80x24 and Consolas 16px; override the font if unavailable and keep it fixed across comparisons. Keep grid, font availability, display/backend/scale, and binary/workload hashes fixed; keep windows visible and unoccluded. The harness uses an isolated per-run configuration, not user config.
 
-Raw writes can consume only a prefix: Python's unbuffered Windows console
-writer was observed returning 12,287 bytes for a 55,000-byte request. Ignoring
-the return value silently loses the suffix. All maintained output workload
-writers use `output_write.py` to retry the remaining bytes and reject missing
-progress. Source bytes exclude marker bytes and PTY-added bytes; parsed totals
-can therefore differ. Deterministic regression coverage:
+Every invocation creates a unique UTC directory with `summary.json`, a concise `report.md`, and retained per-run JSON, logs, source-byte acknowledgments, actual child/host geometry, binary/script hashes, endpoint observations, memory samples, child events, and final screen. Warmups are retained but excluded from summary statistics.
+
+Raw writes can consume only a prefix: Python's unbuffered Windows console writer was observed returning 12,287 bytes for a 55,000-byte request. Ignoring the return value silently loses the suffix. All maintained output workload writers—including the benchmark, comparison, and profiler workloads—use `output_write.py` to retry remaining bytes, reject missing progress, and preserve partial final chunks. Acknowledged payload and marker bytes are recorded separately; source bytes exclude marker bytes and PTY-added bytes, so parsed totals can differ. The deterministic regression tests assert exact bytes across capped writes and partial final chunks:
 
 ```bash
 python -m unittest discover -s scripts/perf/tests -p test_output_write.py
 python -m unittest discover -s scripts/perf/tests -p test_dotty_output_bench.py
 ```
 
-The final endpoint requires the marker in the terminal buffer, parser drain
-(empty queue and equal PTY read/parsed counts), and a new submitted frame whose
-generation matches the model. It is the first observer measurement after
-`SwapBuffers`, **not** GPU completion or physical/compositor presentation.
-Windows memory is sampled working set; Linux memory is sampled RSS. Root and
-process-tree maxima cover startup through the endpoint, exclude observer and
-cleanup, and are not exact peaks. Keep the window visible/unoccluded and record
-display backend/scale; small-run statistics are descriptive observations.
-This is a full-stack producer/PTY/parser/render measurement, not an isolated
-parser or NativeAOT speed test. Keep producer APIs consistent across comparisons;
-OS PTY transport (including Windows ConPTY) can dominate output duration.
+Producer timing ends after complete output and flush. The final endpoint requires the marker in the terminal buffer, parser drain (empty queue and equal PTY read/parsed counts), and a new submitted frame with a new present count whose generation matches the model. Parser and submitted-generation durations are first observer measurements after marker presence; the generation endpoint follows `SwapBuffers`. These are **not** GPU completion or physical/compositor presentation. Windows memory is sampled working set; Linux memory is sampled RSS. Root/process-tree maxima cover startup through the endpoint, exclude observer and cleanup, and are not exact peaks. Small-run statistics are descriptive observations, not population percentiles; warmups are retained but excluded from mean/median/range summaries, and profiled throughput must not be merged with these unprofiled observations. This is a full-stack producer/PTY/parser/render measurement, not an isolated parser or NativeAOT speed test. Keep producer APIs consistent; OS PTY transport costs, including Windows ConPTY, can dominate output duration.
 
 ## CI matrix
 

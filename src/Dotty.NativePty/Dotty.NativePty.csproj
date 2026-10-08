@@ -5,18 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    
-    <!-- NuGet Package Metadata -->
-    <PackageId>Dotty.NativePty</PackageId>
-    <Authors>Dominic Codespoti</Authors>
-    <Description>Native PTY implementation for Dotty terminal emulator supporting Windows ConPTY and Unix PTY</Description>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <RepositoryUrl>https://github.com/dominic-codespoti/dotty</RepositoryUrl>
-    <PackageProjectUrl>https://github.com/dominic-codespoti/dotty</PackageProjectUrl>
-    <PackageTags>terminal;pty;conpty;windows;unix;console</PackageTags>
-    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <IncludeSymbols>true</IncludeSymbols>
-    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Internal PTY backends for the Dotty host; no longer published as a NuGet
+         package (it depended on Dotty.Abstractions, which is not published either). -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">

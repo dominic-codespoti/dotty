@@ -472,7 +472,9 @@ def write_workload(
     payload = workload_payload(workload)
     script_path.write_text(
         "#!/usr/bin/env python3\n"
-        "import os, pathlib, time\n"
+        "import os, pathlib, sys, time\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+        "from output_write import write_all\n"
         f"marker = pathlib.Path({str(marker_path)!r})\n"
         f"gate = pathlib.Path({str(gate_path)!r})\n"
         f"lines = {int(lines)}\n"
@@ -483,8 +485,10 @@ def write_workload(
         "start = time.monotonic_ns(); marker.open('a', encoding='utf-8').write(f'START {start}\\n')\n"
         "out = os.fdopen(os.dup(1), 'wb'); chunk = payload * 256\n"
         "full, rem = divmod(lines, 256)\n"
-        "for _ in range(full): out.write(chunk)\n"
-        "if rem: out.write(payload * rem)\n"
+        "written = 0\n"
+        "for _ in range(full): written += write_all(out, chunk)[0]\n"
+        "if rem: written += write_all(out, payload * rem)[0]\n"
+        "if written != len(payload) * lines: raise OSError('incomplete workload write')\n"
         "out.flush(); end = time.monotonic_ns(); marker.open('a', encoding='utf-8').write(f'END {end}\\n')\n"
         "time.sleep(hold)\n",
         encoding="utf-8",

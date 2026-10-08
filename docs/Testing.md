@@ -101,6 +101,54 @@ The optional control transport is loopback-only and enabled with
 uses Python sockets instead of assuming `nc`, and never kills unrelated
 processes. See [GUI harness benchmarking](GuiHarnessBenchmarking.md).
 
+## Native Dotty output benchmark
+
+Use `scripts/perf/dotty_output_bench.py` for the same unprofiled Dotty workload
+on native Windows and POSIX, including NativeAOT apphosts. It requires Python 3,
+`psutil` (`python -m pip install psutil`), a built/published apphost, and a usable
+desktop session. Missing `psutil` is an explicit error; no .NET diagnostics tools
+or competitor terminals are needed.
+
+```bash
+python scripts/perf/dotty_output_bench.py --app /path/to/dotty \
+  --output-root artifacts/perf/dotty-output \
+  --runs 1 --warmup-runs 0 --lines 10000 \
+  --cols 80 --rows 24 --font-family Consolas --font-size 16
+```
+
+On Windows use `python` and the native `dotty.exe` apphost path; on Linux,
+`python3` and a native `dotty` path. The default geometry/font is 80x24,
+Consolas 16px; override the font if unavailable and keep it fixed across the
+comparison. The harness uses an isolated per-run configuration, not user config.
+Every invocation creates a unique UTC directory with `summary.json`, a concise
+`report.md`, and retained per-run JSON, logs, source-byte acknowledgments, actual
+child/host geometry, binary/script hashes, endpoint observations, and memory
+samples. Warmups are retained but excluded from summary statistics.
+
+Raw writes can consume only a prefix: Python's unbuffered Windows console
+writer was observed returning 12,287 bytes for a 55,000-byte request. Ignoring
+the return value silently loses the suffix. All maintained output workload
+writers use `output_write.py` to retry the remaining bytes and reject missing
+progress. Source bytes exclude marker bytes and PTY-added bytes; parsed totals
+can therefore differ. Deterministic regression coverage:
+
+```bash
+python -m unittest discover -s scripts/perf/tests -p test_output_write.py
+python -m unittest discover -s scripts/perf/tests -p test_dotty_output_bench.py
+```
+
+The final endpoint requires the marker in the terminal buffer, parser drain
+(empty queue and equal PTY read/parsed counts), and a new submitted frame whose
+generation matches the model. It is the first observer measurement after
+`SwapBuffers`, **not** GPU completion or physical/compositor presentation.
+Windows memory is sampled working set; Linux memory is sampled RSS. Root and
+process-tree maxima cover startup through the endpoint, exclude observer and
+cleanup, and are not exact peaks. Keep the window visible/unoccluded and record
+display backend/scale; small-run statistics are descriptive observations.
+This is a full-stack producer/PTY/parser/render measurement, not an isolated
+parser or NativeAOT speed test. Keep producer APIs consistent across comparisons;
+OS PTY transport (including Windows ConPTY) can dominate output duration.
+
 ## CI matrix
 
 The authoritative workflow is `.github/workflows/ci.yml`:

@@ -82,6 +82,8 @@ def write_workload(script_path):
         "set -eu\n"
         "python3 - <<'PY' 2>>\"$TERMINAL_BENCH_LOG\"\n"
         "import os, sys, time, subprocess\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+        "from output_write import write_all\n"
         "line = b'The quick brown fox jumps over the lazy dog 0123456789\\n'\n"
         "lines = int(os.environ['TERMINAL_BENCH_LINES'])\n"
         "log = os.environ['TERMINAL_BENCH_LOG']\n"
@@ -113,13 +115,17 @@ def write_workload(script_path):
         "out = sys.stdout.buffer\n"
         "chunk = line * 1000\n"
         "full_chunks, remainder = divmod(lines, 1000)\n"
+        "bytes_written = 0\n"
         "for _ in range(full_chunks):\n"
-        "    out.write(chunk)\n"
+        "    bytes_written += write_all(out, chunk)[0]\n"
         "if remainder:\n"
-        "    out.write(line * remainder)\n"
+        "    bytes_written += write_all(out, line * remainder)[0]\n"
         "out.flush()\n"
+        "end_ns = time.time_ns()\n"
+        "if bytes_written != len(line) * lines: raise OSError('incomplete workload write')\n"
         "with open(log, 'a', encoding='utf-8') as handle:\n"
-        "    handle.write(f'{time.time_ns()} end\\n')\n"
+        "    handle.write(f'{time.time_ns()} written {bytes_written}\\n')\n"
+        "    handle.write(f'{end_ns} end\\n')\n"
         "time.sleep(float(os.environ.get('TERMINAL_BENCH_HOLD_SECONDS', '0.25')))\n"
         "PY\n",
         encoding="utf-8",
@@ -199,6 +205,8 @@ def read_events(log_path):
                 events["geometry"] = {"timestamp_ns": int(parts[0]), "rows": int(parts[2]), "cols": int(parts[3])}
             elif len(parts) == 4 and parts[1] == "stty":
                 events["stty"] = {"rows": int(parts[2]), "cols": int(parts[3])}
+            elif len(parts) == 3 and parts[1] == "written":
+                events["bytes_written"] = int(parts[2])
             elif len(parts) == 2 and parts[1] == "invalid-grid":
                 events["invalid_grid"] = True
     except (OSError, ValueError):
@@ -489,7 +497,11 @@ def run_once(name, args, workload, run_number, run_id=None, warmup=False):
             if "end" in events and "start" in events:
                 output_ms = (events["end"] - events["start"]) / 1_000_000.0
                 launch_to_start_ms = (events["start"] - started_ns) / 1_000_000.0
-                bytes_written = len(LINE.encode("utf-8")) * args.lines
+                bytes_written = events.get("bytes_written")
+                if bytes_written != len(LINE.encode("utf-8")) * args.lines:
+                    return {**base, "skipped": False, "status": "failed",
+                            "reason": "missing or incomplete acknowledged child byte count",
+                            "bytes_written": bytes_written, "command": cmd}
                 geometry = events.get("geometry")
                 result = {
                     **base, "skipped": False, "status": "ok", "pid": proc.pid,

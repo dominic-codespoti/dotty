@@ -105,6 +105,51 @@ RSS, cross-terminal comparison, or profiler evidence. Do not combine profiled
 throughput with unprofiled comparison means: profiling perturbs results and
 captures run in separate processes.
 
+### Native Windows/POSIX Dotty output
+
+For an unprofiled Dotty-only comparison (including NativeAOT), use the native
+Python driver from the repository root. It needs Python 3, `psutil`
+(`python -m pip install psutil`), a usable desktop, and a built/published
+apphost; it does not need competitor terminals or .NET diagnostics tools.
+
+```bash
+python scripts/perf/dotty_output_bench.py --app /path/to/dotty \
+  --output-root artifacts/perf/dotty-output \
+  --runs 3 --warmup-runs 1 --lines 2000000 \
+  --cols 80 --rows 24 --font-family Consolas --font-size 16
+```
+
+Use `dotty.exe` on native Windows and `python3`/`dotty` on native Linux.
+For a smoke, use `--runs 1 --warmup-runs 0 --lines 10000`. Grid and font
+defaults are 80x24/Consolas16; configure an available font and keep settings
+fixed across the comparison. Config is isolated from user data. Each invocation
+creates an immutable, unique UTC run directory containing `summary.json`,
+`report.md`, and per-run logs, child events, memory samples, endpoint observations,
+final screen, actual child/host geometry, and binary/script hashes. Warmups are
+retained but excluded from summary mean/median/range statistics.
+
+Payload and marker counts are the bytes acknowledged by the child writer,
+not a requested-byte estimate. Raw Windows Python console writes can return
+12,287 for a 55,000-byte request; ignoring that return silently drops suffixes.
+`output_write.py` is shared by the benchmark, comparison workload, and profiler
+workload: it consumes every remaining prefix and rejects no-progress writes.
+The regression tests assert exact bytes across capped writes and partial final
+chunks, not source-code text.
+
+Producer duration ends after complete output and flush. Parser and submitted
+generation durations are first observer measurements after the marker appears,
+the parser queue drains/read bytes equal parsed bytes, and the presented
+generation matches the model with a new present count. The generation endpoint
+is after `SwapBuffers`, **not** GPU completion or physical/compositor presentation.
+Source bytes exclude marker bytes and PTY-added bytes, so parsed totals can differ.
+Windows memory is working set; Linux memory is RSS. Root/tree memory maxima
+are sampled from startup through the endpoint, exclude observer/cleanup, and
+are not exact peaks. Keep windows visible/unoccluded, and compare matching
+display/backend/scale, grid, font availability, and binary/workload hashes.
+This full-stack measurement includes producer API and OS PTY transport costs
+(including Windows ConPTY); it does not by itself isolate parser/render or
+NativeAOT performance.
+
 ### Focused CPU follow-up
 
 Use the direct profiler for a cheap, CPU-only workload matrix when the

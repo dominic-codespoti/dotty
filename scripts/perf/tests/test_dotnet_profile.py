@@ -482,20 +482,24 @@ class DotnetProfileTests(unittest.TestCase):
         self.assertEqual(PROFILE.workload_payload("ansi-heavy"), ansi)
         self.assertEqual(len(ansi), 91)
         self.assertEqual(PROFILE.workload_payload("scrolling-heavy"), b"S" * 75 + b"\n\x1b[1S")
-    def test_workload_metadata_and_chunked_script(self):
+    def test_workload_metadata_and_chunked_output_integrity(self):
+        import subprocess
+        import sys
+
         metadata = PROFILE.workload_metadata("ansi-heavy", 513)
         self.assertEqual(metadata["bytes_per_iteration"], 91)
         self.assertEqual(metadata["chunk_iterations"], 256)
         self.assertEqual(metadata["total_output_bytes"], 513 * 91)
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            script = root / "workload.py"
-            PROFILE.write_workload(script, root / "markers", root / "gate", lines=513, hold_seconds=0, workload="scrolling-heavy")
-            generated = script.read_text()
-            self.assertIn("chunk = payload * 256", generated)
-            self.assertIn("full, rem = divmod(lines, 256)", generated)
-            self.assertIn("if rem: out.write(payload * rem)", generated)
-            self.assertLess(generated.index("out.flush()"), generated.index("write(f'END"))
+            script, marker, gate = root / "workload.py", root / "markers", root / "gate"
+            PROFILE.write_workload(script, marker, gate, lines=513, hold_seconds=0, workload="scrolling-heavy")
+            gate.touch()
+            result = subprocess.run([sys.executable, str(script)], capture_output=True, check=True, timeout=10)
+            self.assertEqual(result.stdout, PROFILE.workload_payload("scrolling-heavy") * 513)
+            markers = PROFILE.parse_marker_file(marker)
+            self.assertIn("ready", markers)
+            self.assertGreaterEqual(markers["end"], markers["start"])
 
     def test_workload_cli_default_and_validation(self):
         args = PROFILE.parse_args(["--app", "Dotty", "--output-dir", "/tmp/out"])

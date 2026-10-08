@@ -35,11 +35,60 @@ Benchmark Type                         Recommended Entry Point
 ─────────────────────────────────────  ────────────────────────────
 Consolidated compare + profile         scripts/perf/eval_suite.py all
 Cross-terminal output only             scripts/perf/eval_suite.py compare
+Native Windows/POSIX Dotty output       scripts/perf/dotty_output_bench.py
 .NET CPU/counters/alloc/heap only      scripts/perf/eval_suite.py profile
 Parser/buffer microbenchmarks          dotnet run --mode quick --filter bulk
 GUI tab/memory harness                 scripts/perf/gui_harness_bench.py
 Real Neovim scroll + compositor frames   scripts/perf/eval_suite.py nvim-scroll
 ```
+
+### Portable Dotty-only output measurements
+
+For native Windows versus POSIX (including NativeAOT), use the maintained
+Dotty-only driver, not the POSIX competitor harness. Requires Python 3,
+`psutil` (`python -m pip install psutil`), a usable desktop session, and an
+explicit built/published apphost. Missing `psutil` fails explicitly; .NET
+diagnostics tools and competitor terminals are not required.
+
+```bash
+python scripts/perf/dotty_output_bench.py --app /path/to/dotty \
+  --output-root artifacts/perf/dotty-output \
+  --runs 3 --warmup-runs 1 --lines 2000000 \
+  --cols 80 --rows 24 --font-family Consolas --font-size 16
+```
+
+Use a native `dotty.exe` path on Windows; `python3` and a native `dotty`
+path on Linux. Smoke with `--runs 1 --warmup-runs 0 --lines 10000`.
+Defaults are 80x24 and Consolas16; configure an available font and keep grid,
+font availability, display/backend/scale, and binary/workload hashes fixed.
+Keep windows visible and unoccluded. User config is isolated. Each invocation
+creates a unique UTC directory with JSON/Markdown summary and retained per-run
+child events, actual child/host geometry, binary/script hashes, logs, raw memory
+samples, endpoint observations, and final screen. Warmups are retained but
+excluded from descriptive mean/median/range summaries.
+
+**Never ignore a raw write's return count.** Windows Python's unbuffered
+console writer was observed acknowledging only 12,287 of 55,000 requested
+bytes. All maintained generated writers and the portable driver use the
+shared `output_write.py` full-write loop, reject no progress, and preserve
+partial final chunks. The portable driver records acknowledged payload and
+marker bytes separately; terminal/PTY-added bytes can make parsed totals differ.
+Deterministic coverage is in `test_output_write.py` and
+`test_dotty_output_bench.py` under `scripts/perf/tests`.
+
+Producer timing ends after complete output/flush. Final completion requires
+marker presence, parser drain (empty pending queue and equal read/parsed bytes),
+and a new submitted frame whose generation matches the model. These are first
+observer measurements after `SwapBuffers`, **not** GPU fences or proof of
+physical/compositor presentation. Windows memory is sampled working set;
+Linux memory is sampled RSS. Root/tree maxima span startup through the endpoint,
+exclude observer and cleanup, and are not exact peaks. Do not merge profiled
+throughput with these unprofiled observations or treat small-run statistics
+as population percentiles.
+Treat this as a full-stack producer/PTY/parser/render measurement. Keep producer
+APIs consistent; Windows ConPTY and other OS transport costs can dominate.
+Do not label a platform throughput difference a NativeAOT/parser regression
+without isolating those transport costs.
 
 ## 1. Consolidated Evaluation Suite (Recommended)
 

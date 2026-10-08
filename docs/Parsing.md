@@ -401,27 +401,19 @@ private static readonly Dictionary<char, char> s_decSpecialGraphicsMap = new()
 
 ## Performance Considerations
 
-### Benchmark Mode
+### Benchmark Boundaries
 
-When `DOTTY_BENCH_THROUGHPUT` environment variable is set, the parser skips rendering callbacks entirely for throughput testing:
+PTY output benchmarks measure the producer, platform transport, parser/buffer,
+and submitted frames together. They do not isolate parser throughput. Windows
+ConPTY processes console output before forwarding VT data to Dotty; POSIX PTYs
+forward a byte stream with their configured line discipline.
 
-```csharp
-private readonly bool _throughputMode = !string.IsNullOrEmpty(
-    Environment.GetEnvironmentVariable("DOTTY_BENCH_THROUGHPUT"));
-
-public void Feed(ReadOnlySpan<byte> bytes)
-{
-    if (_throughputMode && _leftoverLen == 0 && bytes.Length > 512)
-    {
-        _throughputChunkCounter++;
-        if ((_throughputChunkCounter & 511) != 0)
-        {
-            return; // Skip 511 out of 512 chunks
-        }
-    }
-    // ... normal processing
-}
-```
+Use `scripts/perf/dotty_output_bench.py` for complete-write, geometry-gated
+end-to-end measurements. Successful runs require acknowledged payload bytes,
+the final marker, drained parser counters, and a matching submitted model
+generation. Short raw writes must be retried; requested bytes are not proof of
+delivered bytes. For parser-only work, use the in-process performance benchmarks
+rather than an environment switch that bypasses terminal processing.
 
 ### Throughput Optimizations
 

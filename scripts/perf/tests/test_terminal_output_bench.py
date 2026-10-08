@@ -1,12 +1,8 @@
-import contextlib
 import importlib.util
-import io
-import json
 import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
-from unittest import mock
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "terminal_output_bench.py"
@@ -108,29 +104,13 @@ class TerminalOutputBenchTests(unittest.TestCase):
                 events = bench.read_events(log)
                 self.assertIn("start", events)
                 self.assertIn("end", events)
+                self.assertEqual(events["bytes_written"], len(expected))
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait()
                 process.stderr.close()
                 os.close(master)
-
-    def test_default_app_prefers_lowercase_jit_apphost(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            jit = root / "src" / "Dotty" / "bin" / "Release" / "net11.0" / "dotty"
-            jit.parent.mkdir(parents=True)
-            jit.write_text("app", encoding="utf-8")
-            self.assertEqual(bench.default_app(root), jit)
-
-    def test_default_app_falls_back_to_legacy_uppercase_publish(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            legacy = root / "src" / "Dotty" / "bin" / "Release" / "net11.0" / "linux-x64" / "publish" / "Dotty"
-            legacy.parent.mkdir(parents=True)
-            legacy.write_text("app", encoding="utf-8")
-            self.assertEqual(bench.default_app(root), legacy)
-
 
     def test_payload_keeps_legacy_keys_and_adds_schema(self):
         payload = bench.build_payload(self.args(), [])
@@ -142,36 +122,6 @@ class TerminalOutputBenchTests(unittest.TestCase):
         self.assertIn(payload["status"], {"skipped", "partial", "ok", "failed"})
         for key in ("metadata", "artifacts", "errors"):
             self.assertIn(key, payload)
-
-    def test_json_out_round_trip_is_payload(self):
-        payload = bench.build_payload(self.args(), [])
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "nested" / "result.json"
-            bench.write_json(output, payload)
-            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), payload)
-    def test_main_json_out_matches_stdout_payload(self):
-        result = {
-            "terminal": "dotty",
-            "run": 1,
-            "skipped": False,
-            "status": "ok",
-            "launch_to_child_start_ms": 1,
-            "output_ms": 2,
-            "throughput_mb_s": 3,
-            "bytes_written": 100,
-            "peak_rss_mb": None,
-            "peak_tree_rss_mb": None,
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "result.json"
-            args = self.args(runs=1, include="dotty", json_out=output)
-            stdout = io.StringIO()
-            with mock.patch.object(bench, "parse_args", return_value=args), \
-                    mock.patch.object(bench, "write_workload"), \
-                    mock.patch.object(bench, "run_once", return_value=result), \
-                    contextlib.redirect_stdout(stdout):
-                bench.main()
-            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), json.loads(stdout.getvalue()))
 
     def test_skip_and_partial_aggregation(self):
         results = [

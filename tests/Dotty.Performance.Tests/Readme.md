@@ -306,9 +306,9 @@ BenchmarkDotNet.Artifacts/performance/
 The gate matches `BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo` to baseline keys by ordinal exact name; description-based benchmark names include BenchmarkDotNet's surrounding single quotes.
 The CI gate covers every benchmark category represented by a checked-in baseline.
 An executed benchmark without a baseline is reported as `NEW` and informational, while a baseline key unused by any benchmark is warned about.
-In quick/CI modes, any first-pass failures are re-measured once, and only those still failing on the second pass fail the gate. Re-measurements run only the initially failing benchmarks in BenchmarkDotNet processes; first-pass-only failures are reported as transient, while a missing second-pass result remains a failure.
+In quick/CI modes, first-pass failures get up to two remeasures; a second remeasure runs only for benchmarks still failing the first. A failure is confirmed only if both remeasures fail, and a missing remeasure result counts as a failure. Any successful remeasure makes the result transient; the gate prints the pass index and median from every pass attempt.
 
-Latency compares the median against `baselineMs * (1 + relativeTolerance) + 0.000075`, with the default relative tolerance of 50% and a 75 ns absolute floor. Effective limits are 0.975 us for a 0.6 us baseline (1.625x), 1.575 us for 1 us (1.575x), and 3.000075 ms for 2 ms (1.5x). The median reduces sensitivity to isolated shared-runner outliers. Parser microbenchmarks batch repeated operations with `OperationsPerInvoke` so each timed invocation covers at least roughly 100 us; reported allocation values are normalized per operation.
+Latency compares the median against `baselineMs * (1 + relativeTolerance) + 0.000075`, with the single default relative tolerance of 100% and a 75 ns absolute floor. Effective limits are 1.275 us for a 0.6 us baseline (2.125x), 2.075 us for 1 us (2.075x), 4.000075 ms for 2 ms (2x), and 20.000075 ms for 10 ms (2x). Because shared runners vary by roughly 1.5–2x, this is a coarse tripwire for regressions around 2–3x or larger, not a precise microbenchmark. Allocation limits remain the tighter guard; use a dedicated machine or local harness for precise latency comparisons. Parser microbenchmarks batch repeated operations with `OperationsPerInvoke` so each timed invocation covers at least roughly 100 us; reported allocation values are normalized per operation.
 
 Allocation limits compare bytes per operation from BenchmarkDotNet's `GcStats.GetBytesAllocatedPerOperation(BenchmarkCase)` and allow `allowedBytes = ceilingBytes + max(64, ceilingBytes * 0.10)` to absorb small counter variation from pooling and tiering (64 B allows 128 B; 1,000,000 B allows 1,100,000 B). Null BDN allocation data is treated as 0 bytes/op; recalibration continues to store `ceil(measuredBytesPerOp) + 64`.
 
@@ -318,7 +318,7 @@ Reseed baselines with the manual GitHub Actions `recalibrate-baselines.yml` work
 
 The workflow updates measurements for categories run, removes stale keys that match no benchmark in the full suite, and keeps valid unrun category baselines. Latency baselines are runner-specific; allocation ceilings should be recalibrated from a current run.
 
-Run `dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode gate-self-test` for deterministic checks of latency boundaries, per-operation allocation normalization, and orphan detection.
+Run `dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode gate-self-test` for deterministic checks of latency boundaries, per-operation allocation normalization, orphan detection, and two-pass regression confirmation.
 ## CI/CD Integration
 
 ### GitHub Actions

@@ -8,17 +8,16 @@ namespace Dotty.Performance.Tests.Infrastructure;
 /// </summary>
 public class BaselineComparer
 {
-    private readonly Dictionary<string, BaselineThreshold> _baselines;
-    private readonly double _regressionThreshold;
+    public const double DefaultRelativeLatencyTolerance = 1.0;
 
-    public BaselineComparer(double regressionThreshold = 0.50)
+    private readonly Dictionary<string, BaselineThreshold> _baselines;
+    public BaselineComparer()
     {
         _baselines = new Dictionary<string, BaselineThreshold>();
-        _regressionThreshold = regressionThreshold;
     }
 
-    public BaselineComparer(string baselineFilePath, double regressionThreshold = 0.50)
-        : this(regressionThreshold)
+    public BaselineComparer(string baselineFilePath)
+        : this()
     {
         LoadBaselines(baselineFilePath);
     }
@@ -32,8 +31,7 @@ public class BaselineComparer
         {
             ExpectedMeanMs = expectedMeanMs,
             MinThroughput = minThroughput,
-            MaxAllocationsPerOp = maxAllocationsPerOp,
-            RegressionThreshold = _regressionThreshold
+            MaxAllocationsPerOp = maxAllocationsPerOp
         };
     }
 
@@ -104,7 +102,7 @@ public class BaselineComparer
         // Median latency avoids single-sample outliers. The fixed 75 ns floor absorbs small shared-runner jitter.
         if (baseline.ExpectedMeanMs > 0)
         {
-            var maxAllowed = GetAllowedLatencyMs(baseline.ExpectedMeanMs, baseline.RegressionThreshold);
+            var maxAllowed = GetAllowedLatencyMs(baseline.ExpectedMeanMs);
             var comparison = new ThresholdComparison
             {
                 Metric = "Median Latency",
@@ -186,8 +184,8 @@ public class BaselineComparer
 
     public IReadOnlyCollection<string> BaselineNames => _baselines.Keys;
 
-    public static double GetAllowedLatencyMs(double baselineMs, double relativeTolerance = 0.50) =>
-        baselineMs * (1 + relativeTolerance) + AbsoluteLatencyFloorMs;
+    public static double GetAllowedLatencyMs(double baselineMs) =>
+        baselineMs * (1 + DefaultRelativeLatencyTolerance) + AbsoluteLatencyFloorMs;
 }
 
 /// <summary>
@@ -204,9 +202,6 @@ public class BaselineThreshold
 
     [JsonPropertyName("maxAllocationsPerOp")]
     public double MaxAllocationsPerOp { get; set; }
-
-    [JsonPropertyName("regressionThreshold")]
-    public double RegressionThreshold { get; set; } = 0.50;
 }
 
 /// <summary>

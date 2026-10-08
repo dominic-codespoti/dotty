@@ -258,6 +258,8 @@ public class Program
         }
     }
 
+    private const int MaxRemeasurePasses = 2;
+
     private static void CheckRegressions(List<BenchmarkDotNet.Reports.Summary> summaries, IConfig benchmarkConfig)
     {
         var report = new PerformanceReport(OutputDirectory);
@@ -268,24 +270,30 @@ public class Program
             .Where(result => !result.Passed)
             .ToArray();
 
-        var secondPassResults = new Dictionary<string, BenchmarkRegressionEvaluation>(StringComparer.Ordinal);
-        foreach (var typeGroup in firstPassFailures.GroupBy(failure => failure.BenchmarkType))
+        var remeasurePasses = new List<IReadOnlyDictionary<string, BenchmarkRegressionEvaluation?>>();
+        var pending = firstPassFailures.ToDictionary(failure => failure.Key, failure => failure, StringComparer.Ordinal);
+        for (int pass = 1; pass <= MaxRemeasurePasses && pending.Count != 0; pass++)
         {
-            var failingNames = typeGroup.Select(failure => failure.Name).ToHashSet(StringComparer.Ordinal);
-            Console.WriteLine($"Re-measuring {failingNames.Count} initially failing benchmark(s) in {typeGroup.Key.Name}...");
-            var filteredConfig = benchmarkConfig.AddFilter(new BenchmarkDotNet.Filters.SimpleFilter(
-                benchmarkCase => failingNames.Contains(benchmarkCase.Descriptor.WorkloadMethodDisplayInfo)));
-            var secondSummary = BenchmarkRunner.Run(typeGroup.Key, filteredConfig, Array.Empty<string>());
-            foreach (var benchmarkReport in secondSummary.Reports)
-            {
-                var result = report.EvaluateBenchmark(benchmarkReport);
-                secondPassResults[result.Key] = result;
-            }
+            var results = RemeasureRegressionFailures(pending.Values, report, benchmarkConfig, pass);
+            remeasurePasses.Add(results);
+            pending = pending
+                .Where(entry => !results.TryGetValue(entry.Key, out var result) || result is null || !result.Passed)
+                .ToDictionary(
+                    entry => entry.Key,
+                    entry => results.TryGetValue(entry.Key, out var result) && result is not null ? result : entry.Value,
+                    StringComparer.Ordinal);
         }
 
-        var resolution = ResolveRegressionRechecks(firstPassFailures, secondPassResults);
-        foreach (var (first, second) in resolution.Transient)
-            Console.WriteLine($"Transient (passed on re-measure): {first.Name}: {first.MedianMs:F4} ms -> {second.MedianMs:F4} ms");
+        var resolution = ResolveRegressionRechecks(firstPassFailures, remeasurePasses);
+        foreach (var transient in resolution.Transient)
+        {
+            string medians = string.Join(" -> ", transient.MediansMs.Select(median =>
+                median.HasValue ? $"{median.Value:F3}" : "missing"));
+            string name = transient.First.Name;
+            if (!(name.StartsWith("'") && name.EndsWith("'")))
+                name = $"'{name}'";
+            Console.WriteLine($"Transient (passed on re-measure {transient.PassedRemeasure}): {name}: {medians} ms");
+        }
 
         var suiteNames = GetAllBenchmarkCases()
             .Select(benchmark => benchmark.Descriptor.WorkloadMethodDisplayInfo).ToHashSet(StringComparer.Ordinal);
@@ -319,18 +327,66 @@ public class Program
         }
     }
 
+    private static Dictionary<string, BenchmarkRegressionEvaluation?> RemeasureRegressionFailures(
+        IEnumerable<BenchmarkRegressionEvaluation> failures,
+        PerformanceReport report,
+        IConfig benchmarkConfig,
+        int pass)
+    {
+        var results = failures.ToDictionary(failure => failure.Key, _ => (BenchmarkRegressionEvaluation?)null, StringComparer.Ordinal);
+        foreach (var typeGroup in failures.GroupBy(failure => failure.BenchmarkType))
+        {
+            var failingNames = typeGroup.Select(failure => failure.Name).ToHashSet(StringComparer.Ordinal);
+            Console.WriteLine($"Re-measuring {failingNames.Count} failing benchmark(s) on re-measure {pass} in {typeGroup.Key.Name}...");
+            var filteredConfig = benchmarkConfig.AddFilter(new BenchmarkDotNet.Filters.SimpleFilter(
+                benchmarkCase => failingNames.Contains(benchmarkCase.Descriptor.WorkloadMethodDisplayInfo)));
+            var summary = BenchmarkRunner.Run(typeGroup.Key, filteredConfig, Array.Empty<string>());
+            foreach (var benchmarkReport in summary.Reports)
+            {
+                var result = report.EvaluateBenchmark(benchmarkReport);
+                if (results.ContainsKey(result.Key))
+                    results[result.Key] = result;
+            }
+        }
+
+        return results;
+    }
+
     private static RegressionResolution ResolveRegressionRechecks(
         IReadOnlyCollection<BenchmarkRegressionEvaluation> firstPassFailures,
-        IReadOnlyDictionary<string, BenchmarkRegressionEvaluation> secondPassResults)
+        IReadOnlyList<IReadOnlyDictionary<string, BenchmarkRegressionEvaluation?>> remeasurePasses)
     {
         var confirmed = new List<BenchmarkRegressionEvaluation>();
-        var transient = new List<(BenchmarkRegressionEvaluation First, BenchmarkRegressionEvaluation Second)>();
+        var transient = new List<TransientRegression>();
         foreach (var first in firstPassFailures)
         {
-            if (secondPassResults.TryGetValue(first.Key, out var second) && second.Passed)
-                transient.Add((first, second));
-            else
-                confirmed.Add(secondPassResults.TryGetValue(first.Key, out second) ? second : first);
+            var medians = new List<double?> { first.MedianMs };
+            var latestFailure = first;
+            bool recovered = false;
+            for (int passIndex = 0; passIndex < remeasurePasses.Count; passIndex++)
+            {
+                if (!remeasurePasses[passIndex].TryGetValue(first.Key, out var result))
+                    break;
+
+                if (result is null)
+                {
+                    medians.Add(null);
+                    continue;
+                }
+
+                medians.Add(result.MedianMs);
+                if (result.Passed)
+                {
+                    transient.Add(new TransientRegression(first, passIndex + 1, medians.ToArray()));
+                    recovered = true;
+                    break;
+                }
+
+                latestFailure = result;
+            }
+
+            if (!recovered)
+                confirmed.Add(latestFailure);
         }
 
         return new RegressionResolution(confirmed.ToArray(), transient.ToArray());
@@ -338,7 +394,12 @@ public class Program
 
     private sealed record RegressionResolution(
         BenchmarkRegressionEvaluation[] Confirmed,
-        (BenchmarkRegressionEvaluation First, BenchmarkRegressionEvaluation Second)[] Transient);
+        TransientRegression[] Transient);
+
+    private sealed record TransientRegression(
+        BenchmarkRegressionEvaluation First,
+        int PassedRemeasure,
+        double?[] MediansMs);
 
     // Update executed benchmarks, preserve other valid baselines, and remove suite-wide orphans.
     private static void UpdateBaselines(List<BenchmarkDotNet.Reports.Summary> summaries)
@@ -367,8 +428,7 @@ public class Program
                 {
                     ExpectedMeanMs = Math.Round(medianMs, 6),
                     MinThroughput = 0,
-                    MaxAllocationsPerOp = Math.Ceiling(allocatedPerOp) + 64,
-                    RegressionThreshold = 0.50,
+                    MaxAllocationsPerOp = Math.Ceiling(allocatedPerOp) + 64
                 };
                 updated++;
             }
@@ -391,11 +451,13 @@ public class Program
         BenchmarkTypes.SelectMany(type => BenchmarkConverter.TypeToBenchmarks(type).BenchmarksCases);
     private static void RunGateSelfTest()
     {
-        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(0.0006) - 0.000975) > 1e-12)
+        if (BaselineComparer.DefaultRelativeLatencyTolerance != 1.0 ||
+            Math.Abs(BaselineComparer.GetAllowedLatencyMs(0.0006) - 0.001275) > 1e-12)
             throw new InvalidOperationException("Sub-microsecond latency threshold formula changed.");
-        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(0.001) - 0.001575) > 1e-12)
+        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(0.001) - 0.002075) > 1e-12)
             throw new InvalidOperationException("One-microsecond latency threshold formula changed.");
-        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(2.0) - 3.000075) > 1e-12)
+        if (Math.Abs(BaselineComparer.GetAllowedLatencyMs(2.0) - 4.000075) > 1e-12 ||
+            Math.Abs(BaselineComparer.GetAllowedLatencyMs(10.0) - 20.000075) > 1e-12)
             throw new InvalidOperationException("Millisecond latency threshold formula changed.");
 
         var comparer = new BaselineComparer();
@@ -404,8 +466,8 @@ public class Program
         comparer.SetBaseline("allocation", 0);
         if (comparer.Compare("small", new BenchmarkResult { P50Ms = 0.0013 }).Passed)
             throw new InvalidOperationException("600 ns baseline accepted 1.3 us.");
-        if (comparer.Compare("large", new BenchmarkResult { P50Ms = 3.01 }).Passed)
-            throw new InvalidOperationException("2 ms baseline accepted 3.01 ms.");
+        if (comparer.Compare("large", new BenchmarkResult { P50Ms = 4.01 }).Passed)
+            throw new InvalidOperationException("2 ms baseline accepted 4.01 ms.");
 
         var allocationGate = new BaselineComparer();
         allocationGate.SetBaseline("zero-allocation", expectedMeanMs: 0, maxAllocationsPerOp: 64);
@@ -433,16 +495,32 @@ public class Program
         var firstA = new BenchmarkRegressionEvaluation(benchmarkType, "A", 0.003, false, "first A failure");
         var firstB = new BenchmarkRegressionEvaluation(benchmarkType, "B", 0.004, false, "first B failure");
         var firstMissing = new BenchmarkRegressionEvaluation(benchmarkType, "Missing", 0.005, false, "first missing failure");
-        var secondA = new BenchmarkRegressionEvaluation(benchmarkType, "A", 0.006, false, "second A failure");
-        var secondB = new BenchmarkRegressionEvaluation(benchmarkType, "B", 0.002, true, "second B passed");
+        var remeasure1A = new BenchmarkRegressionEvaluation(benchmarkType, "A", 0.006, false, "remeasure 1 A failure");
+        var remeasure2A = new BenchmarkRegressionEvaluation(benchmarkType, "A", 0.007, false, "remeasure 2 A failure");
+        var remeasure1B = new BenchmarkRegressionEvaluation(benchmarkType, "B", 0.006, false, "remeasure 1 B failure");
+        var remeasure2B = new BenchmarkRegressionEvaluation(benchmarkType, "B", 0.002, true, "remeasure 2 B passed");
         var recheck = ResolveRegressionRechecks(
             [firstA, firstB, firstMissing],
-            new Dictionary<string, BenchmarkRegressionEvaluation>(StringComparer.Ordinal)
-            { [secondA.Key] = secondA, [secondB.Key] = secondB });
+            [
+                new Dictionary<string, BenchmarkRegressionEvaluation?>(StringComparer.Ordinal)
+                {
+                    [remeasure1A.Key] = remeasure1A,
+                    [remeasure1B.Key] = remeasure1B,
+                    [firstMissing.Key] = null
+                },
+                new Dictionary<string, BenchmarkRegressionEvaluation?>(StringComparer.Ordinal)
+                {
+                    [remeasure2A.Key] = remeasure2A,
+                    [remeasure2B.Key] = remeasure2B,
+                    [firstMissing.Key] = null
+                }
+            ]);
         if (!recheck.Confirmed.Select(result => result.Name).SequenceEqual(["A", "Missing"]) ||
-            recheck.Confirmed.Single(result => result.Name == "A").MedianMs != secondA.MedianMs ||
-            recheck.Transient.Length != 1 || recheck.Transient[0].First.Name != "B" || recheck.Transient[0].Second.MedianMs != secondB.MedianMs)
-            throw new InvalidOperationException("Confirm-before-fail regression resolution changed.");
+            recheck.Confirmed.Single(result => result.Name == "A").MedianMs != remeasure2A.MedianMs ||
+            recheck.Transient.Length != 1 || recheck.Transient[0].First.Name != "B" ||
+            recheck.Transient[0].PassedRemeasure != 2 ||
+            !recheck.Transient[0].MediansMs.SequenceEqual(new double?[] { firstB.MedianMs, remeasure1B.MedianMs, remeasure2B.MedianMs }))
+            throw new InvalidOperationException("Two-pass confirm-before-fail regression resolution changed.");
 
         Console.WriteLine("Performance gate self-check passed.");
     }

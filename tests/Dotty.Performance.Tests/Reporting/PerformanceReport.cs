@@ -20,10 +20,7 @@ public class PerformanceReport
     public PerformanceReport(string outputDirectory, string? baselineFile = null)
     {
         _outputDirectory = outputDirectory;
-        _baselineComparer = new BaselineComparer(
-            ResolveBaselineFile(baselineFile, outputDirectory),
-            regressionThreshold: 0.50);
-
+        _baselineComparer = new BaselineComparer(ResolveBaselineFile(baselineFile, outputDirectory));
         Directory.CreateDirectory(outputDirectory);
     }
 

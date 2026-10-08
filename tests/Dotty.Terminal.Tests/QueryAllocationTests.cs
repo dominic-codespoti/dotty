@@ -7,6 +7,7 @@ using Xunit;
 namespace Dotty.Terminal.Tests;
 
 /// <summary>Allocation guards for DECRQM, XTGETTCAP and modifyOtherKeys.</summary>
+[Collection("Allocation-sensitive tests")]
 public sealed class QueryAllocationTests
 {
     private static readonly TerminalReplyHandler IgnoreReplyHandler = IgnoreReply;
@@ -21,12 +22,17 @@ public sealed class QueryAllocationTests
 
     private static void AssertNoAllocations(BasicAnsiParser parser, params byte[][] sequences)
     {
-        for (int i = 0; i < 16; i++)
-            foreach (byte[] sequence in sequences) parser.Feed(sequence);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 128; i++)
-            foreach (byte[] sequence in sequences) parser.Feed(sequence);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        foreach (byte[] sequence in sequences)
+            for (int i = 0; i < 16; i++) parser.Feed(sequence);
+
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                foreach (byte[] sequence in sequences) parser.Feed(sequence);
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 128,
+            windows: 5);
     }
 
     [Fact]

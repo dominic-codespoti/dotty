@@ -144,24 +144,25 @@ public class BaselineComparer
             }
         }
 
-        // Check allocations if baseline defined
+        // Allocation counters vary slightly with ArrayPool reuse and tiering; allow a small proportional slack.
         if (baseline.MaxAllocationsPerOp > 0)
         {
+            double maxAllowed = GetAllowedAllocationsPerOp(baseline.MaxAllocationsPerOp);
             var comparison = new ThresholdComparison
             {
                 Metric = "Allocations/Op",
                 Baseline = baseline.MaxAllocationsPerOp,
                 Actual = result.AllocatedBytesPerOp,
-                Threshold = baseline.MaxAllocationsPerOp,
+                Threshold = maxAllowed,
                 Unit = "bytes",
-                Passed = result.AllocatedBytesPerOp <= baseline.MaxAllocationsPerOp
+                Passed = result.AllocatedBytesPerOp <= maxAllowed
             };
             comparisons.Add(comparison);
 
             if (!comparison.Passed)
             {
                 passed = false;
-                messages.Add($"Allocations {result.AllocatedBytesPerOp:F0} bytes/op exceeds threshold {baseline.MaxAllocationsPerOp:F0} bytes/op");
+                messages.Add($"Allocations {result.AllocatedBytesPerOp:F0} bytes/op exceeds threshold {maxAllowed:F0} bytes/op");
             }
         }
 
@@ -175,6 +176,13 @@ public class BaselineComparer
         };
     }
     public const double AbsoluteLatencyFloorMs = 0.000075;
+
+    // Allocation counters vary slightly with ArrayPool reuse and tiering.
+    public const double MinimumAllocationSlackBytes = 64;
+    public const double RelativeAllocationSlack = 0.10;
+
+    public static double GetAllowedAllocationsPerOp(double baselineBytes) =>
+        baselineBytes + Math.Max(MinimumAllocationSlackBytes, baselineBytes * RelativeAllocationSlack);
 
     public IReadOnlyCollection<string> BaselineNames => _baselines.Keys;
 

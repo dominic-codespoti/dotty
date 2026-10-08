@@ -303,15 +303,19 @@ BenchmarkDotNet.Artifacts/performance/
 
 ## Baseline Tracking
 
-The gate uses the exact ordinal string in `BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo`; for `[Benchmark(Description = ...)]` methods, the key includes the single quotes (for example, `'Parse SGR: Bold'`). New benchmarks with no matching baseline are reported as `NEW`; baseline keys that match no benchmark in the selected categories and benchmarks with no baseline are both listed at the end of a gate run.
+The gate matches `BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo` to baseline keys by ordinal exact name; description-based benchmark names include BenchmarkDotNet's surrounding single quotes.
+The CI gate covers every benchmark category represented by a checked-in baseline.
+An executed benchmark without a baseline is reported as `NEW` and informational, while a baseline key unused by any benchmark is warned about.
 
 Latency compares the median against `baselineMs * (1 + relativeTolerance) + 0.000075`, with the default relative tolerance of 50% and a 75 ns absolute floor. Effective limits are 0.975 us for a 0.6 us baseline (1.625x), 1.575 us for 1 us (1.575x), and 3.000075 ms for 2 ms (1.5x). The median reduces sensitivity to isolated shared-runner outliers. Parser microbenchmarks batch repeated operations with `OperationsPerInvoke` so each timed invocation covers at least roughly 100 us; reported allocation values are normalized per operation.
 
-Allocation figures are bytes per operation from BenchmarkDotNet `GcStats.GetBytesAllocatedPerOperation(BenchmarkCase)`, not aggregate bytes over the run; its per-op calculation respects `OperationsPerInvoke`. If BDN supplies no allocation data (null), reports and updates use 0 bytes/op; baseline updates add 64 B headroom.
+Allocation limits compare bytes per operation from BenchmarkDotNet's `GcStats.GetBytesAllocatedPerOperation(BenchmarkCase)` and allow `allowedBytes = ceilingBytes + max(64, ceilingBytes * 0.10)` to absorb small counter variation from pooling and tiering (64 B allows 128 B; 1,000,000 B allows 1,100,000 B). Null BDN allocation data is treated as 0 bytes/op; recalibration continues to store `ceil(measuredBytesPerOp) + 64`.
 
 ### Updating Baselines
 
-Run the manual GitHub Actions `recalibrate-baselines.yml` workflow with `workflow_dispatch`; leave the filter empty to include every category. It updates measurements for categories run, removes stale keys within those categories, and keeps other categories. Latency baselines are runner-specific and must be reseeded by the user after this change lands. The checked-in allocation ceilings were not recalculated by hand; recalibration from a current run is required.
+Reseed baselines with the manual GitHub Actions `recalibrate-baselines.yml` workflow. Its `filter` input uses category substring matching; GitHub replaces an empty input with the configured default (`parser memory rendering silk startup throughput bulk`), so use that full string to reseed every category.
+
+The workflow updates measurements for categories run, removes stale keys that match no benchmark in the full suite, and keeps valid unrun category baselines. Latency baselines are runner-specific; allocation ceilings should be recalibrated from a current run.
 
 Run `dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode gate-self-test` for deterministic checks of latency boundaries, per-operation allocation normalization, and orphan detection.
 ## CI/CD Integration

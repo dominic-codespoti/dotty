@@ -1,4 +1,3 @@
-using System;
 using System.Text;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
@@ -6,6 +5,7 @@ using Xunit;
 
 namespace Dotty.Terminal.Tests;
 
+[Collection("Allocation-sensitive tests")]
 public sealed class TerminalCoreAllocationTests
 {
     [Fact]
@@ -24,12 +24,7 @@ public sealed class TerminalCoreAllocationTests
         for (int i = 0; i < 32; i++)
             parser.Feed(line);
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 256; i++)
-            parser.Feed(line);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
+        AllocationAssert.NoAllocations(() => parser.Feed(line), warmupIterations: 0, measuredIterationsPerWindow: 256, windows: 5);
     }
 
     [Fact]
@@ -63,15 +58,17 @@ public sealed class TerminalCoreAllocationTests
                 ResizeBoth(primary, secondary, size.Rows, size.Columns);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 64; i++)
-        {
-            foreach (var size in measuredSizes)
-                ResizeBoth(primary, secondary, size.Rows, size.Columns);
-        }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                foreach (var size in measuredSizes)
+                    ResizeBoth(primary, secondary, size.Rows, size.Columns);
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 64,
+            windows: 5,
+            beforeEachWindow: () => primary.SetAlternateScreen(true));
         primary.SetAlternateScreen(false);
-        Assert.Equal(0, allocated);
     }
 
     [Fact]
@@ -83,14 +80,14 @@ public sealed class TerminalCoreAllocationTests
             using var snapshot = buffer.CaptureRenderSnapshotVisible();
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 128; i++)
-        {
-            using var snapshot = buffer.CaptureRenderSnapshotVisible();
-        }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-        Assert.Equal(0, allocated);
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                using var snapshot = buffer.CaptureRenderSnapshotVisible();
+            },
+            warmupIterations: 8,
+            measuredIterationsPerWindow: 128,
+            windows: 5);
     }
 
     [Fact]
@@ -100,11 +97,7 @@ public sealed class TerminalCoreAllocationTests
         var adapter = new TerminalAdapter();
         var parser = new BasicAnsiParser { Handler = adapter };
         byte[] set = Encoding.UTF8.GetBytes("\u001b]4;1;#ff0000\u0007");
-        parser.Feed(set);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        parser.Feed(set);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0, allocated);
+        AllocationAssert.NoAllocations(() => parser.Feed(set), warmupIterations: 1, measuredIterationsPerWindow: 1, windows: 5);
     }
     [Fact]
     public void RepeatedPaletteQueriesAndNoOpResetsAllocateNothingAfterWarmup()
@@ -112,26 +105,25 @@ public sealed class TerminalCoreAllocationTests
         var adapter = new TerminalAdapter();
         adapter.ReplyRequested += static _ => { };
         var parser = new BasicAnsiParser { Handler = adapter };
-        byte[] setDefault = Encoding.UTF8.GetBytes("]10;#010203");
-        parser.Feed(setDefault);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        parser.Feed(setDefault);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        byte[] setDefault = Encoding.UTF8.GetBytes("\u001b]10;#010203\u0007");
+        AllocationAssert.NoAllocations(() => parser.Feed(setDefault), warmupIterations: 1, measuredIterationsPerWindow: 1, windows: 5);
 
-        byte[] setPalette = Encoding.UTF8.GetBytes("]4;1;#ff0000");
-        parser.Feed(setPalette);
-        byte[] query = Encoding.UTF8.GetBytes("]4;1;?");
-        parser.Feed(query);
-        before = GC.GetAllocatedBytesForCurrentThread();
-        parser.Feed(query);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        byte[] setPalette = Encoding.UTF8.GetBytes("\u001b]4;1;#ff0000\u0007");
+        byte[] query = Encoding.UTF8.GetBytes("\u001b]4;1;?\u0007");
+        AllocationAssert.NoAllocations(
+            () => parser.Feed(query),
+            warmupIterations: 1,
+            measuredIterationsPerWindow: 1,
+            windows: 5,
+            beforeEachWindow: () => parser.Feed(setPalette));
 
-        byte[] reset = Encoding.UTF8.GetBytes("]104");
-        parser.Feed(reset);
-        parser.Feed(reset);
-        before = GC.GetAllocatedBytesForCurrentThread();
-        parser.Feed(reset);
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        byte[] reset = Encoding.UTF8.GetBytes("\u001b]104\u0007");
+        AllocationAssert.NoAllocations(
+            () => parser.Feed(reset),
+            warmupIterations: 1,
+            measuredIterationsPerWindow: 1,
+            windows: 5,
+            beforeEachWindow: () => parser.Feed(reset));
     }
 
     private static void FillWrappedScrollback(TerminalBuffer buffer, string line)

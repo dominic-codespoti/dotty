@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       filter:
-        description: 'Benchmark filter (parser, memory, rendering, throughput, bulk, or empty for all)'
+        description: 'Benchmark category filter (substring match; use parser memory rendering silk startup throughput bulk for all categories; empty resolves to this default)'
         required: false
-        default: 'parser'
+        default: 'parser memory rendering silk startup throughput bulk'
       commit:
         description: 'Commit updated baselines.json back to the branch'
         required: false

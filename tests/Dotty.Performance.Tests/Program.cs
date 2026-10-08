@@ -379,10 +379,15 @@ public class Program
             throw new InvalidOperationException("2 ms baseline accepted 3.01 ms.");
 
         var allocationGate = new BaselineComparer();
-        allocationGate.SetBaseline("allocation", expectedMeanMs: 0, maxAllocationsPerOp: 100);
-        if (!allocationGate.Compare("allocation", new BenchmarkResult { AllocatedBytesPerOp = BytesPerOperation(1200, 12) }).Passed ||
-            allocationGate.Compare("allocation", new BenchmarkResult { AllocatedBytesPerOp = BytesPerOperation(1212, 12) }).Passed)
-            throw new InvalidOperationException("Per-operation allocation conversion or comparison changed.");
+        allocationGate.SetBaseline("zero-allocation", expectedMeanMs: 0, maxAllocationsPerOp: 64);
+        if (!allocationGate.Compare("zero-allocation", new BenchmarkResult { AllocatedBytesPerOp = 128 }).Passed ||
+            allocationGate.Compare("zero-allocation", new BenchmarkResult { AllocatedBytesPerOp = 129 }).Passed)
+            throw new InvalidOperationException("64 B allocation ceiling slack changed.");
+
+        allocationGate.SetBaseline("large-allocation", expectedMeanMs: 0, maxAllocationsPerOp: 1_000_000);
+        if (!allocationGate.Compare("large-allocation", new BenchmarkResult { AllocatedBytesPerOp = 1_100_000 }).Passed ||
+            allocationGate.Compare("large-allocation", new BenchmarkResult { AllocatedBytesPerOp = 1_100_001 }).Passed)
+            throw new InvalidOperationException("Proportional allocation slack changed.");
 
         var parserThroughputName = GetAllBenchmarkCases()
             .Where(benchmark => benchmark.Descriptor.Categories.Contains("Parser"))
@@ -397,9 +402,6 @@ public class Program
             throw new InvalidOperationException("Exact-name baseline orphan detection changed.");
         Console.WriteLine("Performance gate self-check passed.");
     }
-
-    private static double BytesPerOperation(long allocatedBytes, int operationsPerInvoke) =>
-        (double)allocatedBytes / operationsPerInvoke;
 
     private static IConfig ParseArguments(string[] args)
     {

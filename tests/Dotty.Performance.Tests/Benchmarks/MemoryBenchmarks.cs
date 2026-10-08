@@ -14,8 +14,51 @@ namespace Dotty.Performance.Tests.Benchmarks;
 public class MemoryBenchmarks : PerformanceTestBase
 {
     private readonly TerminalPalette _sgrPalette = new();
-    #region Grid Allocations
+    private TerminalBuffer _resizeBuffer = null!;
+    private TerminalBuffer _buffer = null!;
+    private TerminalBuffer _scrollbackBuffer = null!;
+    private TerminalBuffer _historyBuffer = null!;
+    private CellGrid _grid = null!;
+    private ushort _styleId;
+    private ushort _boldId;
+    private BasicAnsiParser _plainParser = null!;
+    private BasicAnsiParser _ansiParser = null!;
+    private byte[] _plainData = null!;
+    private byte[] _ansiData = null!;
+    private string _text1Kb = null!;
+    private readonly string[] _scrollbackLines = new string[100];
 
+    public override void GlobalSetup()
+    {
+        base.GlobalSetup();
+        _resizeBuffer = new TerminalBuffer(24, 80, scrollbackCapacity: 0);
+        _buffer = new TerminalBuffer(24, 80, scrollbackCapacity: 0);
+        _scrollbackBuffer = new TerminalBuffer(24, 80, scrollbackCapacity: 1000);
+        _historyBuffer = new TerminalBuffer(24, 80, scrollbackCapacity: 1000);
+        _grid = new CellGrid(24, 80);
+
+        var styleSet = new StyleSet();
+        _styleId = styleSet.GetOrCreateId(new CellAttributes { Bold = true, Italic = true, UnderlineStyle = UnderlineStyle.Single });
+        _boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
+        for (int i = 0; i < _scrollbackLines.Length; i++)
+            _scrollbackLines[i] = $"Line {i}: This is a test line with some content here.";
+
+        _text1Kb = System.Text.Encoding.UTF8.GetString(TestDataGenerator.GeneratePlainText(1000));
+        _plainData = TestDataGenerator.GeneratePlainText(10000);
+        _ansiData = TestDataGenerator.GenerateBasicAnsiText(10000, 0.1);
+        _plainParser = new BasicAnsiParser { Handler = new TerminalAdapter(24, 80, scrollbackCapacity: 0) };
+        _ansiParser = new BasicAnsiParser { Handler = new TerminalAdapter(24, 80, scrollbackCapacity: 0) };
+
+        for (int i = 0; i < 1000; i++)
+        {
+            _scrollbackBuffer.WriteText("Line: Content", CellAttributes.Default);
+            _scrollbackBuffer.LineFeed();
+            _historyBuffer.WriteText("Line: Content", CellAttributes.Default);
+            _historyBuffer.LineFeed();
+        }
+    }
+
+    #region Grid Allocations
 
     [Benchmark(Description = "Allocate CellGrid 80x24")]
     public CellGrid Grid_Allocate_80x24() => new(24, 80);
@@ -33,31 +76,22 @@ public class MemoryBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Buffer Resize Up")]
     public void Buffer_ResizeUp()
     {
-        var buffer = new TerminalBuffer(24, 80);
-        buffer.Resize(40, 120);
+        _resizeBuffer.Resize(40, 120);
+        _resizeBuffer.Resize(24, 80);
     }
 
     [Benchmark(Description = "Buffer Resize Down")]
     public void Buffer_ResizeDown()
     {
-        var buffer = new TerminalBuffer(60, 200);
-        buffer.Resize(24, 80);
+        _resizeBuffer.Resize(60, 200);
+        _resizeBuffer.Resize(24, 80);
     }
 
     [Benchmark(Description = "Buffer Clear")]
-    public void Buffer_Clear()
-    {
-        var buffer = new TerminalBuffer(24, 80);
-        buffer.EraseDisplay(2);
-    }
+    public void Buffer_Clear() => _buffer.EraseDisplay(2);
 
     [Benchmark(Description = "Buffer Write Text 1KB")]
-    public void Buffer_WriteText_1KB()
-    {
-        var buffer = new TerminalBuffer(24, 80);
-        var text = TestDataGenerator.GeneratePlainText(1000);
-        buffer.WriteText(System.Text.Encoding.UTF8.GetString(text).AsSpan(), CellAttributes.Default);
-    }
+    public void Buffer_WriteText_1KB() => _buffer.WriteText(_text1Kb.AsSpan(), CellAttributes.Default);
 
     #endregion
 
@@ -66,31 +100,18 @@ public class MemoryBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Scrollback: Append 100 Lines")]
     public void Scrollback_Append100()
     {
-        var buffer = new TerminalBuffer(24, 80);
         for (int i = 0; i < 100; i++)
         {
-            buffer.WriteText($"Line {i}: This is a test line with some content here.", CellAttributes.Default);
-            buffer.LineFeed();
+            _scrollbackBuffer.WriteText(_scrollbackLines[i], CellAttributes.Default);
+            _scrollbackBuffer.LineFeed();
         }
     }
 
     [Benchmark(Description = "Scrollback: Read History 100 Lines")]
     public void Scrollback_Read100()
     {
-        var buffer = new TerminalBuffer(24, 80);
-
-        // Populate scrollback
-        for (int i = 0; i < 1000; i++)
-        {
-            buffer.WriteText($"Line {i}: Content", CellAttributes.Default);
-            buffer.LineFeed();
-        }
-
-        // Read history
         for (int i = 0; i < 100; i++)
-        {
-            var line = buffer.GetScrollbackLine(i);
-        }
+            _historyBuffer.GetScrollbackLine(i);
     }
 
     #endregion
@@ -98,26 +119,10 @@ public class MemoryBenchmarks : PerformanceTestBase
     #region Parser Allocations
 
     [Benchmark(Description = "Parser: Plain Text 10KB (alloc check)")]
-    public void Parser_Plain_Allocations()
-    {
-        var adapter = new TerminalAdapter(24, 80);
-        var parser = new BasicAnsiParser();
-        parser.Handler = adapter;
-
-        var data = TestDataGenerator.GeneratePlainText(10000);
-        parser.Feed(data);
-    }
+    public void Parser_Plain_Allocations() => _plainParser.Feed(_plainData);
 
     [Benchmark(Description = "Parser: ANSI Text 10KB (alloc check)")]
-    public void Parser_Ansi_Allocations()
-    {
-        var adapter = new TerminalAdapter(24, 80);
-        var parser = new BasicAnsiParser();
-        parser.Handler = adapter;
-
-        var data = TestDataGenerator.GenerateBasicAnsiText(10000, 0.1);
-        parser.Feed(data);
-    }
+    public void Parser_Ansi_Allocations() => _ansiParser.Feed(_ansiData);
 
     #endregion
 
@@ -126,54 +131,30 @@ public class MemoryBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Cell: Set Attributes")]
     public void Cell_SetAttributes()
     {
-        var grid = new CellGrid(24, 80);
-        var styleSet = new StyleSet();
-        ushort styleId = styleSet.GetOrCreateId(new CellAttributes { Bold = true, Italic = true, UnderlineStyle = UnderlineStyle.Single });
-
         for (int row = 0; row < 24; row++)
-        {
             for (int col = 0; col < 80; col++)
-            {
-                ref var cell = ref grid.GetRef(row, col);
-                cell.StyleId = styleId;
-            }
-        }
+                _grid.GetRef(row, col).StyleId = _styleId;
     }
 
     [Benchmark(Description = "Cell: Set Character")]
     public void Cell_SetCharacter()
     {
-        var grid = new CellGrid(24, 80);
-
         for (int row = 0; row < 24; row++)
-        {
             for (int col = 0; col < 80; col++)
-            {
-                grid.GetRef(row, col).SetAscii('X');
-            }
-        }
+                _grid.GetRef(row, col).SetAscii('X');
     }
 
     [Benchmark(Description = "Cell: Reset")]
     public void Cell_Reset()
     {
-        var grid = new CellGrid(24, 80);
-        var styleSet = new StyleSet();
-        ushort boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
-
-        // Fill first
         for (int row = 0; row < 24; row++)
-        {
             for (int col = 0; col < 80; col++)
             {
-                ref var cell = ref grid.GetRef(row, col);
+                ref var cell = ref _grid.GetRef(row, col);
                 cell.SetAscii('X');
-                cell.StyleId = boldId;
+                cell.StyleId = _boldId;
             }
-        }
-
-        // Reset
-        grid.ClearAll();
+        _grid.ClearAll();
     }
 
     #endregion

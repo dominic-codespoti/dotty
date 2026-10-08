@@ -13,84 +13,95 @@ namespace Dotty.Performance.Tests.Benchmarks;
 [BenchmarkCategory("Rendering")]
 public class RenderingBenchmarks : PerformanceTestBase
 {
-    private TerminalAdapter _adapter = null!;
-    private BasicAnsiParser _parser = null!;
+    private BasicAnsiParser _parser80x24 = null!;
+    private BasicAnsiParser _parser120x40 = null!;
+    private BasicAnsiParser _parser200x60 = null!;
+    private BasicAnsiParser _scrollParser100 = null!;
+    private BasicAnsiParser _scrollParser500 = null!;
+    private BasicAnsiParser _scrollParser1000 = null!;
+    private BasicAnsiParser _progressiveParser = null!;
     private byte[] _fullScreenData80x24 = null!;
     private byte[] _fullScreenData120x40 = null!;
-    private byte[] _scrollData = null!;
+    private byte[] _fullScreenData200x60 = null!;
+    private byte[] _scrollData100 = null!;
+    private byte[] _scrollData500 = null!;
+    private byte[] _scrollData1000 = null!;
     private List<byte[]> _progressiveUpdates = null!;
+    private TerminalBuffer _buffer = null!;
+    private CellGrid _grid = null!;
+    private ushort _boldId;
+    private readonly int[] _cursorRows = new int[100];
+    private readonly int[] _cursorColumns = new int[100];
 
-    // GlobalSetup inherited from PerformanceTestBase
     public override void GlobalSetup()
     {
         base.GlobalSetup();
 
-        _adapter = new TerminalAdapter(24, 80);
-        _parser = new BasicAnsiParser();
-        _parser.Handler = _adapter;
+        _parser80x24 = CreateParser(24, 80);
+        _parser120x40 = CreateParser(40, 120);
+        _parser200x60 = CreateParser(60, 200);
+        _scrollParser100 = CreateParser(24, 80);
+        _scrollParser500 = CreateParser(24, 80);
+        _scrollParser1000 = CreateParser(24, 80);
+        _progressiveParser = CreateParser(24, 80);
 
-        // Pre-generate test data
         _fullScreenData80x24 = TestDataGenerator.GenerateFullScreenRedraw(24, 80);
         _fullScreenData120x40 = TestDataGenerator.GenerateFullScreenRedraw(40, 120);
-        _scrollData = TestDataGenerator.GenerateScrollingWorkload(1000);
+        _fullScreenData200x60 = TestDataGenerator.GenerateFullScreenRedraw(60, 200);
+        _scrollData100 = TestDataGenerator.GenerateScrollingWorkload(100);
+        _scrollData500 = TestDataGenerator.GenerateScrollingWorkload(500);
+        _scrollData1000 = TestDataGenerator.GenerateScrollingWorkload(1000);
         _progressiveUpdates = TestDataGenerator.GenerateProgressiveUpdates(100, 100);
 
-        Warmup(() => _parser.Feed(_fullScreenData80x24), 3);
+        _buffer = new TerminalBuffer(24, 80, scrollbackCapacity: 0);
+        _grid = new CellGrid(24, 80);
+        var styleSet = new StyleSet();
+        _boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
+        for (int i = 0; i < _cursorRows.Length; i++)
+        {
+            _cursorRows[i] = i % 24;
+            _cursorColumns[i] = i % 80;
+        }
+
+        Warmup(() => _parser80x24.Feed(_fullScreenData80x24), 3);
+        Warmup(() => _parser120x40.Feed(_fullScreenData120x40), 3);
+        Warmup(() => _parser200x60.Feed(_fullScreenData200x60), 3);
+        Warmup(() => _scrollParser100.Feed(_scrollData100), 3);
+        Warmup(() => _scrollParser500.Feed(_scrollData500), 3);
+        Warmup(() => _scrollParser1000.Feed(_scrollData1000), 3);
+        Warmup(() => _progressiveParser.Feed(_progressiveUpdates[0]), 3);
+    }
+
+    private static BasicAnsiParser CreateParser(int rows, int columns)
+    {
+        var adapter = new TerminalAdapter(rows, columns, scrollbackCapacity: 0);
+        var parser = new BasicAnsiParser { Handler = adapter };
+        return parser;
     }
 
     #region Full Screen Rendering
 
     [Benchmark(Description = "Full Screen Redraw 80x24")]
-    public void FullScreenRedraw_80x24()
-    {
-        _parser.Feed(_fullScreenData80x24);
-    }
+    public void FullScreenRedraw_80x24() => _parser80x24.Feed(_fullScreenData80x24);
 
     [Benchmark(Description = "Full Screen Redraw 120x40")]
-    public void FullScreenRedraw_120x40()
-    {
-        // Reset and resize
-        _adapter.ResizeBuffer(40, 120);
-        _parser.Feed(_fullScreenData120x40);
-    }
+    public void FullScreenRedraw_120x40() => _parser120x40.Feed(_fullScreenData120x40);
 
     [Benchmark(Description = "Full Screen Redraw 200x60")]
-    public void FullScreenRedraw_200x60()
-    {
-        var data = TestDataGenerator.GenerateFullScreenRedraw(60, 200);
-        _adapter.ResizeBuffer(60, 200);
-        _parser.Feed(data);
-    }
+    public void FullScreenRedraw_200x60() => _parser200x60.Feed(_fullScreenData200x60);
 
     #endregion
 
     #region Scroll Operations
 
     [Benchmark(Description = "Scroll: 100 Lines")]
-    public void Scroll_100Lines()
-    {
-        // Setup buffer
-        _adapter = new TerminalAdapter(24, 80);
-        _parser.Handler = _adapter;
-        _parser.Feed(_scrollData);
-    }
+    public void Scroll_100Lines() => _scrollParser100.Feed(_scrollData100);
 
     [Benchmark(Description = "Scroll: 500 Lines")]
-    public void Scroll_500Lines()
-    {
-        var data = TestDataGenerator.GenerateScrollingWorkload(500);
-        _adapter = new TerminalAdapter(24, 80);
-        _parser.Handler = _adapter;
-        _parser.Feed(data);
-    }
+    public void Scroll_500Lines() => _scrollParser500.Feed(_scrollData500);
 
     [Benchmark(Description = "Scroll: 1000 Lines")]
-    public void Scroll_1000Lines()
-    {
-        _adapter = new TerminalAdapter(24, 80);
-        _parser.Handler = _adapter;
-        _parser.Feed(_scrollData);
-    }
+    public void Scroll_1000Lines() => _scrollParser1000.Feed(_scrollData1000);
 
     #endregion
 
@@ -99,25 +110,15 @@ public class RenderingBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Progressive Update: 10 updates")]
     public void ProgressiveUpdate_10()
     {
-        _adapter = new TerminalAdapter(24, 80);
-        _parser.Handler = _adapter;
-
-        for (int i = 0; i < Math.Min(10, _progressiveUpdates.Count); i++)
-        {
-            _parser.Feed(_progressiveUpdates[i]);
-        }
+        for (int i = 0; i < 10; i++)
+            _progressiveParser.Feed(_progressiveUpdates[i]);
     }
 
     [Benchmark(Description = "Progressive Update: 50 updates")]
     public void ProgressiveUpdate_50()
     {
-        _adapter = new TerminalAdapter(24, 80);
-        _parser.Handler = _adapter;
-
-        for (int i = 0; i < Math.Min(50, _progressiveUpdates.Count); i++)
-        {
-            _parser.Feed(_progressiveUpdates[i]);
-        }
+        for (int i = 0; i < 50; i++)
+            _progressiveParser.Feed(_progressiveUpdates[i]);
     }
 
     #endregion
@@ -127,53 +128,45 @@ public class RenderingBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Cursor: Move + Print 100x")]
     public void Cursor_MoveAndPrint()
     {
-        var buffer = new TerminalBuffer(24, 80);
         var attrs = CellAttributes.Default;
-
         for (int i = 0; i < 100; i++)
         {
-            buffer.SetCursor(i % 24, i % 80);
-            buffer.WriteText("X", attrs);
+            _buffer.SetCursor(_cursorRows[i], _cursorColumns[i]);
+            _buffer.WriteText("X", attrs);
         }
     }
 
     [Benchmark(Description = "Cursor: Random Jumps 100x")]
     public void Cursor_RandomJumps()
     {
-        var random = new Random(42);
-        var buffer = new TerminalBuffer(24, 80);
-
         for (int i = 0; i < 100; i++)
-        {
-            buffer.SetCursor(random.Next(24), random.Next(80));
-        }
+            _buffer.SetCursor(_cursorRows[i], _cursorColumns[i]);
     }
 
     #endregion
 
     #region Cell Rendering
 
-    [Benchmark(Description = "Render: Clear 80x24")]
+    [Benchmark(Description = "Render: Clear 80x24", OperationsPerInvoke = 16)]
     public void Render_Clear80x24()
     {
-        var grid = new CellGrid(24, 80);
-        grid.ClearAll();
+        for (int i = 0; i < 16; i++)
+            _grid.ClearAll();
     }
 
-    [Benchmark(Description = "Render: Fill 80x24")]
+    [Benchmark(Description = "Render: Fill 80x24", OperationsPerInvoke = 16)]
     public void Render_Fill80x24()
     {
-        var grid = new CellGrid(24, 80);
-        var styleSet = new StyleSet();
-        ushort boldId = styleSet.GetOrCreateId(new CellAttributes { Bold = true });
-
-        for (int row = 0; row < 24; row++)
+        for (int iteration = 0; iteration < 16; iteration++)
         {
-            for (int col = 0; col < 80; col++)
+            for (int row = 0; row < 24; row++)
             {
-                ref var cell = ref grid.GetRef(row, col);
-                cell.SetAscii((char)('A' + (col % 26)));
-                cell.StyleId = boldId;
+                for (int col = 0; col < 80; col++)
+                {
+                    ref var cell = ref _grid.GetRef(row, col);
+                    cell.SetAscii((char)('A' + (col % 26)));
+                    cell.StyleId = _boldId;
+                }
             }
         }
     }
@@ -182,38 +175,35 @@ public class RenderingBenchmarks : PerformanceTestBase
 
     #region Buffer Operations
 
-    [Benchmark(Description = "Buffer: Line Feed 100x")]
+    [Benchmark(Description = "Buffer: Line Feed 100x", OperationsPerInvoke = 1600)]
     public void Buffer_LineFeed100()
     {
-        var buffer = new TerminalBuffer(24, 80);
-
-        for (int i = 0; i < 100; i++)
+        for (int repeat = 0; repeat < 16; repeat++)
         {
-            buffer.LineFeed();
+            for (int i = 0; i < 100; i++)
+                _buffer.LineFeed();
         }
     }
 
-    [Benchmark(Description = "Buffer: Insert Lines 10x")]
+    [Benchmark(Description = "Buffer: Insert Lines 10x", OperationsPerInvoke = 160)]
     public void Buffer_InsertLines10()
     {
-        var buffer = new TerminalBuffer(24, 80);
-        buffer.SetCursor(10, 0);
-
-        for (int i = 0; i < 10; i++)
+        for (int repeat = 0; repeat < 16; repeat++)
         {
-            buffer.InsertLines(1);
+            _buffer.SetCursor(10, 0);
+            for (int i = 0; i < 10; i++)
+                _buffer.InsertLines(1);
         }
     }
 
-    [Benchmark(Description = "Buffer: Delete Lines 10x")]
+    [Benchmark(Description = "Buffer: Delete Lines 10x", OperationsPerInvoke = 160)]
     public void Buffer_DeleteLines10()
     {
-        var buffer = new TerminalBuffer(24, 80);
-        buffer.SetCursor(10, 0);
-
-        for (int i = 0; i < 10; i++)
+        for (int repeat = 0; repeat < 16; repeat++)
         {
-            buffer.DeleteLines(1);
+            _buffer.SetCursor(10, 0);
+            for (int i = 0; i < 10; i++)
+                _buffer.DeleteLines(1);
         }
     }
 
@@ -221,27 +211,31 @@ public class RenderingBenchmarks : PerformanceTestBase
 
     #region Erase Operations
 
-    [Benchmark(Description = "Erase: Display")]
+    [Benchmark(Description = "Erase: Display", OperationsPerInvoke = 16)]
     public void Erase_Display()
     {
-        var buffer = new TerminalBuffer(24, 80);
-        buffer.EraseDisplay(2);
+        for (int i = 0; i < 16; i++)
+            _buffer.EraseDisplay(2);
     }
 
-    [Benchmark(Description = "Erase: Line")]
+    [Benchmark(Description = "Erase: Line", OperationsPerInvoke = 128)]
     public void Erase_Line()
     {
-        var buffer = new TerminalBuffer(24, 80);
-        buffer.SetCursor(10, 0);
-        buffer.EraseLine(2);
+        for (int i = 0; i < 128; i++)
+        {
+            _buffer.SetCursor(10, 0);
+            _buffer.EraseLine(2);
+        }
     }
 
-    [Benchmark(Description = "Erase: Line End")]
+    [Benchmark(Description = "Erase: Line End", OperationsPerInvoke = 128)]
     public void Erase_LineEnd()
     {
-        var buffer = new TerminalBuffer(24, 80);
-        buffer.SetCursor(10, 40);
-        buffer.EraseLine(0);
+        for (int i = 0; i < 128; i++)
+        {
+            _buffer.SetCursor(10, 40);
+            _buffer.EraseLine(0);
+        }
     }
 
     #endregion

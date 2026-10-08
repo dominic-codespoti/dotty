@@ -272,27 +272,14 @@ public class PerformanceReport
         Console.WriteLine($"Comparison report generated: {filePath}");
     }
 
-    /// <summary>
-    /// Check for performance regressions
-    /// </summary>
-    public bool CheckRegressions(Summary summary, out List<string> regressions)
+    public BenchmarkRegressionEvaluation EvaluateBenchmark(BenchmarkReport report)
     {
-        regressions = new List<string>();
-        bool hasRegressions = false;
-
-        foreach (var report in summary.Reports)
-        {
-            var result = ExtractResult(report);
-            var comparison = _baselineComparer.Compare(report.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo, result);
-
-            if (comparison.HasBaseline && !comparison.Passed)
-            {
-                hasRegressions = true;
-                regressions.Add($"{report.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo}: {comparison.Message}");
-            }
-        }
-
-        return !hasRegressions;
+        var result = ExtractResult(report);
+        var name = report.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo;
+        var comparison = _baselineComparer.Compare(name, result);
+        return new BenchmarkRegressionEvaluation(
+            report.BenchmarkCase.Descriptor.Type, name, result.P50Ms,
+            !comparison.HasBaseline || comparison.Passed, comparison.Message);
     }
 
     public static (string[] MissingBaselines, string[] UnmatchedBaselines) GetBaselineCoverage(
@@ -335,6 +322,12 @@ public class PerformanceReport
 
         return $"{value:F2} {suffixes[suffixIndex]}";
     }
+}
+
+public sealed record BenchmarkRegressionEvaluation(
+    Type BenchmarkType, string Name, double MedianMs, bool Passed, string Message)
+{
+    public string Key => $"{BenchmarkType.FullName ?? BenchmarkType.Name}\0{Name}";
 }
 
 /// <summary>

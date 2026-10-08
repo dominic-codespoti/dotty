@@ -306,6 +306,7 @@ BenchmarkDotNet.Artifacts/performance/
 The gate matches `BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo` to baseline keys by ordinal exact name; description-based benchmark names include BenchmarkDotNet's surrounding single quotes.
 The CI gate covers every benchmark category represented by a checked-in baseline.
 An executed benchmark without a baseline is reported as `NEW` and informational, while a baseline key unused by any benchmark is warned about.
+In quick/CI modes, any first-pass failures are re-measured once, and only those still failing on the second pass fail the gate. Re-measurements run only the initially failing benchmarks in BenchmarkDotNet processes; first-pass-only failures are reported as transient, while a missing second-pass result remains a failure.
 
 Latency compares the median against `baselineMs * (1 + relativeTolerance) + 0.000075`, with the default relative tolerance of 50% and a 75 ns absolute floor. Effective limits are 0.975 us for a 0.6 us baseline (1.625x), 1.575 us for 1 us (1.575x), and 3.000075 ms for 2 ms (1.5x). The median reduces sensitivity to isolated shared-runner outliers. Parser microbenchmarks batch repeated operations with `OperationsPerInvoke` so each timed invocation covers at least roughly 100 us; reported allocation values are normalized per operation.
 

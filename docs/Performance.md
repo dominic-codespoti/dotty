@@ -511,6 +511,7 @@ from appearing at the 1,000 ms failsafe before END arrives.
 The gate matches `BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo` to baseline keys by ordinal exact name; description-based benchmark names include BenchmarkDotNet's surrounding single quotes.
 The CI gate covers every benchmark category represented by a checked-in baseline.
 An executed benchmark without a baseline is reported as `NEW` and informational, while a baseline key unused by any benchmark is warned about.
+In quick/CI modes, any first-pass failures are re-measured once, and only those still failing on the second pass fail the gate. Re-measurements run only the initially failing benchmarks in BenchmarkDotNet processes; first-pass-only failures are reported as transient, while a missing second-pass result remains a failure.
 
 The latency gate compares the BenchmarkDotNet median with:
 

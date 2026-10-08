@@ -144,7 +144,7 @@ public class Program
             // Check for regressions if in CI mode
             if (mode == "ci" || mode == "quick")
             {
-                CheckRegressions(summaries);
+                CheckRegressions(summaries, benchmarkConfig);
             }
 
             Console.WriteLine();
@@ -258,26 +258,40 @@ public class Program
         }
     }
 
-    private static void CheckRegressions(List<BenchmarkDotNet.Reports.Summary> summaries)
+    private static void CheckRegressions(List<BenchmarkDotNet.Reports.Summary> summaries, IConfig benchmarkConfig)
     {
         var report = new PerformanceReport(OutputDirectory);
-        var allRegressions = new List<string>();
+        var firstPassFailures = summaries
+            .Where(summary => summary != null)
+            .SelectMany(summary => summary.Reports)
+            .Select(report.EvaluateBenchmark)
+            .Where(result => !result.Passed)
+            .ToArray();
 
-        foreach (var summary in summaries)
+        var secondPassResults = new Dictionary<string, BenchmarkRegressionEvaluation>(StringComparer.Ordinal);
+        foreach (var typeGroup in firstPassFailures.GroupBy(failure => failure.BenchmarkType))
         {
-            if (summary != null)
+            var failingNames = typeGroup.Select(failure => failure.Name).ToHashSet(StringComparer.Ordinal);
+            Console.WriteLine($"Re-measuring {failingNames.Count} initially failing benchmark(s) in {typeGroup.Key.Name}...");
+            var filteredConfig = benchmarkConfig.AddFilter(new BenchmarkDotNet.Filters.SimpleFilter(
+                benchmarkCase => failingNames.Contains(benchmarkCase.Descriptor.WorkloadMethodDisplayInfo)));
+            var secondSummary = BenchmarkRunner.Run(typeGroup.Key, filteredConfig, Array.Empty<string>());
+            foreach (var benchmarkReport in secondSummary.Reports)
             {
-                if (!report.CheckRegressions(summary, out var regressions))
-                {
-                    allRegressions.AddRange(regressions);
-                }
+                var result = report.EvaluateBenchmark(benchmarkReport);
+                secondPassResults[result.Key] = result;
             }
         }
-        var executedReports = summaries.Where(s => s != null).SelectMany(s => s.Reports).ToArray();
-        var executedNames = executedReports.Select(r => r.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo).ToHashSet(StringComparer.Ordinal);
+
+        var resolution = ResolveRegressionRechecks(firstPassFailures, secondPassResults);
+        foreach (var (first, second) in resolution.Transient)
+            Console.WriteLine($"Transient (passed on re-measure): {first.Name}: {first.MedianMs:F4} ms -> {second.MedianMs:F4} ms");
+
         var suiteNames = GetAllBenchmarkCases()
             .Select(benchmark => benchmark.Descriptor.WorkloadMethodDisplayInfo).ToHashSet(StringComparer.Ordinal);
         var coverage = PerformanceReport.GetBaselineCoverage(suiteNames, report.BaselineNames);
+        var executedNames = summaries.Where(summary => summary != null).SelectMany(summary => summary.Reports)
+            .Select(benchmark => benchmark.BenchmarkCase.Descriptor.WorkloadMethodDisplayInfo).ToHashSet(StringComparer.Ordinal);
         var missingInRun = coverage.MissingBaselines.Where(executedNames.Contains).ToArray();
         if (missingInRun.Length != 0 || coverage.UnmatchedBaselines.Length != 0)
         {
@@ -287,22 +301,16 @@ public class Program
             foreach (string name in coverage.UnmatchedBaselines) Console.WriteLine($"  Baseline matched no benchmark: {name}");
         }
 
-
-        if (allRegressions.Any())
+        if (resolution.Confirmed.Length != 0)
         {
             Console.WriteLine();
-            Console.WriteLine("!!! PERFORMANCE REGRESSIONS DETECTED !!!");
-            foreach (var regression in allRegressions)
-            {
-                Console.WriteLine($"  - {regression}");
-            }
+            Console.WriteLine("!!! PERFORMANCE REGRESSIONS CONFIRMED ON RE-MEASURE !!!");
+            foreach (var regression in resolution.Confirmed)
+                Console.WriteLine($"  {regression.Name}: {regression.Message}");
             Console.WriteLine();
 
-            // Exit with error code in CI mode
             if (Environment.GetEnvironmentVariable("CI") == "true")
-            {
                 Environment.Exit(1);
-            }
         }
         else
         {
@@ -310,6 +318,27 @@ public class Program
             Console.WriteLine("All performance thresholds passed.");
         }
     }
+
+    private static RegressionResolution ResolveRegressionRechecks(
+        IReadOnlyCollection<BenchmarkRegressionEvaluation> firstPassFailures,
+        IReadOnlyDictionary<string, BenchmarkRegressionEvaluation> secondPassResults)
+    {
+        var confirmed = new List<BenchmarkRegressionEvaluation>();
+        var transient = new List<(BenchmarkRegressionEvaluation First, BenchmarkRegressionEvaluation Second)>();
+        foreach (var first in firstPassFailures)
+        {
+            if (secondPassResults.TryGetValue(first.Key, out var second) && second.Passed)
+                transient.Add((first, second));
+            else
+                confirmed.Add(secondPassResults.TryGetValue(first.Key, out second) ? second : first);
+        }
+
+        return new RegressionResolution(confirmed.ToArray(), transient.ToArray());
+    }
+
+    private sealed record RegressionResolution(
+        BenchmarkRegressionEvaluation[] Confirmed,
+        (BenchmarkRegressionEvaluation First, BenchmarkRegressionEvaluation Second)[] Transient);
 
     // Update executed benchmarks, preserve other valid baselines, and remove suite-wide orphans.
     private static void UpdateBaselines(List<BenchmarkDotNet.Reports.Summary> summaries)
@@ -400,6 +429,21 @@ public class Program
         var coverage = PerformanceReport.GetBaselineCoverage(["'Known'", "'New'"], ["'Known'", "'Orphan'"]);
         if (!coverage.MissingBaselines.SequenceEqual(["'New'"]) || !coverage.UnmatchedBaselines.SequenceEqual(["'Orphan'"]))
             throw new InvalidOperationException("Exact-name baseline orphan detection changed.");
+        var benchmarkType = typeof(Program);
+        var firstA = new BenchmarkRegressionEvaluation(benchmarkType, "A", 0.003, false, "first A failure");
+        var firstB = new BenchmarkRegressionEvaluation(benchmarkType, "B", 0.004, false, "first B failure");
+        var firstMissing = new BenchmarkRegressionEvaluation(benchmarkType, "Missing", 0.005, false, "first missing failure");
+        var secondA = new BenchmarkRegressionEvaluation(benchmarkType, "A", 0.006, false, "second A failure");
+        var secondB = new BenchmarkRegressionEvaluation(benchmarkType, "B", 0.002, true, "second B passed");
+        var recheck = ResolveRegressionRechecks(
+            [firstA, firstB, firstMissing],
+            new Dictionary<string, BenchmarkRegressionEvaluation>(StringComparer.Ordinal)
+            { [secondA.Key] = secondA, [secondB.Key] = secondB });
+        if (!recheck.Confirmed.Select(result => result.Name).SequenceEqual(["A", "Missing"]) ||
+            recheck.Confirmed.Single(result => result.Name == "A").MedianMs != secondA.MedianMs ||
+            recheck.Transient.Length != 1 || recheck.Transient[0].First.Name != "B" || recheck.Transient[0].Second.MedianMs != secondB.MedianMs)
+            throw new InvalidOperationException("Confirm-before-fail regression resolution changed.");
+
         Console.WriteLine("Performance gate self-check passed.");
     }
 

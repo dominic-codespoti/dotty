@@ -585,6 +585,23 @@ public sealed class TerminalMouseController
             pane.ScrollDown(lines);
     }
 
+    /// <summary>
+    /// True while a selection drag is held outside its pane: autoscroll must keep
+    /// ticking even though the pointer is no longer producing events.
+    /// </summary>
+    public bool SelectionAutoscrollActive
+    {
+        get
+        {
+            var pane = _selectionPane;
+            if (pane == null || _host.ActiveTab == null || !LeftMouseDown || IsDraggingScrollbar)
+                return false;
+
+            float y = _lastContentPointer.Y - pane.Bounds.Y;
+            return y < 0f || y > pane.Bounds.Height;
+        }
+    }
+
     public bool TickSelectionAutoscroll()
     {
         var pane = _selectionPane;

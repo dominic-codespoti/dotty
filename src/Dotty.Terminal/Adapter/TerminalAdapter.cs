@@ -741,6 +741,19 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         _timeProvider.GetElapsedTime(Volatile.Read(ref _synchronizedUpdateStartedTimestamp)).TotalMilliseconds
             < SynchronizedUpdateMaxHoldMs;
 
+    public double SynchronizedUpdateRemainingMs
+    {
+        get
+        {
+            if (!_synchronizedUpdateActive)
+                return 0;
+
+            double elapsedMs = _timeProvider.GetElapsedTime(
+                Volatile.Read(ref _synchronizedUpdateStartedTimestamp)).TotalMilliseconds;
+            return Math.Max(0, SynchronizedUpdateMaxHoldMs - elapsedMs);
+        }
+    }
+
     private bool _focusReportingEnabled;
 
     public void OnSetFocusReporting(bool enabled)

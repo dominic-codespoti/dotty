@@ -31,7 +31,10 @@ public sealed class WindowLifecycleCoordinator : IDisposable
             Volatile.Write(ref _pendingCount, _pending.Count);
         }
 
-        return !IsClosed;
+        bool enqueued = !IsClosed;
+        if (enqueued)
+            HostWake.Request();
+        return enqueued;
     }
 
     public int Drain()

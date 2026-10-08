@@ -167,16 +167,11 @@ internal static class DottyWindowHost
     private static TerminalKeyModifiers _nativeModifiers;
     private static nint _glfwSetWindowTitleProc;
     private static bool _glfwTitleProcResolved;
-    /// <summary>
-    /// Idle-frame throttle (ms). The Silk render loop is unthrottled and clean
-    /// frames skip SwapBuffers — without this the loop spins at 100% of one core
-    /// when idle. Kept at 1ms: a larger sleep risks pushing presents across
-    /// vblank boundaries during interactive bursts (observed as typing stutter
-    /// at 4ms); 1ms holds idle near ~3% with no visible hitch risk. Deliberately
-    /// unconditional — gating the sleep on recent-frame history adds pacing
-    /// state to the hottest path for little observable benefit.
-    /// </summary>
-    private const int IdleFrameSleepMs = 1;
+    private const int LuaStatusRefreshIntervalMs = 1000;
+
+    // Depth of the Silk frame action. A GLFW refresh callback re-enters it from
+    // inside event dispatch, where glfwWaitEventsTimeout must not be called.
+    private static int _frameDepth;
 
     private static bool _showTabBar = true;
     private static bool _customFrameActive;
@@ -246,7 +241,19 @@ internal static class DottyWindowHost
         _window.FramebufferResize += OnFramebufferResize;
         _window.FocusChanged += OnWindowFocusChanged;
         _window.Closing += OnClosing;
-        _window.Run();
+        _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
+        HostWake.Initialize(static () => _glfwApi!.PostEmptyEvent(), Environment.CurrentManagedThreadId);
+        try
+        {
+            _window.Initialize();
+            _window.Run(RunFrame);
+            _window.DoEvents();
+            _window.Reset();
+        }
+        finally
+        {
+            HostWake.Shutdown();
+        }
         return _exitCode;
     }
     private static bool IsTabBarVisible => _showTabBar || _customFrameActive;
@@ -480,6 +487,7 @@ internal static class DottyWindowHost
             _pendingProcessExits.Enqueue(new ProcessExit(tab, leaf, exitCode));
             Volatile.Write(ref _pendingProcessExitCount, _pendingProcessExits.Count);
         }
+        HostWake.Request();
     }
 
     private static void OnTabTitleChanged(TerminalTab tab, string title)
@@ -491,6 +499,7 @@ internal static class DottyWindowHost
             _pendingTabTitleChanges.Enqueue(new TabTitleChange(tab));
             Volatile.Write(ref _pendingTabTitleChangeCount, _pendingTabTitleChanges.Count);
         }
+        HostWake.Request();
 
         if (tab == _tabManager?.ActiveTab)
             EnqueuePendingTitle(title);
@@ -505,6 +514,7 @@ internal static class DottyWindowHost
             _pendingTitles.Enqueue(title);
             Volatile.Write(ref _pendingTitleCount, _pendingTitles.Count);
         }
+        HostWake.Request();
     }
 
     private static void OnTabAdded(TerminalTab tab)
@@ -628,6 +638,7 @@ internal static class DottyWindowHost
             _pendingClipboards.Enqueue(new ClipboardWrite(session, text));
             Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
         }
+        HostWake.Request();
 
     }
     private static void RefreshVisibleSessionSubscriptions()
@@ -1153,6 +1164,7 @@ internal static class DottyWindowHost
 
         var completion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingControlCommands.Enqueue(new ControlRequest(command, completion));
+        HostWake.Request();
         return completion.Task;
     }
 
@@ -1520,8 +1532,59 @@ internal static class DottyWindowHost
         }
     }
 
+    private static void RunFrame()
+    {
+        _frameDepth++;
+        try
+        {
+            _window.DoEvents();
+            if (!_window.IsClosing)
+                _window.DoUpdate();
+            if (!_window.IsClosing)
+                _window.DoRender();
+        }
+        finally
+        {
+            _frameDepth--;
+        }
+    }
+
+    private static bool CursorBlinks(bool hasActiveTab) =>
+        hasActiveTab && _lastWindowFocus != false && UserConfigService.Current.Cursor.Blink;
+
+    /// <summary>
+    /// Blocks until input, a cross-thread wake, or the nearest deadline. Replaces a
+    /// fixed 1 ms sleep: input and output end the wait immediately, so nothing is
+    /// delayed after them, while an idle window wakes only for its next deadline.
+    /// </summary>
+    private static void WaitForWork(
+        bool includeBlink,
+        bool retryShortly = false,
+        long coalesceRemainingMs = 0,
+        long syncHoldRemainingMs = 0)
+    {
+        if (_frameDepth > 1 || (!retryShortly && HostWake.IsPending))
+            return;
+
+        long now = GetClockMilliseconds();
+        int timeoutMs = IdleWait.Compute(new IdleWaitInputs(
+            NowMs: now,
+            RetryShortly: retryShortly,
+            CursorBlinkActive: includeBlink && CursorBlinks(_tabManager?.ActiveTab != null),
+            LastCursorBlinkMs: _lastCursorBlinkTimestampMs,
+            CursorBlinkIntervalMs: Math.Max(100, UserConfigService.Current.Cursor.BlinkIntervalMs),
+            LastLuaStatusRefreshMs: _lastLuaStatusRefreshTimestampMs,
+            LuaStatusRefreshIntervalMs: LuaStatusRefreshIntervalMs,
+            CoalesceRemainingMs: coalesceRemainingMs,
+            SyncHoldRemainingMs: syncHoldRemainingMs,
+            SelectionAutoscrollActive: _mouseController?.SelectionAutoscrollActive == true));
+        if (timeoutMs > 0)
+            _glfwApi!.WaitEventsTimeout(timeoutMs / 1000.0);
+    }
+
     private static void OnRenderCore(double delta)
     {
+        HostWake.Reset();
         _nativeTextInput?.ThrowPendingCallbackError();
         DrainWindowEvents();
         if (_closed)
@@ -1531,7 +1594,7 @@ internal static class DottyWindowHost
         var tabManager = _tabManager;
         var activeTab = tabManager.ActiveTab;
         long now = GetClockMilliseconds();
-        if (now - _lastLuaStatusRefreshTimestampMs >= 1000)
+        if (now - _lastLuaStatusRefreshTimestampMs >= LuaStatusRefreshIntervalMs)
             RefreshLuaStatus();
         // While a synchronized update (CSI 2026, used by nvim for every
         // redraw) is held, presents are withheld by design. Sleep instead of
@@ -1544,7 +1607,9 @@ internal static class DottyWindowHost
                 _syncHeld = true;
                 _syncHoldStartTimestampMs = now;
             }
-            Thread.Sleep(IdleFrameSleepMs);
+            WaitForWork(
+                includeBlink: false,
+                syncHoldRemainingMs: Math.Max(1L, (long)Math.Ceiling(activeTab?.Session.Adapter.SynchronizedUpdateRemainingMs ?? 0d)));
             return;
         }
         if (_syncHeld)
@@ -1562,7 +1627,7 @@ internal static class DottyWindowHost
         int framebufferHeight = _window.FramebufferSize.Y;
         if (framebufferWidth <= 0 || framebufferHeight <= 0)
         {
-            Thread.Sleep(IdleFrameSleepMs);
+            WaitForWork(includeBlink: false);
             return;
         }
         UpdateCursorBlink(now, activeTab != null);
@@ -1614,7 +1679,7 @@ internal static class DottyWindowHost
             // at startup) — a periodic fullscreen flash to old content every
             // time the keepalive would have fired. Holding the front buffer is
             // always correct when nothing changed.
-            Thread.Sleep(IdleFrameSleepMs);
+            WaitForWork(includeBlink: true);
             return;
         }
         // Preserve bulk-output coalescing, but let content catch up immediately
@@ -1622,8 +1687,7 @@ internal static class DottyWindowHost
         bool contentOnly = (pendingReasons & ~WindowFrameReason.Content) == WindowFrameReason.None;
         if (contentOnly &&
             _lastPresentTimestampMs != 0 &&
-            now - _lastPresentTimestampMs < WindowPresentationGate.BackloggedFrameIntervalMs &&
-            now - _lastInteractionTimestampMs >= WindowPresentationGate.InteractiveWindowMs)
+            now - _lastPresentTimestampMs < WindowPresentationGate.BackloggedFrameIntervalMs)
         {
             bool anyBacklogged = false;
             for (int i = 0; i < _visibleLeafCount; i++)
@@ -1635,13 +1699,14 @@ internal static class DottyWindowHost
                 }
             }
 
-            if (WindowPresentationGate.ShouldCoalesce(
+            long holdMs = WindowPresentationGate.CoalesceRemainingMs(
                 now,
                 _lastPresentTimestampMs,
                 _lastInteractionTimestampMs,
-                anyBacklogged))
+                anyBacklogged);
+            if (holdMs > 0)
             {
-                Thread.Sleep(IdleFrameSleepMs);
+                WaitForWork(includeBlink: true, coalesceRemainingMs: holdMs);
                 return;
             }
         }
@@ -1733,7 +1798,7 @@ internal static class DottyWindowHost
                 // lock is held by the PTY consumer, so an immediate retry just
                 // burns a core re-composing a frame that will likely lose again.
                 WindowPresentationGate.Requeue(consumedReasons);
-                Thread.Sleep(IdleFrameSleepMs);
+                WaitForWork(includeBlink: false, retryShortly: true);
                 return;
             }
             if (frame.ImeCaretBoundsValid && _nativeTextInput != null)
@@ -1783,7 +1848,7 @@ internal static class DottyWindowHost
             return;
 
         var cursorConfig = UserConfigService.Current.Cursor;
-        if (cursorConfig.Blink)
+        if (CursorBlinks(hasActiveTab))
         {
             int blinkInterval = Math.Max(100, cursorConfig.BlinkIntervalMs);
             if (now - _lastCursorBlinkTimestampMs >= blinkInterval)
@@ -1920,6 +1985,11 @@ internal static class DottyWindowHost
     private static void OnWindowFocusChanged(bool focused)
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Input);
+        if (focused)
+        {
+            _cursorBlinkVisible = true;
+            _lastCursorBlinkTimestampMs = GetClockMilliseconds();
+        }
         _luaHost?.NotifyWindowFocusChanged(focused);
         RefreshLuaStatus();
         if (!focused)

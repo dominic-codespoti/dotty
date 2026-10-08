@@ -5,6 +5,7 @@ using Xunit;
 
 namespace Dotty.App.Tests;
 
+[Collection(HostWakeCollection.Name)]
 public sealed class WindowPresentationGateTests
 {
     [Fact]
@@ -62,6 +63,30 @@ public sealed class WindowPresentationGateTests
         public void AdvanceMs(long milliseconds) => _timestamp += milliseconds;
     }
 
+    private const long Idle = 0;
+    private const long LongAgo = 10_000;
+
+    [Theory]
+    [InlineData(false, 2, 6)]
+    [InlineData(false, WindowPresentationGate.ContentFrameMinIntervalMs, 0)]
+    [InlineData(true, 2, 28)]
+    [InlineData(true, WindowPresentationGate.BackloggedFrameIntervalMs, 0)]
+    public void StreamingContentIsHeldToTheIntervalForItsBacklogState(bool backlogged, long sincePresent, long expected)
+    {
+        long now = LongAgo + sincePresent;
+        Assert.Equal(expected, WindowPresentationGate.CoalesceRemainingMs(now, LongAgo, Idle, backlogged));
+    }
+
+    [Fact]
+    public void RecentInteractionAndFirstFrameAreNeverHeldBack()
+    {
+        long now = LongAgo + 1;
+        Assert.Equal(0, WindowPresentationGate.CoalesceRemainingMs(now, LongAgo, now - 1, anyBacklogged: true));
+        Assert.Equal(0, WindowPresentationGate.CoalesceRemainingMs(now, lastPresent: 0, Idle, anyBacklogged: true));
+        Assert.True(WindowPresentationGate.CoalesceRemainingMs(
+            now, LongAgo, now - WindowPresentationGate.InteractiveWindowMs, anyBacklogged: true) > 0);
+    }
+
     [Fact]
     public void InvalidateCoalescesReasonsAndConsumeClearsPendingReasons()
     {
@@ -77,6 +102,30 @@ public sealed class WindowPresentationGateTests
         }
         finally
         {
+            WindowPresentationGate.Requeue(previous);
+        }
+    }
+
+    [Fact]
+    public async Task BackgroundInvalidatePostsWakeButNoneDoesNot()
+    {
+        WindowFrameReason previous = WindowPresentationGate.Consume();
+        int posts = 0;
+        HostWake.Shutdown();
+        HostWake.Initialize(() => Interlocked.Increment(ref posts), Environment.CurrentManagedThreadId);
+        try
+        {
+            await Task.Run(() => WindowPresentationGate.Invalidate(WindowFrameReason.Content), TestContext.Current.CancellationToken);
+            Assert.Equal(1, posts);
+            HostWake.Reset();
+
+            await Task.Run(() => WindowPresentationGate.Invalidate(WindowFrameReason.None), TestContext.Current.CancellationToken);
+            Assert.Equal(1, posts);
+        }
+        finally
+        {
+            HostWake.Shutdown();
+            WindowPresentationGate.Consume();
             WindowPresentationGate.Requeue(previous);
         }
     }

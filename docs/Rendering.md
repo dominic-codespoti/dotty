@@ -22,10 +22,8 @@ The host creates an OpenGL 3.3 window with `VSync = false` and
 `ShouldSwapAutomatically = false`, then calls `SwapBuffers` after rendering a
 dirty frame. This manual-swap policy is also used on Wayland: presentation is
 demand-driven rather than a continuously swapped/vblank-paced loop. Clean
-frames keep the existing front buffer and the render loop sleeps briefly
-instead of swapping stale back-buffer contents. PTY output can be coalesced
-while a session reports a backlog, while interactive input keeps normal
-latency.
+frames keep the existing front buffer instead of swapping stale back-buffer
+contents.
 
 Focus and topology changes are presentation inputs, not just input-routing
 events. Losing window focus invalidates a frame and resets transient keyboard
@@ -40,6 +38,27 @@ selection autoscroll.
 The renderer never reads live cells while the PTY consumer is mutating them.
 Snapshot capture and the row cache preserve correctness under sustained PTY
 output while avoiding a full scrollback copy for each frame.
+
+### Idle and wake behavior
+
+The host does not poll. When a frame iteration has nothing to do it blocks in
+`glfwWaitEventsTimeout`, so input events end the wait on their own and every
+other producer calls `HostWake.Request()` (a single deduplicated
+`glfwPostEmptyEvent`) after queueing work: PTY output and other invalidations
+through `WindowPresentationGate`, lifecycle callbacks, title, clipboard and
+process-exit queues, and control-server commands. The wait is bounded by the
+nearest deadline, computed by the pure `IdleWait.Compute`: cursor blink (only
+while the window is focused), the 1 s Lua status refresh, the remaining
+frame-coalescing interval, the remaining synchronized-update failsafe (which
+expires lazily, so nothing else would wake the loop), selection autoscroll,
+and a 100 ms safety cap that turns any missed wake into bounded lag rather
+than a stall. A frame action re-entered from a GLFW refresh callback never
+waits, because `glfwWaitEventsTimeout` must not be called from a callback.
+
+Content-only frames are held to at least 8 ms apart while output streams, and
+to 30 ms while the PTY consumer is backlogged, so rendering does not take the
+buffer lock on every flush and interrupt parsing. Frames within 250 ms of
+interactive input, and the first frame after idle, are never held back.
 
 ## Pane views, selection, and scrollback
 

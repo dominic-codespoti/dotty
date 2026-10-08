@@ -1,180 +1,672 @@
 {
-  "'Parse Plain Text 100B'": {
-    "expectedMeanMs": 0.008293,
+  "\u0027Parse Plain Text 100B\u0027": {
+    "expectedMeanMs": 0.001106,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Plain Text 1KB'": {
-    "expectedMeanMs": 0.074742,
+  "\u0027Parse Plain Text 1KB\u0027": {
+    "expectedMeanMs": 0.010918,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Plain Text 10KB'": {
-    "expectedMeanMs": 0.804857,
+  "\u0027Parse Plain Text 10KB\u0027": {
+    "expectedMeanMs": 0.083554,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Plain Text 100KB'": {
-    "expectedMeanMs": 3.738661,
+  "\u0027Parse Plain Text 100KB\u0027": {
+    "expectedMeanMs": 0.822551,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Basic ANSI 100B'": {
-    "expectedMeanMs": 0.00462,
+  "\u0027Parse Basic ANSI 100B\u0027": {
+    "expectedMeanMs": 0.000721,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Basic ANSI 1KB (5% density)'": {
-    "expectedMeanMs": 0.056734,
+  "\u0027Parse Basic ANSI 1KB (5% density)\u0027": {
+    "expectedMeanMs": 0.006541,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse 256-Color ANSI 1KB'": {
-    "expectedMeanMs": 0.071658,
+  "\u0027Parse 256-Color ANSI 1KB\u0027": {
+    "expectedMeanMs": 0.010844,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse TrueColor ANSI 1KB'": {
-    "expectedMeanMs": 0.041086,
+  "\u0027Parse TrueColor ANSI 1KB\u0027": {
+    "expectedMeanMs": 0.007233,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Log Output (100 lines)'": {
-    "expectedMeanMs": 0.350171,
+  "\u0027Parse Log Output (100 lines)\u0027": {
+    "expectedMeanMs": 0.037762,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Shell Session (20 cmds)'": {
-    "expectedMeanMs": 0.227964,
+  "\u0027Parse Shell Session (20 cmds)\u0027": {
+    "expectedMeanMs": 0.039132,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Mouse Events (1K events)'": {
-    "expectedMeanMs": 2.754811,
+  "\u0027Parse Mouse Events (1K events)\u0027": {
+    "expectedMeanMs": 0.304768,
     "minThroughput": 0,
-    "maxAllocationsPerOp": 75936,
+    "maxAllocationsPerOp": 6384,
     "regressionThreshold": 0.5
   },
-  "'Parse OSC Sequences (100 seqs)'": {
-    "expectedMeanMs": 0.119957,
+  "\u0027Parse OSC Sequences (100 seqs)\u0027": {
+    "expectedMeanMs": 0.017637,
     "minThroughput": 0,
-    "maxAllocationsPerOp": 106912,
+    "maxAllocationsPerOp": 8968,
     "regressionThreshold": 0.5
   },
-  "'Throughput - Plain Text 1MB'": {
-    "expectedMeanMs": 7.718908,
-    "minThroughput": 0,
-    "maxAllocationsPerOp": 64,
-    "regressionThreshold": 0.5
-  },
-  "'Throughput - ANSI Text 1MB'": {
-    "expectedMeanMs": 6.615843,
+  "\u0027Throughput - Plain Text 1MB\u0027": {
+    "expectedMeanMs": 8.13702,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse SGR: Bold'": {
-    "expectedMeanMs": 0.001862,
+  "\u0027Throughput - ANSI Text 1MB\u0027": {
+    "expectedMeanMs": 7.063106,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse SGR: Color (256)'": {
-    "expectedMeanMs": 0.00245,
+  "\u0027Parse SGR: Bold\u0027": {
+    "expectedMeanMs": 0.000269,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse SGR: TrueColor'": {
-    "expectedMeanMs": 0.002971,
+  "\u0027Parse SGR: Color (256)\u0027": {
+    "expectedMeanMs": 0.000232,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Cursor: MoveTo'": {
-    "expectedMeanMs": 0.000588,
+  "\u0027Parse SGR: TrueColor\u0027": {
+    "expectedMeanMs": 0.000272,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Cursor: Up/Down'": {
-    "expectedMeanMs": 0.000786,
+  "\u0027Parse Cursor: MoveTo\u0027": {
+    "expectedMeanMs": 5.4E-05,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Erase: Line'": {
-    "expectedMeanMs": 0.002831,
+  "\u0027Parse Cursor: Up/Down\u0027": {
+    "expectedMeanMs": 5.8E-05,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Mode: Cursor Visibility'": {
-    "expectedMeanMs": 0.000686,
+  "\u0027Parse Erase: Line\u0027": {
+    "expectedMeanMs": 0.00022,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse OSC: Window Title'": {
-    "expectedMeanMs": 0.000765,
+  "\u0027Parse Mode: Cursor Visibility\u0027": {
+    "expectedMeanMs": 8.2E-05,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Query: XTGETTCAP TN'": {
-    "expectedMeanMs": 0.000581,
+  "\u0027Parse OSC: Window Title\u0027": {
+    "expectedMeanMs": 8.2E-05,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Query: modifyOtherKeys negotiate'": {
-    "expectedMeanMs": 0.000802,
+  "\u0027Parse Query: XTGETTCAP TN\u0027": {
+    "expectedMeanMs": 5.7E-05,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse OSC 4: palette set + query'": {
-    "expectedMeanMs": 0.002487,
-    "minThroughput": 0,
-    "maxAllocationsPerOp": 2176,
-    "regressionThreshold": 0.5
-  },
-  "'Parse OSC 10: dynamic color set + query'": {
-    "expectedMeanMs": 0.002196,
-    "minThroughput": 0,
-    "maxAllocationsPerOp": 544,
-    "regressionThreshold": 0.5
-  },
-  "'Parse Unicode: 2-byte'": {
-    "expectedMeanMs": 0.010114,
+  "\u0027Parse Query: modifyOtherKeys negotiate\u0027": {
+    "expectedMeanMs": 7.7E-05,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Unicode: 3-byte'": {
-    "expectedMeanMs": 0.013295,
+  "\u0027Parse OSC 4: palette set \u002B query\u0027": {
+    "expectedMeanMs": 0.000419,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Unicode: 4-byte (emoji)'": {
-    "expectedMeanMs": 0.00916,
+  "\u0027Parse OSC 10: dynamic color set \u002B query\u0027": {
+    "expectedMeanMs": 0.000171,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5
   },
-  "'Parse Query: DECRQM set/reset'": {
-    "expectedMeanMs": 0.000819,
+  "\u0027Parse Unicode: 2-byte\u0027": {
+    "expectedMeanMs": 0.000745,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Unicode: 3-byte\u0027": {
+    "expectedMeanMs": 0.000847,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Unicode: 4-byte (emoji)\u0027": {
+    "expectedMeanMs": 0.000824,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Query: DECRQM set/reset\u0027": {
+    "expectedMeanMs": 0.000159,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Complex Sequences 1KB\u0027": {
+    "expectedMeanMs": 0.050093,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Chunks - 1KB x 10\u0027": {
+    "expectedMeanMs": 0.101698,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Chunks - 10KB x 10\u0027": {
+    "expectedMeanMs": 0.873082,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Erase: Display\u0027": {
+    "expectedMeanMs": 0.001239,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parse Mode: Alternate Screen\u0027": {
+    "expectedMeanMs": 0.001084,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Allocate CellGrid 80x24\u0027": {
+    "expectedMeanMs": 0.008691,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 23224,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Allocate CellGrid 120x40\u0027": {
+    "expectedMeanMs": 0.023973,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 57784,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Allocate CellGrid 200x60\u0027": {
+    "expectedMeanMs": 0.086069,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 144236,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Buffer Resize Up\u0027": {
+    "expectedMeanMs": 0.09978,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Buffer Resize Down\u0027": {
+    "expectedMeanMs": 0.239692,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Buffer Clear\u0027": {
+    "expectedMeanMs": 0.001861,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Buffer Write Text 1KB\u0027": {
+    "expectedMeanMs": 0.008598,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Scrollback: Append 100 Lines\u0027": {
+    "expectedMeanMs": 0.023364,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Scrollback: Read History 100 Lines\u0027": {
+    "expectedMeanMs": 0.018353,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 11632,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parser: Plain Text 10KB (alloc check)\u0027": {
+    "expectedMeanMs": 0.083741,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Parser: ANSI Text 10KB (alloc check)\u0027": {
+    "expectedMeanMs": 0.068676,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cell: Set Attributes\u0027": {
+    "expectedMeanMs": 0.005773,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cell: Set Character\u0027": {
+    "expectedMeanMs": 0.004394,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cell: Reset\u0027": {
+    "expectedMeanMs": 0.01116,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027SGR Parse: Simple\u0027": {
+    "expectedMeanMs": 5.8E-05,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027SGR Parse: 256 Color\u0027": {
+    "expectedMeanMs": 4.8E-05,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027SGR Parse: TrueColor\u0027": {
+    "expectedMeanMs": 0.000108,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027SGR Parse: Complex\u0027": {
+    "expectedMeanMs": 0.00024,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Full Screen Redraw 80x24\u0027": {
+    "expectedMeanMs": 0.034345,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Full Screen Redraw 120x40\u0027": {
+    "expectedMeanMs": 0.085879,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Full Screen Redraw 200x60\u0027": {
+    "expectedMeanMs": 0.193192,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Scroll: 100 Lines\u0027": {
+    "expectedMeanMs": 0.044488,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Scroll: 500 Lines\u0027": {
+    "expectedMeanMs": 0.142408,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Scroll: 1000 Lines\u0027": {
+    "expectedMeanMs": 0.283498,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Progressive Update: 10 updates\u0027": {
+    "expectedMeanMs": 0.022421,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Progressive Update: 50 updates\u0027": {
+    "expectedMeanMs": 0.104998,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cursor: Move \u002B Print 100x\u0027": {
+    "expectedMeanMs": 0.008466,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cursor: Random Jumps 100x\u0027": {
+    "expectedMeanMs": 0.000685,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Render: Clear 80x24\u0027": {
+    "expectedMeanMs": 0.005727,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Render: Fill 80x24\u0027": {
+    "expectedMeanMs": 0.006015,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Buffer: Line Feed 100x\u0027": {
+    "expectedMeanMs": 4.1E-05,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Buffer: Insert Lines 10x\u0027": {
+    "expectedMeanMs": 0.000415,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Buffer: Delete Lines 10x\u0027": {
+    "expectedMeanMs": 0.000333,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Erase: Display\u0027": {
+    "expectedMeanMs": 0.000928,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Erase: Line\u0027": {
+    "expectedMeanMs": 0.000177,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Erase: Line End\u0027": {
+    "expectedMeanMs": 0.000184,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Silk CPU warm-atlas frame build 80x24\u0027": {
+    "expectedMeanMs": 0.085629,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 48192,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Silk CPU warm-atlas frame build 120x40\u0027": {
+    "expectedMeanMs": 0.248253,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 120192,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Silk CPU pooled Span\u003CCellInstance\u003E build 80x24\u0027": {
+    "expectedMeanMs": 0.077296,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Silk CPU cold-atlas frame build 80x24\u0027": {
+    "expectedMeanMs": 1.964663,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 262320,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Silk CPU warm-atlas powerline styled frame build 80x24\u0027": {
+    "expectedMeanMs": 0.069022,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 48192,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cold Start: TerminalAdapter 80x24\u0027": {
+    "expectedMeanMs": 0.018948,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 5128,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cold Start: TerminalAdapter 120x40\u0027": {
+    "expectedMeanMs": 0.026892,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 5456,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Cold Start: Full Setup (Parser\u002BAdapter)\u0027": {
+    "expectedMeanMs": 0.014392,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 6328,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Init: BasicAnsiParser\u0027": {
+    "expectedMeanMs": 0.000217,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 1264,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Init: Parser \u002B Handler Setup\u0027": {
+    "expectedMeanMs": 0.014565,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 6328,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Init: CellGrid 80x24\u0027": {
+    "expectedMeanMs": 0.008782,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 23224,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Init: CellGrid 120x40\u0027": {
+    "expectedMeanMs": 0.019291,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 57784,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Init: TerminalBuffer 80x24\u0027": {
+    "expectedMeanMs": 0.014284,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 3080,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Init: TerminalBuffer with Scrollback\u0027": {
+    "expectedMeanMs": 2.060455,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 103080,
+    "regressionThreshold": 0.5
+  },
+  "\u0027First Frame: Parse 1KB\u0027": {
+    "expectedMeanMs": 0.021664,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 6328,
+    "regressionThreshold": 0.5
+  },
+  "\u0027First Frame: Parse \u002B Render 1KB\u0027": {
+    "expectedMeanMs": 0.019921,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 11912,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Resize: 80x24 -\u003E 120x40\u0027": {
+    "expectedMeanMs": 0.055945,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Resize: 120x40 -\u003E 80x24\u0027": {
+    "expectedMeanMs": 0.052072,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: 1MB Plain Text\u0027": {
+    "expectedMeanMs": 7.706536,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: 10MB Plain Text\u0027": {
+    "expectedMeanMs": 80.42815,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: 1MB ANSI Text\u0027": {
+    "expectedMeanMs": 6.659757,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: 10K Lines\u0027": {
+    "expectedMeanMs": 2.858605,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: 100K Lines\u0027": {
+    "expectedMeanMs": 27.800765,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: 1K SGR Sequences\u0027": {
+    "expectedMeanMs": 0.23119,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: 10K Cursor Moves\u0027": {
+    "expectedMeanMs": 0.543457,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: Mixed (logs\u002Bcode\u002Bansi)\u0027": {
+    "expectedMeanMs": 0.34338,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Throughput: Interactive (keys\u002Boutput)\u0027": {
+    "expectedMeanMs": 0.027942,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Burst: 100KB chunks x 10\u0027": {
+    "expectedMeanMs": 7.966901,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Burst: 10KB chunks x 100\u0027": {
+    "expectedMeanMs": 7.360261,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: Single Character\u0027": {
+    "expectedMeanMs": 8.4E-05,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: 10 Characters\u0027": {
+    "expectedMeanMs": 0.000111,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: 100 Characters\u0027": {
+    "expectedMeanMs": 0.000491,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: Parse SGR\u0027": {
+    "expectedMeanMs": 0.000203,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: Cursor Move\u0027": {
+    "expectedMeanMs": 5.4E-05,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: Line Clear\u0027": {
+    "expectedMeanMs": 0.000371,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: Screen Clear\u0027": {
+    "expectedMeanMs": 0.001275,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: Line Feed\u0027": {
+    "expectedMeanMs": 6.2E-05,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "\u0027Latency: Tab Character\u0027": {
+    "expectedMeanMs": 1.5E-05,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "FullPipeline": {
+    "expectedMeanMs": 114.373845,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "WriteOnly": {
+    "expectedMeanMs": 107.548316,
+    "minThroughput": 0,
+    "maxAllocationsPerOp": 64,
+    "regressionThreshold": 0.5
+  },
+  "LineFeedOnly": {
+    "expectedMeanMs": 21.119905,
     "minThroughput": 0,
     "maxAllocationsPerOp": 64,
     "regressionThreshold": 0.5

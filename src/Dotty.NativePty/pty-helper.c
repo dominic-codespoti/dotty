@@ -273,6 +273,11 @@ int main(int argc, char **argv) {
         if (slave_fd > STDERR_FILENO) close(slave_fd);
         if (master_fd >= 0) close(master_fd);
 
+        // The helper protocol variables were consumed above; keep them out of the user's shell.
+        unsetenv("DOTTY_CONTROL_SOCKET");
+        unsetenv("DOTTY_INITIAL_COLS");
+        unsetenv("DOTTY_INITIAL_ROWS");
+
         // Exec shell or provided command
         if (argc > 1) {
             // exec argv[1] with remaining args

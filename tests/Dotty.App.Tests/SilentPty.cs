@@ -53,8 +53,24 @@ internal sealed class SilentPty : IPty
         bool shellIsExecutable = false)
     {
         StartedWorkingDirectory = workingDirectory;
+        StartedShell = shell;
+        StartedEnvironment = environmentVariables;
+        StartedCommand = command;
+        StartedShellIsExecutable = shellIsExecutable;
         IsRunning = true;
     }
+
+    /// <summary>The <c>shell</c> argument of the last <see cref="Start"/> call.</summary>
+    public string? StartedShell { get; private set; }
+
+    /// <summary>The <c>environmentVariables</c> argument of the last <see cref="Start"/> call.</summary>
+    public IDictionary<string, string>? StartedEnvironment { get; private set; }
+
+    /// <summary>The <c>command</c> argument of the last <see cref="Start"/> call.</summary>
+    public IReadOnlyList<string>? StartedCommand { get; private set; }
+
+    /// <summary>The <c>shellIsExecutable</c> argument of the last <see cref="Start"/> call.</summary>
+    public bool StartedShellIsExecutable { get; private set; }
 
     public void Resize(int columns, int rows)
     {

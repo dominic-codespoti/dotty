@@ -26,6 +26,9 @@ public sealed class DottyUserConfig
     [JsonPropertyName("hyperlinks")]
     public HyperlinksUserConfig Hyperlinks { get; set; } = new();
 
+    [JsonPropertyName("mouse")]
+    public MouseUserConfig Mouse { get; set; } = new();
+
     [JsonPropertyName("theme")]
     public string Theme { get; set; } = "DarkPlus";
 
@@ -270,6 +273,7 @@ public static class UserConfigService
         {
             config.Clipboard ??= new ClipboardUserConfig();
             config.Hyperlinks ??= new HyperlinksUserConfig();
+            config.Mouse ??= new MouseUserConfig();
         }
         return config;
     }

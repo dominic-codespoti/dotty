@@ -195,7 +195,7 @@ public sealed class LuaHookManager
 
     /// <summary>
     /// Runs the <c>clipboard_read</c> hooks for an OSC 52 read request. <paramref name="selection"/> is
-    /// <c>"clipboard"</c> (the only selection served today). Same veto semantics as
+    /// <c>"clipboard"</c> or <c>"primary"</c> (primary is served on X11 only). Same veto semantics as
     /// <see cref="AllowClipboardWrite"/>: the first non-nil result decides (<c>false</c> denies), a nil result
     /// defers to the next hook, and a callback invocation error denies. No handler allows.
     /// </summary>

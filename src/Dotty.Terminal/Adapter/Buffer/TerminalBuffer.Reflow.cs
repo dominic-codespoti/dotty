@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Dotty.Terminal.Graphics;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -82,6 +83,18 @@ public partial class TerminalBuffer
             oldRows,
             oldTotalScrolled);
 
+        // Kitty graphics: the anchored placements of each screen join the reflow like the prompt marks do.
+        var mainImages = WithPlacements(_screens.MainImages);
+        var alternateImages = alternateLayout is null ? null : WithPlacements(_screens.AlternateImages);
+        mainImages?.CaptureAnchors(
+            oldMainScrollback,
+            oldRows,
+            RegisterGraphicsAnchors(oldMainScreen, mainLayout, mainMapping, oldMainScrollback));
+        alternateImages?.CaptureAnchors(
+            0,
+            oldRows,
+            RegisterGraphicsAnchors(alternateScreen!, alternateLayout!, alternateMapping, 0));
+
         _screens.Reflow(
             rows,
             columns,
@@ -129,6 +142,20 @@ public partial class TerminalBuffer
 
         RebasePromptMarks(promptAnchors, activeMapping, rows);
 
+        if (mainImages is not null)
+        {
+            _graphicsAnchorMapping = mainMapping;
+            mainImages.RebaseAnchors(mainMapping.NewScrollbackRows, rows, ResolveGraphicsAnchorDelegate);
+        }
+        if (alternateImages is not null)
+        {
+            _graphicsAnchorMapping = alternateMapping;
+            alternateImages.RebaseAnchors(alternateMapping.NewScrollbackRows, rows, ResolveGraphicsAnchorDelegate);
+        }
+        _graphicsAnchorMapping = null;
+        _graphicsAnchorScreen = null;
+        _graphicsAnchorLayout = null;
+
         if (fullScreenScroll)
         {
             _scrollTop = 0;
@@ -159,6 +186,66 @@ public partial class TerminalBuffer
         RaiseHistoryInvalidated(mainMapping.RetainedStart > 0
             ? HistoryDiscardReason.CapacityShrunk
             : HistoryDiscardReason.Rebased);
+    }
+
+    // Registrar/resolver state for the placement anchors of the store being captured or rebased. The delegates are
+    // created once, so a reflow with placements allocates no closure; without placements none of this runs.
+    private Screen? _graphicsAnchorScreen;
+    private Screen.SourceLayout? _graphicsAnchorLayout;
+    private ReflowMapping? _graphicsAnchorMapping;
+    private int _graphicsAnchorScrollback;
+    private AnchorRegistrar? _registerGraphicsAnchorDelegate;
+    private AnchorResolver? _resolveGraphicsAnchorDelegate;
+
+    private static KittyImageStore? WithPlacements(KittyImageStore? store) =>
+        store is { HasPlacements: true } ? store : null;
+
+    private AnchorResolver ResolveGraphicsAnchorDelegate => _resolveGraphicsAnchorDelegate ??= ResolveGraphicsAnchor;
+
+    /// <summary>
+    /// The registrar for the placements of <paramref name="screen"/> (mirrors <see cref="CapturePromptAnchors"/>):
+    /// a placement at <c>logicalRow</c> (relative to visible row 0, negative = history) and <c>column</c> becomes a
+    /// <see cref="ReflowCursorAnchor"/> on <paramref name="mapping"/>.
+    /// </summary>
+    private AnchorRegistrar RegisterGraphicsAnchors(
+        Screen screen,
+        Screen.SourceLayout layout,
+        ReflowMapping mapping,
+        int scrollbackRows)
+    {
+        _graphicsAnchorScreen = screen;
+        _graphicsAnchorLayout = layout;
+        _graphicsAnchorMapping = mapping;
+        _graphicsAnchorScrollback = scrollbackRows;
+        return _registerGraphicsAnchorDelegate ??= RegisterGraphicsAnchor;
+    }
+
+    private int RegisterGraphicsAnchor(int logicalRow, int column)
+    {
+        var anchor = _graphicsAnchorScreen!.GetReflowAnchor(
+            logicalRow,
+            column,
+            wrapPending: false,
+            _graphicsAnchorScrollback,
+            _graphicsAnchorLayout!);
+        return _graphicsAnchorMapping!.AddAnchor(anchor);
+    }
+
+    // Same arithmetic as RebasePromptMarks: the chronological index of the landing row is OutputIndex - RetainedStart;
+    // the store itself rejects indexes outside [0, NewScrollbackRows + rows).
+    private bool ResolveGraphicsAnchor(int slot, out long row, out int column)
+    {
+        var mapping = _graphicsAnchorMapping!;
+        if (mapping.TryMap(slot, out var position))
+        {
+            row = position.OutputIndex - mapping.RetainedStart;
+            column = position.Column;
+            return true;
+        }
+
+        row = 0;
+        column = 0;
+        return false;
     }
 
     private static CursorState MapCursorState(

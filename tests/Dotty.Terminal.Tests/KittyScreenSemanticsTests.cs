@@ -96,8 +96,8 @@ public sealed class KittyScreenSemanticsTests
         Assert.Equal((5, 1), t.Cursor);
         Assert.Equal(new[] { "R1", "R2", "R3", "R4", "R5", "" }, Enumerable.Range(0, 6).Select(r => t.Row(r)));
         var placement = t.Store.Placements.Single();
-        // Registered at the cursor row before the scroll (this stage does not yet move placements with the text).
-        Assert.Equal(4, placement.AnchorRow - t.Store.ViewTop);
+        // Registered at the cursor row (4) before the scroll, which then moves it up with the text (row 3).
+        Assert.Equal(3, placement.AnchorRow - t.Store.ViewTop);
         Assert.Equal(0, placement.AnchorCol);
     }
 

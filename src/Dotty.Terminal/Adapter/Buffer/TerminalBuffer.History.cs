@@ -45,3 +45,26 @@ public partial class TerminalBuffer
     /// <summary>The main/alternate/spare screens, for tests that inspect lazy-commit state.</summary>
     internal ScreenManager ScreenManagerForTests => _screens;
 }
+
+// Kitty graphics and the discard reasons. The buffer does not subscribe to its own event; each raise site calls the
+// image stores directly (same SyncRoot hold, just before the raise), because the event only fires for the main
+// screen while the stores also need CSI 3 J / ED 2 on the alternate screen.
+//
+//   reason          raise site                          image store effect
+//   --------------  ----------------------------------  ------------------------------------------------------
+//   Cleared         ClearScrollback (CSI 3 J), main     OnHistoryInvalidated(Cleared, ViewTop) on the ACTIVE store
+//                                                       (also on the alternate screen, where the event is not
+//                                                       raised): placements wholly in the history go, visible stay
+//   Cleared         EraseDisplay(2) (ED 2), main        OnHistoryInvalidated(Cleared, long.MaxValue) on the ACTIVE
+//                                                       store (also alternate): Screen.Clear wipes history + visible
+//   Reset           FullReset (RIS)                     ClearImageStores: every image and placement of BOTH
+//                                                       screens (limits stay in ScreenManager)
+//   Reset           ClearScreen                         OnHistoryInvalidated(Reset): all placements of BOTH stores
+//   CapacityShrunk  ResizeWithReflow                    none: CaptureAnchors/RebaseAnchors already deleted the
+//                                                       placements whose line was trimmed (no double delete)
+//   Rebased         ResizeWithReflow                    none: RebaseAnchors re-based every surviving placement
+//
+// Entering/leaving the alternate screen raises nothing; ScreenManager.SetAlternate clears the alternate store.
+// Resizes always go through ResizeWithReflow (Resize has no other path), so a rows-only resize re-lays the ring out
+// by logical line too: a placement stays attached to its line, and one on a trimmed (or blank-padded-away) row is
+// deleted.

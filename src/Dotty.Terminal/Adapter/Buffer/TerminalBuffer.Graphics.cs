@@ -58,4 +58,49 @@ public partial class TerminalBuffer
             return;
         store.CaptureVisible(snapshot.BeginGraphics(), Rows, scrollOffset);
     }
+
+    /// <summary>
+    /// Deletes the active screen's placements that a history discard took with it: with <paramref name="wholeRing"/>
+    /// (ED 2, whose <c>Screen.Clear</c> wipes the history and the visible rows alike) everything, otherwise (CSI 3 J)
+    /// the placements wholly above the first visible row. Runs for the alternate screen too: it has a ring of its
+    /// own, and the main screen's store is untouched while it is active.
+    /// </summary>
+    private void DiscardGraphicsHistory(bool wholeRing)
+    {
+        if (_screens.ActiveImages is not { HasPlacements: true } images)
+            return;
+        long floor = wholeRing ? long.MaxValue : images.ViewTop;
+        if (images.OnHistoryInvalidated(HistoryDiscardReason.Cleared, floor) > 0)
+            BumpGraphicsGeneration();
+    }
+
+    /// <summary>Deletes every placement of both screens (the images stay): <see cref="HistoryDiscardReason.Reset"/>.</summary>
+    private void DiscardAllGraphicsPlacements()
+    {
+        int deleted = 0;
+        if (_screens.MainImages is { HasPlacements: true } main)
+            deleted += main.OnHistoryInvalidated(HistoryDiscardReason.Reset, 0);
+        if (_screens.AlternateImages is { HasPlacements: true } alternate)
+            deleted += alternate.OnHistoryInvalidated(HistoryDiscardReason.Reset, 0);
+        if (deleted > 0)
+            BumpGraphicsGeneration();
+    }
+
+    /// <summary>
+    /// The host's cell size changed: re-resolves the auto-sized placements of both screens (see
+    /// <see cref="KittyImageStore.OnCellPixelSizeChanged"/>). Takes <see cref="SyncRoot"/>.
+    /// </summary>
+    internal void OnCellPixelSizeChanged(int cellPixelWidth, int cellPixelHeight)
+    {
+        lock (SyncRoot)
+        {
+            int changed = 0;
+            if (_screens.MainImages is { HasPlacements: true } main)
+                changed += main.OnCellPixelSizeChanged(cellPixelWidth, cellPixelHeight);
+            if (_screens.AlternateImages is { HasPlacements: true } alternate)
+                changed += alternate.OnCellPixelSizeChanged(cellPixelWidth, cellPixelHeight);
+            if (changed > 0)
+                BumpGraphicsGeneration();
+        }
+    }
 }

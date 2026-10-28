@@ -41,8 +41,18 @@ public partial class TerminalAdapter
         Volatile.Write(ref _windowPixelSize, PackPair(Math.Max(1, width), Math.Max(1, height)));
 
     /// <summary>Sets the character cell size in pixels reported by CSI 16 t (default 8x16).</summary>
-    public void SetCellPixelSize(int width, int height) =>
-        Volatile.Write(ref _cellPixelSize, PackPair(Math.Max(1, width), Math.Max(1, height)));
+    public void SetCellPixelSize(int width, int height)
+    {
+        int w = Math.Max(1, width), h = Math.Max(1, height);
+        long packed = PackPair(w, h);
+        lock (_buffer.SyncRoot)
+        {
+            long previous = Interlocked.Exchange(ref _cellPixelSize, packed);
+            // Kitty placements sized by the cell (native size, one dimension, in-cell offsets) follow the new size.
+            if (previous != packed)
+                _buffer.OnCellPixelSizeChanged(w, h);
+        }
+    }
 
     /// <summary>Sets the screen pixel size reported by CSI 15 t; without it the text area size is reported.</summary>
     public void SetScreenPixelSize(int width, int height) =>

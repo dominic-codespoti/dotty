@@ -400,6 +400,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         _promptMarks.Clear();
         // Blank the rows that held history and return their pages to the OS; the visible screen stays.
         ActiveBuffer.DiscardHistory();
+        // Only the history goes: the floor is the first visible row, so visible placements stay.
+        DiscardGraphicsHistory(wholeRing: false);
         if (!_isAlternate)
             RaiseHistoryInvalidated(HistoryDiscardReason.Cleared);
     }
@@ -410,6 +412,9 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (_isAlternate)
             SetAlternateScreen(false);
         _screens.ClearAll();
+        // RIS deletes every image of both screens (the configured limits stay with the manager).
+        if (_screens.ClearImageStores())
+            BumpGraphicsGeneration();
         _cursor.Reset();
         _bracketedPaste = false;
         InitializeTabStops();
@@ -444,6 +449,18 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (delta <= 0) return;
         if (top == 0)
             unchecked { _totalScrolled += delta; }
+
+        // Kitty graphics: Screen.ScrollUpRegion rotates the ring head exactly when top == 0 && bottom == Rows - 1
+        // (any other region only shifts rows inside it), so the placements either move with the ring or follow the
+        // region's margin semantics. LF, SU and the cursor move after an image all arrive here.
+        if (_screens.ActiveImages is { HasPlacements: true } images)
+        {
+            if (top == 0 && bottom == Rows - 1)
+                images.OnRingRotatedUp(delta, ActiveBuffer.ScrollbackCapacity);
+            else
+                images.OnRegionScrolled(top, bottom, delta, Rows);
+            BumpGraphicsGeneration();
+        }
 
         // Identity generations: the whole region changed; classification and
         // glyph caches must re-examine every row. (Motion epochs removed
@@ -482,6 +499,17 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             int blankLines = clampedLines - restoredFromScrollback;
             for (int row = 0; row < blankLines; row++)
                 ActiveBuffer.ClearRow(row);
+        }
+
+        // Kitty graphics: the full-screen path rotated the ring head back by clampedLines (Screen.ScrollDownRegion);
+        // other regions shift rows down inside the margins (RI at the top margin, SD).
+        if (_screens.ActiveImages is { HasPlacements: true } images)
+        {
+            if (isFullScreenRegion)
+                images.OnRingRotatedDown(clampedLines, Rows);
+            else
+                images.OnRegionScrolled(top, bottom, -clampedLines, Rows);
+            BumpGraphicsGeneration();
         }
 
         int height = bottom - top + 1;
@@ -925,6 +953,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (mode == 2)
         {
             MarkAllRowsDirty();
+            // Screen.Clear wiped the whole ring, history included: nothing a placement could sit on remains.
+            DiscardGraphicsHistory(wholeRing: true);
             if (!_isAlternate)
                 RaiseHistoryInvalidated(HistoryDiscardReason.Cleared);
         }
@@ -1081,6 +1111,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     public void ClearScreen()
     {
         _screens.ClearAll();
+        DiscardAllGraphicsPlacements();
         _cursor.Reset();
         MarkAllRowsDirty();
         RaiseHistoryInvalidated(HistoryDiscardReason.Reset);

@@ -33,8 +33,18 @@ public abstract class PerformanceTestBase
         _allocatedBytes = GC.GetTotalAllocatedBytes();
 
         // Disable GC pressure during benchmarks for more consistent results (10MB to avoid earlyoom triggers)
-        GC.TryStartNoGCRegion(10 * 1024 * 1024, true);
+        if (UseNoGcRegion)
+            GC.TryStartNoGCRegion(10 * 1024 * 1024, true);
     }
+
+    /// <summary>
+    /// Whether <see cref="GlobalSetup"/> starts a 10 MB no-GC region. Classes whose setup or
+    /// measured body allocates far more managed memory than that (for example a 10k-line
+    /// scrollback reflow, whose first resize grows pooled lists by tens of MB) MUST override
+    /// this to <c>false</c>: otherwise the region silently ends mid-run and the first GC lands
+    /// inside a measured iteration.
+    /// </summary>
+    protected virtual bool UseNoGcRegion => true;
 
     /// <summary>
     /// Global cleanup executed once per benchmark run

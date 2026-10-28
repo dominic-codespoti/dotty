@@ -278,6 +278,49 @@ Individual operation latency:
 - Clear operations
 - Line feed/tab latency
 
+### ParserScanBenchmarks
+
+Parser run-scan, CJK/grapheme, REP and scroll-region workloads (category `Parser`/`Scan`, run by `--filter parser`):
+- ASCII runs of 8/22/80 bytes with CRLF, a 4096-byte single run, and the 80 B / 4096 B variants on a full 10k-line scrollback ring
+- ASCII runs split by SGR, a CJK 3-byte run, mixed ASCII+CJK lines, combining marks, emoji ZWJ sequences
+- `REP` (`CSI 80 b`, `CSI 100000 b`)
+- LF / RI / DL inside a partial `DECSTBM` region on a 200x60 grid (1,000 operations per invoke)
+
+Each scan/CJK method feeds one pre-built 64 KiB array with `OperationsPerInvoke = 1`: read the mean as **ns per 64 KiB**
+(MB/s = 65536 / ns x 1000). The scrollback-0 variants stay L1/L2 resident; the `10k scrollback` variants show the cache effect of a ~10 MB ring.
+
+### ParserOscBenchmarks
+
+OSC strings (category `Parser`/`Osc`): OSC 0 titles that change every sequence, OSC 52 clipboard writes (4 KiB, 64 KiB in one `Feed`,
+64 KiB in 8 KiB chunks, and an oversize payload one byte over the parser's OSC cap that is discarded), OSC 8 hyperlinks and the OSC 133
+prompt cycle (measured at the 5000-mark cap).
+
+### ReflowBenchmarks
+
+Resize/reflow over a populated **10,000-line scrollback** (category `Memory`/`Reflow`, run by `--filter memory`): 80x24 -> 120x40 -> 80x24,
+80x24 -> 200x60 -> 80x24, rows-only, with ~500 prompt marks in the retained window, with the alternate screen active, and over CJK
+lines (wide-glyph wrap boundaries). One invoke is a resize there and back; results are per reflow (`OperationsPerInvoke = 2`).
+Set `DOTTY_REFLOW_BENCH_MEMORY=1` to print `GC.GetTotalMemory(true)` before the first resize and after 20 resizes for the fixture that is built.
+
+### TextFormatBenchmarks
+
+Row-to-text cost of the copy and search paths (category `Memory`/`Text`): literal / many-match / regex / CJK search over a 60x200
+visible snapshot, selecting all visible rows, selecting 10k scrollback lines (ASCII and CJK), and `GetScrollbackLine` for all 10k rows.
+It calls only `SearchEngine.FindMatches`, `TextSelectionService` and `TerminalBuffer.GetScrollbackLine`. There is deliberately no
+"search over scrollback" benchmark yet: production search does not materialize scrollback text into its snapshot.
+
+### ParserScanExperiments (not gated)
+
+A/B of printable-ASCII run scanners: the parser's current `SearchValues<byte>` set, `IndexOfAnyExceptInRange(0x20, 0x7E)`, hand-written
+`Vector128` / `Vector256` / `Vector512` scanners and an arm64 `AdvSimd.Arm64.MaxAcross` variant, at run lengths 4/8/16/22/55/80/256/4096.
+`GlobalSetup` checks every variant against a scalar reference and throws on any disagreement. It runs **only** with an explicit experiment filter:
+
+```bash
+dotnet run -c Release -- --mode detailed --filter experiment
+```
+
+It is not in the CI quick run, never produces baselines, and its summaries are excluded from regression checks and baseline updates.
+
 ## Output and Reports
 
 Benchmarks generate reports in:
@@ -365,6 +408,22 @@ The `TestDataGenerator` creates realistic test content:
 - Medium: 10 KB
 - Large: 100 KB
 - XLarge: 1 MB
+
+## Harness Rules for Gated Benchmarks
+
+- **One method per variant, no `[Params]`.** A baseline key is the benchmark's `Description` (`WorkloadMethodDisplayInfo`); `[Params]` values do not change
+  it, so all values of one method would share a single baseline entry. Write a separate `[Benchmark(Description = "...")]` method per variant.
+  (The ungated `ParserScanExperiments` class is the only one that groups methods, via `[GroupBenchmarksBy(ByCategory)]`, for per-length baselines.)
+- **Register every gated class twice in `Program.cs`**: in the matching `--filter` block (so it runs) and in `BenchmarkTypes` (so its names count for
+  baseline coverage, orphan detection and `--mode update-baselines`).
+- **Large-state classes opt out of the no-GC region.** `PerformanceTestBase.GlobalSetup` starts a 10 MB `GC.TryStartNoGCRegion`. A class whose setup or
+  measured body allocates far more managed memory than that (10k-line scrollback fixtures, reflow) must override
+  `protected override bool UseNoGcRegion => false;`, otherwise the region silently ends mid-run and a GC lands inside a measured iteration.
+- **Build per-variant fixtures lazily** when a class has several large, mutually exclusive fixtures: BenchmarkDotNet runs each benchmark in its own process but
+  runs `GlobalSetup` (all of it) once per benchmark, so building every fixture there multiplies setup time and memory.
+- **Experiment classes** (A/B tools that must never be gated) run only for `--filter experiment`; run their `Run<T>` call outside the `summaries` list.
+- Latency gate: `baselineMs * 2 + 75 ns` (2x tolerance, up to two re-measures). It cannot prove or disprove a 20% change; prove wins with local
+  A/B runs (alternating before/after, same machine, at least 3 rounds), not CI.
 
 ## Adding New Benchmarks
 

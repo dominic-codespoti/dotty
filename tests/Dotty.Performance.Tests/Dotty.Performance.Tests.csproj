@@ -22,6 +22,8 @@
     <ProjectReference Include="../../src/Dotty.NativePty/Dotty.NativePty.csproj" />
     <ProjectReference Include="../../src/Dotty.Abstractions/Dotty.Abstractions.csproj" />
     <ProjectReference Include="../../src/Dotty.Rendering.Gpu/Dotty.Rendering.Gpu.csproj" />
+    <!-- SearchEngine and TextSelectionService (text-format benchmarks) live in Dotty.Runtime. -->
+    <ProjectReference Include="../../src/Dotty.Runtime/Dotty.Runtime.csproj" />
   </ItemGroup>
 
   <!-- BenchmarkDotNet and Performance Testing Packages -->

@@ -16,9 +16,10 @@ public sealed class OscFastPathTests
     // Mirrors BasicAnsiParser.MaxOscPayloadBytes (private); the boundary tests pin it.
     private const int OscCap = 1024 * 1024;
 
-    private sealed class Rig
+    private sealed class Rig : IDisposable
     {
-        public readonly TerminalAdapter Adapter = new(24, 80);
+        // The OSC tests never scroll; a tiny ring keeps the thousands of rigs the split sweeps build cheap.
+        public readonly TerminalAdapter Adapter = new(24, 80, scrollbackCapacity: 16);
         public readonly BasicAnsiParser Parser = new();
         public readonly List<string> Events = new();
 
@@ -29,6 +30,8 @@ public sealed class OscFastPathTests
             Adapter.ClipboardWriteRequested += w => Events.Add($"W:{(int)w.Selection}:{w.Text}");
             Adapter.ClipboardReadRequested += r => Events.Add($"R:{(int)r.Selection}");
         }
+
+        public void Dispose() => Adapter.Dispose();
     }
 
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
@@ -36,7 +39,7 @@ public sealed class OscFastPathTests
 
     private static List<string> Run(byte[] stream, params int[] splitAt)
     {
-        var rig = new Rig();
+        using var rig = new Rig();
         int prev = 0;
         foreach (int cut in splitAt)
         {
@@ -88,7 +91,7 @@ public sealed class OscFastPathTests
         }
 
         // Byte-at-a-time feed.
-        var rig = new Rig();
+        using var rig = new Rig();
         foreach (byte value in stream)
             rig.Parser.Feed(new[] { value });
         Assert.Equal(whole, rig.Events);

@@ -448,7 +448,12 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         int restoredFromScrollback = 0;
         bool isFullScreenRegion = top == 0 && bottom == Rows - 1;
         if (isFullScreenRegion)
-            restoredFromScrollback = Math.Min(_totalScrolled, clampedLines);
+        {
+            // Only rows the ring still holds can come back. _totalScrolled keeps counting forward scrolls even when
+            // the ring retains none (capacity 0) or fewer than were scrolled, so it is capped by the capacity.
+            int retainedHistory = Math.Max(0, Math.Min(_totalScrolled, ActiveBuffer.ScrollbackCapacity));
+            restoredFromScrollback = Math.Min(retainedHistory, clampedLines);
+        }
 
         ActiveBuffer.ScrollDownRegion(top, bottom, n);
         if (top == 0 && _totalScrolled > 0)

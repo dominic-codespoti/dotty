@@ -16,8 +16,17 @@ public partial class TerminalBuffer
             return false;
         }
 
-        // Same index flip as GetScrollbackLine: row 0 is the oldest, the screen ring counts from the newest.
-        ActiveBuffer.TryReadScrollbackRow(count - 1 - index, out hot, out cold);
+        // Same index flip as GetScrollbackLine: row 0 is the oldest, the screen ring counts from the newest. Indices past
+        // the ring (a MaxScrollback override larger than the capacity) hold no real history and read as empty rows.
+        int scrollbackIndex = count - 1 - index;
+        if (scrollbackIndex >= ActiveBuffer.ScrollbackCapacity)
+        {
+            hot = default;
+            cold = default;
+            return true;
+        }
+
+        ActiveBuffer.TryReadScrollbackRow(scrollbackIndex, out hot, out cold);
         return true;
     }
 

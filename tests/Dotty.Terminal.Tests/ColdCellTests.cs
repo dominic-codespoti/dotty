@@ -50,7 +50,7 @@ public sealed class ColdCellTests
         var cell = new ColdCell { GraphemeIndex = -1 };
 
         Assert.Equal(0u, Bits(cell));
-        Assert.Equal(default, cell);
+        Assert.Equal(default(ColdCell), cell);
     }
 
     [Theory]

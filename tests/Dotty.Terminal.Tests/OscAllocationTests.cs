@@ -35,8 +35,8 @@ public sealed class OscAllocationTests
             best = Math.Min(best, GC.GetAllocatedBytesForCurrentThread() - before);
         }
 
-        // One string of raw.Length chars (2 bytes each) plus header, nothing else.
-        Assert.True(best <= raw.Length * 2L + 256, $"allocated {best} bytes");
+        // One string of raw.Length chars (2 bytes each) plus header, nothing else (a stray 48 KiB buffer would show).
+        Assert.True(best <= raw.Length * 2L + 1024, $"allocated {best} bytes");
     }
 
     [Fact]

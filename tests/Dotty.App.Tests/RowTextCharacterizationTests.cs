@@ -120,23 +120,13 @@ public sealed class RowTextCharacterizationTests
         Assert.Equal("界" + new string(' ', Cols - 1), buffer.GetRowText(7));
     }
 
-    // ---- RenderSnapshot row text (visible-row capture and full capture) ----
+    // ---- RenderSnapshot row text (visible-row capture) ----
 
     [Fact]
     public void VisibleSnapshot_RowText_MatchesGolden()
     {
         var buffer = BuildFixture();
         using var snapshot = buffer.CaptureRenderSnapshotVisible();
-        string[] golden = VisibleGolden();
-        for (int row = 0; row < golden.Length; row++)
-            Assert.Equal(golden[row], snapshot.GetVisibleRowText(row));
-    }
-
-    [Fact]
-    public void FullSnapshot_RowText_MatchesGolden()
-    {
-        var buffer = BuildFixture();
-        using var snapshot = buffer.CaptureRenderSnapshot(0, -1);
         string[] golden = VisibleGolden();
         for (int row = 0; row < golden.Length; row++)
             Assert.Equal(golden[row], snapshot.GetVisibleRowText(row));
@@ -151,7 +141,7 @@ public sealed class RowTextCharacterizationTests
         Assert.Equal(string.Empty, snapshot.GetVisibleRowText(10));
     }
 
-    // ---- Scrollback rows (Screen.GetScrollbackRow via TerminalBuffer, and the snapshot's arena copy) ----
+    // ---- Scrollback rows (Screen.GetScrollbackRow via TerminalBuffer, and the search snapshot's cell copy) ----
 
     private static TerminalBuffer BuildScrolledFixture()
     {
@@ -183,16 +173,28 @@ public sealed class RowTextCharacterizationTests
     }
 
     [Fact]
-    public void FullSnapshot_ScrollbackRowText_MatchesGolden_NewestFirst()
+    public void SearchSnapshot_ScrollbackRows_MatchGolden_OldestFirst()
     {
         var buffer = BuildScrolledFixture();
-        using var snapshot = buffer.CaptureRenderSnapshot(0, -1);
+        using var snapshot = buffer.CaptureRenderSnapshotForSearch();
         Assert.Equal(ScrollbackGolden.Length, snapshot.ScrollbackCount);
-        for (int k = 0; k < ScrollbackGolden.Length; k++)
+        for (int i = 0; i < ScrollbackGolden.Length; i++)
         {
-            // Snapshot scrollback indices count from the newest line.
-            Assert.Equal(ScrollbackGolden[k], snapshot.GetScrollbackRowText(ScrollbackGolden.Length - 1 - k));
+            // The snapshot's scrollback copy uses the live buffer's index: 0 = oldest.
+            Assert.True(snapshot.TryGetScrollbackRow(i, out var hot, out var cold));
+            Assert.Equal(ScrollbackGolden[i], RowText.Build(hot, cold, 0, hot.Length - 1, ContinuationPolicy.SpaceCell));
         }
+
+        Assert.False(snapshot.TryGetScrollbackRow(-1, out _, out _));
+        Assert.False(snapshot.TryGetScrollbackRow(ScrollbackGolden.Length, out _, out _));
+    }
+
+    [Fact]
+    public void VisibleSnapshot_CarriesNoScrollbackCells()
+    {
+        var buffer = BuildScrolledFixture();
+        using var snapshot = buffer.CaptureRenderSnapshotVisible();
+        Assert.False(snapshot.TryGetScrollbackRow(0, out _, out _));
     }
 
     [Fact]

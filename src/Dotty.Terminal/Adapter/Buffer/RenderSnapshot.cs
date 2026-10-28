@@ -17,15 +17,11 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
     private CellHot[] _cellsStorage = Array.Empty<CellHot>();
     private ColdCell[] _coldStorage = Array.Empty<ColdCell>();
     private int[] _rowMapStorage = Array.Empty<int>();
-    private int[] _rowMaxColStorage = Array.Empty<int>();
     private ulong[] _rowGenerationsStorage = Array.Empty<ulong>();
     private int[] _rowOffsetsStorage = Array.Empty<int>();
     public CellHot[] Cells = Array.Empty<CellHot>();
     public ColdCell[] Cold = Array.Empty<ColdCell>();
     public int[] RowMap = Array.Empty<int>();        // physical row per visible logical row
-    public int[] RowMaxCol = Array.Empty<int>();     // per physical row
-    public int Head;
-    public int TotalRows;
     public ulong[] RowGenerationsArray = Array.Empty<ulong>(); // per visible logical row
 
     public ReadOnlySpan<ulong> RowGenerations =>
@@ -52,7 +48,7 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
 
     /// <summary>
     /// Per-visible-row offset into the compact <see cref="Cells"/>/<see cref="Cold"/>
-    /// arrays (visible-row capture only). Empty when the full-arena capture was used.
+    /// arrays. Empty until the snapshot is captured.
     /// </summary>
     public int[] RowOffsets = Array.Empty<int>();
 
@@ -82,8 +78,6 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         owner.GetHyperlinkTable(out snap._hyperlinkTable, out snap._hyperlinkCount);
         snap.Rows = rows;
         snap.Columns = cols;
-        snap.TotalRows = screen.TotalRows;
-        snap.Head = screen.Head;
         snap.ScrollbackCount = scrollbackCount;
         snap.IsAlternateScreenActive = altActive;
         snap.CursorRow = scrollOffset > 0 ? cursorRow + scrollOffset : cursorRow;
@@ -93,7 +87,6 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         snap._styles = styles;
         snap.ScrollbackText = Array.Empty<string>();
         snap.CapturedSbStart = 0;
-        snap.RowMaxCol = Array.Empty<int>();
 
         EnsureCapacity(ref snap._cellsStorage, visibleCellCount);
         EnsureCapacity(ref snap._coldStorage, visibleCellCount);
@@ -159,7 +152,6 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         long bytes = (long)_cellsStorage.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<CellHot>()
             + (long)_coldStorage.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<ColdCell>()
             + (long)_rowMapStorage.Length * sizeof(int)
-            + (long)_rowMaxColStorage.Length * sizeof(int)
             + (long)_rowGenerationsStorage.Length * sizeof(ulong)
             + (long)_rowOffsetsStorage.Length * sizeof(int)
             + (long)ScrollbackText.Length * IntPtr.Size;
@@ -168,13 +160,11 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         _cellsStorage = Array.Empty<CellHot>();
         _coldStorage = Array.Empty<ColdCell>();
         _rowMapStorage = Array.Empty<int>();
-        _rowMaxColStorage = Array.Empty<int>();
         _rowGenerationsStorage = Array.Empty<ulong>();
         _rowOffsetsStorage = Array.Empty<int>();
         Cells = Array.Empty<CellHot>();
         Cold = Array.Empty<ColdCell>();
         RowMap = Array.Empty<int>();
-        RowMaxCol = Array.Empty<int>();
         RowGenerationsArray = Array.Empty<ulong>();
         RowOffsets = Array.Empty<int>();
         ScrollbackText = Array.Empty<string>();
@@ -193,7 +183,6 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         Cells = Array.Empty<CellHot>();
         Cold = Array.Empty<ColdCell>();
         RowMap = Array.Empty<int>();
-        RowMaxCol = Array.Empty<int>();
         RowGenerationsArray = Array.Empty<ulong>();
         RowOffsets = Array.Empty<int>();
         if (ScrollbackText.Length != 0)
@@ -210,19 +199,13 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
     public ReadOnlySpan<CellHot> GetRowCells(int row)
     {
         if (row < 0 || row >= Rows) return default;
-        if (RowOffsets.Length > 0)
-            return new ReadOnlySpan<CellHot>(Cells, RowOffsets[row], Columns);
-        int pRow = RowMap[row];
-        return new ReadOnlySpan<CellHot>(Cells, pRow * Columns, Columns);
+        return new ReadOnlySpan<CellHot>(Cells, RowOffsets[row], Columns);
     }
 
     public ReadOnlySpan<ColdCell> GetRowColdCells(int row)
     {
         if (row < 0 || row >= Rows) return default;
-        if (RowOffsets.Length > 0)
-            return new ReadOnlySpan<ColdCell>(Cold, RowOffsets[row], Columns);
-        int pRow = RowMap[row];
-        return new ReadOnlySpan<ColdCell>(Cold, pRow * Columns, Columns);
+        return new ReadOnlySpan<ColdCell>(Cold, RowOffsets[row], Columns);
     }
 
     public ulong GetRowGeneration(int row)
@@ -250,29 +233,12 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
     }
 
     /// <summary>
-    /// Grapheme-aware text of one scrollback line from the copied arena
-    /// (newest = 0). Used by search so it never touches the live buffer.
-    /// </summary>
-    public string GetScrollbackRowText(int scrollbackIndex)
-    {
-        if (scrollbackIndex < 0 || scrollbackIndex >= ScrollbackCount) return string.Empty;
-        int total = TotalRows;
-        int pRow = (Head - 1 - scrollbackIndex + total * 2) % total;
-        int maxCol = RowMaxCol[pRow];
-        if (maxCol < 0) return string.Empty;
-        return BuildRowText(pRow, maxCol);
-    }
-
-    /// <summary>
-    /// Grapheme-aware text of one visible row from the copied arena.
+    /// Grapheme-aware text of one visible row from the copied rows.
     /// </summary>
     public string GetVisibleRowText(int row)
     {
         if (row < 0 || row >= Rows || Columns <= 0) return string.Empty;
-        // CaptureVisible compacts rows and records their offsets; the full
-        // capture keeps the physical ring map and uses arena row indices.
-        int rowIndex = RowOffsets.Length > 0 ? RowOffsets[row] / Columns : RowMap[row];
-        return BuildRowText(rowIndex, Columns - 1);
+        return BuildRowText(RowOffsets[row] / Columns, Columns - 1);
     }
 
     private string BuildRowText(int pRow, int maxCol)

@@ -614,6 +614,42 @@ public sealed unsafe class ScreenLazyCommitTests
     }
 
     [Fact]
+    public void ReverseIndexWithoutScrollbackCapacityBlanksTheNewTopRow()
+    {
+        // Forward scrolls keep counting even when the ring retains nothing; the reverse scroll must still blank
+        // the row it rotates in instead of repeating the old bottom row at the top.
+        using var buffer = new TerminalBuffer(5, 20, 0);
+        for (int i = 0; i < 30; i++)
+            WriteLine(buffer, $"line-{i}");
+        Assert.Equal(0, buffer.ScrollbackCount);
+        buffer.SetCursor(4, 0);
+        buffer.WriteText("bottom".AsSpan(), CellAttributes.Default);
+
+        buffer.SetCursor(0, 0);
+        buffer.ReverseIndex();
+
+        string[] expected = { string.Empty, "line-26", "line-27", "line-28", "line-29" };
+        Assert.Equal(expected, Enumerable.Range(0, 5).Select(r => buffer.GetRowText(r).TrimEnd()).ToArray());
+        Assert.Empty(buffer.ValidateInvariants());
+    }
+
+    [Fact]
+    public void ScrollDownBeyondTheRetainedHistoryBlanksTheRowsTheRingCannotRestore()
+    {
+        using var buffer = new TerminalBuffer(5, 20, 2);
+        for (int i = 0; i < 20; i++)
+            WriteLine(buffer, $"line-{i}");
+        Assert.Equal(2, buffer.ScrollbackCount);
+
+        buffer.ScrollDownLines(4);
+
+        // Two history rows (line-14, line-15) come back; the other two rotated-in rows are blank.
+        string[] expected = { string.Empty, string.Empty, "line-14", "line-15", "line-16" };
+        Assert.Equal(expected, Enumerable.Range(0, 5).Select(r => buffer.GetRowText(r).TrimEnd()).ToArray());
+        Assert.Empty(buffer.ValidateInvariants());
+    }
+
+    [Fact]
     public void ResizeReflowsHistoryIntoTheRingTailAndParksTheSpare()
     {
         using var buffer = new TerminalBuffer(5, 20, 50);

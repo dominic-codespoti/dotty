@@ -603,10 +603,9 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         }
 
         var pane = state.SourcePane;
-        using var snapshot = pane.Session.Adapter.Buffer.CaptureRenderSnapshotVisible(
-            scrollOffset: 0,
-            sbStart: 0,
-            sbEnd: -1);
+        // The search capture copies the scrollback cells too (and takes SyncRoot itself); the per-frame
+        // visible capture (sbEnd: -1) carries no scrollback, so scrollback matches were never found.
+        using var snapshot = pane.Session.Adapter.Buffer.CaptureRenderSnapshotForSearch();
         var matches = SearchEngine.FindMatches(
             snapshot,
             state.Query,

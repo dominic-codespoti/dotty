@@ -9,7 +9,7 @@ namespace Dotty.Terminal.Adapter;
 /// outside the lock, so the UI thread never blocks the PTY writer for the
 /// whole raster and the raster never races a partial parse. Its storage is
 /// retained by the owning buffer and reused after <see cref="Dispose"/>.
-public sealed class RenderSnapshot : IRenderSource, IDisposable
+public sealed partial class RenderSnapshot : IRenderSource, IDisposable
 {
     private int _disposed = 1;
     private TerminalBuffer? _owner;
@@ -226,6 +226,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
             + (long)_rowOffsetsStorage.Length * sizeof(int)
             + (long)ScrollbackText.Length * IntPtr.Size;
         if (bytes != 0) BufferMemoryMetrics.ChangeSnapshotCapacity(bytes, 0);
+        ReleaseScrollbackRows();
         _cellsStorage = Array.Empty<CellHot>();
         _coldStorage = Array.Empty<ColdCell>();
         _rowMapStorage = Array.Empty<int>();
@@ -260,6 +261,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         if (ScrollbackText.Length != 0)
             BufferMemoryMetrics.ChangeSnapshotCapacity((long)ScrollbackText.Length * IntPtr.Size, 0);
         ScrollbackText = Array.Empty<string>();
+        ReleaseScrollbackRows();
         _styles = Array.Empty<CellAttributes>();
         _hyperlinkTable = Array.Empty<string>();
         _hyperlinkCount = 0;
@@ -338,23 +340,12 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     private string BuildRowText(int pRow, int maxCol)
     {
         int offset = pRow * Columns;
-        using var sb = ZStr.CreateStringBuilder(maxCol + 1);
-        for (int i = 0; i <= maxCol; i++)
-        {
-            var cell = Cells[offset + i];
-            if (cell.IsContinuation || cell.Rune == 0)
-            {
-                sb.Append(' ');
-                continue;
-            }
-            var cold = Cold[offset + i];
-            var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
-            if (string.IsNullOrEmpty(grapheme))
-                sb.Append(' ');
-            else
-                sb.Append(grapheme);
-        }
-        return sb.ToString();
+        return RowText.Build(
+            new ReadOnlySpan<CellHot>(Cells, offset, Columns),
+            new ReadOnlySpan<ColdCell>(Cold, offset, Columns),
+            0,
+            maxCol,
+            ContinuationPolicy.SpaceCell);
     }
 
     public string GetDebugInfo()

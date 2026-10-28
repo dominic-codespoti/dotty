@@ -428,11 +428,21 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         RequestRender();
     }
 
+    /// <summary>DECSET/DECRST 1049: alternate screen with cursor save/restore.</summary>
     public void OnSetAlternateScreen(bool enabled)
     {
         _buffer.SetAlternateScreen(enabled);
         SetKittyAlternateScreen(enabled);
         Trace?.Invoke($"AltScreen({enabled})", _buffer);
+        RequestRender();
+    }
+
+    /// <summary>DECSET/DECRST 47 and 1047: alternate screen switch only; the cursor is neither saved nor restored.</summary>
+    public void OnSwitchAlternateScreen(bool enabled)
+    {
+        _buffer.SwitchAlternateScreen(enabled);
+        SetKittyAlternateScreen(enabled);
+        Trace?.Invoke($"AltScreen47({enabled})", _buffer);
         RequestRender();
     }
 

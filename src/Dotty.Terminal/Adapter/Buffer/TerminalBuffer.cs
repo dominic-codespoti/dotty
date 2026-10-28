@@ -120,7 +120,21 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         }
     }
 
-    public void SetAlternateScreen(bool active)
+    /// <summary>
+    /// DECSET/DECRST 1049: switches screens and restores the cursor captured on entry when leaving
+    /// (xterm's save-cursor + alternate screen). Entering clears the alternate screen.
+    /// </summary>
+    public void SetAlternateScreen(bool active) => SetAlternateScreenCore(active, restoreCursorOnLeave: true);
+
+    /// <summary>
+    /// DECSET/DECRST 47 and 1047: switches screens only. Like xterm, leaving does not restore the cursor, so the
+    /// cursor stays where the alternate screen left it. (The entry position is still captured because resize
+    /// reflow uses it as the hidden main screen's cursor anchor.) Remaining deviation: entering always clears the
+    /// alternate screen, whereas xterm leaves its contents for 47.
+    /// </summary>
+    public void SwitchAlternateScreen(bool active) => SetAlternateScreenCore(active, restoreCursorOnLeave: false);
+
+    private void SetAlternateScreenCore(bool active, bool restoreCursorOnLeave)
     {
         if (active == _isAlternate)
             return;
@@ -142,12 +156,13 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
         if (!active)
         {
-            // Restore main screen scrollback count and cursor, discarding
+            // Restore main screen scrollback count (and, for 1049, the cursor), discarding
             // whatever accumulated while the alt screen was active.
             _totalScrolled = _savedTotalScrolled;
             if (_hasAlternateSavedCursor)
             {
-                _cursor.RestoreState(_alternateSavedCursorState, Rows, Columns);
+                if (restoreCursorOnLeave)
+                    _cursor.RestoreState(_alternateSavedCursorState, Rows, Columns);
                 _hasAlternateSavedCursor = false;
             }
         }

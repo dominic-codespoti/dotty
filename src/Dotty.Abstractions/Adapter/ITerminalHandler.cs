@@ -36,7 +36,9 @@ namespace Dotty.Abstractions.Adapter
         void OnLineFeed();
         void OnSetScrollRegion(int top1Based, int bottom1Based);
         void OnSetOriginMode(bool enabled);
-        void OnSetAlternateScreen(bool enabled);
+        void OnSetAlternateScreen(bool enabled); // DECSET/DECRST 1049: save/restore the cursor around the switch
+        // DECSET/DECRST 47 and 1047: switch screens only, no cursor save/restore (as in xterm).
+        void OnSwitchAlternateScreen(bool enabled) { }
         void OnSetCursorVisibility(bool visible);
         void OnSaveCursor();
         void OnRestoreCursor();

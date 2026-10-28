@@ -57,6 +57,7 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnSetScrollRegion(int top1Based, int bottom1Based) => Events.Add($"DECSTBM:{top1Based},{bottom1Based}");
         void ITerminalHandler.OnSetOriginMode(bool enabled) => Events.Add($"DECOM:{enabled}");
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) => Events.Add($"ALT:{enabled}");
+        void ITerminalHandler.OnSwitchAlternateScreen(bool enabled) => Events.Add($"ALT47:{enabled}");
         void ITerminalHandler.OnSetCursorVisibility(bool v) => Events.Add($"CURSOR_VIS:{v}");
         void ITerminalHandler.OnSetKeypadApplicationMode(bool en) => Events.Add($"KAM:{en}");
         void ITerminalHandler.OnSetCursorShape(int s) => Events.Add($"DECSCUSR:{s}");
@@ -268,6 +269,28 @@ public class ParserEdgeCaseTests
         var (p, h) = Setup();
         p.Feed("\x1b[?1049l"u8);
         Assert.Contains("ALT:False", h.Events);
+    }
+
+    [Fact]
+    public void DecSet47And1047_RouteToTheSwitchOnlyHandler()
+    {
+        var (p, h) = Setup();
+        p.Feed("\x1b[?47h\x1b[?47l\x1b[?1047h\x1b[?1047l"u8);
+        Assert.Equal(new[] { "ALT47:True", "ALT47:False", "ALT47:True", "ALT47:False" }, h.Events.ToArray());
+        Assert.Equal(0, h.SaveCursorCount);
+        Assert.Equal(0, h.RestoreCursorCount);
+    }
+
+    [Fact]
+    public void DecSet1048_RoutesToSaveAndRestoreCursorOnly()
+    {
+        var (p, h) = Setup();
+        p.Feed("\x1b[?1048h"u8);
+        Assert.Equal(1, h.SaveCursorCount);
+        Assert.Equal(0, h.RestoreCursorCount);
+        p.Feed("\x1b[?1048l"u8);
+        Assert.Equal(1, h.RestoreCursorCount);
+        Assert.DoesNotContain(h.Events, e => e.StartsWith("ALT"));
     }
 
     [Fact]

@@ -135,14 +135,14 @@ public sealed class VisibilityReportTests
     }
 
     [Fact]
-    public void ResetVisibilityReports_DisablesTheModeButNotTheHostFact()
+    public void FullReset_DisablesTheModeButNotTheHostFact()
     {
         var (adapter, parser, replies) = Setup();
         Feed(parser, "\u001b[?2033h");
         adapter.SetVisibility(false);
         replies.Clear();
 
-        adapter.ResetVisibilityReports();
+        Feed(parser, "\u001bc");
 
         Assert.False(adapter.VisibilityReportsEnabled);
         Assert.False(adapter.IsVisible);

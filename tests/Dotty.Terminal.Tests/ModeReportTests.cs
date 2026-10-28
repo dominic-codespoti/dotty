@@ -187,6 +187,54 @@ public sealed class ModeReportTests
         Assert.False(adapter.Buffer.IsAlternateScreenActive);
     }
 
+    [Theory]
+    [InlineData(47)]
+    [InlineData(1047)]
+    public void Decset47And1047_SwitchScreensWithoutSavingOrRestoringTheCursor(int mode)
+    {
+        var (adapter, parser, _) = Setup();
+        Feed(parser, $"{Esc}[2;3H{Esc}[?{mode}h");
+        Assert.True(adapter.Buffer.IsAlternateScreenActive);
+        Assert.Equal(1, adapter.Buffer.CursorRow); // the cursor carries over into the alternate screen
+        Assert.Equal(2, adapter.Buffer.CursorCol);
+
+        Feed(parser, $"{Esc}[4;5H{Esc}[?{mode}l");
+        Assert.False(adapter.Buffer.IsAlternateScreenActive);
+        Assert.Equal(3, adapter.Buffer.CursorRow); // not restored to the position before the switch
+        Assert.Equal(4, adapter.Buffer.CursorCol);
+    }
+
+    [Fact]
+    public void Decset47_LeavesTheDecscSlotAlone()
+    {
+        var (adapter, parser, _) = Setup();
+        Feed(parser, $"{Esc}[2;3H{Esc}7{Esc}[?47h{Esc}[4;5H{Esc}[?47l");
+        Assert.Equal(3, adapter.Buffer.CursorRow);
+        Feed(parser, $"{Esc}8");
+        Assert.Equal(1, adapter.Buffer.CursorRow);
+        Assert.Equal(2, adapter.Buffer.CursorCol);
+    }
+
+    [Fact]
+    public void Decset1049_SavesAndRestoresTheCursor()
+    {
+        var (adapter, parser, _) = Setup();
+        Feed(parser, $"{Esc}[2;3H{Esc}[?1049h{Esc}[4;5H{Esc}[?1049l");
+        Assert.False(adapter.Buffer.IsAlternateScreenActive);
+        Assert.Equal(1, adapter.Buffer.CursorRow);
+        Assert.Equal(2, adapter.Buffer.CursorCol);
+    }
+
+    [Fact]
+    public void Decset1049_FollowedBy47Reset_DoesNotRestoreTheCursor()
+    {
+        var (adapter, parser, _) = Setup();
+        Feed(parser, $"{Esc}[2;3H{Esc}[?1049h{Esc}[4;5H{Esc}[?47l");
+        Assert.False(adapter.Buffer.IsAlternateScreenActive);
+        Assert.Equal(3, adapter.Buffer.CursorRow);
+        Assert.Equal(4, adapter.Buffer.CursorCol);
+    }
+
     [Fact]
     public void Decrqm_ReflectsOtherTrackLiveState()
     {

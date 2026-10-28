@@ -37,14 +37,6 @@ public static class ConfigOptionCatalog
 
     private static readonly IReadOnlyList<ConfigOption> Live = CreateLive();
 
-    /// <summary>
-    /// Options whose configuration properties are introduced by other changes that have not landed in
-    /// this tree yet, so their entries use literal defaults instead of a getter. When the property
-    /// exists, <c>ConfigCatalogTests</c> checks the literal still equals the real default; the
-    /// entry should then be converted to <see cref="Opt{T}"/> and removed from this list.
-    /// </summary>
-    public static readonly IReadOnlyList<ConfigOption> PendingMergeOptions = CreatePendingMerge();
-
     /// <summary>Every documented option, ordered by JSON path (ordinal).</summary>
     public static readonly IReadOnlyList<ConfigOption> All = CreateAll();
 
@@ -209,9 +201,7 @@ public static class ConfigOptionCatalog
 
     private static IReadOnlyList<ConfigOption> CreateAll()
     {
-        var all = new List<ConfigOption>(Live.Count + PendingMergeOptions.Count);
-        all.AddRange(Live);
-        all.AddRange(PendingMergeOptions);
+        var all = new List<ConfigOption>(Live);
         all.Sort(static (a, b) => string.CompareOrdinal(a.JsonPath, b.JsonPath));
         return all;
     }
@@ -225,16 +215,6 @@ public static class ConfigOptionCatalog
         string description,
         string? scope = null) =>
         new(jsonPath, luaKey, type, values, () => FormatDefault(read(DefaultConfig)), description, scope);
-
-    private static ConfigOption Literal(
-        string jsonPath,
-        string luaKey,
-        string type,
-        string[]? values,
-        string defaultText,
-        string description,
-        string? scope = null) =>
-        new(jsonPath, luaKey, type, values, () => defaultText, description, scope);
 
     private static IReadOnlyList<ConfigOption> CreateLive() =>
     [
@@ -317,23 +297,23 @@ public static class ConfigOptionCatalog
             "When to ask before opening a link; unknown values mean risky. Hard-blocked schemes are refused in every mode."),
         Opt("hyperlinks.allowedSchemes", "hyperlinks.allowed_schemes", "string[]", null, c => c.Hyperlinks.AllowedSchemes,
             "URI schemes that may be opened (case-insensitive); hard-blocked schemes cannot be enabled by listing them."),
-    ];
 
-    // Entries for options being added by concurrent changes. Defaults are the intended ones and are
-    // verified against the real property by ConfigCatalogTests once it exists.
-    private static IReadOnlyList<ConfigOption> CreatePendingMerge() =>
-    [
-        Literal("shellIntegration", "shell_integration", "string", ["detect", "none"], "\"none\"",
-            "Automatically inject Dotty's shell-integration scripts (OSC 7 / OSC 133) into recognized interactive shells: 'detect' injects, 'none' never does.",
-            "Applies to new tabs and panes only."),
-        Literal("vt.windowResizeAllowed", "vt.window_resize_allowed", "boolean", null, "false",
-            "Let applications resize the window with CSI 8 ; rows ; cols t. Ignored in split or multi-tab windows."),
-        Literal("vt.checksumReportEnabled", "vt.checksum_report_enabled", "boolean", null, "false",
-            "Answer DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y) rectangular-area checksum requests; off by default because it discloses screen content."),
-        Literal("mouse.copyOnSelect", "mouse.copy_on_select", "string", ["none", "primary", "clipboard", "both"], "\"none\"",
-            "Where a finished selection is copied automatically; it does not clear the selection and does not affect middle-click.",
+        Opt("mouse.copyOnSelect", "mouse.copy_on_select", "string", ["none", "primary", "clipboard", "both"], c => c.Mouse.CopyOnSelect,
+            "Where a finished local selection is copied automatically; it does not clear the selection and does not affect middle-click. Case-insensitive; the legacy booleans true (primary on Linux, clipboard elsewhere) and false (none) are also accepted, and unknown values mean none.",
             "Selections made after the change."),
-        Literal("mouse.middleClickAction", "mouse.middle_click_action", "string", ["primary-paste", "clipboard-paste", "ignore"], "\"clipboard-paste\"",
-            "What a middle-click in a pane does when the application is not capturing the mouse: paste the primary selection, paste the clipboard, or nothing."),
+        Opt("mouse.middleClickAction", "mouse.middle_click_action", "string", ["primary-paste", "clipboard-paste", "ignore"], c => c.Mouse.MiddleClickAction,
+            "What a middle-click in a pane does when the application is not capturing the mouse: paste the primary selection, paste the clipboard, or nothing. Unknown values mean clipboard-paste.",
+            "Read live; takes effect for the next click."),
+
+        Opt("shellIntegration", "shell_integration", "string", ["detect", "none"], c => c.ShellIntegration,
+            "Automatically inject Dotty's shell-integration scripts (OSC 7 / OSC 133) into recognized interactive shells: 'detect' injects, 'none' never does; any other value is treated as none. An explicit command and the DOTTY_SHELL_INTEGRATION opt-out are never overridden.",
+            "Applies to new tabs and panes only."),
+
+        Opt("vt.checksumReportEnabled", "vt.checksum_report_enabled", "boolean", null, c => c.Vt.ChecksumReportEnabled,
+            "Answer DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y) rectangular-area checksum requests; off by default because the reply lets a program read back screen content. When false no reply is sent.",
+            "Applied to sessions at creation and on config reload."),
+        Opt("vt.windowResizeAllowed", "vt.window_resize_allowed", "boolean", null, c => c.Vt.WindowResizeAllowed,
+            "Let applications resize the window with CSI 8 ; rows ; cols t (and CSI Ps t with Ps >= 24). Ignored with several tabs, split panes, or a maximized, fullscreen or minimized window.",
+            "Read live; takes effect for the next request."),
     ];
 }

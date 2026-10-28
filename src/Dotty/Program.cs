@@ -20,6 +20,10 @@ internal static class Program
                 return 0;
             }
 
+            // Actions print and exit: no config load, console detach, or graphics.
+            if (options.Action is not null)
+                return CliActions.Run(options.Action, options.ActionArguments, Console.Out, Console.Error);
+
             options.ValidateForLaunch();
             WindowsConsole.DetachOwnedConsole();
             return DottyWindowHost.Run(options);

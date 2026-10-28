@@ -26,6 +26,9 @@ public sealed partial class LuaScriptHost
 
     private static readonly Dictionary<string, ConfigField> ConfigFields = CreateConfigFields();
 
+    /// <summary>Canonical Lua config keys; the drift guard in ConfigCatalogTests compares them with the option catalog.</summary>
+    internal static IReadOnlyCollection<string> ConfigFieldKeys => ConfigFields.Keys;
+
     private static Dictionary<string, ConfigField> CreateConfigFields() => new(StringComparer.Ordinal)
     {
         ["theme"] = new(ConfigValueKind.String, c => c.Theme, (c, v) => c.Theme = (string)v!),

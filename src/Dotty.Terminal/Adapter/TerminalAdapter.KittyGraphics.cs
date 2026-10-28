@@ -94,7 +94,23 @@ public partial class TerminalAdapter : IKittyGraphicsHost
 
     void IKittyGraphicsHost.ReacquireSyncRoot() => _buffer.ReacquireSyncRoot();
 
-    void IKittyGraphicsHost.GraphicsChanged() => RequestRender();
+    KittyImageStore IKittyGraphicsHost.ActiveImageStore => _buffer.ActiveImageStore;
+
+    bool IKittyGraphicsHost.ApplyImageLimits(long storageLimitBytes, int maxPlacementsPerScreen) =>
+        _buffer.ApplyImageLimits(storageLimitBytes, maxPlacementsPerScreen);
+
+    bool IKittyGraphicsHost.ClearImageStores() => _buffer.ClearImageStores();
+
+    void IKittyGraphicsHost.DisposeImageStores() => _buffer.DisposeImageStores();
+
+    void IKittyGraphicsHost.MoveCursorAfterImage(int effCols, int effRows) =>
+        _buffer.MoveCursorAfterImage(effCols, effRows);
+
+    void IKittyGraphicsHost.GraphicsChanged()
+    {
+        _buffer.BumpGraphicsGeneration();
+        RequestRender();
+    }
 
     long IKittyGraphicsHost.NowTicks => _timeProvider.GetTimestamp();
 

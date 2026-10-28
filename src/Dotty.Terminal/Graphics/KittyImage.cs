@@ -42,10 +42,15 @@ internal sealed class KittyImage
     public ImagePixels Root => Frames[0];
 
     /// <summary>
-    /// Number of placements that reference the image. Maintained by the placement bookkeeping; an image with
-    /// none is "unreferenced" and is the first eviction candidate.
+    /// Placements of this image, maintained by <see cref="KittyImageStore"/> only (null until the first one).
     /// </summary>
-    public int PlacementCount { get; internal set; }
+    internal List<KittyPlacement>? PlacementList { get; set; }
+
+    /// <summary>
+    /// Number of placements that reference the image. An image with none is "unreferenced" and is the first
+    /// eviction candidate.
+    /// </summary>
+    public int PlacementCount => PlacementList?.Count ?? 0;
 
     /// <summary>True once the store deleted the image and released its pixels.</summary>
     public bool IsDeleted { get; private set; }

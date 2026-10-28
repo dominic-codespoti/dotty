@@ -5,14 +5,16 @@ namespace Dotty.Terminal.Graphics;
 
 /// <summary>
 /// Executes kitty graphics commands for one terminal: receives the parser's APC callbacks, owns the single
-/// in-flight <see cref="KittyTransfer"/> and the <see cref="KittyImageStore"/>, and produces the replies.
+/// in-flight <see cref="KittyTransfer"/>, works on the <see cref="KittyImageStore"/> of the active screen (each
+/// screen has its own, owned by the host), and produces the replies.
 /// </summary>
 /// <remarks>
 /// <para>Command routing. A command whose only keys are <c>m</c> and/or <c>q</c> continues the open transfer (a
 /// stray one with no open transfer is dropped silently, which is also how the rest of a failed load is swallowed).
 /// Any other command first aborts an open transfer, then runs: <c>a=t</c>/<c>a=T</c> start a transfer,
-/// <c>a=q</c> starts a query transfer (needs <c>i</c>, else it is ignored), the remaining actions are parsed and
-/// ignored for now (<see cref="HandleOtherAction"/> is their seam).</para>
+/// <c>a=q</c> starts a query transfer (needs <c>i</c>, else it is ignored), <c>a=p</c> places a stored image,
+/// <c>a=d</c> deletes; the animation actions (<c>f a c</c>) are parsed and ignored for now
+/// (<see cref="HandleOtherAction"/> is their seam).</para>
 /// <para>Replies are produced when the APC terminator arrives (never for a cancelled APC), in parse order, so a
 /// reply is queued before anything the application sends after the APC. An OK is sent only when image data was
 /// actually loaded, never for an <c>m=1</c> chunk; errors carry the ids of the first chunk.</para>
@@ -44,7 +46,6 @@ internal sealed class KittyGraphicsController : IDisposable
     }
 
     private readonly IKittyGraphicsHost _host;
-    private readonly KittyImageStore _store;
     private KittyGraphicsOptions _options;
     private IImageDecoder? _decoder;
     private KittyTransfer? _transfer;
@@ -58,7 +59,6 @@ internal sealed class KittyGraphicsController : IDisposable
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _options = new KittyGraphicsOptions().Normalize();
-        _store = new KittyImageStore(_options.StorageLimitBytes);
     }
 
     /// <summary>True while the protocol is enabled; the parser discards graphics APCs otherwise.</summary>
@@ -66,7 +66,8 @@ internal sealed class KittyGraphicsController : IDisposable
 
     public KittyGraphicsOptions Options => _options;
 
-    public KittyImageStore Store => _store;
+    /// <summary>The store of the screen that is active now.</summary>
+    public KittyImageStore Store => _host.ActiveImageStore;
 
     /// <summary>True while a multi-chunk load is waiting for more chunks (or is being finished).</summary>
     public bool HasOpenTransfer => _transfer != null;
@@ -87,12 +88,10 @@ internal sealed class KittyGraphicsController : IDisposable
         if (!normalized.Enabled)
         {
             ClearImages();
-            _store.SetStorageLimit(normalized.StorageLimitBytes);
+            _host.ApplyImageLimits(normalized.StorageLimitBytes, normalized.MaxPlacementsPerScreen);
             return;
         }
-        long before = _store.UsedBytes;
-        _store.SetStorageLimit(normalized.StorageLimitBytes);
-        if (_store.UsedBytes != before)
+        if (_host.ApplyImageLimits(normalized.StorageLimitBytes, normalized.MaxPlacementsPerScreen))
             _host.GraphicsChanged();
     }
 
@@ -112,13 +111,11 @@ internal sealed class KittyGraphicsController : IDisposable
         t.Dispose();
     }
 
-    /// <summary>RIS: aborts the open transfer and deletes every image; the options (storage limit) are kept.</summary>
+    /// <summary>RIS: aborts the open transfer and deletes every image of both screens; the options (limits) are kept.</summary>
     public void ClearImages()
     {
         AbortTransfer();
-        bool hadImages = _store.Count != 0;
-        _store.Clear();
-        if (hadImages)
+        if (_host.ClearImageStores())
             _host.GraphicsChanged();
     }
 
@@ -129,7 +126,7 @@ internal sealed class KittyGraphicsController : IDisposable
             return;
         _disposed = true;
         AbortTransfer();
-        _store.Dispose();
+        _host.DisposeImageStores();
     }
 
     // ---- APC callbacks ---------------------------------------------------------------------------------------
@@ -229,7 +226,11 @@ internal sealed class KittyGraphicsController : IDisposable
                 StartTransfer(cmd);
                 break;
             case KittyAction.Put:
+                HandlePut(cmd);
+                break;
             case KittyAction.Delete:
+                HandleDelete(cmd);
+                break;
             case KittyAction.Frame:
             case KittyAction.Animate:
             case KittyAction.Compose:
@@ -241,9 +242,66 @@ internal sealed class KittyGraphicsController : IDisposable
         }
     }
 
-    /// <summary>Seam for the placement/delete/animation stage; these actions are parsed and ignored for now.</summary>
+    /// <summary>Seam for the animation stage (<c>a=f/a/c</c>); these actions are parsed and ignored for now.</summary>
     private void HandleOtherAction(in KittyGraphicsCommand cmd)
     {
+    }
+
+    /// <summary>
+    /// <c>a=p</c>: puts a stored image (by <c>i</c>, or the newest with number <c>I</c>) at the cursor. The reply
+    /// carries the image's id (and <c>I</c>, <c>p</c> as given): OK, <c>ENOENT</c> when the image is unknown, or the
+    /// placement error. With neither <c>i</c> nor <c>I</c> nothing is addressable and nothing is answered.
+    /// </summary>
+    private void HandlePut(in KittyGraphicsCommand cmd)
+    {
+        if (cmd.HasBothIdAndNumber)
+        {
+            SetPending(KittyStatus.BothIdAndNumber, cmd.ImageId, cmd.ImageNumber, cmd.PlacementId, cmd.Quiet);
+            return;
+        }
+        if (cmd.ImageId == 0 && cmd.ImageNumber == 0)
+            return;
+
+        var store = Store;
+        var image = cmd.ImageId != 0 ? store.FindByClientId(cmd.ImageId) : store.FindByNumber(cmd.ImageNumber);
+        if (image == null)
+        {
+            SetPending(KittyStatus.ImageNotFound, cmd.ImageId, cmd.ImageNumber, cmd.PlacementId, cmd.Quiet);
+            return;
+        }
+        var status = PlaceImage(cmd, image);
+        SetPending(status, image.ClientId, cmd.ImageNumber, cmd.PlacementId, cmd.Quiet);
+    }
+
+    /// <summary><c>a=d</c>: deletes placements/images; never answers.</summary>
+    private void HandleDelete(in KittyGraphicsCommand cmd)
+    {
+        if (Store.ApplyDelete(in cmd, _host.CursorRow, _host.CursorCol, _host.Rows) > 0)
+            _host.GraphicsChanged();
+    }
+
+    /// <summary>
+    /// Registers a placement of <paramref name="image"/> at the cursor cell (<c>AnchorRow = ViewTop + cursor row</c>)
+    /// and, unless it is virtual (<c>U=1</c>) or <c>C=1</c>, moves the cursor past it. The placement exists before
+    /// the cursor move scrolls anything, so it scrolls with the text. Relative placements (<c>P</c>/<c>Q</c> given)
+    /// are not supported yet: they answer <see cref="KittyStatus.InvalidKeyValue"/> and create nothing.
+    /// </summary>
+    private KittyStatus PlaceImage(in KittyGraphicsCommand cmd, KittyImage image)
+    {
+        if (cmd.ParentImage != 0 || cmd.ParentPlacement != 0)
+            return KittyStatus.InvalidKeyValue;
+
+        var store = Store;
+        long anchorRow = store.ViewTop + _host.CursorRow;
+        var status = store.TryPlace(image, in cmd, anchorRow, _host.CursorCol, _host.CellPixelWidth, _host.CellPixelHeight, out var placement);
+        if (status != KittyStatus.Ok || placement == null)
+            return status;
+
+        store.TouchAccess(image, _host.NowTicks);
+        if (placement.Kind == PlacementKind.Normal && cmd.CursorPolicy != 1)
+            _host.MoveCursorAfterImage(placement.EffCols, placement.EffRows);
+        _host.GraphicsChanged();
+        return KittyStatus.Ok;
     }
 
     private void StartTransfer(in KittyGraphicsCommand cmd)
@@ -259,7 +317,7 @@ internal sealed class KittyGraphicsController : IDisposable
 
         // Retransmitting an id replaces the image: the old one goes now, so a failed or interrupted transmit leaves
         // no stale image behind. A query never touches stored images.
-        if (!query && cmd.ImageId != 0 && _store.DeleteByClientId(cmd.ImageId))
+        if (!query && cmd.ImageId != 0 && Store.DeleteByClientId(cmd.ImageId))
             _host.GraphicsChanged();
 
         var transfer = KittyTransfer.TryStart(cmd, _options, _decoder, out var status);
@@ -321,8 +379,10 @@ internal sealed class KittyGraphicsController : IDisposable
 
     private void Commit(in KittyGraphicsCommand first, ImagePixels pixels, byte quiet)
     {
-        // Live state: the quota may have shrunk and the id may have been taken while the lock was released.
-        if (pixels.ByteLength > _store.StorageLimitBytes)
+        // Live state: the quota may have shrunk and the id may have been taken while the lock was released; the
+        // image goes to the store of the screen that is active now.
+        var store = Store;
+        if (pixels.ByteLength > store.StorageLimitBytes)
         {
             pixels.Dispose();
             SetPending(KittyStatus.StorageQuota, first.ImageId, first.ImageNumber, first.PlacementId, quiet);
@@ -343,13 +403,13 @@ internal sealed class KittyGraphicsController : IDisposable
         try
         {
             if (clientId != 0)
-                _store.DeleteByClientId(clientId);
+                store.DeleteByClientId(clientId);
             if (first.ImageNumber != 0)
-                clientId = _store.AllocateClientId();
+                clientId = store.AllocateClientId();
             // N is the usage hint; bit 0 marks the image transient.
             bool transient = (first.Hints & 1) != 0;
             added = (first.ImageNumber == 0 || clientId != 0)
-                && _store.TryAdd(pixels, clientId, first.ImageNumber, transient, _host.NowTicks, out image);
+                && store.TryAdd(pixels, clientId, first.ImageNumber, transient, _host.NowTicks, out image);
         }
         catch
         {
@@ -371,7 +431,7 @@ internal sealed class KittyGraphicsController : IDisposable
             {
                 // The image stays stored (the transmit itself succeeded); the reply reports the failed placement.
                 if (image.ClientId == 0 && image.PlacementCount == 0)
-                    _store.Delete(image);
+                    store.Delete(image);
                 SetPending(placed, clientId, first.ImageNumber, first.PlacementId, quiet);
                 return;
             }
@@ -379,18 +439,18 @@ internal sealed class KittyGraphicsController : IDisposable
 
         // An image nobody can address (no id) and nothing displays is garbage.
         if (image.ClientId == 0 && image.PlacementCount == 0)
-            _store.Delete(image);
+            store.Delete(image);
 
         SetPending(KittyStatus.Ok, clientId, first.ImageNumber, first.PlacementId, quiet);
     }
 
     /// <summary>
-    /// Seam for the placement stage: <c>a=T</c> puts the freshly stored image using the transmit command's keys
-    /// (<paramref name="cmd"/> is the first chunk's command, so <c>p c r x y w h X Y z C U P Q H V</c> are all
-    /// there). Runs at the final-chunk commit, after the image is in the store and before the reply; a non-Ok
-    /// result becomes the reply and the image is kept.
+    /// <c>a=T</c>: puts the freshly stored image using the transmit command's keys (<paramref name="cmd"/> is the
+    /// first chunk's command, so <c>p c r x y w h X Y z C U P Q H V</c> are all there), at the cursor position when
+    /// the final chunk is committed. Runs after the image is in the store and before the reply; a non-Ok result
+    /// becomes the reply and the image is kept.
     /// </summary>
-    private KittyStatus PlaceAfterTransmit(in KittyGraphicsCommand cmd, KittyImage image) => KittyStatus.Ok;
+    private KittyStatus PlaceAfterTransmit(in KittyGraphicsCommand cmd, KittyImage image) => PlaceImage(cmd, image);
 
     // ---- replies and failure handling ------------------------------------------------------------------------
 

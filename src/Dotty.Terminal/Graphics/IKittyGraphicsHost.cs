@@ -40,6 +40,31 @@ internal interface IKittyGraphicsHost
     /// <summary>Re-acquires the lock released by <see cref="ReleaseSyncRootForBlockingWork"/>.</summary>
     void ReacquireSyncRoot();
 
+    /// <summary>
+    /// The image store of the screen that is active now (main or alternate); created on first use. Each screen has
+    /// its own store, so image ids, numbers and the quota are per screen.
+    /// </summary>
+    KittyImageStore ActiveImageStore { get; }
+
+    /// <summary>
+    /// Applies the storage quota and the per-screen placement cap to the stores of both screens (evicting down to
+    /// the quota immediately). Returns true when that deleted something.
+    /// </summary>
+    bool ApplyImageLimits(long storageLimitBytes, int maxPlacementsPerScreen);
+
+    /// <summary>Deletes every image (and so every placement) of both screens. Returns true when there was any.</summary>
+    bool ClearImageStores();
+
+    /// <summary>Releases the stores of both screens; they accept nothing afterwards.</summary>
+    void DisposeImageStores();
+
+    /// <summary>
+    /// Moves the cursor past a just-placed image of <paramref name="effCols"/> × <paramref name="effRows"/> cells
+    /// (<see cref="KittyCursorPolicy.Advance"/>), scrolling the scroll region when the move overshoots its bottom
+    /// margin. Called after the placement is registered, so the placement scrolls with the text.
+    /// </summary>
+    void MoveCursorAfterImage(int effCols, int effRows);
+
     /// <summary>Visible graphics state changed; the host should schedule a render.</summary>
     void GraphicsChanged();
 

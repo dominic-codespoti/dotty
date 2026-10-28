@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Threading;
+using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Graphics;
 using Dotty.Terminal.Graphics;
 using Xunit;
@@ -241,6 +242,77 @@ internal sealed class FakeKittyHost : IKittyGraphicsHost
     }
 
     public void GraphicsChanged() => GraphicsChangedCalls++;
+
+    // ---- per-screen stores and the cursor move, as the terminal buffer provides them ----
+
+    private KittyImageStore? _mainStore;
+    private KittyImageStore? _altStore;
+    private long _storageLimit = DottyDefaults.KittyImageStorageLimitBytes;
+    private int _maxPlacements = DottyDefaults.KittyMaxPlacementsPerScreen;
+    private int? _scrollBottom;
+
+    /// <summary>Which screen's store <see cref="ActiveImageStore"/> resolves to.</summary>
+    public bool AlternateActive { get; set; }
+
+    /// <summary>Bottom margin row (0-based); the last row unless set.</summary>
+    public int ScrollBottom
+    {
+        get => _scrollBottom ?? Rows - 1;
+        set => _scrollBottom = value;
+    }
+
+    /// <summary>Every <see cref="MoveCursorAfterImage"/> call as (effCols, effRows).</summary>
+    public List<(int Cols, int Rows)> CursorMoves { get; } = new();
+
+    /// <summary>Rows the scroll region was asked to scroll by the cursor moves, in order.</summary>
+    public List<int> RegionScrolls { get; } = new();
+
+    public KittyImageStore MainStore => _mainStore ??= NewStore();
+    public KittyImageStore AltStore => _altStore ??= NewStore();
+
+    public KittyImageStore ActiveImageStore => AlternateActive ? AltStore : MainStore;
+
+    private KittyImageStore NewStore() => new(_storageLimit) { MaxPlacements = _maxPlacements };
+
+    public bool ApplyImageLimits(long storageLimitBytes, int maxPlacementsPerScreen)
+    {
+        _storageLimit = storageLimitBytes;
+        _maxPlacements = maxPlacementsPerScreen;
+        bool changed = false;
+        foreach (var store in new[] { _mainStore, _altStore })
+        {
+            if (store == null) continue;
+            int images = store.Count, placements = store.PlacementCount;
+            store.MaxPlacements = maxPlacementsPerScreen;
+            store.SetStorageLimit(storageLimitBytes);
+            changed |= store.Count != images || store.PlacementCount != placements;
+        }
+        return changed;
+    }
+
+    public bool ClearImageStores()
+    {
+        bool had = _mainStore is { Count: > 0 } || _altStore is { Count: > 0 };
+        _mainStore?.Clear();
+        _altStore?.Clear();
+        return had;
+    }
+
+    public void DisposeImageStores()
+    {
+        _mainStore?.Dispose();
+        _altStore?.Dispose();
+    }
+
+    public void MoveCursorAfterImage(int effCols, int effRows)
+    {
+        CursorMoves.Add((effCols, effRows));
+        var advance = KittyCursorPolicy.Advance(CursorRow, CursorCol, Columns, Rows, ScrollBottom, effCols, effRows);
+        if (advance.ScrollRows > 0)
+            RegionScrolls.Add(advance.ScrollRows);
+        CursorRow = advance.Row;
+        CursorCol = advance.Col;
+    }
 }
 
 /// <summary>Restores-to-baseline check for the process-wide graphics counters (tests run non-parallel).</summary>
@@ -322,5 +394,34 @@ internal static class KittyTestData
         var data = new byte[count];
         new Random(seed).NextBytes(data);
         return data;
+    }
+}
+
+/// <summary>Builds commands from control strings and places images straight into a store.</summary>
+internal static class KittyCommands
+{
+    public static KittyGraphicsCommand Parse(string control)
+    {
+        var result = KittyControlParser.TryParse(Encoding.ASCII.GetBytes(control), out var cmd);
+        Assert.Equal(KittyParseResult.Ok, result);
+        return cmd;
+    }
+
+    /// <summary><see cref="KittyImageStore.TryPlace"/> with placement keys given as a control string; asserts success.</summary>
+    public static KittyPlacement Place(this KittyImageStore store, KittyImage image, string keys = "",
+        long anchorRow = 0, int anchorCol = 0, int cellW = 8, int cellH = 16)
+    {
+        var status = store.TryPlace(image, Parse(keys), anchorRow, anchorCol, cellW, cellH, out var placement);
+        Assert.Equal(KittyStatus.Ok, status);
+        Assert.NotNull(placement);
+        return placement!;
+    }
+
+    /// <summary>Adds a <paramref name="width"/>x<paramref name="height"/> RGBA image (not retained by the test).</summary>
+    public static KittyImage AddImage(this KittyImageStore store, int width, int height, uint clientId = 0, uint number = 0, long now = 0)
+    {
+        Assert.True(store.TryAdd(ImagePixels.Allocate(width, height, ImagePixelFormat.Rgba8Premultiplied), clientId, number, false, now, out var image));
+        Assert.NotNull(image);
+        return image!;
     }
 }

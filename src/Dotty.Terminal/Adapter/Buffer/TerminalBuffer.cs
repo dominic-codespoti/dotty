@@ -656,6 +656,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             CursorBlinking,
             scrollOffset);
         snapshot.GlobalGeneration = Generation;
+        CaptureGraphics(snapshot, scrollOffset);
 
         int count = sbEnd - sbStart + 1;
         if (count > 0)

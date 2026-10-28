@@ -162,7 +162,7 @@ public sealed class KittyImageStoreTests
     {
         using var store = new KittyImageStore(300);
         var referenced = Add(store, 100, clientId: 1, now: 1);
-        referenced.PlacementCount = 1;
+        store.Place(referenced);
         var plain = Add(store, 100, clientId: 2, now: 2);
         var transient = Add(store, 100, clientId: 3, transient: true, now: 3);
 
@@ -191,9 +191,9 @@ public sealed class KittyImageStoreTests
     {
         using var store = new KittyImageStore(200);
         var older = Add(store, 100, clientId: 1, now: 1);
-        older.PlacementCount = 1;
+        store.Place(older);
         var newerTransient = Add(store, 100, clientId: 2, transient: true, now: 2);
-        newerTransient.PlacementCount = 1;
+        store.Place(newerTransient);
 
         Add(store, 100, clientId: 3, now: 3); // nothing unreferenced to give up: transient referenced goes first
         Assert.True(newerTransient.IsDeleted);
@@ -253,7 +253,7 @@ public sealed class KittyImageStoreTests
     {
         using var store = new KittyImageStore(10_000);
         var anonymous = Add(store, 40);
-        anonymous.PlacementCount = 1;
+        store.Place(anonymous);
         Add(store, 40, clientId: 1);
         Assert.False(anonymous.IsDeleted);
         Assert.Equal(2, store.Count);
@@ -361,9 +361,11 @@ public sealed class KittyImageStoreTests
         var image = Add(store, 400, clientId: 1);
         store.ValidateInvariants();
 
-        image.PlacementCount = -1;
+        var placement = store.Place(image);
+        store.ValidateInvariants();
+        image.PlacementList!.Clear(); // the image forgets a placement the store still indexes
         Assert.Throws<InvalidOperationException>(store.ValidateInvariants);
-        image.PlacementCount = 0;
+        image.PlacementList.Add(placement);
         store.ValidateInvariants();
 
         var extraFrame = Px(40); // bypasses the store: its bytes are not in UsedBytes
@@ -419,7 +421,8 @@ public sealed class KittyImageStoreTests
                         if (added)
                         {
                             Assert.NotNull(image);
-                            image!.PlacementCount = rng.Next(3) == 0 ? 1 : 0;
+                            if (rng.Next(3) == 0)
+                                store.Place(image!);
                         }
                         else
                         {

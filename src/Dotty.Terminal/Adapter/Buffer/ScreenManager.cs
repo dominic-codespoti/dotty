@@ -1,5 +1,6 @@
 using System;
 using Dotty.Abstractions.Config;
+using Dotty.Terminal.Graphics;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -47,6 +48,76 @@ internal sealed class ScreenManager : IDisposable
 
     public Screen Active => _usingAlt ? _alt! : _main;
 
+    // Kitty images live per screen (ids, numbers and the quota are per screen, as in kitty): the main and the
+    // alternate screen each own a store, created on first use. A store is independent of the Screen objects, which
+    // a reflow swaps.
+    private KittyImageStore? _mainImages;
+    private KittyImageStore? _altImages;
+    private long _imageStorageLimit = DottyDefaults.KittyImageStorageLimitBytes;
+    private int _maxPlacementsPerScreen = DottyDefaults.KittyMaxPlacementsPerScreen;
+    private bool _imagesDisposed;
+
+    /// <summary>The main screen's image store; null until first used.</summary>
+    internal KittyImageStore? MainImages => _mainImages;
+
+    /// <summary>The alternate screen's image store; null until first used.</summary>
+    internal KittyImageStore? AlternateImages => _altImages;
+
+    /// <summary>The active screen's image store; null until first used.</summary>
+    internal KittyImageStore? ActiveImages => _usingAlt ? _altImages : _mainImages;
+
+    /// <summary>The active screen's image store, created with the configured limits when it does not exist yet.</summary>
+    internal KittyImageStore EnsureActiveImages()
+    {
+        var store = ActiveImages;
+        if (store != null)
+            return store;
+        store = new KittyImageStore(_imageStorageLimit) { MaxPlacements = _maxPlacementsPerScreen };
+        if (_usingAlt)
+            _altImages = store;
+        else
+            _mainImages = store;
+        if (_imagesDisposed)
+            store.Dispose();
+        return store;
+    }
+
+    /// <summary>Applies the limits to both stores (evicting immediately) and to stores created later. True when that deleted anything.</summary>
+    internal bool ApplyImageLimits(long storageLimitBytes, int maxPlacementsPerScreen)
+    {
+        _imageStorageLimit = storageLimitBytes;
+        _maxPlacementsPerScreen = maxPlacementsPerScreen;
+        bool changed = ApplyImageLimits(_mainImages, storageLimitBytes, maxPlacementsPerScreen);
+        changed |= ApplyImageLimits(_altImages, storageLimitBytes, maxPlacementsPerScreen);
+        return changed;
+    }
+
+    private static bool ApplyImageLimits(KittyImageStore? store, long storageLimitBytes, int maxPlacementsPerScreen)
+    {
+        if (store == null)
+            return false;
+        int images = store.Count, placements = store.PlacementCount;
+        store.MaxPlacements = maxPlacementsPerScreen;
+        store.SetStorageLimit(storageLimitBytes);
+        return store.Count != images || store.PlacementCount != placements;
+    }
+
+    /// <summary>Deletes every image of both screens. True when there was any.</summary>
+    internal bool ClearImageStores()
+    {
+        bool had = _mainImages is { Count: > 0 } || _altImages is { Count: > 0 };
+        _mainImages?.Clear();
+        _altImages?.Clear();
+        return had;
+    }
+
+    internal void DisposeImageStores()
+    {
+        _imagesDisposed = true;
+        _mainImages?.Dispose();
+        _altImages?.Dispose();
+    }
+
     internal Screen Main => _main;
     internal Screen? Alternate => _alt;
     /// <summary>Parked screens kept for the next resize (test/diagnostic hook).</summary>
@@ -74,6 +145,7 @@ internal sealed class ScreenManager : IDisposable
                 _alt = new Screen(_savedMain.Rows, _savedMain.Columns, _savedMain.ScrollbackCapacity);
             }
             _alt.Clear();
+            _altImages?.Clear();
         }
         else
         {
@@ -88,6 +160,7 @@ internal sealed class ScreenManager : IDisposable
             // full-screen app that scrolled does not keep its ring resident, and a later resize does not
             // reflow stale alternate content. Re-entry clears it again, which is then nearly free.
             _alt?.Clear();
+            _altImages?.Clear();
         }
     }
 
@@ -192,6 +265,7 @@ internal sealed class ScreenManager : IDisposable
 
     public void Dispose()
     {
+        DisposeImageStores();
         _main.Dispose();
         _alt?.Dispose();
         _savedMain?.Dispose();

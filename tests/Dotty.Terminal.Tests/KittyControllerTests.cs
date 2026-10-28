@@ -33,13 +33,10 @@ public sealed class KittyControllerTests
     }
 
     [Theory]
-    [InlineData("a=p,i=1,p=2")]
-    [InlineData("a=d,d=i,i=1")]
-    [InlineData("a=d")]
     [InlineData("a=f,i=1,s=1,v=1")]
     [InlineData("a=a,i=1,s=3")]
     [InlineData("a=c,i=1,r=1,c=2")]
-    public void OtherActionsAreParsedAndIgnoredForNow(string control)
+    public void AnimationActionsAreParsedAndIgnoredForNow(string control)
     {
         using var rig = new KittyRig();
         rig.Apc("i=1,s=1,v=1,f=24", OnePixel);
@@ -47,7 +44,7 @@ public sealed class KittyControllerTests
 
         rig.Apc(control, "AAAAAAAA"); // frame loads carry a payload: it is dropped
         Assert.Empty(rig.Replies);
-        Assert.NotNull(rig.Store.FindByClientId(1)); // not even delete does anything yet
+        Assert.NotNull(rig.Store.FindByClientId(1));
         Assert.Equal(1, rig.Store.Count);
     }
 
@@ -168,13 +165,12 @@ public sealed class KittyControllerTests
     }
 
     [Fact]
-    public void AnonymousImagesAreDroppedRightAfterTheCommand()
+    public void AnonymousImagesWithoutAPlacementAreDroppedRightAfterTheCommand()
     {
         var baseline = new GraphicsBaseline();
         using (var rig = new KittyRig())
         {
             rig.Apc("s=1,v=1,f=24", OnePixel);
-            rig.Apc("a=T,s=1,v=1,f=24", OnePixel);
             rig.Apc("a=t,s=1,v=1,f=24,q=0", OnePixel);
             Assert.Empty(rig.Replies);
             Assert.Equal(0, rig.Store.Count);

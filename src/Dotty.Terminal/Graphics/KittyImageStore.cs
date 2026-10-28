@@ -5,8 +5,8 @@ namespace Dotty.Terminal.Graphics;
 
 /// <summary>
 /// Images of one screen: id model, byte accounting and quota eviction. Not thread-safe; callers hold the terminal
-/// buffer lock. Placement bookkeeping attaches through <see cref="KittyImage.PlacementCount"/> (an image with none is
-/// "unreferenced").
+/// buffer lock. Placements (see <c>KittyImageStore.Placements.cs</c>) hang off their image
+/// (<see cref="KittyImage.PlacementCount"/>; an image with none is "unreferenced").
 /// </summary>
 /// <remarks>
 /// Ids: <see cref="KittyImage.InternalId"/> is monotonic and never reused (also across <see cref="Clear"/>);
@@ -17,7 +17,7 @@ namespace Dotty.Terminal.Graphics;
 /// store is over its limit the remaining images go in the order unreferenced first, then transient first, then oldest
 /// access, then lowest internal id.</para>
 /// </remarks>
-internal sealed class KittyImageStore : IDisposable
+internal sealed partial class KittyImageStore : IDisposable
 {
     /// <summary>First client id handed out for <c>I=</c> transmissions.</summary>
     public const uint FirstAllocatedClientId = 0x8000_0000u;
@@ -121,6 +121,7 @@ internal sealed class KittyImageStore : IDisposable
         if (!_byInternalId.TryGetValue(image.InternalId, out var live) || !ReferenceEquals(live, image))
             return false;
 
+        RemovePlacementsOf(image);
         _byInternalId.Remove(image.InternalId);
         if (image.ClientId != 0)
             _byClientId.Remove(image.ClientId);
@@ -182,7 +183,6 @@ internal sealed class KittyImageStore : IDisposable
             Require(image.InternalId == internalId, "image stored under a foreign internal id");
             Require(!image.IsDeleted, "deleted image still in the store");
             Require(image.Frames.Count >= 1, "image without frames");
-            Require(image.PlacementCount >= 0, "negative placement count");
             Require(internalId < _nextInternalId, "internal id not below the next id");
             sum += image.ByteLength;
             if (image.ClientId != 0)
@@ -203,6 +203,7 @@ internal sealed class KittyImageStore : IDisposable
         foreach (var (number, image) in _newestByNumber)
             Require(newest.TryGetValue(number, out long best) && best == image.InternalId, "newest-by-number entry is not the newest");
         Require(_usedBytes <= _storageLimitBytes, "store is over its storage limit");
+        ValidatePlacements();
     }
 
     private static void Require(bool condition, string message)

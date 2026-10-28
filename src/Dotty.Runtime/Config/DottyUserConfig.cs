@@ -61,6 +61,13 @@ public sealed class DottyUserConfig
     public System.Collections.Generic.Dictionary<string, string> Keybindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [JsonPropertyName("clipboard")]
     public ClipboardUserConfig Clipboard { get; set; } = new();
+
+    /// <summary>
+    /// Shell integration auto-injection: <c>none</c> (default, opt-in) or <c>detect</c>. Any other value
+    /// is treated as <c>none</c>. Applies to sessions created after the change.
+    /// </summary>
+    [JsonPropertyName("shellIntegration")]
+    public string ShellIntegration { get; set; } = "none";
 }
 public sealed class FontUserConfig
 {

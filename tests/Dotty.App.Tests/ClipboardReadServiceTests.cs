@@ -605,4 +605,39 @@ public sealed class ClipboardReadServiceTests : IDisposable
         Assert.Empty(_env.Replies);
         Assert.Equal(0, _env.ClipboardReads);
     }
+
+    private ContextMenuModel ShowAskPrompt(TerminalTab tab)
+    {
+        _config.Osc52Read = "ask";
+        Request(tab);
+        _service.Drain();
+        ContextMenuModel prompt = Assert.Single(_env.Prompts);
+        Assert.True(prompt.MoveFocus(1));
+        Assert.Equal("Allow", prompt.Items[prompt.HoveredIndex].Label);
+        return prompt;
+    }
+
+    [Fact]
+    public void Ask_PolicyTightenedToDenyWhilePromptOpen_AllowSendsNothing()
+    {
+        TerminalTab tab = AddTab();
+        ContextMenuModel prompt = ShowAskPrompt(tab);
+
+        _config.Osc52Read = "deny";
+        Assert.True(prompt.ExecuteFocused());
+
+        Assert.Empty(_env.Replies);
+    }
+
+    [Fact]
+    public void Ask_SessionClosedWhilePromptOpen_AllowSendsNothing()
+    {
+        TerminalTab tab = AddTab();
+        ContextMenuModel prompt = ShowAskPrompt(tab);
+
+        _env.Tabs.Clear();
+        Assert.True(prompt.ExecuteFocused());
+
+        Assert.Empty(_env.Replies);
+    }
 }

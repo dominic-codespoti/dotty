@@ -613,6 +613,9 @@ internal static class DottyWindowHost
             if (_clipboardSubscriptions.ContainsKey(session))
                 continue;
 
+            // Panes created by split actions never pass through a creation site above; configure them on first sight.
+            SilkConfig.ApplyConfigToAdapter(session.Adapter, _activeTheme);
+
             Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> callback = CreateClipboardHandler(session);
             session.ClipboardWriteRequested += callback;
             _clipboardSubscriptions.Add(session, callback);
@@ -2270,6 +2273,7 @@ internal static class DottyWindowHost
             _atlas = null!;
         }
     }
+
     private static readonly Dictionary<TerminalSession, Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest>> _clipboardReadSubscriptions = new();
     private static readonly ClipboardReadService _clipboardReads = new(
         new ClipboardReadEnvironment(),

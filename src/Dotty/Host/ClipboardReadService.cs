@@ -154,9 +154,19 @@ internal sealed class ClipboardReadService
         }
 
         IClipboardReadEnvironment environment = _environment;
+        Func<ClipboardUserConfig> config = _config;
         _environment.ShowPrompt(ClipboardReadPromptBuilder.Build(
             tab.Title,
             text,
-            allow: () => environment.WriteReply(session, reply)));
+            allow: () =>
+            {
+                // The prompt can stay open for a long time: honour a policy tightened to deny, and never answer a
+                // session that has left the window meanwhile.
+                if (ClipboardReadModes.Parse(config().Osc52Read) == ClipboardReadMode.Deny)
+                    return;
+                if (!environment.TryResolveOwner(session, out _, out _))
+                    return;
+                environment.WriteReply(session, reply);
+            }));
     }
 }

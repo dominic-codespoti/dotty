@@ -42,7 +42,11 @@ public interface ITerminalMouseHost
     void PasteClipboard(LeafPane targetPane);
     void CreateTab(TerminalTab activeTab);
     void ClearTerminal(TerminalTab activeTab);
-    void OpenHyperlink(string url);
+    /// <summary>Activates a clicked link. <paramref name="displayText"/> is the visible text of an explicit (OSC 8) link, null for detected links.</summary>
+    void OpenHyperlink(string url, HyperlinkSource source, string? displayText);
+
+    /// <summary>Scan options for hover and click (e.g. OSC 8 links disabled by configuration).</summary>
+    HyperlinkScanOptions HyperlinkScan { get; }
     bool TryExecuteAction(TerminalAction action);
     void SetPointerCursor(StandardCursor cursor);
 }
@@ -294,11 +298,10 @@ public sealed class TerminalMouseController
         if (_host.Ctrl && button == MouseButton.Left && insidePane)
         {
             // Never use the hover cache for activation: the buffer and scroll offset may have changed.
-            var clickedLink = FindLink(pane!, hit.ViewRow, hit.ViewColumn);
-            if (clickedLink.HasValue)
+            if (TryFindLink(pane!, hit.ViewRow, hit.ViewColumn, out HyperlinkSpan clickedLink, out string? displayText))
             {
                 ResetClickSequence();
-                _host.OpenHyperlink(clickedLink.Value.Url);
+                _host.OpenHyperlink(clickedLink.Url, clickedLink.Source, displayText);
                 return;
             }
         }
@@ -418,11 +421,24 @@ public sealed class TerminalMouseController
         _lastClickPosition = default;
         _lastClickPane = null;
     }
-    private HyperlinkSpan? FindLink(LeafPane pane, int viewRow, int viewColumn)
+    private bool TryFindLink(LeafPane pane, int viewRow, int viewColumn, out HyperlinkSpan link, out string? displayText)
     {
         using var snapshot = pane.Session.Adapter.Buffer.CaptureRenderSnapshotVisible(
             scrollOffset: pane.ScrollOffset, sbStart: 0, sbEnd: -1);
-        return HyperlinkScanner.FindLinkAt(snapshot, viewRow, viewColumn);
+        HyperlinkSpan? found = HyperlinkScanner.FindLinkAt(snapshot, viewRow, viewColumn, _host.HyperlinkScan);
+        if (!found.HasValue)
+        {
+            link = default;
+            displayText = null;
+            return false;
+        }
+
+        link = found.Value;
+        // Read from the same snapshot that produced the span so the policy sees what the user clicked.
+        displayText = link.Source == HyperlinkSource.Explicit
+            ? HyperlinkScanner.GetSpanText(snapshot, link)
+            : null;
+        return true;
     }
 
     public void HandleMouseMove(IMouse mouse, Vector2 position)
@@ -516,7 +532,7 @@ public sealed class TerminalMouseController
         if (_host.Ctrl && hit.Pane != null && hit.Inside)
         {
             bool hoveredLink = HyperlinkScanner.ContainsLinkAt(
-                hit.Pane.Session.Adapter.Buffer, hit.ViewRow, hit.ViewColumn);
+                hit.Pane.Session.Adapter.Buffer, hit.ViewRow, hit.ViewColumn, _host.HyperlinkScan);
             _host.SetPointerCursor(hoveredLink ? StandardCursor.Hand : StandardCursor.IBeam);
         }
         else

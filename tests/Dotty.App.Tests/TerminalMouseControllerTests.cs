@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Text;
 using Dotty.Runtime.ContextMenu;
+using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Panes;
 using Dotty.Runtime.Selection;
 using Dotty.Runtime.Tabs;
@@ -92,6 +93,9 @@ public sealed class TerminalMouseControllerTests
         public bool CreateTabCalled { get; private set; }
         public bool ClearTerminalCalled { get; private set; }
         public string? OpenedHyperlink { get; private set; }
+        public HyperlinkSource? OpenedHyperlinkSource { get; private set; }
+        public string? OpenedHyperlinkText { get; private set; }
+        public HyperlinkScanOptions HyperlinkScan { get; set; } = HyperlinkScanOptions.Default;
         public LeafPane? PasteTarget { get; private set; }
         public StandardCursor CurrentCursor { get; private set; } = StandardCursor.Default;
 
@@ -104,7 +108,12 @@ public sealed class TerminalMouseControllerTests
         }
         public void CreateTab(TerminalTab activeTab) => CreateTabCalled = true;
         public void ClearTerminal(TerminalTab activeTab) => ClearTerminalCalled = true;
-        public void OpenHyperlink(string url) => OpenedHyperlink = url;
+        public void OpenHyperlink(string url, HyperlinkSource source, string? displayText)
+        {
+            OpenedHyperlink = url;
+            OpenedHyperlinkSource = source;
+            OpenedHyperlinkText = displayText;
+        }
         public void SetPointerCursor(StandardCursor cursor) => CurrentCursor = cursor;
         public bool TryExecuteAction(TerminalAction action) => true;
 
@@ -283,6 +292,65 @@ public sealed class TerminalMouseControllerTests
         // Drag to col 10, row 3
         controller.HandleMouseMove(mouse, new Vector2(100f, 80f));
         Assert.Equal(10, tab.ActivePane.Selection.ActiveColumn);
+    }
+
+    [Fact]
+    public void HandleMouseDown_CtrlClickOnOscEightLink_ActivatesWithSourceAndVisibleText()
+    {
+        using var host = new FakeTerminalMouseHost { Ctrl = true };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        Feed(tab.ActivePane, "\u001b]8;;https://evil.test/\u001b\\https://paypal.com\u001b]8;;\u001b\\ tail");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(55f, 30f) }; // col 5, row 0 (TopOffset 20)
+
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+
+        Assert.Equal("https://evil.test/", host.OpenedHyperlink);
+        Assert.Equal(HyperlinkSource.Explicit, host.OpenedHyperlinkSource);
+        Assert.Equal("https://paypal.com", host.OpenedHyperlinkText);
+        Assert.False(tab.ActivePane.Selection.HasSelection);
+    }
+
+    [Fact]
+    public void HandleMouseDown_CtrlClickOnDetectedUrl_ActivatesWithoutDisplayText()
+    {
+        using var host = new FakeTerminalMouseHost { Ctrl = true };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        Feed(tab.ActivePane, "go https://example.com/x now");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(75f, 30f) };
+
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+
+        Assert.Equal("https://example.com/x", host.OpenedHyperlink);
+        Assert.Equal(HyperlinkSource.Detected, host.OpenedHyperlinkSource);
+        Assert.Null(host.OpenedHyperlinkText);
+    }
+
+    [Fact]
+    public void HandleMouseDown_CtrlClickOnOscEightLink_IgnoredWhenExplicitLinksDisabled()
+    {
+        using var host = new FakeTerminalMouseHost
+        {
+            Ctrl = true,
+            HyperlinkScan = new HyperlinkScanOptions(IncludeExplicit: false),
+        };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        Feed(tab.ActivePane, "\u001b]8;;https://evil.test/\u001b\\Click me\u001b]8;;\u001b\\");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(25f, 30f) };
+
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseMove(mouse, new Vector2(25f, 30f));
+
+        Assert.Null(host.OpenedHyperlink);
+        Assert.Equal(StandardCursor.IBeam, host.CurrentCursor);
     }
 
     [Fact]

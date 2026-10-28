@@ -32,6 +32,12 @@ public interface IRenderSource
 
     ref readonly CellAttributes GetStyle(ushort styleId);
 
+    /// <summary>
+    /// URL for a cold-cell <see cref="ColdCell.HyperlinkId"/> (OSC 8), or null when the id is
+    /// 0/unknown. Snapshots resolve against the table captured with them.
+    /// </summary>
+    string? GetHyperlinkUrl(ushort id);
+
     /// <summary>Text of one scrollback line, newest = 0.</summary>
     string GetScrollbackLineText(int index);
 

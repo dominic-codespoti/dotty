@@ -143,12 +143,31 @@ public sealed class LuaHookManager
         return false;
     }
 
-    public bool TryOpenUrl(string url)
+    /// <summary>
+    /// Runs the <c>open_url</c> hooks with the canonical URL and its <paramref name="source"/>
+    /// (<c>"explicit"</c> for OSC 8, <c>"detected"</c> for scanned text). Returns true when a
+    /// hook returned <c>true</c> (handled). One-argument callbacks ignore the second argument.
+    /// </summary>
+    public bool TryOpenUrl(string url, string source)
     {
-        return Owner != null
-            && TryInvokeFirst("open_url", LuaValue.From(url), out LuaValue value)
-            && value.TryGetBoolean(out bool handled)
-            && handled;
+        if (Owner == null)
+        {
+            return false;
+        }
+
+        LuaCallbackReference[] callbacks = Get("open_url");
+        LuaValue urlArg = LuaValue.From(url);
+        LuaValue sourceArg = LuaValue.From(source);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            if (callbacks[i].Invoke(urlArg, sourceArg, out LuaValue value)
+                && !value.IsNil)
+            {
+                return value.TryGetBoolean(out bool handled) && handled;
+            }
+        }
+
+        return false;
     }
 
     public bool TryFormatStatus(ReusableTextBuffer destination)

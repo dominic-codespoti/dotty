@@ -74,6 +74,27 @@ public class LuaScriptingTests : IDisposable
         Assert.Equal("OneLight", _config.ThemeLight);
     }
 
+    /// <summary>Verifies Lua can configure hyperlink behavior through direct keys, groups and apply_table.</summary>
+    [Fact]
+    public void LuaConfig_SetsHyperlinkOptions()
+    {
+        Assert.True(_host.ExecuteString(@"
+            local d=require('dotty');
+            d.config.hyperlinks.osc8=false;
+            d.config.hyperlinks.confirm='always';
+            d.config.hyperlinks.allowed_schemes={'https'};
+            assert(d.config.hyperlinks.osc8==false and d.config.hyperlinks.confirm=='always');
+            assert(d.config.hyperlinks.allowed_schemes[1]=='https')"));
+        Assert.False(_config.Hyperlinks.Osc8);
+        Assert.Equal("always", _config.Hyperlinks.Confirm);
+        Assert.Equal(new[] { "https" }, _config.Hyperlinks.AllowedSchemes);
+
+        Assert.True(_host.ExecuteString(@"
+            require('dotty').config.apply_table({hyperlinks={osc8=true,confirm='never'}})"));
+        Assert.True(_config.Hyperlinks.Osc8);
+        Assert.Equal("never", _config.Hyperlinks.Confirm);
+    }
+
     /// <summary>Verifies Lua can create and select tabs.</summary>
     [Fact]
     public void LuaTabs_CreatesAndSelectsTabs()
@@ -171,8 +192,17 @@ public class LuaScriptingTests : IDisposable
     public void LuaHooks_HandlesOpenUrlOnlyWhenCallbackAcceptsIt()
     {
         Assert.True(_host.ExecuteString(@"dotty.on('open_url',function(url) return url=='dotty://handled' end)"));
-        Assert.True(_host.Hooks.TryOpenUrl("dotty://handled"));
-        Assert.False(_host.Hooks.TryOpenUrl("dotty://unhandled"));
+        Assert.True(_host.Hooks.TryOpenUrl("dotty://handled", "detected"));
+        Assert.False(_host.Hooks.TryOpenUrl("dotty://unhandled", "detected"));
+    }
+
+    /// <summary>Verifies the open_url hook receives the link source as its second argument.</summary>
+    [Fact]
+    public void LuaHooks_OpenUrlReceivesSourceArgument()
+    {
+        Assert.True(_host.ExecuteString(@"dotty.on('open_url',function(url, source) return source=='explicit' end)"));
+        Assert.True(_host.Hooks.TryOpenUrl("https://example.com/", "explicit"));
+        Assert.False(_host.Hooks.TryOpenUrl("https://example.com/", "detected"));
     }
 
     /// <summary>Verifies config.lua changes apply before evaluation returns.</summary>

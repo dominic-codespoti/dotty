@@ -25,10 +25,15 @@ public sealed class ScrollbackSessionConfigTests : IDisposable
 
     public void Dispose()
     {
+        // Leave UserConfigService.Current at the built-in defaults without touching the user's real config
+        // directory: loading from an empty private home resets Current, and only then is the variable restored.
         UserConfigService.Shutdown();
-        Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", _originalHome);
+        Directory.CreateDirectory(_home);
+        Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", _home);
+        try { File.Delete(Path.Combine(_home, "config.json")); } catch { }
         UserConfigService.Load();
         UserConfigService.Shutdown();
+        Environment.SetEnvironmentVariable("DOTTY_CONFIG_HOME", _originalHome);
         try { if (Directory.Exists(_home)) Directory.Delete(_home, recursive: true); } catch { }
     }
 

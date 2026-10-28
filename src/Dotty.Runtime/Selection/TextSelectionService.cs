@@ -65,7 +65,7 @@ public sealed class TextSelectionService
             {
                 if (row < 0)
                 {
-                    string[] cells = GetScrollbackCells(buffer.GetScrollbackLine(-row - 1).Text ?? string.Empty);
+                    string[] cells = GetScrollbackCells(GetScrollbackText(buffer, row));
                     SelectCellRun(row, col, cells);
                 }
                 else if (row < buffer.Rows && buffer.Columns > 0)
@@ -225,7 +225,7 @@ public sealed class TextSelectionService
     {
         if (row < 0)
         {
-            string[] cells = GetScrollbackCells(buffer.GetScrollbackLine(-row - 1).Text ?? string.Empty);
+            string[] cells = GetScrollbackCells(GetScrollbackText(buffer, row));
             int start = Math.Clamp(startCol, 0, cells.Length);
             int end = Math.Clamp(endCol + 1, start, cells.Length);
             for (int i = start; i < end; i++) destination.Append(cells[i]);
@@ -248,7 +248,7 @@ public sealed class TextSelectionService
         int max = Math.Max(min, endCol);
         if (row < 0)
         {
-            string[] cells = GetScrollbackCells(buffer.GetScrollbackLine(-row - 1).Text ?? string.Empty);
+            string[] cells = GetScrollbackCells(GetScrollbackText(buffer, row));
             for (int col = min; col <= max; col++)
                 destination.Append(col < cells.Length ? cells[col] : " ");
             return;
@@ -319,6 +319,14 @@ public sealed class TextSelectionService
         StartSelection(row, start, SelectionMode.Word);
         UpdateSelection(row, end);
     }
+
+    /// <summary>
+    /// Text of the history line shown at negative <paramref name="row"/> (-1 = the newest line, directly above the
+    /// live screen). <see cref="TerminalBuffer.GetScrollbackLine"/> counts from the OLDEST line, so the row is
+    /// flipped against <see cref="TerminalBuffer.ScrollbackCount"/>; out-of-range rows read as empty.
+    /// </summary>
+    private static string GetScrollbackText(TerminalBuffer buffer, int row) =>
+        buffer.GetScrollbackLine(buffer.ScrollbackCount + row).Text ?? string.Empty;
 
     private static string[] GetScrollbackCells(string text)
     {

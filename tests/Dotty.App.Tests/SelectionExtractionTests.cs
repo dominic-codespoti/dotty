@@ -296,4 +296,33 @@ public sealed class SelectionExtractionTests
     {
         Assert.Equal("a界 e\u0301b c" + NL + "vis", Select(BuildWithHistory(), -1, 0, 0, 2));
     }
+
+    /// <summary>Two history lines, "one" (older) then "two" (newer), above a visible row 0 holding "vis".</summary>
+    private static TerminalBuffer BuildWithTwoHistoryLines()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 12, scrollbackCapacity: 20);
+        WriteAt(buffer, 0, 0, "one");
+        buffer.ScrollUpLines(1);
+        WriteAt(buffer, 0, 0, "two");
+        buffer.ScrollUpLines(1);
+        WriteAt(buffer, 0, 0, "vis");
+        Assert.Equal(2, buffer.ScrollbackCount);
+        return buffer;
+    }
+
+    [Fact]
+    public void Scrollback_RowMinusOneIsTheNewestHistoryLine()
+    {
+        var buffer = BuildWithTwoHistoryLines();
+
+        Assert.Equal("two", Select(buffer, -1, 0, -1, 2));
+        Assert.Equal("one", Select(buffer, -2, 0, -2, 2));
+        Assert.Equal("one" + NL + "two" + NL + "vis", Select(buffer, -2, 0, 0, 2));
+        Assert.Equal(string.Empty, Select(buffer, -3, 0, -3, 2));
+
+        var service = new TextSelectionService();
+        service.SelectWord(buffer, -2, 1);
+        Assert.Equal("one", service.GetSelectedText(buffer));
+        Assert.Equal("two", Select(buffer, -1, 0, -1, 2, SelectionMode.Block));
+    }
 }

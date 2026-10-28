@@ -18,9 +18,10 @@ namespace Dotty.Performance.Tests.Benchmarks;
 /// <see cref="TerminalBuffer.GetScrollbackLine"/>. If one of those is renamed, update only the single call in the
 /// matching benchmark method; the descriptions (baseline keys) must not change.
 ///
-/// Deliberately absent until scrollback search captures history rows in production: "search over 10k scrollback".
-/// The snapshot used here is captured with the production-shaped default arguments (no scrollback text), and the
-/// search buffers use scrollback capacity 0, so the search benchmarks measure exactly the visible rows.
+/// The "Search: ... visible rows" snapshots are captured with the per-frame default arguments (no scrollback cells) over
+/// scrollback-capacity-0 buffers, so those benchmarks measure exactly the visible rows. The one scrollback search
+/// benchmark uses <see cref="TerminalBuffer.CaptureRenderSnapshotForSearch"/>, the capture the host runs per search
+/// keystroke, and times capture plus search together.
 ///
 /// Fixtures are built lazily by the one benchmark that needs them (see <see cref="ReflowBenchmarks"/> for why).
 /// This class opts out of the no-GC region.
@@ -104,6 +105,13 @@ public class TextFormatBenchmarks : PerformanceTestBase
     {
         var snapshot = CjkSnapshot();
         return SearchEngine.FindMatches(snapshot, _cjkQuery!, regex: false, matchCase: false).Count;
+    }
+
+    [Benchmark(Description = "Search: literal over 10k scrollback + visible (search capture)")]
+    public int Search_Literal_Scrollback()
+    {
+        using var snapshot = Scrollback().CaptureRenderSnapshotForSearch();
+        return SearchEngine.FindMatches(snapshot, "error", regex: false, matchCase: false).Count;
     }
 
     #endregion

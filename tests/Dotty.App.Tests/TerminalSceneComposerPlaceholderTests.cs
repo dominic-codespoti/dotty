@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Graphics;
 using Dotty.Abstractions.Themes;
 using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;

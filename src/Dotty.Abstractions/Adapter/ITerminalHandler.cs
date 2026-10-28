@@ -95,6 +95,18 @@ namespace Dotty.Abstractions.Adapter
         // form for external implementors.
         void OnQueryCapability(ReadOnlySpan<char> requestHex) => OnQueryCapability(requestHex.ToString());
 
+        // Kitty graphics protocol (APC G ... ST).  The parser captures the APC
+        // only when KittyGraphicsEnabled is true; otherwise the string is
+        // discarded without any callback.  Begin receives the control data
+        // (bytes between "ESC _ G" and the first ';' or the terminator), Payload
+        // receives the base64 bytes in arbitrary slices (0..n calls), and End is
+        // called exactly once per Begin: true when terminated by ST/0x9C, false
+        // when cancelled or aborted.  Slices are only valid during the call.
+        bool KittyGraphicsEnabled => false;
+        void OnKittyGraphicsBegin(ReadOnlySpan<byte> control) { }
+        void OnKittyGraphicsPayload(ReadOnlySpan<byte> base64) { }
+        void OnKittyGraphicsEnd(bool completed) { }
+
         // XTerm modifyOtherKeys (CSI > 4 ; Pv m)
         void OnSetModifyOtherKeys(int level) { }
 

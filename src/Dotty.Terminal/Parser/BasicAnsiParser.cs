@@ -19,6 +19,8 @@ namespace Dotty.Terminal.Parser
         // DCS payload capture exists only for short queries (XTGETTCAP + q).
         // Longer DCS strings are consumed without dispatch.
         private const int MaxDcsPayloadBytes = 4 * 1024;
+        // Kitty graphics control data is a short key=value list; longer is hostile.
+        private const int MaxApcControlBytes = 512;
 
         private enum SequenceState : byte
         {
@@ -34,6 +36,10 @@ namespace Dotty.Terminal.Parser
             DiscardOsc,
             DiscardString,
             DiscardStringEscape,
+            ApcFirst,
+            ApcControl,
+            ApcPayload,
+            ApcEscape,
         }
 
         private byte[] _leftover = new byte[32];
@@ -42,6 +48,8 @@ namespace Dotty.Terminal.Parser
         private int _leftoverLen;
         private int _utf8LeftoverLen;
         private SequenceState _sequenceState;
+        // True between OnKittyGraphicsBegin and the matching OnKittyGraphicsEnd.
+        private bool _apcBegun;
         private Charset _charset = Charset.Ascii;
 
         // This set lets the ASCII fast path find both controls and non-ASCII
@@ -65,6 +73,19 @@ namespace Dotty.Terminal.Parser
         }
 
         private static readonly SearchValues<byte> s_printableRunBreaks = CreatePrintableRunBreaks();
+
+        // Payload runs stop at every C0 control and at 0x9C (C1 ST).  DEL and
+        // other high bytes are payload as far as the parser is concerned.
+        private static readonly SearchValues<byte> s_apcBreaks = CreateApcBreaks();
+
+        private static SearchValues<byte> CreateApcBreaks()
+        {
+            Span<byte> values = stackalloc byte[33];
+            for (int i = 0; i < 0x20; i++)
+                values[i] = (byte)i;
+            values[0x20] = 0x9C;
+            return SearchValues.Create(values);
+        }
 
         public ITerminalHandler? Handler { get; set; }
 
@@ -299,6 +320,18 @@ namespace Dotty.Terminal.Parser
                 case SequenceState.DiscardStringEscape:
                     ProcessDiscardStringEscapeByte(b);
                     break;
+                case SequenceState.ApcFirst:
+                    ProcessApcFirstByte(b);
+                    break;
+                case SequenceState.ApcControl:
+                    ProcessApcControlByte(b);
+                    break;
+                case SequenceState.ApcPayload:
+                    ProcessApcPayloadByte(b);
+                    break;
+                case SequenceState.ApcEscape:
+                    ProcessApcEscapeByte(b);
+                    break;
             }
         }
 
@@ -336,6 +369,9 @@ namespace Dotty.Terminal.Parser
                     _sequenceState = SequenceState.Dcs;
                     break;
                 case (byte)'_':
+                    _leftoverLen = 0;
+                    _sequenceState = SequenceState.ApcFirst;
+                    break;
                 case (byte)'^':
                 case (byte)'X':
                     BeginDiscardedString();
@@ -428,7 +464,17 @@ namespace Dotty.Terminal.Parser
             }
 
             if (_sequenceState != SequenceState.Osc)
-                return 0;
+            {
+                if (_sequenceState != SequenceState.ApcPayload)
+                    return 0;
+
+                int apcRun = bytes.IndexOfAny(s_apcBreaks);
+                if (apcRun < 0)
+                    apcRun = bytes.Length;
+                if (apcRun > 0)
+                    Handler?.OnKittyGraphicsPayload(bytes.Slice(0, apcRun));
+                return apcRun;
+            }
 
             int run = bytes.IndexOfAnyInRange((byte)0x00, (byte)0x1F);
             if (run < 0)
@@ -574,6 +620,112 @@ namespace Dotty.Terminal.Parser
             }
         }
 
+        // Kitty graphics APC.  ESC _ G <control> [; <payload>] ST.  Anything that
+        // is not an enabled graphics command is discarded exactly like PM/SOS.
+        private void ProcessApcFirstByte(byte b)
+        {
+            if (b == (byte)'G' && Handler?.KittyGraphicsEnabled == true)
+            {
+                _leftoverLen = 0;
+                _sequenceState = SequenceState.ApcControl;
+                return;
+            }
+
+            // The byte may itself be ESC/CAN/a control; the discard state
+            // decides what it means.
+            BeginDiscardedString();
+            ProcessDiscardStringByte(b);
+        }
+
+        private void ProcessApcControlByte(byte b)
+        {
+            if (b == (byte)';')
+            {
+                _apcBegun = true;
+                _sequenceState = SequenceState.ApcPayload;
+                Handler?.OnKittyGraphicsBegin(_leftover.AsSpan(0, _leftoverLen));
+                _leftoverLen = 0;
+            }
+            else if (b == 0x9C)
+            {
+                CompleteApcWithoutPayload();
+            }
+            else if (b == ESC)
+            {
+                _sequenceState = SequenceState.ApcEscape;
+            }
+            else if (b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (b < 0x20)
+            {
+                AbortStringAndExecute(b);
+            }
+            else if (!AppendSequenceByte(b, MaxApcControlBytes))
+            {
+                // Begin has not been called, so the handler never sees this command.
+                BeginDiscard(SequenceState.DiscardString);
+            }
+        }
+
+        private void ProcessApcPayloadByte(byte b)
+        {
+            if (b == 0x9C)
+            {
+                FinishApc(completed: true);
+            }
+            else if (b == ESC)
+            {
+                _sequenceState = SequenceState.ApcEscape;
+            }
+            else if (b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (b < 0x20)
+            {
+                // ResetSequence ends the command with completed=false.
+                AbortStringAndExecute(b);
+            }
+            else
+            {
+                Handler?.OnKittyGraphicsPayload(new ReadOnlySpan<byte>(in b));
+            }
+        }
+
+        private void ProcessApcEscapeByte(byte b)
+        {
+            if (b == (byte)'\\')
+            {
+                if (_apcBegun)
+                    FinishApc(completed: true);
+                else
+                    CompleteApcWithoutPayload();
+            }
+            else
+            {
+                // Abandons the command (End(false) if it began) and the ESC
+                // starts a fresh sequence.
+                AbortStringAndReprocessAsEscape(b);
+            }
+        }
+
+        // Control data ended by ST with no ';': Begin, no payload, End(true).
+        private void CompleteApcWithoutPayload()
+        {
+            _apcBegun = true;
+            Handler?.OnKittyGraphicsBegin(_leftover.AsSpan(0, _leftoverLen));
+            FinishApc(completed: true);
+        }
+
+        private void FinishApc(bool completed)
+        {
+            _apcBegun = false;
+            ResetSequence();
+            Handler?.OnKittyGraphicsEnd(completed);
+        }
+
         private void AbortStringAndExecute(byte control)
         {
             ResetSequence();
@@ -635,6 +787,14 @@ namespace Dotty.Terminal.Parser
 
         private void ResetSequence()
         {
+            if (_apcBegun)
+            {
+                _apcBegun = false;
+                _sequenceState = SequenceState.None;
+                _leftoverLen = 0;
+                Handler?.OnKittyGraphicsEnd(false);
+            }
+
             _sequenceState = SequenceState.None;
             _leftoverLen = 0;
             ShrinkLeftover();

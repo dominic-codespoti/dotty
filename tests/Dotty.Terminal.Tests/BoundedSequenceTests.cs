@@ -186,6 +186,31 @@ public sealed class BoundedSequenceTests
         public List<(int mode, bool isPrivate)> RequestModeCalls { get; } = new();
         public List<(int id, int page, int top, int left, int bottom, int right)> ChecksumCalls { get; } = new();
         public int CursorPositionReportCalls { get; private set; }
+        // Kitty graphics capture.  KittyEvents holds "B:<control>", "P:<slice>" and "E:True|False"
+        // (bytes mapped 1:1 to chars).  With KittyCountOnly set nothing is stored, so
+        // allocation tests only measure the parser.
+        public bool KittyEnabled { get; set; }
+        public bool KittyCountOnly { get; set; }
+        public List<string> KittyEvents { get; } = new();
+        public int KittyBeginCount { get; private set; }
+        public int KittyEndCount { get; private set; }
+        public long KittyPayloadBytes { get; private set; }
+        bool ITerminalHandler.KittyGraphicsEnabled => KittyEnabled;
+        void ITerminalHandler.OnKittyGraphicsBegin(ReadOnlySpan<byte> control)
+        {
+            KittyBeginCount++;
+            if (!KittyCountOnly) KittyEvents.Add("B:" + Encoding.Latin1.GetString(control));
+        }
+        void ITerminalHandler.OnKittyGraphicsPayload(ReadOnlySpan<byte> base64)
+        {
+            KittyPayloadBytes += base64.Length;
+            if (!KittyCountOnly) KittyEvents.Add("P:" + Encoding.Latin1.GetString(base64));
+        }
+        void ITerminalHandler.OnKittyGraphicsEnd(bool completed)
+        {
+            KittyEndCount++;
+            if (!KittyCountOnly) KittyEvents.Add("E:" + completed);
+        }
         public int SoftResetCalls { get; private set; }
 
         object? ITerminalHandler.Buffer => null;

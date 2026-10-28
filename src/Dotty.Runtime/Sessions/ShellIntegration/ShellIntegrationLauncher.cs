@@ -137,7 +137,7 @@ public static class ShellIntegrationLauncher
             }
             case ShellKind.PowerShell:
             {
-                string script = Path.Combine(integrationDir, "Dotty.ps1").Replace("'", "''", StringComparison.Ordinal);
+                string script = EscapePowerShellSingleQuoted(Path.Combine(integrationDir, "Dotty.ps1"));
                 string expression =
                     "try { Invoke-Expression ([System.IO.File]::ReadAllText('" + script + "')) } catch { }";
                 return new ShellLaunch([executable, "-NoLogo", "-NoExit", "-Command", expression], env);
@@ -145,6 +145,22 @@ public static class ShellIntegrationLauncher
             default:
                 return ShellLaunch.None;
         }
+    }
+
+    /// <summary>
+    /// Escapes text for a PowerShell single-quoted string. PowerShell treats the typographic quotes U+2018/2019/201A/201B
+    /// as single quotes too, so every one of them is doubled.
+    /// </summary>
+    private static string EscapePowerShellSingleQuoted(string value)
+    {
+        var builder = new System.Text.StringBuilder(value.Length + 2);
+        foreach (char c in value)
+        {
+            builder.Append(c);
+            if (c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B')
+                builder.Append(c);
+        }
+        return builder.ToString();
     }
 
     private static bool IsOptedOut(string? value) =>

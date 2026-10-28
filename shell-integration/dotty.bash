@@ -6,7 +6,9 @@
 [[ -n ${_dotty_bash_installed-} ]] && return 0 2>/dev/null
 _dotty_bash_active=0
 _dotty_bash_exit_status=0
-_dotty_bash_prompt_running=0
+# Starts "running" so commands executed while the shell is still starting up (the rest of the rc file, or
+# this file's own trap/PROMPT_COMMAND assignments) are not reported as a command; the first prompt clears it.
+_dotty_bash_prompt_running=1
 _dotty_bash_old_debug_trap=$(trap -p DEBUG)
 _dotty_bash_old_debug_command=
 _dotty_bash_read_old_debug_command() {

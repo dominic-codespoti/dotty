@@ -4,13 +4,13 @@ if set -q DOTTY_SHELL_INTEGRATION_DIR
     # Do not leak our directory into child processes.
     set -l __dotty_ours "$DOTTY_SHELL_INTEGRATION_DIR/inject/xdg"
     set -l __dotty_kept
-    for __dotty_dir in (string split : -- "$XDG_DATA_DIRS")
+    for __dotty_dir in (string split -- : "$XDG_DATA_DIRS")
         if test "$__dotty_dir" != "$__dotty_ours"; and test -n "$__dotty_dir"
             set __dotty_kept $__dotty_kept $__dotty_dir
         end
     end
     if test (count $__dotty_kept) -gt 0
-        set -gx XDG_DATA_DIRS (string join : -- $__dotty_kept)
+        set -gx XDG_DATA_DIRS (string join -- : $__dotty_kept)
     else
         set -e XDG_DATA_DIRS
     end

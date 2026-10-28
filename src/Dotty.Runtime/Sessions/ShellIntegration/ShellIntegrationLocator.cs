@@ -26,7 +26,7 @@ public static class ShellIntegrationLocator
         string? overrideDir = Environment.GetEnvironmentVariable("DOTTY_SHELL_INTEGRATION_DIR");
         if (!string.IsNullOrWhiteSpace(overrideDir))
         {
-            string? fromOverride = Resolve(overrideDir, null, File.Exists, out string? overrideDiagnostic);
+            string? fromOverride = Resolve(Normalize(overrideDir), null, File.Exists, out string? overrideDiagnostic);
             lock (Gate) _lastDiagnostic = overrideDiagnostic;
             return fromOverride;
         }
@@ -39,6 +39,22 @@ public static class ShellIntegrationLocator
                 _probed = true;
             }
             return _packagedDirectory;
+        }
+    }
+
+    /// <summary>
+    /// Makes the override absolute (the shell runs in another working directory) and drops a trailing separator so
+    /// the paths derived from it compare equal to what the injection scripts rebuild from the exported variable.
+    /// </summary>
+    private static string Normalize(string directory)
+    {
+        try
+        {
+            return Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory.Trim()));
+        }
+        catch (Exception)
+        {
+            return directory;
         }
     }
 

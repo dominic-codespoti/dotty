@@ -40,7 +40,8 @@ public sealed class VtUserConfigTests : IDisposable
         Assert.True(config.Vt.ChecksumReportEnabled);
 
         string json = JsonSerializer.Serialize(config);
-        Assert.Contains("\"vt\":{\"checksumReportEnabled\":true}", json);
+        using (JsonDocument document = JsonDocument.Parse(json))
+            Assert.True(document.RootElement.GetProperty("vt").GetProperty("checksumReportEnabled").GetBoolean());
         Assert.True(JsonSerializer.Deserialize<DottyUserConfig>(json)!.Vt.ChecksumReportEnabled);
     }
 

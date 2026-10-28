@@ -112,6 +112,15 @@ public sealed class ShellIntegrationLauncherTests
     }
 
     [Fact]
+    public void PowerShell_DoublesTypographicSingleQuotesToo()
+    {
+        ShellLaunch launch = Prepare("pwsh", dir: "/opt/Jo\u2019s \u2018dir\u2019/shell-integration");
+
+        Assert.NotNull(launch.Command);
+        Assert.Contains("Jo\u2019\u2019s \u2018\u2018dir\u2019\u2019", launch.Command![4]);
+    }
+
+    [Fact]
     public void WindowsPathWithSpaces_IsAcceptedWhenItIsAnExistingFile()
     {
         const string exe = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";

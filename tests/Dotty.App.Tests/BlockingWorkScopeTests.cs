@@ -304,7 +304,7 @@ public sealed class BlockingWorkScopeTests
         lock (buffer.SyncRoot)
         {
             bool released = false;
-            Assert.Throws<InvalidOperationException>(() =>
+            Assert.Throws<InvalidOperationException>((Action)(() =>
             {
                 try
                 {
@@ -316,7 +316,7 @@ public sealed class BlockingWorkScopeTests
                     if (released)
                         buffer.ReacquireSyncRoot();
                 }
-            });
+            }));
             Assert.True(released);
             Assert.True(Monitor.IsEntered(buffer.SyncRoot));
         }

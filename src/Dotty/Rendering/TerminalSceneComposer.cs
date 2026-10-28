@@ -251,6 +251,11 @@ public sealed class TerminalSceneComposer
                 leaf.Session.Resize(leaf.Columns, leaf.Rows);
             }
 
+            // A resize can shrink the history (reflow, or a smaller byte-capped capacity): a stale offset past the
+            // oldest line would make the snapshot wrap around the ring, so pull it back before capturing.
+            if (leaf.ScrollOffset > 0)
+                leaf.ScrollTo(leaf.ScrollOffset, leaf.Session.Adapter.Buffer.ScrollbackCount);
+
             RenderSnapshot? leafSnapshot = null;
             bool lockTaken = false;
             var leafBuffer = leaf.Session.Adapter.Buffer;

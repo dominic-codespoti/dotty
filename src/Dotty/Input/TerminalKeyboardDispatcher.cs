@@ -445,7 +445,8 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
                 break;
             case Key.Escape:
                 menu.Close();
-                _host.ActiveContextMenu = null;
+                if (ReferenceEquals(_host.ActiveContextMenu, menu))
+                    _host.ActiveContextMenu = null;
                 break;
         }
         return true;

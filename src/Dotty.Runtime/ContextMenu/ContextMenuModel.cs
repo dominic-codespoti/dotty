@@ -23,6 +23,14 @@ public sealed class ContextMenuModel
     /// <summary>Whether the context menu is currently visible and receiving interaction.</summary>
     public bool IsVisible { get; set; }
 
+    /// <summary>
+    /// Invoked once when the menu is closed while visible without any item action having run
+    /// (Escape, click outside, replacement by another menu). Cleared after it fires.
+    /// </summary>
+    public Action? Dismissed { get; set; }
+
+    private bool _actionExecuted;
+
     public ContextMenuModel(float x = 0f, float y = 0f, IReadOnlyList<ContextMenuItem>? items = null)
     {
         X = x;
@@ -40,13 +48,22 @@ public sealed class ContextMenuModel
         Items = items ?? Array.Empty<ContextMenuItem>();
         HoveredIndex = -1;
         IsVisible = Items.Count > 0;
+        _actionExecuted = false;
     }
 
-    /// <summary>Closes and hides the context menu.</summary>
+    /// <summary>
+    /// Closes and hides the context menu. Idempotent: <see cref="Dismissed"/> fires at most once,
+    /// and only when the menu was visible and no item action was executed.
+    /// </summary>
     public void Close()
     {
+        bool dismissed = IsVisible && !_actionExecuted;
+        var callback = dismissed ? Dismissed : null;
+        if (dismissed)
+            Dismissed = null;
         IsVisible = false;
         HoveredIndex = -1;
+        callback?.Invoke();
     }
 
     /// <summary>Moves focus to the next or previous enabled actionable row, wrapping at either end.</summary>
@@ -94,6 +111,7 @@ public sealed class ContextMenuModel
             return false;
 
         var item = Items[HoveredIndex];
+        _actionExecuted = true;
         item.Action?.Invoke();
         Close();
         return true;

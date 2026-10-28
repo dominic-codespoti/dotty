@@ -567,18 +567,63 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         RequestRender();
     }
 
+    /// <summary>
+    /// Upper bound on REP characters written for a previous character outside printable ASCII (0x20-0x7E).
+    /// Non-ASCII glyphs may be wide or zero-width, so the whole-row periodicity argument
+    /// below does not apply; instead the count is capped at the buffer's total cell capacity
+    /// (rows + retained scrollback + 1 rows of columns). For wide glyphs this already
+    /// overwrites the entire retained window; only the final cursor parity can differ from
+    /// an unbounded repeat when the requested count exceeds this cap.
+    /// </summary>
     public void OnRepeatCharacter(int n)
     {
         // REP - CSI n b - repeat previous character n times
         if (_lastPrintedChar == '\0' || n <= 0) return;
-        Span<char> chars = stackalloc char[Math.Min(n, 256)];
-        chars.Fill(_lastPrintedChar);
-        int remaining = n;
-        while (remaining > 0)
+
+        int columns = Math.Max(1, _buffer.Columns);
+        long window = ((long)_buffer.Rows + Math.Max(0, _buffer.MaxScrollback) + 1) * columns;
+        // window is a whole number of rows, so it is a multiple of columns.
+        // window <= (int.MaxValue) in practice; clamp to keep the arithmetic in int range.
+        int limit = (int)Math.Min(window, int.MaxValue - columns);
+
+        if (_lastPrintedChar >= 0x20 && _lastPrintedChar <= 0x7E)
         {
-            int batch = Math.Min(remaining, 256);
-            _buffer.WriteText(chars.Slice(0, batch), _currentAttributes);
-            remaining -= batch;
+            // Equivalence proof (single-width ASCII, same attributes/hyperlink for every write):
+            // after the first `columns` writes every subsequent group of exactly `columns`
+            // writes is a no-op on the visible grid and the cursor column: with autowrap on, it
+            // fills one full row with the same char, wraps, and scrolls the identical row into
+            // scrollback; with autowrap off, every write lands in the last column. Hence
+            // writing n chars equals writing n - m*columns chars for any m with
+            // n - m*columns >= `limit`, because the retained window (rows + scrollback)
+            // is then completely overwritten by identical rows either way. Rows pushed out
+            // of scrollback beyond that are unobservable; only _totalScrolled differs
+            // (by whole rows, and ScrollbackCount is already capped at capacity).
+            if (n > limit)
+                n = limit + (n % columns);
+
+            Span<byte> bytes = stackalloc byte[256];
+            bytes.Fill((byte)_lastPrintedChar);
+            int remaining = n;
+            while (remaining > 0)
+            {
+                int batch = Math.Min(remaining, bytes.Length);
+                _buffer.WriteAscii(bytes.Slice(0, batch), _currentAttributes);
+                remaining -= batch;
+            }
+        }
+        else
+        {
+            if (n > limit) n = limit;
+
+            Span<char> chars = stackalloc char[256];
+            chars.Fill(_lastPrintedChar);
+            int remaining = n;
+            while (remaining > 0)
+            {
+                int batch = Math.Min(remaining, chars.Length);
+                _buffer.WriteText(chars.Slice(0, batch), _currentAttributes);
+                remaining -= batch;
+            }
         }
         RequestRender();
     }

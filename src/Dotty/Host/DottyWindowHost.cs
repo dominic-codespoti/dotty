@@ -440,7 +440,7 @@ internal static class DottyWindowHost
             shell: _launchOptions.Shell,
             command: _launchOptions.Command,
             shellIsExecutable: _launchOptions.Shell != null);
-        SilkConfig.ApplyThemeToAdapter(initialTab.Session.Adapter, _activeTheme);
+        SilkConfig.ApplyConfigToAdapter(initialTab.Session.Adapter, _activeTheme);
         if (_launchOptions.Command != null)
             _initialCommandSession = initialTab.Session;
         _keybindings.RegisterDefaults();
@@ -1043,7 +1043,7 @@ internal static class DottyWindowHost
         _activeTheme = SilkConfig.LoadActiveTheme();
         foreach (var tab in _tabManager.Tabs)
             foreach (var pane in tab.PaneTree.Leaves)
-                SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter, _activeTheme);
+                SilkConfig.ApplyConfigToAdapter(pane.Session.Adapter, _activeTheme);
         (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme(theme: _activeTheme);
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
     }
@@ -1081,14 +1081,14 @@ internal static class DottyWindowHost
             workingDirectory: workingDirectory ?? activeSession?.InheritableWorkingDirectory,
             shell: shell ?? activeSession?.LaunchShell ?? _launchOptions.Shell,
             shellIsExecutable: shell is null && (activeSession?.LaunchShellIsExecutable ?? (_launchOptions.Shell is not null)));
-        SilkConfig.ApplyThemeToAdapter(tab.Session.Adapter);
+        SilkConfig.ApplyConfigToAdapter(tab.Session.Adapter);
         return tab;
     }
 
     private static LeafPane SplitLuaPane(TerminalTab tab, LeafPane target, SplitDirection direction, string? workingDirectory, string? shell)
     {
         var pane = tab.PaneTree.Split(target, direction, workingDirectory ?? target.Session.InheritableWorkingDirectory, shell);
-        SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter);
+        SilkConfig.ApplyConfigToAdapter(pane.Session.Adapter);
         return pane;
     }
 
@@ -2346,7 +2346,7 @@ internal static class DottyWindowHost
                 workingDirectory: activeTab.Session.InheritableWorkingDirectory,
                 shell: activeTab.Session.LaunchShell,
                 shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
-            SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
+            SilkConfig.ApplyConfigToAdapter(newTab.Session.Adapter);
         }
 
         public void CloseOtherTabs(TerminalTab activeTab)
@@ -2370,7 +2370,7 @@ internal static class DottyWindowHost
                 workingDirectory: activeTab.Session.InheritableWorkingDirectory,
                 shell: activeTab.Session.LaunchShell,
                 shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
-            SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
+            SilkConfig.ApplyConfigToAdapter(newTab.Session.Adapter);
         }
 
         public void ClearTerminal(TerminalTab activeTab)

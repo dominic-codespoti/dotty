@@ -10,6 +10,12 @@ public sealed class DottyLaunchOptions
     public bool ShowHelp { get; set; }
     public bool ShowVersion { get; set; }
 
+    /// <summary>Command-line action such as <c>+explain-config</c>; null when launching a terminal. Actions never create a window.</summary>
+    public string? Action { get; set; }
+
+    /// <summary>Arguments that followed <see cref="Action"/>.</summary>
+    public IReadOnlyList<string> ActionArguments { get; set; } = [];
+
     public string EffectiveWorkingDirectory => WorkingDirectory ?? Environment.CurrentDirectory;
 
     public void ValidateForLaunch()
@@ -96,10 +102,14 @@ public sealed class DottyLaunchOptions
 
 public static class DottyLaunchOptionsParser
 {
+    /// <summary>The only supported command-line action.</summary>
+    public const string ExplainConfigAction = "+explain-config";
+
     public const string HelpText = """
 Usage: dotty [--working-directory DIR|-d DIR] [--shell PATH] [--] [COMMAND [ARG...]]
        dotty --help|-h
        dotty --version
+       dotty +explain-config [OPTION]
 
 Options:
   -h, --help                    Show this help and exit
@@ -107,6 +117,10 @@ Options:
   -d, --working-directory DIR   Start in DIR
       --shell PATH              Start PATH as the interactive shell
   --                            End Dotty options; run COMMAND with exact arguments
+
+Actions (print and exit without opening a window):
+  +explain-config [OPTION]      List every config option, or document OPTION
+                                (JSON path or Lua key, e.g. font.size)
 """;
 
     public static DottyLaunchOptions Parse(IReadOnlyList<string> args)
@@ -116,6 +130,7 @@ Options:
         int index = 0;
         bool sawShell = false;
         IReadOnlyList<string>? command = null;
+        List<string>? actionArguments = null;
 
         while (index < args.Count)
         {
@@ -130,6 +145,18 @@ Options:
                     argv[i] = args[index + i];
                 command = new ReadOnlyCollection<string>(argv);
                 break;
+            }
+
+            if (arg.StartsWith('+'))
+            {
+                if (options.Action is not null)
+                    throw new ArgumentException($"Only one action may be given; found '{options.Action}' and '{arg}'.");
+                if (arg != ExplainConfigAction)
+                    throw new ArgumentException($"Unknown action '{arg}'.");
+                options.Action = arg;
+                actionArguments = [];
+                index++;
+                continue;
             }
 
             switch (arg)
@@ -152,6 +179,12 @@ Options:
                     sawShell = true;
                     break;
                 default:
+                    if (actionArguments is not null && !arg.StartsWith('-'))
+                    {
+                        actionArguments.Add(arg);
+                        index++;
+                        break;
+                    }
                     throw new ArgumentException($"Unknown option or unexpected argument '{arg}'. Use '--' before a command.");
             }
         }
@@ -160,6 +193,14 @@ Options:
             throw new ArgumentException("Choose either '--help' or '--version'.");
         if (sawShell && command is not null)
             throw new ArgumentException("'--shell' cannot be combined with a command.");
+        if (options.Action is not null)
+        {
+            if (sawShell || options.WorkingDirectory is not null || command is not null)
+                throw new ArgumentException($"'{options.Action}' cannot be combined with '--shell', '--working-directory', or a command.");
+            if (actionArguments!.Count > 1)
+                throw new ArgumentException($"'{options.Action}' accepts at most one OPTION.");
+            options.ActionArguments = actionArguments!;
+        }
         options.Command = command;
         return options;
     }

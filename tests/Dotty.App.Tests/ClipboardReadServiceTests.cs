@@ -30,6 +30,10 @@ public sealed class ClipboardReadServiceTests : IDisposable
         public bool MenuVisible;
         public bool HookAllows = true;
         public string? Clipboard = "clip";
+        public bool PrimarySupported;
+        public string? Primary = "prim";
+        public int PrimaryReads;
+        public readonly List<ClipboardSelection> HookSelections = new();
         public int ClipboardReads;
         public int HookCalls;
         public int Wakes;
@@ -56,10 +60,19 @@ public sealed class ClipboardReadServiceTests : IDisposable
 
         public bool IsActiveTab(TerminalTab tab) => ActiveTabs.Contains(tab);
 
-        public bool AllowRead(LeafPane pane, TerminalTab tab)
+        public bool AllowRead(LeafPane pane, TerminalTab tab, ClipboardSelection selection)
         {
             HookCalls++;
+            HookSelections.Add(selection);
             return HookAllows;
+        }
+
+        public bool SupportsPrimarySelection => PrimarySupported;
+
+        public string? ReadPrimary()
+        {
+            PrimaryReads++;
+            return Primary;
         }
 
         public string? ReadClipboard()
@@ -485,6 +498,51 @@ public sealed class ClipboardReadServiceTests : IDisposable
         Request(tab, ClipboardSelection.Clipboard | ClipboardSelection.Primary);
         _service.Drain();
         Assert.Equal(ExpectedReply("clip"), Text(Assert.Single(_env.Replies).Reply));
+    }
+
+    [Fact]
+    public void PrimaryRequest_OnSystemPrimaryPlatformIsServedWithPrimaryReply()
+    {
+        _config.Osc52Read = "allow";
+        _env.PrimarySupported = true;
+        TerminalTab tab = AddTab();
+
+        Request(tab, ClipboardSelection.Primary);
+        _service.Drain();
+
+        Assert.Equal(Esc + "]52;p;" + Convert.ToBase64String(Encoding.UTF8.GetBytes("prim")) + St,
+            Text(Assert.Single(_env.Replies).Reply));
+        Assert.Equal(0, _env.ClipboardReads);
+        Assert.Equal(1, _env.PrimaryReads);
+        Assert.Equal(ClipboardSelection.Primary, Assert.Single(_env.HookSelections));
+    }
+
+    [Fact]
+    public void ClipboardPlusPrimary_OnSystemPrimaryPlatformStillServesClipboard()
+    {
+        _config.Osc52Read = "allow";
+        _env.PrimarySupported = true;
+        TerminalTab tab = AddTab();
+
+        Request(tab, ClipboardSelection.Clipboard | ClipboardSelection.Primary);
+        _service.Drain();
+
+        Assert.Equal(ExpectedReply("clip"), Text(Assert.Single(_env.Replies).Reply));
+        Assert.Equal(0, _env.PrimaryReads);
+    }
+
+    [Fact]
+    public void PrimaryRequest_WithNoPrimaryText_SendsNothing()
+    {
+        _config.Osc52Read = "allow";
+        _env.PrimarySupported = true;
+        _env.Primary = null;
+        TerminalTab tab = AddTab();
+
+        Request(tab, ClipboardSelection.Primary);
+        _service.Drain();
+
+        Assert.Empty(_env.Replies);
     }
 
     [Fact]

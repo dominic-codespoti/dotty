@@ -1,6 +1,7 @@
 using Dotty.Abstractions.Config;
 using System;
 using System.Numerics;
+using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Input;
@@ -40,6 +41,15 @@ public interface ITerminalMouseHost
     void CopySelection();
     void PasteClipboard();
     void PasteClipboard(LeafPane targetPane);
+
+    /// <summary>What a middle click does outside mouse reporting (live configuration).</summary>
+    MiddleClickAction MiddleClick { get; }
+
+    /// <summary>Pastes the PRIMARY selection into <paramref name="targetPane"/> through the shared paste router.</summary>
+    void PastePrimary(LeafPane targetPane);
+
+    /// <summary>A user-made local selection was completed by releasing the left button (copy-on-select hook).</summary>
+    void OnLocalSelectionFinished(LeafPane pane);
     void CreateTab(TerminalTab activeTab);
     void ClearTerminal(TerminalTab activeTab);
     /// <summary>Activates a clicked link. <paramref name="displayText"/> is the visible text of an explicit (OSC 8) link, null for detected links.</summary>
@@ -65,6 +75,7 @@ public sealed class TerminalMouseController
     private int _reportingButtons;
     private LeafPane? _reportingPane;
     private LeafPane? _selectionPane;
+    private bool _selectionMoved;
     private LeafPane? _scrollbarPane;
     private Vector2 _lastContentPointer;
 
@@ -310,7 +321,15 @@ public sealed class TerminalMouseController
         _pressedButtons |= mask;
         if (button == MouseButton.Middle && insidePane)
         {
-            _host.PasteClipboard(pane!);
+            switch (_host.MiddleClick)
+            {
+                case MiddleClickAction.PrimaryPaste:
+                    _host.PastePrimary(pane!);
+                    break;
+                case MiddleClickAction.ClipboardPaste:
+                    _host.PasteClipboard(pane!);
+                    break;
+            }
             return;
         }
 
@@ -328,6 +347,7 @@ public sealed class TerminalMouseController
         }
         var localPane = pane!;
         _selectionPane = localPane;
+        _selectionMoved = false;
         _scrollbarPane = null;
         IsDraggingScrollbar = false;
         IsScrollbarHovered = false;
@@ -517,6 +537,7 @@ public sealed class TerminalMouseController
                 selection.UpdateLineSelection(selectionHit.LogicalRow, selectionPane.Columns);
             else
                 selection.UpdateSelection(selectionHit.LogicalRow, selectionHit.ViewColumn);
+            _selectionMoved = true;
 
             // Keep a local drag local even when the pointer crosses a split boundary.
             _host.SetPointerCursor(StandardCursor.IBeam);
@@ -560,9 +581,13 @@ public sealed class TerminalMouseController
         _pressedButtons &= ~mask;
         if (button == MouseButton.Left)
         {
+            if (_selectionPane is { } finished && !IsDraggingScrollbar && finished.Selection.HasSelection &&
+                (_selectionMoved || _clickCount >= 2))
+                _host.OnLocalSelectionFinished(finished);
             IsDraggingScrollbar = false;
             _scrollbarPane = null;
             _selectionPane = null;
+            _selectionMoved = false;
         }
     }
 
@@ -672,6 +697,7 @@ public sealed class TerminalMouseController
         _reportingButtons = 0;
         _reportingPane = null;
         _selectionPane = null;
+        _selectionMoved = false;
         _scrollbarPane = null;
         IsDraggingScrollbar = false;
         IsScrollbarHovered = false;

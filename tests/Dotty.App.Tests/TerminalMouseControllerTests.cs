@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Text;
+using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Panes;
@@ -105,6 +106,21 @@ public sealed class TerminalMouseControllerTests
         {
             PasteCalled = true;
             PasteTarget = targetPane;
+        }
+        public MiddleClickAction MiddleClick { get; set; } = MiddleClickAction.ClipboardPaste;
+        public int PastePrimaryCalls { get; private set; }
+        public LeafPane? PrimaryTarget { get; private set; }
+        public int SelectionFinishedCalls { get; private set; }
+        public LeafPane? SelectionFinishedPane { get; private set; }
+        public void PastePrimary(LeafPane targetPane)
+        {
+            PastePrimaryCalls++;
+            PrimaryTarget = targetPane;
+        }
+        public void OnLocalSelectionFinished(LeafPane pane)
+        {
+            SelectionFinishedCalls++;
+            SelectionFinishedPane = pane;
         }
         public void CreateTab(TerminalTab activeTab) => CreateTabCalled = true;
         public void ClearTerminal(TerminalTab activeTab) => ClearTerminalCalled = true;
@@ -568,6 +584,136 @@ public sealed class TerminalMouseControllerTests
         Assert.True(host.PasteCalled);
         Assert.Same(rightPane, host.PasteTarget);
         Assert.Same(rightPane, tab.ActivePane);
+    }
+
+    [Theory]
+    [InlineData(MiddleClickAction.PrimaryPaste, 1, false)]
+    [InlineData(MiddleClickAction.ClipboardPaste, 0, true)]
+    [InlineData(MiddleClickAction.Ignore, 0, false)]
+    public void MiddleClick_FollowsConfiguredAction(MiddleClickAction action, int primaryCalls, bool clipboardPaste)
+    {
+        using var host = new FakeTerminalMouseHost { MiddleClick = action };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+
+        var controller = new TerminalMouseController(host);
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(50f, 60f) }, MouseButton.Middle);
+
+        Assert.Equal(primaryCalls, host.PastePrimaryCalls);
+        Assert.Equal(clipboardPaste, host.PasteCalled);
+        if (primaryCalls > 0)
+            Assert.Same(tab.ActivePane, host.PrimaryTarget);
+    }
+
+    [Fact]
+    public void MiddleClick_InReportingPane_NeverPastes()
+    {
+        using var host = new FakeTerminalMouseHost { MiddleClick = MiddleClickAction.PrimaryPaste };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        EnableMouseMode(tab.ActivePane, 1000);
+
+        var controller = new TerminalMouseController(host);
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(50f, 60f) }, MouseButton.Middle);
+
+        Assert.Equal(0, host.PastePrimaryCalls);
+        Assert.False(host.PasteCalled);
+    }
+
+    [Fact]
+    public void DragSelection_ReleaseReportsFinishedSelectionOnce()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseMove(mouse, new Vector2(100f, 80f));
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+
+        Assert.Equal(1, host.SelectionFinishedCalls);
+        Assert.Same(tab.ActivePane, host.SelectionFinishedPane);
+        Assert.True(tab.ActivePane.Selection.HasSelection);
+    }
+
+    [Fact]
+    public void PlainClick_DoesNotReportFinishedSelection()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+
+        Assert.Equal(0, host.SelectionFinishedCalls);
+    }
+
+    [Fact]
+    public void DoubleClick_ReportsFinishedSelectionOnSecondRelease()
+    {
+        long now = 1000;
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        Feed(tab.ActivePane, "hello world");
+
+        var controller = new TerminalMouseController(host, () => now);
+        var mouse = new FakeMouse { Position = new Vector2(15f, 30f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+        Assert.Equal(0, host.SelectionFinishedCalls);
+
+        now += 100;
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+        Assert.Equal(1, host.SelectionFinishedCalls);
+    }
+
+    [Fact]
+    public void ScrollbarDrag_ReleaseDoesNotReportFinishedSelection()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        for (int i = 0; i < 50; i++)
+            tab.ActivePane.Session.Adapter.Buffer.ScrollUpLines(1);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(795f, 100f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseMove(mouse, new Vector2(795f, 200f));
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+
+        Assert.Equal(0, host.SelectionFinishedCalls);
+    }
+
+    [Fact]
+    public void ReportingPane_LeftDragNeverReportsFinishedSelection()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        EnableMouseMode(tab.ActivePane, 1002);
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseMove(mouse, new Vector2(100f, 80f));
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+
+        Assert.Equal(0, host.SelectionFinishedCalls);
     }
 
     [Fact]

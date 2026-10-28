@@ -58,6 +58,8 @@ internal static class DottyWindowHost
     private static IKeyboard? _keyboard;
     private static ITerminalClipboard? _clipboard;
     private static ClipboardPasteRouter? _pasteRouter;
+    private static IPrimarySelection? _primary;
+    private static ClipboardPasteRouter? _primaryPasteRouter;
     private static IMouse? _mouse;
     private static TerminalKeyboardController _keyboardController = null!;
     private static TerminalKeyboardDispatcher _keyboardDispatcher = null!;
@@ -415,6 +417,7 @@ internal static class DottyWindowHost
                 scancode >= 0 && NativeGlfwMetadata.TryGetPrimaryCodePoint((int)key, scancode, out uint scalar) ? (int)scalar : 0);
         _mouseController = new TerminalMouseController(_mouseHost);
 
+        _primary = new NativeSelection(_glfwApi!);
         _input = _window.CreateInput();
         if (_input.Keyboards.Count > 0)
         {
@@ -422,6 +425,11 @@ internal static class DottyWindowHost
             _clipboard = new KeyboardClipboard(_keyboard);
             _pasteRouter = new ClipboardPasteRouter(
                 _clipboard,
+                static () => UserConfigService.Current.Clipboard,
+                static prompt => _mouseHost.ShowPrompt(prompt),
+                static pane => IsPaneAlive(pane));
+            _primaryPasteRouter = new ClipboardPasteRouter(
+                new PrimarySelectionClipboard(_primary),
                 static () => UserConfigService.Current.Clipboard,
                 static prompt => _mouseHost.ShowPrompt(prompt),
                 static pane => IsPaneAlive(pane));
@@ -673,8 +681,12 @@ internal static class DottyWindowHost
 
     private static void EnqueueClipboardWrite(TerminalSession session, Dotty.Abstractions.Clipboard.ClipboardWriteRequest request)
     {
-        // Primary-only writes are dropped until an X11 selection helper exists; they must not clobber the clipboard.
-        if (!request.Selection.HasFlag(Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard))
+        // Primary is honored only when it is the system's (X11); elsewhere primary-only writes are dropped so they
+        // never clobber the clipboard.
+        var selection = request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+        if (_primary is { IsSystemSelection: true })
+            selection |= request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary;
+        if (selection == Dotty.Abstractions.Clipboard.ClipboardSelection.None)
             return;
         if (!UserConfigService.Current.Clipboard.AllowOsc52Write)
             return;
@@ -710,7 +722,7 @@ internal static class DottyWindowHost
                 Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
                 return;
             }
-            _pendingClipboards.Enqueue(new ClipboardWrite(session, Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard, text, bytes));
+            _pendingClipboards.Enqueue(new ClipboardWrite(session, selection, text, bytes));
             _pendingClipboardBytes += bytes;
             Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
         }
@@ -1494,7 +1506,10 @@ internal static class DottyWindowHost
             if (!_luaHost.Hooks.AllowClipboardWrite(ownerPane, ownerTab, request.Text))
                 continue;
 
-            _clipboard?.SetText(request.Text);
+            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard) != 0)
+                _clipboard?.SetText(request.Text);
+            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary) != 0 && _primary is { IsSystemSelection: true } primary)
+                primary.Set(request.Text);
         }
 
         _clipboardReads.Drain();
@@ -2157,6 +2172,22 @@ internal static class DottyWindowHost
         activePane.Selection.ClearSelection();
     }
 
+    private static void CopyFinishedSelection(LeafPane pane)
+    {
+        var mode = MouseOptions.ParseCopyOnSelect(UserConfigService.Current.Mouse.CopyOnSelect);
+        if (mode == CopyOnSelectMode.None || !pane.Selection.HasSelection)
+            return;
+
+        CopyOnSelect.Apply(mode, pane.Selection.GetSelectedText(pane.Session.Adapter.Buffer), _primary, _clipboard);
+    }
+
+    private static void PastePrimaryToPane(LeafPane targetPane)
+    {
+        if (_keyboard == null) return;
+
+        _primaryPasteRouter?.Paste(targetPane);
+    }
+
     private static void PasteClipboardToSession()
     {
         var activePane = _tabManager?.ActiveTab?.ActivePane;
@@ -2299,8 +2330,15 @@ internal static class DottyWindowHost
 
         public bool IsActiveTab(TerminalTab tab) => ReferenceEquals(tab, _tabManager?.ActiveTab);
 
-        public bool AllowRead(LeafPane pane, TerminalTab tab) =>
-            _luaHost.Hooks.AllowClipboardRead(pane, tab, "clipboard");
+        public bool AllowRead(LeafPane pane, TerminalTab tab, Dotty.Abstractions.Clipboard.ClipboardSelection selection) =>
+            _luaHost.Hooks.AllowClipboardRead(
+                pane,
+                tab,
+                selection == Dotty.Abstractions.Clipboard.ClipboardSelection.Primary ? "primary" : "clipboard");
+
+        public bool SupportsPrimarySelection => _primary is { IsSystemSelection: true };
+
+        public string? ReadPrimary() => _primary is { IsSystemSelection: true } primary ? primary.Get() : null;
 
         public string? ReadClipboard() => _clipboard?.GetText();
 
@@ -2396,6 +2434,9 @@ internal static class DottyWindowHost
         public void CopySelection() => CopySelectionToClipboard();
         public void PasteClipboard() => PasteClipboardToSession();
         public void PasteClipboard(LeafPane targetPane) => PasteClipboardToPane(targetPane);
+        public MiddleClickAction MiddleClick => MouseOptions.ParseMiddleClick(UserConfigService.Current.Mouse.MiddleClickAction);
+        public void PastePrimary(LeafPane targetPane) => PastePrimaryToPane(targetPane);
+        public void OnLocalSelectionFinished(LeafPane pane) => CopyFinishedSelection(pane);
         public bool TryExecuteAction(TerminalAction action) =>
             _keyboardDispatcher?.Actions.TryExecute(action) ?? false;
 

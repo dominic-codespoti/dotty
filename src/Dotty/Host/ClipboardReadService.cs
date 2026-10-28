@@ -28,8 +28,14 @@ internal interface IClipboardReadEnvironment
     /// <summary>True when <paramref name="tab"/> is the tab being shown. Main thread.</summary>
     bool IsActiveTab(TerminalTab tab);
 
-    /// <summary>Runs the Lua <c>clipboard_read</c> hook; false vetoes the request. Main thread.</summary>
-    bool AllowRead(LeafPane pane, TerminalTab tab);
+    /// <summary>Runs the Lua <c>clipboard_read</c> hook for <paramref name="selection"/>; false vetoes the request. Main thread.</summary>
+    bool AllowRead(LeafPane pane, TerminalTab tab, ClipboardSelection selection);
+
+    /// <summary>True only when the PRIMARY selection is the operating system's (X11); primary requests are dropped otherwise.</summary>
+    bool SupportsPrimarySelection { get; }
+
+    /// <summary>Reads the PRIMARY selection. Null means unavailable/none; an empty string is a genuinely empty selection. Main thread.</summary>
+    string? ReadPrimary();
 
     /// <summary>Reads the system clipboard. Null means unavailable/busy; an empty string is a genuinely empty clipboard.</summary>
     string? ReadClipboard();
@@ -70,20 +76,25 @@ internal sealed class ClipboardReadService
     internal ClipboardReadQueue Queue => _queue;
 
     /// <summary>
-    /// Handles an OSC 52 query from <paramref name="session"/>. Only the clipboard selection is served: primary
-    /// selection needs an X11 helper that does not exist yet, so primary-only requests are dropped. Under
-    /// <c>deny</c> (the default) this returns before touching the queue.
+    /// Handles an OSC 52 query from <paramref name="session"/>. The clipboard is served whenever requested (also when
+    /// primary is requested too); a primary-only request is served only where the primary selection is the system's
+    /// (X11) and is dropped elsewhere. Under <c>deny</c> (the default) this returns before touching the queue.
     /// </summary>
     internal void OnRequested(TerminalSession session, ClipboardReadRequest request)
     {
-        if ((request.Selection & ClipboardSelection.Clipboard) == 0)
+        ClipboardSelection selection;
+        if ((request.Selection & ClipboardSelection.Clipboard) != 0)
+            selection = ClipboardSelection.Clipboard;
+        else if ((request.Selection & ClipboardSelection.Primary) != 0 && _environment.SupportsPrimarySelection)
+            selection = ClipboardSelection.Primary;
+        else
             return;
         if (ClipboardReadModes.Parse(_config().Osc52Read) == ClipboardReadMode.Deny)
             return;
         if (!_environment.IsAvailable)
             return;
 
-        if (_queue.TryEnqueue(session, ClipboardSelection.Clipboard))
+        if (_queue.TryEnqueue(session, selection))
             _environment.Wake();
     }
 
@@ -132,11 +143,15 @@ internal sealed class ClipboardReadService
         TerminalSession session = pending.Session;
         if (!_environment.TryResolveOwner(session, out TerminalTab tab, out LeafPane pane))
             return;
-        if (!_environment.AllowRead(pane, tab))
+        ClipboardSelection selection = pending.Selection;
+        bool primary = selection == ClipboardSelection.Primary;
+        if (primary && !_environment.SupportsPrimarySelection)
+            return;
+        if (!_environment.AllowRead(pane, tab, selection))
             return;
 
         // Snapshot once: the text the user is shown is exactly the text that is sent.
-        string? text = _environment.ReadClipboard();
+        string? text = primary ? _environment.ReadPrimary() : _environment.ReadClipboard();
         if (text is null)
             return;
         // UTF-8 needs at least one byte per UTF-16 unit, so an oversize unit count rules the clipboard out cheaply.
@@ -144,7 +159,7 @@ internal sealed class ClipboardReadService
             return;
 
         byte[] utf8 = Encoding.UTF8.GetBytes(text);
-        if (!Osc52Reply.TryEncode(pending.Selection, utf8, out byte[] reply))
+        if (!Osc52Reply.TryEncode(selection, utf8, out byte[] reply))
             return;
 
         if (mode == ClipboardReadMode.Allow)

@@ -60,7 +60,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     }
 
     public event Action<string>? RenderRequested;
-    public event Action<string>? ClipboardWriteRequested;
+    public event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
     public event Action? PaletteChanged;
     public event Action? Bell;
@@ -270,21 +270,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         }
         else if (code == 52)
         {
-            var payloadStr = payload.ToString();
-            int semiIdx = payloadStr.IndexOf(';');
-            if (semiIdx >= 0)
-            {
-                var base64Part = payloadStr.Substring(semiIdx + 1);
-                if (base64Part != "?")
-                {
-                    try
-                    {
-                        var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64Part));
-                        ClipboardWriteRequested?.Invoke(decoded);
-                    }
-                    catch { }
-                }
-            }
+            HandleOsc52(payload);
         }
         else if (code == 10 || code == 11 || code == 12)
         {

@@ -396,7 +396,7 @@ public class MouseModeTests
             add { }
             remove { }
         }
-        event Action<string>? ITerminalHandler.ClipboardWriteRequested
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ITerminalHandler.ClipboardWriteRequested
         {
             add { }
             remove { }

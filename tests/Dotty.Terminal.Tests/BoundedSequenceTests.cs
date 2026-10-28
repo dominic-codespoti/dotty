@@ -32,13 +32,27 @@ public sealed class BoundedSequenceTests
         var handler = new RecordingHandler();
         parser.Handler = handler;
 
-        var oversizedPayload = new string('x', 65_537);
+        var oversizedPayload = new string('x', 1_048_577);
         var input = $"\u001b]8;;{oversizedPayload}\u0007\u001b]8;;ok\u0007tail";
         parser.Feed(Encoding.UTF8.GetBytes(input));
 
         Assert.Single(handler.OscCalls);
         Assert.Equal((8, ";ok"), handler.OscCalls[0]);
         Assert.Contains("tail", handler.PrintCalls);
+    }
+
+    [Fact]
+    public void Osc52Payload100Kb_IsDeliveredWhole()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        var payload = new string('A', 100_000);
+        parser.Feed(Encoding.ASCII.GetBytes($"\u001b]52;c;{payload}\u0007"));
+
+        Assert.Single(handler.OscCalls);
+        Assert.Equal((52, ";c;" + payload), handler.OscCalls[0]);
     }
 
     [Fact]
@@ -165,7 +179,7 @@ public sealed class BoundedSequenceTests
 
         object? ITerminalHandler.Buffer => null;
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
-        event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
         event Action? ITerminalHandler.PaletteChanged { add { } remove { } }
 

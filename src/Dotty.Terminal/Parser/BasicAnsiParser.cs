@@ -15,7 +15,7 @@ namespace Dotty.Terminal.Parser
         // sequence is split across Feed calls.  CSI parameters are deliberately
         // small; OSC strings need room for long hyperlinks and titles.
         private const int MaxCsiParameterBytes = 256;
-        private const int MaxOscPayloadBytes = 64 * 1024;
+        private const int MaxOscPayloadBytes = 1024 * 1024;
         // DCS payload capture exists only for short queries (XTGETTCAP + q).
         // Longer DCS strings are consumed without dispatch.
         private const int MaxDcsPayloadBytes = 4 * 1024;
@@ -491,11 +491,19 @@ namespace Dotty.Terminal.Parser
         {
             _sequenceState = SequenceState.None;
             _leftoverLen = 0;
+            ShrinkLeftover();
+        }
+
+        private void ShrinkLeftover()
+        {
+            if (_leftover.Length > 4096)
+                _leftover = new byte[32];
         }
 
         private void BeginDiscard(SequenceState discardState)
         {
             _leftoverLen = 0;
+            ShrinkLeftover();
             _sequenceState = discardState;
         }
 

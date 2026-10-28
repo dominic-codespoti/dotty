@@ -13,7 +13,7 @@ namespace Dotty.Abstractions.Adapter
     {
         object? Buffer { get; }
         event Action<string>? RenderRequested;
-        event Action<string>? ClipboardWriteRequested;
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
         event Action<string>? TitleChanged;
         event Action? PaletteChanged;
         void OnHyperlink(string uri);

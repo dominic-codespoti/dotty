@@ -292,7 +292,8 @@ public sealed partial class LuaScriptHost
                 valid = type == LuaType.Number;
                 if (valid)
                 {
-                    value = (int)lua.ToInteger(index);
+                    // Saturate instead of wrapping: 2^32 must not read as 0 (clamped limits would silently collapse to their minimum).
+                    value = (int)Math.Clamp(lua.ToInteger(index), int.MinValue, int.MaxValue);
                 }
 
                 break;

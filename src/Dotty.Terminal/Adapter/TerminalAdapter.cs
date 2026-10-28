@@ -568,12 +568,12 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     }
 
     /// <summary>
-    /// Upper bound on REP characters written for a previous character outside printable ASCII (0x20-0x7E).
-    /// Non-ASCII glyphs may be wide or zero-width, so the whole-row periodicity argument
-    /// below does not apply; instead the count is capped at the buffer's total cell capacity
-    /// (rows + retained scrollback + 1 rows of columns). For wide glyphs this already
-    /// overwrites the entire retained window; only the final cursor parity can differ from
-    /// an unbounded repeat when the requested count exceeds this cap.
+    /// REP (<c>CSI Ps b</c>): repeats the previous printed character <paramref name="n"/> times. The count is
+    /// bounded to what the retained window (visible rows + scrollback) can observe, so a hostile
+    /// <c>CSI 2147483647 b</c> costs O(window) instead of O(n). For printable ASCII the result is identical to an
+    /// unbounded repeat; for other characters (possibly wide or zero-width, so the periodicity argument in the
+    /// body does not hold) the count is capped at one window and the final cursor column can differ from an
+    /// unbounded repeat when <paramref name="n"/> exceeds it.
     /// </summary>
     public void OnRepeatCharacter(int n)
     {
@@ -582,22 +582,19 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
 
         int columns = Math.Max(1, _buffer.Columns);
         long window = ((long)_buffer.Rows + Math.Max(0, _buffer.MaxScrollback) + 1) * columns;
-        // window is a whole number of rows, so it is a multiple of columns.
-        // window <= (int.MaxValue) in practice; clamp to keep the arithmetic in int range.
-        int limit = (int)Math.Min(window, int.MaxValue - columns);
+        // Whole rows only: the ASCII reduction below subtracts multiples of `columns`, so `limit` must be one.
+        int limit = (int)(Math.Min(window, int.MaxValue - columns) / columns * columns);
 
         if (_lastPrintedChar >= 0x20 && _lastPrintedChar <= 0x7E)
         {
-            // Equivalence proof (single-width ASCII, same attributes/hyperlink for every write):
-            // after the first `columns` writes every subsequent group of exactly `columns`
-            // writes is a no-op on the visible grid and the cursor column: with autowrap on, it
-            // fills one full row with the same char, wraps, and scrolls the identical row into
-            // scrollback; with autowrap off, every write lands in the last column. Hence
-            // writing n chars equals writing n - m*columns chars for any m with
-            // n - m*columns >= `limit`, because the retained window (rows + scrollback)
-            // is then completely overwritten by identical rows either way. Rows pushed out
-            // of scrollback beyond that are unobservable; only _totalScrolled differs
-            // (by whole rows, and ScrollbackCount is already capped at capacity).
+            // Every write places the same cell (same char, style, hyperlink). With autowrap on, `columns` further
+            // writes advance the cursor exactly one row (scrolling at the bottom) and leave the cursor column and
+            // wrap-pending flag unchanged; with autowrap off, every write after the last column is reached lands
+            // there. After `limit` = (rows + scrollback + 1) * columns writes every retained row, visible or
+            // scrolled, was produced by this REP and is a full row of the repeated char (except the cursor row),
+            // so dropping m * columns writes (m whole rows) changes nothing observable: grid, scrollback text,
+            // ScrollbackCount (capped at capacity), cursor row/column and wrap-pending all match. Only the
+            // internal _totalScrolled counter, which prompt-mark rows are relative to, differs by m.
             if (n > limit)
                 n = limit + (n % columns);
 

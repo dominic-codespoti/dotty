@@ -99,7 +99,7 @@ public sealed class RepeatCharacterTests
     }
 
     [Fact]
-    public void HugeCount_CompletesPromptly()
+    public void HugeCount_CompletesPromptlyAndKeepsNaiveCursorParity()
     {
         var (adapter, parser) = Create(rows: 24, cols: 80, scrollback: 10000);
         var sw = Stopwatch.StartNew();
@@ -107,8 +107,17 @@ public sealed class RepeatCharacterTests
         sw.Stop();
 
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"REP took {sw.Elapsed}");
+
+        // A naive repeat prints 1 + int.MaxValue characters: every visible row but the last is full of 'x'
+        // and the last holds the remainder, so the cursor column is that remainder (48), not the last column.
+        int lastRowCells = (int)((1L + int.MaxValue) % 80);
+        Assert.NotEqual(0, lastRowCells);
+        Assert.Equal(23, adapter.Buffer.CursorRow);
+        Assert.Equal(lastRowCells, adapter.Buffer.CursorCol);
         Assert.Equal('x', (char)adapter.Buffer.GetCell(0, 0).Rune);
-        Assert.Equal('x', (char)adapter.Buffer.GetCell(23, 79).Rune);
+        Assert.Equal('x', (char)adapter.Buffer.GetCell(22, 79).Rune);
+        Assert.Equal('x', (char)adapter.Buffer.GetCell(23, lastRowCells - 1).Rune);
+        Assert.Equal(10000, adapter.Buffer.ScrollbackCount);
     }
 
     [Fact]

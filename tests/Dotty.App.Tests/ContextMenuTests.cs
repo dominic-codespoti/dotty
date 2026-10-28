@@ -307,4 +307,26 @@ public class ContextMenuTests
         string pair = HostPrompt.SanitizeLine("abc\U0001F600def", 5);
         Assert.Equal("abc\u2026", pair);
     }
+
+    [Fact]
+    public void HostPrompt_SanitizeLine_TrimsOnlyAnEscapeCutByTheEllipsisReserve()
+    {
+        // "ab" + "\x1B" fills the 6-char budget exactly; reserving a char for the ellipsis cuts the escape to "\x1".
+        Assert.Equal("ab\u2026", HostPrompt.SanitizeLine("ab\u001bcd", 6));
+
+        // "a" + "\u{202E}" fills 9 chars; the cut leaves "\u{202E" without its closing brace.
+        Assert.Equal("a\u2026", HostPrompt.SanitizeLine("a\u202Eb", 9));
+    }
+
+    [Fact]
+    public void HostPrompt_SanitizeLine_KeepsCompleteEscapesAndLiteralBackslashesBeforeTheEllipsis()
+    {
+        // A complete escape followed by more text is not a partial tail and must not erase everything after it.
+        Assert.Equal("\\x1B[31mred\u2026", HostPrompt.SanitizeLine("\u001b[31mred text goes on", 12));
+        Assert.Equal("\\u{202E}abc\u2026", HostPrompt.SanitizeLine("\u202Eabc defg", 12));
+
+        // Backslashes in the input are ordinary text, even when followed by 'x' or 'u'.
+        Assert.Equal("a\\xyz i\u2026", HostPrompt.SanitizeLine("a\\xyz is text", 8));
+        Assert.Equal("path\\to\u2026", HostPrompt.SanitizeLine("path\\to\\file", 8));
+    }
 }

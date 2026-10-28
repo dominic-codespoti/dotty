@@ -371,6 +371,12 @@ public class LuaScriptingTests : IDisposable
         Assert.True(_host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes=0"));
         Assert.Equal(1, _config.Clipboard.Osc52ReadLimitBytes);
 
+        // Values beyond int range saturate (and then clamp to the 8 MiB ceiling) instead of wrapping around to a tiny limit.
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes=1099511627776"));
+        Assert.Equal(ClipboardUserConfig.MaxOsc52ReadLimitBytes, _config.Clipboard.Osc52ReadLimitBytes);
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes=-1099511627776"));
+        Assert.Equal(1, _config.Clipboard.Osc52ReadLimitBytes);
+
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => _host.ExecuteString("dotty.config.clipboard.osc52_read=true"));
         Assert.Contains("clipboard.osc52_read", error.Message);
         error = Assert.Throws<InvalidOperationException>(() => _host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes='big'"));

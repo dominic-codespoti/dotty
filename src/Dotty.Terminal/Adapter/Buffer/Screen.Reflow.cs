@@ -495,10 +495,10 @@ public unsafe partial class Screen
     /// The result equals what the former dense table gave: the anchor's offset is first limited to the last cell
     /// of its line when a wrap is pending and to the line length, and when the output row of that offset was
     /// trimmed out of the retained window the nearest lower offset that is still inside it is used. Output rows
-    /// only grow with the offset, so that nearest offset is the target itself when it is inside the window,
-    /// nothing when its row precedes the window, and the last offset of the window's last row when its row
-    /// follows the window. A line without cells occupies a single output row and every offset below the source
-    /// column count maps onto it by column.
+    /// only grow with the offset, so that nearest offset is the target itself when it is inside the window and
+    /// nothing when its row precedes the window. A row of a line with cells never follows the window: only the
+    /// blank rows of cell-less lines are trimmed from the end. A line without cells occupies a single output row and
+    /// every offset below the source column count maps onto it by column.
     /// </remarks>
     private static bool TryResolveAnchor(
         ReflowMapping mapping,
@@ -540,19 +540,10 @@ public unsafe partial class Screen
             int firstRow = line.FirstOutputRow;
             int rowIndex = FindEmittedRowIndex(emitted, firstRow, line.OutputRowCount, target);
             outputIndex = firstRow + rowIndex;
-            if (outputIndex < windowStart)
+            // The window ends at the last emitted row, and only blank rows (never a row of a line with cells) are
+            // trimmed from the end, so a row at or after the window end cannot occur here.
+            if (outputIndex < windowStart || outputIndex >= windowEnd)
                 return false;
-
-            if (outputIndex >= windowEnd)
-            {
-                // The target's row follows the window: fall back to the last offset on the window's last row.
-                outputIndex = windowEnd - 1;
-                rowIndex = outputIndex - firstRow;
-                if (rowIndex < 0 || outputIndex < windowStart)
-                    return false;
-
-                target = emitted[firstRow + rowIndex + 1].LineOffset - 1;
-            }
 
             var row = emitted[outputIndex];
             int used = 0;

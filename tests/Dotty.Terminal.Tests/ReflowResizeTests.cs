@@ -177,20 +177,23 @@ public sealed class ReflowResizeTests
 
     // Anchor placement (plan 08, WI-R2): the reflow resolves only the cursor, saved cursors and prompt marks. These pin
     // that each lands on its own character, in the middle of a wrapped line, and where its row was trimmed away.
+    // Cursor movement clears the continuation flag of the row it moves onto, so the 12-character line is written on one
+    // 12-column row and the cursor placed on it before any resize; the first resize is what makes the line wrap.
 
     [Fact]
     public void CursorInsideWrappedLineStaysOnItsCharacterAcrossResizes()
     {
-        var buffer = new TerminalBuffer(rows: 3, columns: 8);
+        var buffer = new TerminalBuffer(rows: 3, columns: 12);
         buffer.WriteText("abcdefghijkl".AsSpan(), CellAttributes.Default);
-        buffer.SetCursor(1, 1); // on 'j'
+        buffer.SetCursor(0, 9); // on 'j'
 
-        buffer.Resize(3, 4); // abcd / efgh / ijkl
+        buffer.Resize(3, 4); // abcd / efgh / ijkl: one logical line over three rows
         Assert.Equal("ijkl", buffer.GetRowText(2));
         Assert.Equal(2, buffer.CursorRow);
         Assert.Equal(1, buffer.CursorCol);
 
-        buffer.Resize(3, 8); // abcdefgh / ijkl
+        buffer.Resize(3, 8); // abcdefgh / ijkl: the cursor now sits on a continuation row
+        Assert.Equal("abcdefgh", buffer.GetRowText(0));
         Assert.Equal("ijkl    ", buffer.GetRowText(1));
         Assert.Equal(1, buffer.CursorRow);
         Assert.Equal(1, buffer.CursorCol);
@@ -199,9 +202,9 @@ public sealed class ReflowResizeTests
     [Fact]
     public void SavedCursorFollowsItsCharacterAcrossResize()
     {
-        var buffer = new TerminalBuffer(rows: 3, columns: 8);
+        var buffer = new TerminalBuffer(rows: 3, columns: 12);
         buffer.WriteText("abcdefghijkl".AsSpan(), CellAttributes.Default);
-        buffer.SetCursor(1, 1); // on 'j'
+        buffer.SetCursor(0, 9); // on 'j'
         buffer.SaveCursor();
         buffer.SetCursor(0, 0);
 
@@ -217,9 +220,9 @@ public sealed class ReflowResizeTests
     [Fact]
     public void PromptMarkInsideWrappedLineFollowsItsCharacter()
     {
-        var buffer = new TerminalBuffer(rows: 3, columns: 8);
+        var buffer = new TerminalBuffer(rows: 3, columns: 12);
         buffer.WriteText("abcdefghijkl".AsSpan(), CellAttributes.Default);
-        buffer.SetCursor(1, 1); // on 'j'
+        buffer.SetCursor(0, 9); // on 'j'
         buffer.AddPromptMark(PromptKind.Prompt);
 
         buffer.Resize(3, 4);

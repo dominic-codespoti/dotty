@@ -137,7 +137,7 @@ printf '\033]52;c;?\033\\'; IFS= read -rs -t 5 -d '\\' reply; printf '%s\n' "$re
 
 Then, under `"ask"`, also verify:
 
-1. `printf '\033]52;p;?\033\\'` never prompts or replies (Primary reads are not served).
+1. `printf '\033]52;p;?\033\\'` never prompts or replies on Wayland, macOS, and Windows (Primary reads are served on X11 only; on X11 it prompts exactly like a clipboard read).
 2. With `"osc52ReadLimitBytes": 4`, the `hello` request is dropped silently.
 3. Issue the request, switch to another tab or focus another window before
    answering: no prompt appears until the requesting tab is active and Dotty is
@@ -205,6 +205,77 @@ reload), while a typed `https://example.com` still is; a Lua
 Opening itself goes through `xdg-open` (Linux), `open` (macOS), and ShellExecute
 (Windows); see [Platform Support](PlatformSupport.md#manual-link-opener-checks) for the
 per-platform checks.
+
+## Manual smoke: X11 primary selection, copy-on-select, and middle-click
+
+**Manual verification only; nothing in CI draws a window, selects text, or reads the X11 PRIMARY selection.** The unit tests (`MouseOptionsTests`, `TerminalMouseControllerTests`, `ClipboardReadServiceTests`) cover the policy and host seams. Use an isolated configuration, a native X11 session (Xvfb with a pointer-injection tool also works), and any independent PRIMARY reader such as `xclip -o -selection primary`:
+
+```bash
+mkdir -p /tmp/dotty-primary
+cat > /tmp/dotty-primary/config.json <<'EOF'
+{ "mouse": { "copyOnSelect": "primary", "middleClickAction": "primary-paste" },
+  "clipboard": { "allowOsc52Write": true, "osc52Read": "allow" } }
+EOF
+DOTTY_CONFIG_HOME=/tmp/dotty-primary dotnet run --project src/Dotty/Dotty.csproj -c Release
+```
+
+(`osc52Read: allow` is for this throwaway profile only.) Then:
+
+| Check | Expected |
+|---|---|
+| Print some text and drag-select it | `xclip -o -selection primary` in another terminal prints it; the selection stays highlighted; the clipboard (Ctrl+Shift+V) is unchanged |
+| Set `copyOnSelect` to `both`, reselect | PRIMARY and the clipboard both hold the text |
+| Set `copyOnSelect` to `clipboard`, reselect | only the clipboard changes |
+| Double-click a word, triple-click a line | the word/line is copied the same way; `none` copies nothing |
+| Middle-click in a second pane or tab with `primary-paste` | the PRIMARY text is pasted (a multi-line paste still asks to confirm, per `clipboard.confirmPaste`) |
+| `clipboard-paste` / `ignore` | middle-click pastes the clipboard / does nothing |
+| Enable mouse reporting (`printf '\e[?1000h\e[?1006h'; cat`), middle-click | the app receives the report; Shift+middle-click pastes locally |
+| `printf '\e]52;p;%s\a' "$(printf hello \| base64)"` | `xclip -o -selection primary` prints `hello` |
+| `printf '\e]52;p;?\a'` | the reply `ESC ] 52 ; p ; <base64> ESC \` arrives (view it with `cat -v`) |
+
+On Wayland, macOS, and Windows the PRIMARY selection is an in-process buffer: repeat the copy-on-select and middle-click rows and confirm that pasting between panes works but no other application sees the text, that `printf '\e]52;p;...'` does not change the clipboard, and that a primary-only OSC 52 read gets no reply. These per-platform results are manual evidence only.
+
+## Manual smoke: shell-integration injection
+
+**Manual verification only.** `ShellIntegrationLauncherTests` check the argv/environment rewrite and `ShellIntegrationInjectionTests` run the bash wrapper; no automated test launches zsh, fish, or PowerShell through Dotty. With a throwaway profile (`DOTTY_CONFIG_HOME=/tmp/dotty-inject`, `config.json` containing `{ "shellIntegration": "detect" }`) start Dotty once per shell and confirm in each:
+
+| Shell | Start with | Check |
+|---|---|---|
+| bash | `dotty --shell /usr/bin/bash` | the idempotence guard from [Shell Integration](ShellIntegration.md#what-each-script-guarantees) is set; `echo $DOTTY_SHELL_INTEGRATION $DOTTY_SHELL_INTEGRATION_DIR` prints `1` and the directory; your `~/.bashrc` still ran (an alias or prompt of yours is present) |
+| zsh | `dotty --shell /usr/bin/zsh` (also once with `ZDOTDIR` pointing at a directory of your own) | the guard is set after the first prompt; `echo $ZDOTDIR` is your value or empty, never Dotty's `inject/zsh`; your own `.zshenv`/`.zshrc` ran |
+| fish | `dotty --shell /usr/bin/fish` | the guard is set; `echo $XDG_DATA_DIRS` does not contain `inject/xdg` |
+| PowerShell 7 (Windows and Linux) | `dotty --shell pwsh` | `$global:DottyShellIntegrationInstalled` is true; no error text appears at startup |
+
+In every shell, `cd /tmp`, then open a new tab with Ctrl+Shift+T: it starts in `/tmp` (OSC 7), and Ctrl+Shift+PageUp jumps to the previous prompt (OSC 133). Negative checks: `DOTTY_SHELL_INTEGRATION=0 dotty --shell /usr/bin/bash` leaves the guard unset; `dotty -- bash` and `dotty --shell /bin/sh` are not injected; `DOTTY_SHELL_INTEGRATION_DIR=/nonexistent dotty ...` injects nothing and the shell starts normally; with the config set to `none`, nothing is injected. For a published archive repeat the bash and zsh rows from the extracted directory, which proves that the dotfile `inject/zsh/.zshenv` survived packaging. If your system `/etc/zshenv` sets `ZDOTDIR` (for example under Nix), zsh injection is expected to do nothing; see [Shell Integration](ShellIntegration.md#automatic-injection).
+
+## Manual smoke: `+explain-config`
+
+The action is unit-tested (`ConfigCatalogTests`, `DottyLaunchOptionsTests`); running the built binary is a quick manual check of the early-exit contract:
+
+```bash
+dotty +explain-config | head            # exit 0: one line per option
+dotty +explain-config mouse.copyOnSelect # type, default, values, scope, description
+dotty +explain-config mouse             # the group
+dotty +explain-config nosuch; echo $?   # message and suggestions on stderr, exit 1
+dotty +explain-config a b; echo $?      # usage error, exit 2
+DOTTY_CONFIG_HOME=/tmp/never-created env -u DISPLAY -u WAYLAND_DISPLAY dotty +explain-config vt
+ls /tmp/never-created                   # must not exist: no config was loaded or created
+```
+
+## Manual smoke: window operations and visibility reports
+
+**Manual verification only**: the adapter side is covered by `WindowOpsTests` and `VisibilityReportTests` and the host policy by `VtHostPolicyTests`, but nothing in CI resizes or minimizes a real window. Use a single-tab, single-pane, non-maximized window. Replies are visible with `cat -v` after the query.
+
+| Check | Expected |
+|---|---|
+| `printf '\e[18t\e[14t\e[16t\e[13t\e[15t\e[19t'; cat -v` | `^[[8;rows;colst`, `^[[4;h;wt`, `^[[6;h;wt`, `^[[3;x;yt`, `^[[5;h;wt`, `^[[9;rows;colst`; `20t`/`21t` print nothing; on a platform where the position cannot be read, `13t` reports `0;0` |
+| `printf '\e[8;30;100t'` with `vt.windowResizeAllowed` at its default | nothing happens |
+| the same with `"vt": { "windowResizeAllowed": true }` | the window becomes 100 x 30 cells (give it a frame, then `printf '\e[18t'; cat -v`); the window manager may still constrain the size, which is its decision |
+| the same with two tabs open, a split pane, or a maximized/fullscreen window | ignored |
+| `printf '\e[?2033h'; cat -v` | immediately `^[[?999;1n`; switch to another tab and back: the first tab then shows `^[[?999;2n` followed by `^[[?999;1n` (the report for the hidden state is already in its output when you return). Minimizing and restoring should behave the same where GLFW reports iconification; Dotty cannot observe minimize on Wayland (see the code comment in `NativeGlfwMetadata.IsWindowIconified`), so only tab switches report there |
+| `printf '\e[?998n'; cat -v` | one `^[[?999;1n` while visible, with mode 2033 untouched |
+
+Whether a Windows ConPTY session delivers these queries and replies unchanged to the application is **unverified**: ConPTY sits between the application and Dotty, and nothing in this repository tests window or visibility queries through it.
 
 ## Artifact smoke
 

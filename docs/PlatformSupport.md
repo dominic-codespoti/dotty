@@ -217,6 +217,24 @@ On every platform, confirm that Cancel (and Escape or a click outside the prompt
 launches nothing, and that **Copy link address** copies the canonical URL, not the
 text printed in the terminal.
 
+## Primary selection, window reports, and visibility by platform
+
+These behaviors depend on what GLFW and the window system expose. The decision logic is unit-tested; the per-platform results below are **manual verification** (recipes in [E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click)), and CI exercises none of them.
+
+| Behavior | Linux X11 | Linux Wayland | macOS | Windows |
+|---|---|---|---|---|
+| PRIMARY selection (`mouse.copyOnSelect` `primary`/`both`, `primary-paste`, OSC 52 `p`) | The system PRIMARY selection, through GLFW's X11-only `glfwGetX11SelectionString`/`glfwSetX11SelectionString` | In-process buffer only; OSC 52 `p`/`s` is dropped | In-process buffer only; OSC 52 `p`/`s` is dropped | In-process buffer only; OSC 52 `p`/`s` is dropped |
+| `CSI 13 t` window position, `CSI 15 t` screen size | `glfwGetWindowPos` and the primary monitor's video mode, polled every 250 ms | the position query is skipped (a Wayland client cannot know its position), so `13 t` reports `0;0`; the screen size uses the same monitor query | same calls as X11 | same calls as X11 |
+| Visibility (mode 2033, `CSI ? 998 n`) | Not-visible when GLFW reports the window iconified, the framebuffer is zero-sized, or the tab is not active | Minimizing is not observable (no GLFW iconified state); zero-size framebuffer and tab switches still count | as X11 | as X11 |
+| `CSI 8 t` resize (`vt.windowResizeAllowed`) | Sets the window client size; the window manager may constrain it | same; compositor behavior is unverified | same | same |
+
+Notes:
+
+- The "same calls" cells state what the code does, not that the reported values are meaningful on that platform: if an export is missing the position stays `0;0` and the screen size falls back to the text-area size, and the screen size is that of the **primary** monitor, not necessarily the one holding the window. Whether the monitor query returns a useful size on Wayland was not verified.
+- Resize requests are ignored when the gate is off, with several tabs, with split panes, or when the window is maximized, fullscreen, or minimized; see [Parsing](Parsing.md#window-operations-csi-ps--ps--ps-t).
+- **Windows ConPTY:** that window-report, DECXCPR, DECRQCRA, and visibility queries (and their replies) pass through ConPTY unchanged to the application is **unverified**. The conformance run uses the Unix PTY path only (see [Conformance](Conformance.md)).
+- Shell-integration auto-injection on Windows supports PowerShell and bash only; zsh and fish are not injected there (see [Shell Integration](ShellIntegration.md#automatic-injection)).
+
 ## Promotion gates
 
 Support promotion is staged:

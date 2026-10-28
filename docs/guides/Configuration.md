@@ -58,8 +58,9 @@ handling. Holding Shift overrides reporting and restores the local controls.
 
 When local handling is active, left-drag selects characters, double-click
 selects a word, triple-click selects a line, and dragging outside the pane
-autoscrolls while extending the selection. Middle-click pastes into the target
-pane; a paste that contains line breaks (outside an application's bracketed
+autoscrolls while extending the selection. By default middle-click pastes the
+clipboard into the target
+pane (see `mouse.middleClickAction` below); a paste that contains line breaks (outside an application's bracketed
 paste), control characters, or a paste-end marker first asks for confirmation
 unless `clipboard.confirmPaste` is false. Ctrl+left-click opens a hyperlink,
 whether it is an OSC 8 link or a detected URL, resolved from a fresh buffer
@@ -69,6 +70,37 @@ A reporting pane receives the click as a terminal mouse event unless Shift is
 held. See the `clipboard` and `hyperlinks` sections of the
 [Configuration reference](../Configuration.md#clipboard) for the options, the
 OSC 52 clipboard read policy (`osc52Read`, denied by default), and the prompts.
+
+## Mouse, VT, and shell-integration options
+
+Three small option groups change behavior that is off or conservative by
+default. Edit them in `config.json` (or `dotty.config` in Lua) like any other
+setting; the [reference](../Configuration.md#mouse) has the full tables.
+
+```json
+{
+  "mouse": { "copyOnSelect": "primary", "middleClickAction": "primary-paste" },
+  "vt": { "windowResizeAllowed": false, "checksumReportEnabled": false },
+  "shellIntegration": "detect"
+}
+```
+
+- `mouse.copyOnSelect` (`none`, `primary`, `clipboard`, `both`) copies a finished
+  selection without clearing it; `mouse.middleClickAction` (`primary-paste`,
+  `clipboard-paste`, `ignore`) chooses what a middle click does. The PRIMARY
+  selection is shared with other applications on X11 only; elsewhere it stays
+  inside Dotty. Both options apply to the next selection or click after a reload.
+- `vt.windowResizeAllowed` and `vt.checksumReportEnabled` stay `false` unless you
+  trust everything that prints to the terminal: one lets programs resize the
+  window, the other lets them read the screen back.
+- `shellIntegration: "detect"` starts bash, zsh, fish, and PowerShell with the
+  OSC 7/133 scripts loaded; set `DOTTY_SHELL_INTEGRATION=0` in Dotty's
+  environment to opt out. It affects new tabs and panes only. See
+  [Shell Integration](../ShellIntegration.md#automatic-injection).
+
+To see every option with its default, run `dotty +explain-config`, or
+`dotty +explain-config mouse.copyOnSelect` for one. It reads no config file and
+opens no window.
 
 ## Safe edits and troubleshooting
 

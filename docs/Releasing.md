@@ -44,6 +44,20 @@ Use these bump rules:
 
 A recommendation is advice, not authorization. The assistant MUST report the current version, latest tag, reviewed changes, proposed bump, and readiness/gaps, then wait for explicit user authorization before changing the central version, pushing a tag, manually dispatching publication, or otherwise publishing. A request to analyze or recommend a release is not permission to execute one.
 
+## Archive assertions
+
+`release.yml` fails the build when a published archive lacks the shell-integration payload. The injection files are required in addition to the opt-in scripts because automatic injection (`shellIntegration: "detect"`) silently does nothing without them, and `inject/zsh/.zshenv` is a dotfile that a plain `*` glob would drop (`Dotty.csproj` packages `shell-integration/**/*` recursively for this reason).
+
+| Where | Asserted |
+|---|---|
+| Linux and macOS publish output (`Verify Linux artifact`, `Verify macOS artifact`) | `shell-integration/dotty.bash`, `inject/bash/dotty-rcfile.bash`, `inject/zsh/.zshenv`, `inject/xdg/fish/vendor_conf.d/dotty-shell-integration.fish` |
+| Windows publish output (`Verify Windows artifact`) | `dotty.bash`, `Dotty.ps1`, `inject\bash\dotty-rcfile.bash`, `inject\zsh\.zshenv` |
+| `smoke-release-assets`, every `.tar.gz` | the same four Unix files as above, in addition to the executable and native libraries |
+| `smoke-release-assets`, every `.zip` | `shell-integration/Dotty.ps1` and `shell-integration/inject/bash/dotty-rcfile.bash` |
+| Extracted Linux archive (Xvfb start) | `shell-integration/dotty.bash` and `shell-integration/inject/zsh/.zshenv` exist before the host is started |
+
+These are presence checks only. They do not run any injected shell; see [Shell Integration](ShellIntegration.md#verification-scope). The Linux archive start under Xvfb is the only automated GUI start of a release artifact.
+
 ## Build portability and platform readiness
 
 Public release builds use the portable NativeAOT baseline by default. Do not force a host-specific CPU instruction set into published artifacts: a previous GitHub artifact failed on a consumer CPU with an unsupported-instruction exit (134). Local performance experiments MAY opt into native CPU tuning explicitly with -p:IlcInstructionSet=native; that is for comparable local measurements, not a portable release artifact.

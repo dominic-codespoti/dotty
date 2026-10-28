@@ -29,9 +29,12 @@ Dotty is a modern terminal emulator composed of:
 - Runtime JSON configuration hot-reload with platform-specific paths
 - [Kitty keyboard negotiation](docs/KeyboardProtocol.md), native press/repeat/release, and committed Unicode scalars
 - [Direct command launches](docs/CommandLine.md) with literal arguments, working directories, and child exit status
+- `dotty +explain-config [OPTION]` documents every configuration option from the command line without opening a window
 - OSC 52 clipboard policy: writes denied by default, reads (`osc52Read`) `deny` by default with an `ask` prompt option
 - Confirmation prompts for risky pastes and risky or blocked links (OSC 8 and detected URLs), with a hard scheme blocklist and `hyperlinks` policy
-- Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy
+- Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy, optionally injected automatically (`shellIntegration: "detect"`)
+- Mouse options (`mouse.copyOnSelect`, `mouse.middleClickAction`) with the X11 PRIMARY selection on X11 and an in-process fallback elsewhere, and opt-in VT switches (`vt.windowResizeAllowed`, `vt.checksumReportEnabled`); see [configuration](docs/Configuration.md#mouse)
+- [esctest2 conformance run](docs/Conformance.md) on Linux CI (reporting only until a baseline is captured)
 - [Performance regression snapshots](docs/Performance.md) and [native desktop verification lanes](docs/NativeDesktopAndIme.md)
 
 ## Install

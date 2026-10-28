@@ -110,27 +110,139 @@ The parser handles all standard CSI sequences:
 
 Kitty keyboard protocol CSI commands (`CSI =`, `>`, `<`, and `?` ending in `u`) are handled separately from legacy numeric CSI parameters; DA1, DA2, and unsupported DA3 requests are distinguished by the `CSI c` private introducer. See [Keyboard Protocol and Compatibility](KeyboardProtocol.md) for the negotiation stack, supported flags, screen scoping, and exact replies.
 Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather than `OnEraseDisplay(3)`.
-`CSI ? 6 n` (DEC private CPR query) is routed to `OnCursorPositionReport()` so shells like PSReadLine
-receive a private CPR response (`ESC[?row;colR`) instead of the standard DSR response format.
-`CSI ? Ps n` with `Ps` other than 6 is routed to `OnPrivateDeviceStatusReport(Ps)`; `CSI > Ps n` is not a status report and is ignored. The adapter does not implement `OnPrivateDeviceStatusReport`, so these queries receive no reply.
-`CSI Ps ; Ps ; Ps t` is routed to `OnWindowOperation(operation, arg1, arg2)`; omitted parameters are 0 and the `?`, `>` and `<` forms are ignored. The adapter implements operation 14 (reply `CSI 4 ; height ; width t` in pixels), 18 (reply `CSI 8 ; rows ; cols t`) and 20/21 (reply an empty `ESC ] 0 ; ST` title); every other operation is ignored. This handler replaces the former `OnWindowReport(int)`.
+`CSI Ps n` is the status report family; see [Status reports](#status-reports-dsr-cpr-and-decxcpr). `CSI ? 6 n` (DECXCPR) is routed to `OnCursorPositionReport()`, so shells like PSReadLine receive the private form `ESC[?row;col;pageR`. `CSI ? Ps n` with `Ps` other than 6 is routed to `OnPrivateDeviceStatusReport(Ps)`; only `998` is answered (see [Visibility reports](#visibility-reports-mode-2033-and-csi--998-n)). `CSI > Ps n` is not a status report and is ignored.
+`CSI Ps ; Ps ; Ps t` is routed to `OnWindowOperation(operation, arg1, arg2)`; omitted parameters are 0 and the `?`, `>` and `<` forms are ignored. See [Window operations](#window-operations-csi-ps--ps--ps-t).
 
-#### Routed sequences with default no-op handlers
-
-The parser routes the sequences below to `ITerminalHandler` methods that have empty default bodies. Only the rows marked "implemented" change terminal state or produce replies; the rest are recognized, consumed whole, and otherwise ignored, so they no longer leak into the cursor, SGR, or text path.
+#### Routed sequences
 
 | Sequence | Handler | Behaviour in `TerminalAdapter` |
 |---|---|---|
-| `CSI ! p` (DECSTR; numeric parameters before `!` are ignored) | `OnSoftReset()` | Not implemented: the adapter has no override, so terminal state is **not** reset. The parser does reset its own G0/G1 charset to ASCII. |
-| `CSI ? Ps n`, `Ps != 6` | `OnPrivateDeviceStatusReport(Ps)` | Not implemented; no reply. (`CSI ? 6 n` is implemented via `OnCursorPositionReport()`.) |
-| `CSI Ps ; Ps ; Ps t` | `OnWindowOperation(op, a1, a2)` | Implemented for operations 14, 18, 20 and 21 (see above). |
-| `CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` (DECRQCRA) | `OnRequestChecksum(...)` | Not implemented; no reply. A well-formed request is consumed; a malformed one is rejected by the numeric parser and dropped. |
+| `CSI ! p` (DECSTR; numeric parameters before `!` are ignored) | `OnSoftReset()` | Implemented: see [DECSTR and RIS](#decstr-and-ris-reset-sets). The parser also resets its own G0/G1 charset to ASCII. |
+| `ESC c` (RIS) | `OnFullReset()` | Implemented: see [DECSTR and RIS](#decstr-and-ris-reset-sets). The parser also resets its charset to ASCII. |
+| `CSI Ps n` | `OnDeviceStatusReport(Ps)` | 5 and 6 answered; every other code is silent. |
+| `CSI ? 6 n` | `OnCursorPositionReport()` | DECXCPR, implemented. |
+| `CSI ? Ps n`, `Ps != 6` | `OnPrivateDeviceStatusReport(Ps)` | Only 998 is answered; others are silent. |
+| `CSI Ps ; Ps ; Ps t` | `OnWindowOperation(op, a1, a2)` | Operations 8, 13-16, 18, 19 and Ps >= 24 act; the rest are ignored. |
+| `CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` (DECRQCRA) | `OnRequestChecksum(...)` | Implemented but **gated**: no reply unless `vt.checksumReportEnabled` is set. A well-formed request is always consumed; a malformed one is rejected by the numeric parser and dropped. |
 | `CSI ? 66 h/l` (DECNKM) | `OnSetKeypadApplicationMode(enabled)` | Implemented: shares state with `ESC =` / `ESC >` (DECKPAM/DECKPNM). |
-| `CSI ? 67 h/l` (DECBKM) | `OnSetBackarrowKeyMode(sendsBackspace)` | Not implemented; Backspace encoding is unchanged. |
-| `CSI ? 2027 h/l` | none | Accepted and ignored: grapheme clustering is always on. |
-| `CSI ? 2033 h/l` | `OnSetVisibilityReports(enabled)` | Not implemented; no visibility reports are sent. |
+| `CSI ? 67 h/l` (DECBKM) | `OnSetBackarrowKeyMode(sendsBackspace)` | Implemented: see [Keyboard Protocol](KeyboardProtocol.md#decbkm-backarrow-key-mode-67). |
+| `CSI ? 47 h/l`, `CSI ? 1047 h/l` | `OnSwitchAlternateScreen(enabled)` | Screen switch only, no cursor save/restore; see [DECSET 47, 1047, 1048, 1049](#decset-47-1047-1048-and-1049). |
+| `CSI ? 1049 h/l` | `OnSetAlternateScreen(enabled)` | Cursor save + alternate screen; same section. |
+| `CSI ? 1048 h/l` | `OnSaveCursor()` / `OnRestoreCursor()` | Save/restore cursor; see the same section. |
+| `CSI ? 2027 h/l` | none | Accepted and ignored: grapheme clustering is always on (see [Grapheme clusters](#combining-cap-grapheme-clusters-and-the-grapheme-store)). |
+| `CSI ? 2033 h/l` | `OnSetVisibilityReports(enabled)` | Implemented: see [Visibility reports](#visibility-reports-mode-2033-and-csi--998-n). |
 
-DECRQM replies are unchanged by this routing: modes 66, 67, 2027, and 2033 still report `0` (not recognized). Mode 9 (X10 mouse) is deliberately **not** routed because the input encoder has no press-only X10 encoding.
+Mode 9 (X10 mouse) is deliberately **not** routed because the input encoder has no press-only X10 encoding.
+
+#### DECSTR and RIS reset sets
+
+DECSTR (`CSI ! p`, `TerminalAdapter.OnSoftReset`) and RIS (`ESC c`, `TerminalAdapter.OnFullReset`) share one core (`ResetTerminalModesCore` plus `TerminalBuffer.ApplySoftResetCore`) so the two cannot drift.
+
+| State | DECSTR | RIS |
+|---|---|---|
+| Cursor visibility (DECTCEM) and shape (DECSCUSR) | reset (visible, block, blinking) | reset |
+| Scroll margins (DECSTBM) | reset to the full screen; cursor is **not** homed | reset |
+| Origin mode (DECOM), autowrap (DECAWM) | reset (off, on) | reset |
+| Saved cursor (DECSC) and saved SGR attributes | reset to home / default | reset |
+| Current SGR attributes (including an open OSC 8 link) | reset | reset |
+| DECCKM, DECKPAM/DECNKM (66), modifyOtherKeys level | reset | reset |
+| ANSI palette (OSC 4 overrides) | reset | reset |
+| OSC 10/11 default fg/bg overrides | kept | reset |
+| Screen contents, scrolled-line count, cursor position | kept | cells cleared, count zeroed, cursor homed |
+| Alternate screen | kept | left (main screen restored, both screens cleared) |
+| Tab stops | kept | back to the defaults |
+| Bracketed paste (2004), mouse modes and encodings, focus reporting (1004) | kept | reset |
+| Synchronized update (2026) | kept | ended |
+| Kitty keyboard flags and stacks | kept | reset |
+| Prompt marks (OSC 133) | kept | cleared |
+| DECBKM (67) | **kept** | reset |
+| Visibility reports (2033) | **kept** | disabled |
+| Window title | kept | kept (like xterm) |
+| Host-reported visibility, `vt.*` switches | not terminal state | not terminal state |
+
+DECSTR also does not touch the checksum (`vt.checksumReportEnabled`) switch, which is host configuration rather than terminal state.
+
+#### Status reports (DSR, CPR and DECXCPR)
+
+- `CSI 5 n` answers `CSI 0 n` (ready).
+- `CSI 6 n` (CPR) answers `CSI row ; col R`, 1-based.
+- `CSI ? 6 n` (DECXCPR) answers `CSI ? row ; col ; page R`. The page is always `1` because Dotty has a single page.
+- With origin mode (DECOM) set, the row in both CPR forms is relative to the top margin (`TerminalBuffer.CursorRowForReport`); the column is always absolute.
+- Every other DSR code, `CSI Ps n` and `CSI ? Ps n` alike (except `CSI ? 998 n`), produces **no reply**, as in xterm, so a program that probes an unsupported report times out instead of receiving a made-up answer.
+
+#### Window operations (`CSI Ps ; Ps ; Ps t`)
+
+| Request | Result |
+|---|---|
+| `CSI 13 t` | `CSI 3 ; x ; y t`: window position; `0 ; 0` until the host reports one |
+| `CSI 14 t` | `CSI 4 ; height ; width t`: text area in pixels (grid size times cell size unless the host overrides it) |
+| `CSI 15 t` | `CSI 5 ; height ; width t`: screen size in pixels; the text-area size until the host reports the monitor |
+| `CSI 16 t` | `CSI 6 ; height ; width t`: cell size in pixels (default 8 x 16 until the host reports the real one) |
+| `CSI 18 t` | `CSI 8 ; rows ; cols t`: text area in characters |
+| `CSI 19 t` | `CSI 9 ; rows ; cols t`: the terminal grid (Dotty has no larger character screen) |
+| `CSI 20 t`, `CSI 21 t` | **silent**: xterm disables title reports by default because the reply injects text into the input stream |
+| `CSI 8 ; rows ; cols t` | resize request (below) |
+| `CSI Ps t`, `Ps >= 24` | resize request to `Ps` rows, columns unchanged (DECSLPP) |
+| any other `Ps` | ignored |
+
+The replies in the first rows are unconditional; they only read state. A resize **request** changes the window, so the adapter merely clamps it to `[0, 1000]` rows and columns (0 keeps that dimension; a request of 0 x 0 is dropped) and raises `WindowResizeRequested`; whether it is honoured is the host's decision (`VtHostPolicy.TryComputeResize`). It is ignored when:
+
+- `vt.windowResizeAllowed` is false (the default);
+- there is more than one tab, or the active tab has split panes;
+- the window is maximized, fullscreen or minimized;
+- the requested size equals the current grid.
+
+Otherwise the host queues the request (`VtResizeRequestQueue`: a later non-zero dimension overrides, 0 keeps), and the next frame sets the client size that holds the requested cells plus padding and tab-bar rows. The request is asynchronous, so a `CSI 18 t` sent in the same write can still report the old grid. The conformance host honours requests synchronously instead; see [Conformance](Conformance.md).
+
+#### Visibility reports (mode 2033 and `CSI ? 998 n`)
+
+Mode 2033 reports when the terminal becomes visible or hidden. Reports are `ESC [ ? 999 ; 1 n` (potentially visible) and `ESC [ ? 999 ; 2 n` (not visible).
+
+- `CSI ? 2033 h` always answers with the current state immediately, even when already enabled; `CSI ? 2033 l` never reports.
+- While enabled, a report is emitted on every **change** of visibility.
+- `CSI ? 998 n` is a one-shot query answered regardless of mode 2033 and leaves the mode unchanged.
+- RIS disables mode 2033; DECSTR does not.
+- Host rule (`VtHostPolicy.IsSessionVisible`): a session is potentially visible when its window is not minimized and its tab is the active one (every pane of the active tab counts). The window counts as minimized when GLFW reports it iconified or the framebuffer has zero size. GLFW cannot observe minimizing on Wayland, so there only tab switches and zero-size framebuffers change visibility. Unknown counts as visible.
+
+#### DECRQCRA (rectangular checksum)
+
+`CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` is answered with `DCS Pi ! ~ XXXX ST` (`XXXX` four uppercase hex digits, `Pi` echoed). Because the reply lets a program read the screen back, it is **off by default**: with `vt.checksumReportEnabled` false no reply is sent at all.
+
+The checksum is the plain 16-bit sum of the code points in the rectangle (xterm's `checksumExtension` with positive, no-attributes, no-trim, drawn and byte flags; not negated, no attribute bits). An unwritten cell counts as a space (0x20), the continuation half of a wide character is skipped, and only the base code point of a combining cluster counts. Omitted or out-of-range bounds default to the whole screen; with origin mode set, rows are relative to the scroll region. An empty rectangle, or a page other than 0 or 1, sums to 0.
+
+#### Combining cap, grapheme clusters and the grapheme store
+
+- A cell holds at most one base code point plus **64** combining code points (`GraphemeHelper.MaxCombiningCodepointsPerCell`, the Ghostty 1.4 limit). Further marks are consumed and dropped, never splitting a surrogate pair.
+- Multi-code-point clusters live in one process-wide, append-only, de-duplicating `GraphemeStore` addressed by the 16-bit index in each cell: at most 32,767 distinct clusters, shared by all sessions. Entries are **never evicted**, because any live or scrollback cell may still hold an index. When the store is full a new cluster is not stored and the cell degrades to its base code point (a mark appended to an existing cell leaves the cell as it was). Indices never wrap or alias.
+- The text-run width cache in `BufferTextWriter` is separately bounded (4096 entries, cleared when exceeded).
+- Mode 2027 (grapheme clustering) is permanently set: `CSI ? 2027 h/l` is accepted and ignored and DECRQM reports `3`. **Limitation:** segmentation works per text run, not across the byte stream. A cluster split across parser runs or `Feed` calls is only re-joined for trailing zero-width marks, not for ZWJ, regional-indicator or Hangul continuations.
+
+#### DECSET 47, 1047, 1048 and 1049
+
+`CSI ? 1049 h/l` (`OnSetAlternateScreen`) saves the cursor on entry and restores it when leaving. `CSI ? 47 h/l` and `CSI ? 1047 h/l` (`OnSwitchAlternateScreen`) switch screens only: leaving does not restore the cursor, which stays where the alternate screen left it. For all three, entering clears the alternate screen, leaving restores the main screen and its scrolled-line count, and the per-screen Kitty keyboard state follows the active screen. DECRQM for 47, 1047 and 1049 reports the live alternate-screen state, so a program that entered with one and queries another sees the same answer. `CSI ? 1048 h` saves the cursor and SGR attributes (as `ESC 7`), `CSI ? 1048 l` restores them; it is an action, so DECRQM reports 1048 as permanently reset (`4`).
+
+#### DECRQM status table
+
+DECRQM (`CSI ? Pd $ p`, `CSI Pd $ p`) answers `CSI ? Pd ; Ps $ y` / `CSI Pd ; Ps $ y` with `Ps`: 0 not recognized, 1 set, 2 reset, 3 permanently set, 4 permanently reset. The table lives in `TerminalAdapter.ModeReports.cs`.
+
+| Private mode | Reply |
+|---|---|
+| 1 (DECCKM), 6 (DECOM), 7 (DECAWM), 25 (DECTCEM), 66 (DECNKM), 67 (DECBKM) | 1 or 2, live state |
+| 47, 1047, 1049 (alternate screen) | 1 or 2, live state |
+| 1000, 1002, 1003 (mouse tracking), 1005, 1006, 1015 (mouse encoding), 1004 (focus) | 1 or 2, live state |
+| 2004 (bracketed paste), 2026 (synchronized update), 2033 (visibility reports) | 1 or 2, live state |
+| 2 (DECANM; there is no VT52 mode), 2027 (grapheme clustering) | 3 |
+| 3, 4, 5, 8, 9, 12, 18, 19, 40, 42, 45, 69, 80, 95, 1007, 1016, 1048 | 4: recognized and ignored (or, for 1048, an action) |
+| 11, 16, 53, 59, 60, 61, 64, 68, 73, 81 | 4: xterm "recognized, unimplemented" modes |
+| anything else | 0 |
+
+| ANSI mode | Reply |
+|---|---|
+| 1, 2, 3, 4, 5, 7, 10, 11, 13 through 19, 20 | 4: `CSI Ps h/l` is not supported at all |
+| 12 (SRM) | 3: Dotty never echoes locally |
+| anything else | 0 |
+
+The reply is built without allocation; counts in every parameter saturate (see Parameter Parsing) so an enormous mode number reports `0` rather than aliasing a real mode.
 
 #### Cursor and character-edit clamping
 
@@ -355,11 +467,11 @@ Format: `ESC ] 52 ; Pc ; Pd ST`. Handled by `TerminalAdapter.HandleOsc52`; the a
 | `Pd` empty | Write of the empty string. |
 | other `Pd` | Base64 decoded, then UTF-8 decoded, then `ClipboardWriteRequested(ClipboardWriteRequest(selection, text))`. Invalid base64 is ignored. |
 
-**Write policy (host, `DottyWindowHost.EnqueueClipboardWrite`):** dropped unless `clipboard.allowOsc52Write` is true; dropped when the selection does not include the clipboard (Primary-only writes are ignored until an X11 selection helper exists, so they never clobber the clipboard); dropped when the decoded text exceeds `MaxOsc52WriteBytes` = 786,432 bytes (checked as UTF-16 length and as UTF-8 byte count). Accepted writes are coalesced (a session's newer write replaces its pending one) and queued with at most 32 entries and 4 MiB of pending text; excess is dropped. The Lua `clipboard_write` hook can still veto. See [Configuration](Configuration.md#clipboard).
+**Write policy (host, `DottyWindowHost.EnqueueClipboardWrite`):** dropped unless `clipboard.allowOsc52Write` is true; the Primary part of the selection is kept only when the PRIMARY selection is the system's (X11), so on other platforms a Primary-only write is dropped and never clobbers the clipboard; dropped when the decoded text exceeds `MaxOsc52WriteBytes` = 786,432 bytes (checked as UTF-16 length and as UTF-8 byte count). Accepted writes are coalesced (a session's newer write replaces its pending one) and queued with at most 32 entries and 4 MiB of pending text; excess is dropped. The Lua `clipboard_write` hook can still veto. See [Configuration](Configuration.md#clipboard).
 
 **Read policy (`osc52Read`, `ClipboardReadService`):** `deny` (default), `ask`, `allow`; unknown values mean `deny`.
 
-- The request is dropped before queueing when the selection does not include the clipboard (Primary reads are not served), when the mode is `deny`, or when the window is closing. Denials never produce a reply: not for policy, a Lua `clipboard_read` veto, a user "Deny", an oversize clipboard (more than `osc52ReadLimitBytes` UTF-8 bytes), an unavailable clipboard, or expiry. Only a genuinely empty clipboard answers (with an empty payload).
+- The request is dropped before queueing when the selection names neither the clipboard nor (on X11 only) the Primary selection, when the mode is `deny`, or when the window is closing; a request naming the clipboard is always served from the clipboard. Denials never produce a reply: not for policy, a Lua `clipboard_read` veto, a user "Deny", an oversize clipboard (more than `osc52ReadLimitBytes` UTF-8 bytes), an unavailable clipboard, or expiry. Only a genuinely empty clipboard answers (with an empty payload).
 - Pending requests live in a queue of at most 4 requests in total and 1 per session (the oldest wins; later ones are dropped), and expire after 30 s. They are served on the UI thread only while the window is focused and the requesting session's tab is the active tab; under `ask` they also wait while another menu or prompt is visible. Lowering the mode to `deny` while requests wait clears the queue.
 - The clipboard is read once. `allow` replies immediately with `ESC ] 52 ; c ; base64(text) ESC \` (always ST-terminated). `ask` shows a centered host prompt naming the (sanitized, truncated) tab title and previewing the same snapshot that will be sent, with **Deny** focused; Escape, click-outside, or replacement by another menu send nothing. Choosing **Allow** re-validates first: if `osc52Read` was changed to `deny` or the session left the window while the prompt was open, no reply is sent.
 
@@ -583,6 +695,12 @@ Typical performance on modern hardware:
 | `tests/Dotty.Terminal.Tests/Osc8ParserTests.cs` | Tests for OSC 8 hyperlink parsing |
 | `tests/Dotty.Terminal.Tests/ParserStringStateTests.cs` | ESC/CAN/SUB/C0 handling in OSC, DCS, APC/PM/SOS, and CSI |
 | `tests/Dotty.Terminal.Tests/ParserRoutingTests.cs` | DECSTR, `CSI ? Ps n`, `CSI Ps t`, DECRQCRA, and modes 66/67/2027/2033 routing |
+| `tests/Dotty.Terminal.Tests/SoftResetTests.cs`, `FullResetTests.cs`, `tests/Dotty.App.Tests/BufferResetTests.cs` | DECSTR and RIS reset sets |
+| `tests/Dotty.Terminal.Tests/DeviceStatusTests.cs` | DSR 5/6, DECXCPR, origin-relative CPR, silent unknown DSR |
+| `tests/Dotty.Terminal.Tests/WindowOpsTests.cs`, `VisibilityReportTests.cs` | `CSI Ps t` replies and resize requests, mode 2033 and `CSI ? 998 n` |
+| `tests/Dotty.Terminal.Tests/ChecksumReportTests.cs` | gated DECRQCRA and the checksum definition |
+| `tests/Dotty.Terminal.Tests/CombiningCapTests.cs`, `tests/Dotty.App.Tests/GraphemeStorageTests.cs` | 64-mark cap and the bounded grapheme store |
+| `tests/Dotty.Terminal.Tests/ModeReportTests.cs` | the DECRQM table and DECSET 47/1047/1048 |
 | `tests/Dotty.Terminal.Tests/SaturatedParameterTests.cs` | Saturating numeric parsing and cursor/ICH/DCH/ECH clamping |
 | `tests/Dotty.Terminal.Tests/RepeatCharacterTests.cs` | REP bound and equivalence |
 | `tests/Dotty.Terminal.Tests/Osc52Tests.cs` | OSC 52 selectors, write/read decoding |
@@ -605,6 +723,7 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-28 | Wave 2: DECSTR/RIS share one reset core; DSR/CPR/DECXCPR with silent unknown codes; DECBKM; window operations 13-19 and gated `CSI 8 t`; mode 2033 and `CSI ? 998 n`; gated DECRQCRA; 64-mark combining cap and a bounded, de-duplicating grapheme store; complete DECRQM table; DECSET 47/1047/1048. |
 | 2026-10-28 | Hardening pass: ESC/C0-correct string states (no 0x9C ST), APC/PM/SOS discard, saturating integers, routed DECSTR/`CSI ? Ps n`/`CSI Ps t`/DECRQCRA/modes 66,67,2027,2033 (default no-op handlers unless noted), `OnWindowOperation`, 1 MiB OSC cap with shrink-on-reset, window title cap, REP bound, ICH/DCH/ECH clamp, OSC 52 write/read policy, OSC 8 ingest validation and bounded URI table, strict OSC 7. |
 | 2026-10-07 | Palette behavior: adapter-local ANSI/xterm palette and dynamic-color overrides; OSC 4/10/11 set requests are silent, queries use rgb:RRRR/GGGG/BBBB and ST; OSC 104/110/111/112 resets and RIS restore overrides. |
 | 2026-10-06 | P0/P1: DECRQM (CSI ? Ps $ p / CSI Ps $ p), XTGETTCAP (DCS + q), modifyOtherKeys (CSI > 4 ; Pv m), OSC 4/10/11/12 behavior |

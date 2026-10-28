@@ -11,6 +11,7 @@ smoke tests. The desktop executable is `src/Dotty/Dotty.csproj`.
 | `tests/Dotty.Terminal.Tests` | terminal buffer, parser, hyperlinks, and reflow |
 | `tests/Dotty.NativePty.Tests` | `IPty` contracts, platform capabilities, Unix helper, and Windows ConPTY |
 | `tests/Dotty.App.SkiaTests` | Skia/OpenGL-adjacent rendering behavior |
+| `tests/Dotty.Conformance.Host` | not a test project: the headless `dotty-conformance-host` executable used by the esctest conformance run; referenced by `Dotty.App.Tests` and listed in `Dotty.slnx` (see [Conformance](Conformance.md)) |
 
 Test projects intentionally do not set a fixed `RuntimeIdentifier`. Native
 assets and conditional PTY tests must resolve for the runner that executes the
@@ -118,6 +119,40 @@ is manual verification with no CI coverage.
 real on Unix when present; zsh/fish/PowerShell are content checks) and
 `UnixPtyTests` (the helper's protocol variables do not reach the child).
 
+## VT, input, mouse, injection, and catalog tests
+
+Deterministic coverage for the behavior in [Parsing](Parsing.md), [Keyboard Protocol](KeyboardProtocol.md), [Configuration](Configuration.md), [Shell Integration](ShellIntegration.md), and [Command-line usage](CommandLine.md). They test the adapter, parser, encoder, policies, and host seams; none of them opens a window, and none exercises X11, Wayland, macOS, or Windows desktop behavior.
+
+`tests/Dotty.Terminal.Tests`:
+
+| Class | Covers |
+|---|---|
+| `SoftResetTests`, `FullResetTests` | DECSTR and RIS reset sets, including what each keeps |
+| `DeviceStatusTests` | DSR 5/6, DECXCPR, origin-relative CPR, silent unknown reports |
+| `WindowOpsTests` | `CSI Ps t` replies, resize-request clamping and the 20/21 silence |
+| `VisibilityReportTests` | mode 2033, `CSI ? 998 n`, edge triggering |
+| `ChecksumReportTests` | gated DECRQCRA and the checksum definition |
+| `CombiningCapTests` | the 64-mark cap and surrogate-safe truncation |
+| `ModeReportTests` | the complete DECRQM table and DECSET 47/1047/1048 |
+
+`tests/Dotty.App.Tests`:
+
+| Class | Covers |
+|---|---|
+| `BufferResetTests`, `GraphemeStorageTests` | buffer-side reset state; the bounded, de-duplicating grapheme store |
+| `BackarrowKeyTests` | DECBKM Backspace encoding |
+| `VtHostPolicyTests`, `VtUserConfigTests` | window-resize gating, visibility rule, client-size math, the resize mailbox; the `vt` config |
+| `MouseOptionsTests` | `mouse` option parsing, copy-on-select, the in-process primary selection, primary paste |
+| `ClipboardReadServiceTests`, `TerminalMouseControllerTests` | OSC 52 primary read policy; middle-click action and copy-on-select hook |
+| `ShellIntegrationLauncherTests` | pure injection rewrite: argv and environment for every shell and every non-injection case |
+| `ConfigCatalogTests` | the `+explain-config` drift guard (see [Adding an option](Configuration.md#adding-an-option)) and the action's output and exit codes |
+| `DottyLaunchOptionsTests` | parsing of `+explain-config` and its conflicts with other options |
+| `ConformanceHostTests` | the conformance host: option parsing, core switches, a run on a real PTY |
+
+`tests/Dotty.NativePty.Tests`: `ShellIntegrationInjectionTests` (the bash rcfile wrapper for real on Unix when `bash` is present; zsh and fish shims are content checks only; csproj packaging of the injection directory). The Ubuntu `build-and-test` job installs `zsh` and `fish`, but no test launches either of them, so real zsh/fish/PowerShell injection is manual verification only.
+
+The Python unit tests for the esctest scripts run with `python3 -m unittest discover -s scripts/esctest/tests` (CI: `code-quality`).
+
 ## Desktop smoke
 
 Linux X11:
@@ -177,7 +212,8 @@ The authoritative workflow is `.github/workflows/ci.yml`:
 | `build-and-test` | macOS arm64 `osx-arm64` | POSIX helper and host-native tests |
 | `build-and-test` | Windows `win-x64` | Host-native tests and ConPTY smoke |
 | `gui-smoke-linux` | Ubuntu `linux-x64` | X11 desktop startup under Xvfb |
-| `code-quality` | Ubuntu | `dotnet format whitespace` verification |
+| `code-quality` | Ubuntu | `dotnet format whitespace` verification, plus the Python unit tests for the benchmark and esctest scripts |
+| `esctest-linux` | Ubuntu | esctest2 conformance against the headless host; **not gating** until `tests/esctest/expected-failures.txt` carries the `# baseline-captured:` marker (see [Conformance](Conformance.md)) |
 | `performance-tests` | Ubuntu | Quick BenchmarkDotNet run on pull requests and `main` |
 
 The hosted macOS and Windows runners build and test native code but do not run

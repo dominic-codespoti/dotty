@@ -1,6 +1,6 @@
 # Dotty shell integration
 
-Shell integration is opt-in. Dotty does not install itself into shell startup files and none of these scripts edits a profile, rc file, or user configuration. Source the script in the shell where integration is wanted; closing that shell removes the setup.
+Shell integration is opt-in: either source a script by hand, or enable [automatic injection](#automatic-injection) with `shellIntegration: "detect"`. Dotty does not install itself into shell startup files and none of these scripts edits a profile, rc file, or user configuration. Source the script in the shell where integration is wanted; closing that shell removes the setup.
 
 From the repository checkout, use the script for the shell currently running:
 
@@ -26,6 +26,31 @@ Shell marker navigation uses the terminal's existing bounded prompt-mark collect
 - **Existing hooks are kept.** Bash chains the previous `DEBUG` trap and every `PROMPT_COMMAND` entry (array or string); PowerShell wraps the previous `prompt` function and `AddToHistoryHandler`; zsh uses `add-zsh-hook`; fish uses `--on-event` handlers (`fish_prompt` for the prompt marker and OSC 7, so it also fires on the first prompt and after an empty Enter; `fish_preexec`/`fish_postexec` for command boundaries).
 - **OSC 7 is always percent-encoded.** Every script writes `file://HOST/PATH` with each byte outside `A-Z a-z 0-9 / . _ ~ -` encoded as `%XX` of the path's UTF-8 bytes (fish uses `string escape --style=url`). Spaces, `?`, `#`, `%`, and non-ASCII names are therefore always safe for Dotty's strict parser. PowerShell does the encoding by hand (not `System.Uri`), skips non-filesystem providers, and on Windows reports `file:///C:/...`; a UNC location is reported with its server as the host and is ignored by Dotty because the host is not local.
 
+## Automatic injection
+
+Instead of sourcing a script by hand, set `"shellIntegration": "detect"` (default `"none"`; see [Configuration](Configuration.md#shellintegration)). Dotty then launches recognized shells so that they load the scripts above on their own. It is still opt-in and edits no dotfile: the rewrite is an argument or environment change for that one launch, and it is computed each time a session starts, so it applies to new tabs and panes only. `DOTTY_SHELL_INTEGRATION=0` (also `none`, `false`, `off`) in Dotty's own environment opts out regardless of the config.
+
+**Finding the scripts.** `ShellIntegrationLocator` uses `DOTTY_SHELL_INTEGRATION_DIR` when set (re-read on every launch), otherwise `shell-integration/` beside the executable, otherwise `../share/dotty/shell-integration`. A directory counts only if it contains `dotty.bash`; if none is found nothing is injected.
+
+**Which shell.** The shell is classified by file-name stem, case-insensitively and without `.exe`: `bash`, `zsh`, `fish`, `pwsh`, `powershell`. Everything else (`sh`, `dash`, `nu`, `cmd`, ...) launches unchanged.
+
+| Shell | Mechanism |
+|---|---|
+| bash | argv becomes `bash --rcfile <dir>/inject/bash/dotty-rcfile.bash -i`. `--rcfile` replaces the normal startup files, so the wrapper itself reads `/etc/bash.bashrc` (when present) and `~/.bashrc`, then sources `dotty.bash`. |
+| zsh | environment `ZDOTDIR=<dir>/inject/zsh` (not on Windows); a user `ZDOTDIR` is passed along as `DOTTY_ZSH_ZDOTDIR`. The shim `.zshenv` restores the user's `ZDOTDIR` (or unsets it), sources the user's own `.zshenv`, and registers a one-shot `precmd` function that sources `dotty.zsh` at the first prompt, so its hooks come after every rc file, and then emits the first prompt marks. |
+| fish | environment `XDG_DATA_DIRS=<dir>/inject/xdg:<existing, or /usr/local/share:/usr/share>` (not on Windows, and not when the directory path contains `:`). fish loads `vendor_conf.d/dotty-shell-integration.fish`, which removes Dotty's entry from `XDG_DATA_DIRS` again so children do not inherit it, and sources `dotty.fish` in interactive shells. |
+| PowerShell (`pwsh`, `powershell`) | argv becomes `<shell> -NoLogo -NoExit -Command "try { Invoke-Expression ([System.IO.File]::ReadAllText('<dir>/Dotty.ps1')) } catch { }"`, so a failure to load never stops the shell. |
+
+Every injected launch also gets `DOTTY_SHELL_INTEGRATION=1` and `DOTTY_SHELL_INTEGRATION_DIR=<dir>` in its environment; variables the caller supplies win over these.
+
+**What is not injected.** Nothing is rewritten for an explicit command (`dotty -- CMD ...`), for a shell string with arguments (`/usr/bin/env bash`, `bash --login`; a whole-string path that is an existing file, such as a Windows path with spaces, still counts), for an unrecognized shell, when the mode is `none` or misspelled, when the opt-out variable is set, or when the scripts directory is not found. Any unexpected error also means "launch unchanged". Shells that are already running, shells you start yourself inside a pane (for example over `ssh`), and shells Dotty did not classify never get integration; source the script by hand there.
+
+**Caveats.**
+
+- zsh reads `/etc/zshenv` before `$ZDOTDIR/.zshenv`. Dotty only sets `ZDOTDIR` in the child's environment, so a system-wide or distribution-managed zsh setup (for example a Nix or home-manager `/etc/zshenv`) that reassigns `ZDOTDIR` makes zsh skip Dotty's shim, and zsh injection then does nothing. This follows from zsh's startup order and has not been tested here; source `dotty.zsh` from your own `.zshrc` in that case.
+- The bash wrapper reproduces `/etc/bash.bashrc` and `~/.bashrc` only. A distribution that expects other files for non-login interactive shells is not replayed.
+- The shipped archive must contain the dotfile `inject/zsh/.zshenv`; the build packages `shell-integration/**` recursively and the release workflow asserts the files (see [Releasing](Releasing.md#archive-assertions)).
+
 ## OSC 7 acceptance rules
 
 Dotty only trusts a working directory it can validate. A report is **ignored** (the previous directory is kept) unless all of these hold:
@@ -45,3 +70,9 @@ Dotty starts every shell with `TERM_PROGRAM=dotty`, `TERM_PROGRAM_VERSION`, and 
 ## Verification scope
 
 The unit tests in `tests/Dotty.NativePty.Tests/ShellIntegrationScriptTests.cs` run Bash for real on Unix when `bash` is present (idempotence, byte-exact OSC 7 encoding, silent skip) and only check the text of the zsh, fish, and PowerShell scripts. Running zsh, fish, and PowerShell interactively (the PowerShell script on Windows with `pwsh`, and Windows PowerShell if you use it) is manual verification; there is no CI coverage of them.
+
+Injection is covered at three levels:
+
+- `tests/Dotty.App.Tests/ShellIntegrationLauncherTests.cs` checks the pure argv/environment rewrite for every shell and every non-injection case, and `SessionLaunchEnvironmentTests` checks that the injected variables merge into the launch environment.
+- `tests/Dotty.NativePty.Tests/ShellIntegrationInjectionTests.cs` runs the bash rcfile wrapper for real on Unix when `bash` is present (marks appear with injection and are absent without it) and, for zsh and fish, only reads the shim text; it also asserts that `Dotty.csproj` packages the injection directory recursively including dotfiles.
+- The CI Ubuntu `build-and-test` job installs `zsh` and `fish`, but no test starts either shell. **Manual verification:** a real zsh, fish, and PowerShell launch through Dotty with `shellIntegration: "detect"` (see [E2E Testing](E2ETesting.md#manual-smoke-shell-integration-injection)), and the Nix/`ZDOTDIR` situation above. None of this has CI coverage.

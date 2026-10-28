@@ -4,6 +4,7 @@ Dotty accepts options before an optional command:
 
 ```text
  dotty [--working-directory DIR|-d DIR] [--shell PATH] [--] [COMMAND [ARG...]]
+ dotty +explain-config [OPTION]
 ```
 
 - `-h`, `--help`: print usage and exit without loading configuration or initializing graphics.
@@ -26,4 +27,24 @@ Examples:
  dotty -d ~/src -- nvim .
  dotty --working-directory /tmp -- /usr/bin/printf '<%s>\n' '' '-n'
  dotty --shell /usr/bin/fish
+```
+
+## `+explain-config`
+
+`dotty +explain-config [OPTION]` prints documentation for configuration options and exits; it is the one command-line *action* (arguments starting with `+`).
+
+- With no argument it lists every option, one per line: the JSON path, then the description.
+- With `OPTION` it documents one option: JSON path, `Lua key`, `Type`, `Default`, `Values` (for enumerations), `Scope` (when a change does not apply everywhere at once, for example "Applies to new tabs and panes only"), then a blank line and the description.
+- `OPTION` is a JSON path (`mouse.copyOnSelect`), a Lua key (`mouse.copy_on_select`), or a last segment that is unambiguous (`copy-on-select`); case, `-` and `_` are ignored.
+- A group name such as `mouse` or `window.padding` lists the options below it.
+- The defaults shown are those of a fresh default configuration, not of your `config.json`.
+
+Exit codes: `0` on success; `1` when nothing matches (the message `dotty: no such option 'X'`, up to five `Did you mean:` suggestions and a hint to list every option go to standard error); `2` for a usage error, such as a second `OPTION`, a second action, an unknown `+action`, an option-looking argument after the action, or combining the action with `--shell`, `-d`, or a command. `--help` and `--version` win over the action.
+
+Early-exit contract: the action runs before launch validation, console detach, configuration loading, and any window or graphics initialization (`Program.Main` returns the result of `CliActions.Run` immediately). It therefore works on a machine with no display and does not read, create, or validate `config.json`. For how to keep the catalog complete when adding an option, see [Configuration](Configuration.md#adding-an-option).
+
+```sh
+ dotty +explain-config
+ dotty +explain-config vt
+ dotty +explain-config mouse.copyOnSelect
 ```

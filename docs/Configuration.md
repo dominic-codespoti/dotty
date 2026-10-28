@@ -94,6 +94,15 @@ become unreadable therefore no longer prevents a new tab from opening.
     "confirm": "risky",
     "allowedSchemes": ["http", "https", "mailto", "file", "ssh", "git"]
   },
+  "mouse": {
+    "copyOnSelect": "none",
+    "middleClickAction": "clipboard-paste"
+  },
+  "vt": {
+    "windowResizeAllowed": false,
+    "checksumReportEnabled": false
+  },
+  "shellIntegration": "none",
   "keybindings": {
     "ctrl+shift+t": "NewTab",
     "ctrl+shift+w": "ClosePane",
@@ -188,8 +197,10 @@ All five are read live, so a reload takes effect for the next request or paste.
 
 **OSC 52 write.** With `allowOsc52Write: true`, an application can set the
 clipboard with `ESC ] 52 ; c ; <base64> ST`. Decoded text over 786,432 bytes
-of UTF-8 is dropped, and a write that names only the Primary selection (`p`/`s`)
-is ignored until an X11 selection helper exists. Lua scripts may register a
+of UTF-8 is dropped. A write that names the Primary selection (`p`/`s`) reaches
+the system PRIMARY selection **on X11 only** (see [`mouse`](#mouse)); elsewhere
+the Primary part is dropped, and a primary-only write does nothing (it never
+falls back to the clipboard). Lua scripts may register a
 `clipboard_write` hook to veto a write by returning `false`: with global
 permission enabled, no hook or a non-vetoing hook allows the write; an explicit
 `false` or a hook invocation error denies it. Hook errors are still reported
@@ -220,8 +231,10 @@ clipboard, an unavailable clipboard, or expiry. Only a genuinely empty clipboard
 is answered (with an empty payload). Requests are queued (1 per session, 4 in
 total, expiring after 30 seconds), and are served only while Dotty's window is
 focused and the requesting tab is the active tab; under `ask` they also wait
-while another menu or prompt is open. Reading the Primary selection is not
-supported and such requests are ignored. A `clipboard_read` hook may veto a read
+while another menu or prompt is open. A read that names the Clipboard is served
+from the clipboard (also when Primary is named too). A read that names only the
+Primary selection is served from the system PRIMARY selection on X11 and dropped
+without a reply elsewhere. A `clipboard_read` hook may veto a read
 but cannot grant one under `deny`. See the [Lua guide](guides/Lua.md#events-and-value-hooks).
 
 **Paste.** Ctrl+Shift+V, middle-click, and the context-menu Paste all go through
@@ -300,6 +313,69 @@ Prompts are drawn by Dotty itself, never by terminal output, and every row of
 untrusted text is sanitized (controls become visible escapes, bidirectional
 marks become `\u{XXXX}`). Native opening has no CI coverage; verify it manually on
 each platform ([Platform Support](PlatformSupport.md#manual-link-opener-checks)).
+
+### `mouse`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `copyOnSelect` | string | `"none"` | Where a finished local selection is copied automatically: `none`, `primary`, `clipboard`, or `both` (case-insensitive). The Ghostty-style boolean spellings are accepted **as strings**: `"true"` (or `"on"`) means `primary` on Linux and `clipboard` on macOS/Windows, `"false"` (or `"off"`) means `none`. Unknown values mean `none`. The property is typed as a string, so an unquoted JSON `true`/`false` is a type mismatch rather than a legacy spelling; quote it. |
+| `middleClickAction` | string | `"clipboard-paste"` | What a middle click does in a pane that is not reporting mouse events: `primary-paste`, `clipboard-paste`, or `ignore` (`-` and `_` are interchangeable). Unknown values mean `clipboard-paste`. |
+
+Copy-on-select runs when the left button is released after a drag, or after a
+double- or triple-click, completed a local selection. It never clears the
+selection and is independent of the Copy action and of middle-click.
+
+The PRIMARY selection is the operating system's only when GLFW is running its
+**X11** backend (it uses GLFW's X11-only selection exports). On every other
+platform or backend (Wayland, macOS, Windows) it is a buffer inside the Dotty
+process: `primary` copies and `primary-paste` work between panes of the same
+Dotty process, but other applications never see them. Middle-click pastes go
+through the normal paste path, so sanitizing and `clipboard.confirmPaste` apply
+to primary pastes too. Nothing but copy-on-select writes the buffer, so with
+`copyOnSelect` set to `none` or `clipboard`, `primary-paste` pastes whatever
+another X11 application left in PRIMARY, or nothing elsewhere. OSC 52 `p`/`s`
+reads and writes use the real PRIMARY selection on X11 only (see
+[`clipboard`](#clipboard)); the in-process buffer is never exposed to OSC 52.
+
+Both options are read live: a change applies to the next selection or click.
+Interoperation of X11 PRIMARY with other applications is a manual check; see
+[E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click).
+
+### `vt`
+
+Opt-in VT behaviors that expose host or screen state to the program running in
+the terminal. Both default to `false`.
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `windowResizeAllowed` | boolean | `false` | Let applications resize the window with `CSI 8 ; rows ; cols t` (and `CSI Ps t` with `Ps` >= 24). Ignored even when enabled if there are several tabs, the active tab has split panes, or the window is maximized, fullscreen, or minimized. Read live, so a reload applies to the next request. |
+| `checksumReportEnabled` | boolean | `false` | Answer DECRQCRA (`CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y`) rectangular-area checksum requests. When `false` no reply is sent at all. Applied to a session when it is created and on config reload. |
+
+Why they are off: a window resize changes your desktop layout on the say-so of
+whatever prints to the terminal, and a checksum reply lets a program read the
+screen contents back without any clipboard or prompt. Enable them only for a
+trusted workload, such as a conformance run. The window-report queries
+(`CSI 13/14/15/16/18/19 t`) only read geometry and are always answered; title
+reports (`CSI 20/21 t`) are never answered. See
+[Parsing](Parsing.md#window-operations-csi-ps--ps--ps-t) and
+[DECRQCRA](Parsing.md#decrqcra-rectangular-checksum).
+
+### `shellIntegration`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `shellIntegration` | string | `"none"` | `none` never injects; `detect` injects Dotty's shell-integration scripts into recognized interactive shells that Dotty starts. Any other value is treated as `none`. |
+
+With `detect`, Dotty starts bash, zsh, fish, and PowerShell (`pwsh` or
+`powershell`) with the OSC 7 / OSC 133 scripts already loaded, without editing
+any dotfile; an explicit command (`dotty -- CMD`) is never
+rewritten. Two environment variables of the Dotty process refine it:
+`DOTTY_SHELL_INTEGRATION=0` (also `none`, `false`, or `off`) opts out whatever the
+config says, and `DOTTY_SHELL_INTEGRATION_DIR` points at a different integration
+directory (it must contain `dotty.bash`). The mechanism per shell, and what is
+not injected, are in [Shell Integration](ShellIntegration.md#automatic-injection).
+The setting is read each time a session starts, so a reload applies to **new tabs
+and panes only**; running shells are unchanged.
 
 ### `keybindings`
 
@@ -386,8 +462,10 @@ handling is active, left-drag selects characters, a double-click selects a word,
 and a triple-click selects a line. Dragging beyond the pane while selecting
 autoscrolls the pane and continues updating the selection.
 
-When local handling is active, middle-clicking inside a pane pastes the clipboard
-into that pane (subject to `clipboard.confirmPaste`). Holding `Ctrl` and
+When local handling is active, middle-clicking inside a pane runs
+`mouse.middleClickAction`: by default it pastes the clipboard into that pane
+(subject to `clipboard.confirmPaste`), `primary-paste` pastes the primary
+selection, and `ignore` does nothing. Holding `Ctrl` and
 left-clicking a link opens it, for detected URLs and for OSC 8 hyperlinks alike
 (subject to the `hyperlinks` policy); the link is resolved from a fresh buffer
 snapshot at click time rather than from a stale hover result. A reporting pane
@@ -408,6 +486,32 @@ cannot apply an older snapshot after a newer write. The host sets
 `UserConfigService.CallbackDispatcher` to queue callbacks on the window thread.
 On shutdown it unsubscribes the event, cancels pending reloads, disposes the
 watcher, and clears the dispatcher.
+
+Not every option applies to running sessions. For the VT, mouse, and shell
+options (the `Scope` line of `dotty +explain-config OPTION` states the same):
+
+| Option | Takes effect |
+|---|---|
+| `mouse.copyOnSelect` | for selections completed after the reload |
+| `mouse.middleClickAction` | at the next middle click |
+| `vt.windowResizeAllowed` | at the next resize request |
+| `vt.checksumReportEnabled` | applied to every session on reload and to sessions created later |
+| `shellIntegration` | new tabs and panes only; running shells are never touched |
+
+## Discovering options: `+explain-config`
+
+`dotty +explain-config` lists every documented option, and `dotty +explain-config OPTION` prints its type, default, allowed values, scope, and description. It never loads your `config.json` and opens no window; see [Command-line usage](CommandLine.md#explain-config). Defaults are read from the live default configuration object, so they cannot drift from the code.
+
+### Adding an option
+
+A drift-guard test class (`ConfigCatalogTests` in `tests/Dotty.App.Tests`) fails when these steps are not all done:
+
+1. Add the property with a `[JsonPropertyName]` to `DottyUserConfig` (or its section class under `src/Dotty.Runtime/Config/`). A new section needs a default instance (not `null`) and a null-coalescing line in the config normalization so a `null` in JSON cannot remove it.
+2. Register the snake_case Lua key in the `ConfigFields` registry of `LuaScriptHost.Config.cs`; for a new section also add its name to the group-key checks there. Lua key and JSON path must differ only by case and underscores.
+3. Add one `Opt(...)` entry to `CreateLive()` in `src/Dotty.Runtime/Config/ConfigOptionCatalog.cs`: JSON path, Lua key, one of the type names `string`, `number`, `integer`, `boolean`, `string[]`, `map`, allowed values for an enumeration, a getter for the default, a one-line description (no newline), and a `scope` when the change does not apply everywhere at once. Entries stay sorted by JSON path.
+4. Document it here, in the [Lua guide](guides/Lua.md#configuration-dottyconfig), and, if it needs a hot-reload note, in the table above.
+
+The guard checks that every config property and every Lua key has a catalog entry, that every catalog entry names a real property and Lua field, that the printed default equals the live default, and that entries are unique, sorted, and well formed.
 
 ## Troubleshooting
 

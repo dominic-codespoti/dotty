@@ -95,6 +95,19 @@ substitutes for that qualification.
 Windows and macOS interactive qualification requires the real desktop sessions
 listed above. It remains explicitly blocked when those hosts are unavailable;
 Linux results must not be represented as Windows/macOS passes.
+
+## Manual lanes for selection, window reports, and injection
+
+Interactive checks that no automated lane covers, to run on each native desktop session before a release (recipes in [E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click)):
+
+- **X11 PRIMARY selection** (`mouse.copyOnSelect`, `mouse.middleClickAction`, OSC 52 `p`/`s`): interoperation with another X11 application is checked on an X11 session only. On Wayland, macOS, and Windows the selection is an in-process buffer, so the manual check is that it is *not* visible to other applications.
+- **Window position, screen size, and visibility reports** (`CSI 13/15 t`, mode 2033, `CSI ? 998 n`): depend on GLFW; minimize is not observable on Wayland.
+- **`CSI 8 t` resize** with `vt.windowResizeAllowed`: the window manager or compositor can still constrain the size.
+- **Shell-integration injection** for bash, zsh, fish, and PowerShell through a real Dotty window, including the Nix/`ZDOTDIR` situation described in [Shell Integration](ShellIntegration.md#automatic-injection).
+- **Windows ConPTY** passthrough of the window, cursor-position, checksum, and visibility queries is unverified.
+
+Linux results must not be represented as Windows or macOS passes.
+
 ## Current qualification status
 
 The final portable-AOT publish and full multi-target test suite completed with

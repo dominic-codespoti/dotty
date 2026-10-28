@@ -456,6 +456,9 @@ internal static class DottyWindowHost
         int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
         float topOffset = barRows * _cellHeight * _scale;
         SetWindowClientSize(new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale)));
+        VtHostBridge.Attach(_window, _tabManager,
+            static () => new VtHostLayout(_cellWidth, _cellHeight, _scale, IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0, _cols, _rows),
+            static (width, height) => SetWindowClientSize(new Vector2D<int>(width, height)));
         StartControlServer();
         StartSystemThemeRefresher();
         _luaHost.NotifyGuiStartup();
@@ -592,6 +595,7 @@ internal static class DottyWindowHost
     {
         RefreshClipboardSubscriptions();
         RefreshVisibleSessionSubscriptions();
+        VtHostBridge.OnSessionsChanged();
     }
 
     private static void RefreshClipboardSubscriptions()
@@ -1664,6 +1668,7 @@ internal static class DottyWindowHost
         DrainWindowEvents();
         if (_closed)
             return;
+        VtHostBridge.Tick(GetClockMilliseconds());
         if (_mouseController?.TickSelectionAutoscroll() == true)
             WindowPresentationGate.Invalidate(WindowFrameReason.Selection);
         var tabManager = _tabManager;
@@ -2204,6 +2209,7 @@ internal static class DottyWindowHost
         while (_pendingControlCommands.TryDequeue(out var request))
             request.Completion.TrySetResult("ERROR host is closed");
         _window.FocusChanged -= OnWindowFocusChanged;
+        VtHostBridge.Detach();
         UserConfigService.ConfigChanged -= OnConfigChanged;
         if (_tabManager != null)
         {

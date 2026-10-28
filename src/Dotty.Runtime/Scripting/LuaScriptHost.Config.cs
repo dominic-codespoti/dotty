@@ -61,7 +61,8 @@ public sealed partial class LuaScriptHost
         ["hyperlinks.osc8"] = new(ConfigValueKind.Boolean, c => c.Hyperlinks.Osc8, (c, v) => c.Hyperlinks.Osc8 = (bool)v!),
         ["hyperlinks.confirm"] = new(ConfigValueKind.String, c => c.Hyperlinks.Confirm, (c, v) => c.Hyperlinks.Confirm = (string)v!),
         ["hyperlinks.allowed_schemes"] = new(ConfigValueKind.StringList, c => c.Hyperlinks.AllowedSchemes, (c, v) => c.Hyperlinks.AllowedSchemes = (System.Collections.Generic.List<string>)v!),
-        ["vt.checksum_report_enabled"] = new(ConfigValueKind.Boolean, c => c.Vt.ChecksumReportEnabled, (c, v) => c.Vt.ChecksumReportEnabled = (bool)v!)
+        ["vt.checksum_report_enabled"] = new(ConfigValueKind.Boolean, c => c.Vt.ChecksumReportEnabled, (c, v) => c.Vt.ChecksumReportEnabled = (bool)v!),
+        ["vt.window_resize_allowed"] = new(ConfigValueKind.Boolean, c => c.Vt.WindowResizeAllowed, (c, v) => c.Vt.WindowResizeAllowed = (bool)v!)
     };
 
     private unsafe partial void RegisterConfig(Lua lua, int dottyIndex)

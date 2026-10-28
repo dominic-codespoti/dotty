@@ -375,6 +375,8 @@ public unsafe partial class Screen
             resized = destination;
             resized.ResetForReflow(rows, columns);
         }
+        // History is written at the end of the destination ring, outside the visible-window extent.
+        resized.NoteReflowDestinationHistory(newScrollbackRows);
 
         for (int index = 0; index < retainedCount; index++)
         {

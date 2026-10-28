@@ -4,10 +4,18 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Dotty.Terminal.Adapter;
-/// <summary>Process-wide explicit capacity accounting for terminal-owned storage.</summary>
+/// <summary>
+/// Process-wide explicit capacity accounting for terminal-owned storage. <c>LiveArenaCapacityBytes</c> is the
+/// <em>reserved virtual</em> size of the cell arenas, not resident memory: arenas are lazily committed, so
+/// <c>LiveArenaCommittedBoundBytes</c> (dirty rows × columns × 12 B, summed over live screens) is the matching
+/// upper bound of the bytes backed by committed pages. Neither is a measured resident size, and the bound ignores
+/// zeroed-in-place leftovers: a cleared range smaller than <c>VirtualArena.MemsetThreshold</c> (64 KiB) keeps its
+/// pages, so resident memory can exceed the bound by up to that much per cleared range.
+/// </summary>
 public static class BufferMemoryMetrics
 {
     private static long _liveArenaCapacityBytes;
+    private static long _liveArenaCommittedBoundBytes;
     private static long _ownedSnapshotArrayCapacityBytes;
     private static long _arenaCapacityAllocatedBytes;
     private static long _snapshotCapacityAllocatedBytes;
@@ -16,13 +24,24 @@ public static class BufferMemoryMetrics
         Interlocked.Read(ref _liveArenaCapacityBytes),
         Interlocked.Read(ref _ownedSnapshotArrayCapacityBytes),
         Interlocked.Read(ref _arenaCapacityAllocatedBytes),
-        Interlocked.Read(ref _snapshotCapacityAllocatedBytes));
+        Interlocked.Read(ref _snapshotCapacityAllocatedBytes),
+        Interlocked.Read(ref _liveArenaCommittedBoundBytes));
+
+    /// <summary>
+    /// Which memory shim backs the cell arenas: <c>mmap-madvise</c> (Linux), <c>mmap-remap</c> (macOS),
+    /// <c>virtualalloc</c> (Windows) or <c>alloc-zeroed</c> (the non-lazy calloc fallback selected when the OS
+    /// shim is unavailable or fails its self-test).
+    /// </summary>
+    public static string ArenaBackend => VirtualArena.BackendName;
 
     internal static void ChangeArenaCapacity(long oldBytes, long newBytes)
     {
         Interlocked.Add(ref _liveArenaCapacityBytes, newBytes - oldBytes);
         if (newBytes > oldBytes) Interlocked.Add(ref _arenaCapacityAllocatedBytes, newBytes);
     }
+
+    internal static void ChangeArenaCommittedBound(long oldBytes, long newBytes) =>
+        Interlocked.Add(ref _liveArenaCommittedBoundBytes, newBytes - oldBytes);
 
     internal static void ChangeSnapshotCapacity(long oldBytes, long newBytes)
     {
@@ -35,7 +54,8 @@ public readonly record struct BufferMemorySnapshot(
     long LiveArenaCapacityBytes,
     long OwnedSnapshotArrayCapacityBytes,
     long ArenaCapacityAllocatedBytes,
-    long SnapshotCapacityAllocatedBytes);
+    long SnapshotCapacityAllocatedBytes,
+    long LiveArenaCommittedBoundBytes = 0);
 
 public unsafe partial class Screen : IDisposable
 {
@@ -44,7 +64,7 @@ public unsafe partial class Screen : IDisposable
     private IntPtr _cellsPtr;
     private IntPtr _coldCellsPtr;
     private int _cellCount;
-    private int _cellCapacity;
+    private int _reservedCells;
     public int Head => _head;
     private int _head;
     public int ScrollbackCapacity => _scrollbackCapacity;
@@ -128,56 +148,19 @@ public unsafe partial class Screen : IDisposable
     internal void ResetForReflow(int rows, int columns) =>
         PrepareForReuse(rows, columns);
 
-    internal void ResetForReuseAndTrim(int rows, int columns)
-    {
-        PrepareForReuse(rows, columns);
-        TrimCapacity();
-    }
-
-    internal void TrimCapacity()
-    {
-        if (_cellCapacity == _cellCount)
-            return;
-
-        long oldCapacityBytes = (long)_cellCapacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>());
-        long newCapacityBytes = (long)_cellCount * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>());
-        IntPtr newCells = Marshal.ReAllocHGlobal(_cellsPtr, (IntPtr)((long)_cellCount * Unsafe.SizeOf<CellHot>()));
-        _cellsPtr = newCells;
-        IntPtr newColdCells = Marshal.ReAllocHGlobal(_coldCellsPtr, (IntPtr)((long)_cellCount * Unsafe.SizeOf<ColdCell>()));
-        _coldCellsPtr = newColdCells;
-        _cellCapacity = _cellCount;
-        BufferMemoryMetrics.ChangeArenaCapacity(oldCapacityBytes, newCapacityBytes);
-    }
     internal void EnsureCapacity(int rows, int columns)
     {
         rows = Math.Max(1, rows);
         columns = Math.Max(1, columns);
         int total = _scrollbackCapacity + rows;
-        int requiredCells = total * columns;
+        long requiredCells = (long)total * columns;
+        if (requiredCells > int.MaxValue)
+            throw new OutOfMemoryException($"A {total}x{columns} screen exceeds the cell arena limit.");
 
-        if (_cellCapacity < requiredCells || _cellsPtr == IntPtr.Zero || _coldCellsPtr == IntPtr.Zero)
-        {
-            long oldCapacityBytes = _cellsPtr != IntPtr.Zero && _coldCellsPtr != IntPtr.Zero
-                ? (long)_cellCapacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>())
-                : 0;
-            int capacity = Math.Max(_cellCapacity, requiredCells);
-            IntPtr cells = Marshal.AllocHGlobal(capacity * Unsafe.SizeOf<CellHot>());
-            IntPtr cold = Marshal.AllocHGlobal(capacity * Unsafe.SizeOf<ColdCell>());
-            long hotBytes = (long)_cellCount * Unsafe.SizeOf<CellHot>();
-            long coldBytes = (long)_cellCount * Unsafe.SizeOf<ColdCell>();
-            if (_cellsPtr != IntPtr.Zero && _cellCount > 0)
-                System.Buffer.MemoryCopy((void*)_cellsPtr, (void*)cells, (long)capacity * Unsafe.SizeOf<CellHot>(), hotBytes);
-            if (_coldCellsPtr != IntPtr.Zero && _cellCount > 0)
-                System.Buffer.MemoryCopy((void*)_coldCellsPtr, (void*)cold, (long)capacity * Unsafe.SizeOf<ColdCell>(), coldBytes);
-            if (_cellsPtr != IntPtr.Zero)
-                Marshal.FreeHGlobal(_cellsPtr);
-            if (_coldCellsPtr != IntPtr.Zero)
-                Marshal.FreeHGlobal(_coldCellsPtr);
-            _cellsPtr = cells;
-            _coldCellsPtr = cold;
-            _cellCapacity = capacity;
-            BufferMemoryMetrics.ChangeArenaCapacity(oldCapacityBytes, (long)capacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>()));
-        }
+        // Growth reserves fresh zeroed virtual memory and releases the old region. No copy: every caller
+        // re-initialises the screen afterwards, so carrying the old cells over was dead work.
+        if (_reservedCells < requiredCells || _cellsPtr == IntPtr.Zero || _coldCellsPtr == IntPtr.Zero)
+            ReserveArenas((int)requiredCells);
 
         if (_rowMaxCol.Length < total)
             Array.Resize(ref _rowMaxCol, total);
@@ -191,35 +174,36 @@ public unsafe partial class Screen : IDisposable
 
     private void PrepareForReuse(int rows, int columns)
     {
-        Rows = Math.Max(1, rows);
-        Columns = Math.Max(1, columns);
+        int newRows = Math.Max(1, rows);
+        int newColumns = Math.Max(1, columns);
+
+        // Zero what was written, using the old row stride, unless the arena is about to be replaced anyway.
+        // Nothing here touches pages that were never written, and no cell is ever bulk-initialised: all-zero
+        // bytes are the blank cell.
+        if ((long)(_scrollbackCapacity + newRows) * newColumns <= _reservedCells)
+            DiscardDirtyRows();
+
+        Rows = newRows;
+        Columns = newColumns;
         EnsureCapacity(Rows, Columns);
         int total = TotalRows;
         _cellCount = total * Columns;
         _head = 0;
-        new Span<CellHot>((void*)_cellsPtr, _cellCount).Clear();
-        new Span<ColdCell>((void*)_coldCellsPtr, _cellCount)
-            .Fill(new ColdCell { GraphemeIndex = -1 });
         Array.Fill(_rowMaxCol, -1, 0, total);
         Array.Clear(_rowColdFlags, 0, total);
         Array.Clear(_rowContinuesPrevious, 0, total);
         Array.Fill(_rowEndCol, -1, 0, total);
+        SetDirtyToVisibleWindow();
     }
 
     public void Dispose()
     {
         if (_cellsPtr != IntPtr.Zero && _coldCellsPtr != IntPtr.Zero)
-            BufferMemoryMetrics.ChangeArenaCapacity((long)_cellCapacity * (Unsafe.SizeOf<CellHot>() + Unsafe.SizeOf<ColdCell>()), 0);
-        if (_cellsPtr != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(_cellsPtr);
-            _cellsPtr = IntPtr.Zero;
-        }
-        if (_coldCellsPtr != IntPtr.Zero)
-        {
-            Marshal.FreeHGlobal(_coldCellsPtr);
-            _coldCellsPtr = IntPtr.Zero;
-        }
+            BufferMemoryMetrics.ChangeArenaCapacity(ReservedBytes, 0);
+        ReleaseArenas();
+        _reservedCells = 0;
+        SetDirtyExtents(0, 0, 0, 0);
+        UpdateCommittedBound();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -346,7 +330,7 @@ public unsafe partial class Screen : IDisposable
             fixed (CellHot* pResult = result)
             {
                 System.Buffer.MemoryCopy(
-                    (void*)(_cellsPtr + offset * Unsafe.SizeOf<CellHot>()),
+                    (void*)(_cellsPtr + (nint)offset * Unsafe.SizeOf<CellHot>()),
                     pResult,
                     byteCount,
                     byteCount);
@@ -403,11 +387,9 @@ public unsafe partial class Screen : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ClearPhysicalRow(int physicalRow)
     {
-        new Span<CellHot>((void*)(_cellsPtr + physicalRow * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
-        // Span.Fill vectorizes (4-byte struct, constant pattern) — the
-        // per-element loop measured 195ms per 500K-line flood, ~2x the fill.
-        new Span<ColdCell>((void*)(_coldCellsPtr + physicalRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns)
-            .Fill(new ColdCell { GraphemeIndex = -1 });
+        // All-zero bytes are the blank cell (ColdCell's default is "empty"), so a row clear is two memsets.
+        new Span<CellHot>((void*)(_cellsPtr + (nint)physicalRow * Columns * Unsafe.SizeOf<CellHot>()), Columns).Clear();
+        new Span<ColdCell>((void*)(_coldCellsPtr + (nint)physicalRow * Columns * Unsafe.SizeOf<ColdCell>()), Columns).Clear();
         _rowMaxCol[physicalRow] = -1;
         _rowColdFlags[physicalRow] = false;
         RowContinuesPrevious[physicalRow] = false;
@@ -427,12 +409,12 @@ public unsafe partial class Screen : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CopyPhysicalRow(int destinationPhysicalRow, int sourcePhysicalRow)
     {
-        int rowBytes = Columns * Unsafe.SizeOf<CellHot>();
+        nint rowBytes = Columns * Unsafe.SizeOf<CellHot>();
         System.Buffer.MemoryCopy(
             (void*)(_cellsPtr + sourcePhysicalRow * rowBytes),
             (void*)(_cellsPtr + destinationPhysicalRow * rowBytes),
             rowBytes, rowBytes);
-        int coldRowBytes = Columns * Unsafe.SizeOf<ColdCell>();
+        nint coldRowBytes = Columns * Unsafe.SizeOf<ColdCell>();
         System.Buffer.MemoryCopy(
             (void*)(_coldCellsPtr + sourcePhysicalRow * coldRowBytes),
             (void*)(_coldCellsPtr + destinationPhysicalRow * coldRowBytes),
@@ -446,16 +428,19 @@ public unsafe partial class Screen : IDisposable
         ClearPhysicalRow(GetPhysicalRow(logicalRow));
     }
 
+    /// <summary>
+    /// Blanks the whole ring (history included, <c>_totalScrolled</c> and the head are the caller's business) by
+    /// zeroing only the dirty extent and returning its pages to the OS; the extent then shrinks to the visible
+    /// window.
+    /// </summary>
     public void Clear()
     {
-        new Span<CellHot>((void*)_cellsPtr, _cellCount).Clear();
-        var coldSpan = new Span<ColdCell>((void*)_coldCellsPtr, _cellCount);
-        for (int i = 0; i < _cellCount; i++)
-            coldSpan[i] = new ColdCell { GraphemeIndex = -1 };
+        DiscardDirtyRows();
         Array.Fill(_rowMaxCol, -1);
         Array.Fill(_rowColdFlags, false);
         Array.Fill(RowContinuesPrevious, false);
         Array.Fill(RowEndCol, -1);
+        SetDirtyToVisibleWindow();
     }
 
     public void RecalculateRowMaxCol(int logicalRow)
@@ -565,6 +550,7 @@ public unsafe partial class Screen : IDisposable
             if (lastContentCol >= 0 && _rowMaxCol[p] < lastContentCol)
                 violations.Add($"phys row {p}: RowMaxCol {_rowMaxCol[p]} below content max {lastContentCol}");
         }
+        ValidateLazyCommit(violations);
         return violations;
     }
 
@@ -621,8 +607,7 @@ public unsafe partial class Screen : IDisposable
 
         int count = end - start;
         new Span<CellHot>((void*)(_cellsPtr + (nint)(offset + start) * Unsafe.SizeOf<CellHot>()), count).Clear();
-        new Span<ColdCell>((void*)(_coldCellsPtr + (nint)(offset + start) * Unsafe.SizeOf<ColdCell>()), count)
-            .Fill(new ColdCell { GraphemeIndex = -1 });
+        new Span<ColdCell>((void*)(_coldCellsPtr + (nint)(offset + start) * Unsafe.SizeOf<ColdCell>()), count).Clear();
 
         RecalculateRowMaxCol(logicalRow);
         RecalculateRowEndCol(logicalRow);
@@ -665,6 +650,7 @@ public unsafe partial class Screen : IDisposable
             int total = _scrollbackCapacity + Rows;
             int clampedLines = Math.Min(lines, Rows);
             _head = (_head + clampedLines) % total;
+            NoteVisibleWindowTouched();
             for (int i = 0; i < clampedLines; i++)
             {
                 int phys = (_head + Rows - 1 - i + total) % total;
@@ -714,6 +700,7 @@ public unsafe partial class Screen : IDisposable
             int clampedLines = Math.Min(lines, regionHeight);
             int total = _scrollbackCapacity + Rows;
             _head = (_head - clampedLines + total * (clampedLines / total + 1)) % total;
+            NoteVisibleWindowTouched();
             return;
         }
 
@@ -770,6 +757,8 @@ public unsafe partial class Screen : IDisposable
 
     public void CopyTo(Screen destination)
     {
+        // Writes below land outside the visible-window extent (history rows): treat the whole ring as dirty.
+        destination.SetAllRowsDirty();
         int rows = Math.Min(Rows, destination.Rows);
         int cols = Math.Min(Columns, destination.Columns);
         int rowSizeBytes = cols * Unsafe.SizeOf<CellHot>();

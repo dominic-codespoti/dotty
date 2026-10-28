@@ -382,6 +382,10 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     {
         _totalScrolled = 0;
         _promptMarks.Clear();
+        // Blank the rows that held history and return their pages to the OS; the visible screen stays.
+        ActiveBuffer.DiscardHistory();
+        if (!_isAlternate)
+            RaiseHistoryInvalidated(HistoryDiscardReason.Cleared);
     }
 
     /// <summary>
@@ -412,6 +416,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         ResetFullOnlyState();
         ApplySoftResetCore();
         MarkAllRowsDirty();
+        RaiseHistoryInvalidated(HistoryDiscardReason.Reset);
     }
 
     public void ScrollUpLines(int n)
@@ -954,6 +959,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (mode == 2)
         {
             MarkAllRowsDirty();
+            if (!_isAlternate)
+                RaiseHistoryInvalidated(HistoryDiscardReason.Cleared);
         }
         else if (mode == 0)
         {
@@ -1129,6 +1136,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         _screens.ClearAll();
         _cursor.Reset();
         MarkAllRowsDirty();
+        RaiseHistoryInvalidated(HistoryDiscardReason.Reset);
     }
 
     public string GetDebugInfo()

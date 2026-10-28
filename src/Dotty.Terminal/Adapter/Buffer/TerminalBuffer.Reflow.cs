@@ -151,6 +151,12 @@ public partial class TerminalBuffer
         _writer.ResetRowDirtyCoalescing();
         unchecked { _globalGeneration++; }
         MarkAllRowsDirty();
+
+        // Absolute rows were re-based above (_totalScrolled, prompt marks). History lives on the main screen, so its
+        // mapping says whether the oldest rows were dropped to fit the capacity.
+        RaiseHistoryInvalidated(mainMapping is { RetainedStart: > 0 }
+            ? HistoryDiscardReason.CapacityShrunk
+            : HistoryDiscardReason.Rebased);
     }
 
     private static CursorState MapCursorState(

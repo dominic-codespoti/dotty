@@ -37,6 +37,8 @@ internal sealed class ScreenManager : IDisposable
 
     internal Screen Main => _main;
     internal Screen? Alternate => _alt;
+    /// <summary>Parked screens kept for the next resize (test/diagnostic hook).</summary>
+    internal IReadOnlyList<Screen> SpareScreens => _spareScreens;
 
     public void ClearAll()
     {
@@ -69,6 +71,11 @@ internal sealed class ScreenManager : IDisposable
                 _savedMain = null;
             }
             _usingAlt = false;
+
+            // Hand the alternate screen's pages back right away (they are O(dirty), and zero afterwards) so a
+            // full-screen app that scrolled does not keep its ring resident, and a later resize does not
+            // reflow stale alternate content. Re-entry clears it again, which is then nearly free.
+            _alt?.Clear();
         }
     }
 
@@ -155,8 +162,8 @@ internal sealed class ScreenManager : IDisposable
             scrollbackRows,
             includeScrollback,
             destination);
-        resized.TrimCapacity();
-        source.ResetForReuseAndTrim(rows, columns);
+        // The spare keeps its virtual reservation (so the next resize allocates nothing) but holds no pages.
+        source.ResetForReuse(rows, columns);
         _spareScreens.Add(source);
         return resized;
     }

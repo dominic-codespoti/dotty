@@ -56,12 +56,25 @@ public sealed class ColdCellTests
     [Theory]
     [InlineData(-2)]
     [InlineData(-32768)] // short.MinValue
-    public void AnyNegativeIndexMeansNoGrapheme(int index)
+    public void NegativeCodesBelowMinusOneRoundTripAsPlaceholderCodes(int index)
     {
         var cell = new ColdCell { GraphemeIndex = (short)index };
 
-        Assert.Equal(-1, cell.GraphemeIndex);
+        Assert.Equal((short)index, cell.GraphemeIndex);
+        Assert.NotEqual(0u, Bits(cell));
+        cell.GraphemeIndex = -1;
         Assert.Equal(0u, Bits(cell));
+    }
+
+    [Fact]
+    public void EveryShortValueRoundTripsAndOnlyMinusOneIsEmpty()
+    {
+        for (int v = short.MinValue; v <= short.MaxValue; v++)
+        {
+            var cell = new ColdCell { GraphemeIndex = (short)v };
+            Assert.Equal((short)v, cell.GraphemeIndex);
+            Assert.Equal(v == -1, Bits(cell) == 0u);
+        }
     }
 
     [Fact]

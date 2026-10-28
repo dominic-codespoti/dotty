@@ -431,7 +431,7 @@ public unsafe partial class Screen
             var hot = UnsafeAsRef<CellHot>(_cellsPtr, offset + column);
             var cold = UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + column);
             if (hot.Rune != 0 || hot.PackedFlags != 0 || hot.StyleId != 0
-                || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                || cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
             {
                 return column;
             }
@@ -606,7 +606,7 @@ public unsafe partial class Screen
             hot.IsContinuation = false;
             UnsafeAsRef<CellHot>(destination._cellsPtr, offset + usedColumns) = hot;
             UnsafeAsRef<ColdCell>(destination._coldCellsPtr, offset + usedColumns) = cell.Cold;
-            if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex >= 0)
+            if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex != -1)
                 hasCold = true;
             if (hot.Rune != 0 && hot.Rune != 32)
                 rowMaxCol = usedColumns;
@@ -622,7 +622,7 @@ public unsafe partial class Screen
                 };
                 UnsafeAsRef<CellHot>(destination._cellsPtr, offset + usedColumns + 1) = continuation;
                 UnsafeAsRef<ColdCell>(destination._coldCellsPtr, offset + usedColumns + 1) = cell.Cold;
-                if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex >= 0)
+                if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex != -1)
                     hasCold = true;
             }
 

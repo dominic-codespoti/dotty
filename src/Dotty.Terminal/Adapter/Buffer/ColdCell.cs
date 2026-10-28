@@ -14,14 +14,19 @@ public struct ColdCell
 {
     public ushort HyperlinkId;
 
-    // Stored as index + 1 so that zero (the default) means "no grapheme".
+    // Stored as (short index) + 1 reinterpreted as ushort, so that zero (the default) means "no data".
     private ushort _graphemePlusOne;
 
-    /// <summary>Index into the grapheme table, or <c>-1</c> when the cell has none.</summary>
+    /// <summary>
+    /// <c>-1</c> when the cell has no grapheme data; <c>&gt;= 0</c> an index into the grapheme table (only
+    /// <c>&gt; 0</c> is a real entry); <c>&lt;= -2</c> a Unicode-placeholder code (see
+    /// <c>Dotty.Terminal.Graphics.PlaceholderTable</c>), never a grapheme-store index. Readers that test for
+    /// "has cold data" must compare with <c>!= -1</c>, not <c>&gt;= 0</c>.
+    /// </summary>
     public short GraphemeIndex
     {
         readonly get => (short)(_graphemePlusOne - 1);
-        set => _graphemePlusOne = (ushort)(value < 0 ? 0 : value + 1);
+        set => _graphemePlusOne = (ushort)(value + 1);
     }
 
     public void Reset()

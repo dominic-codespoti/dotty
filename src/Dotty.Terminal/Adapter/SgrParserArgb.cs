@@ -107,7 +107,7 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 39:
-                    attributes.Foreground = default;
+                    attributes.ClearForeground();
                     hasMore = enumerator.MoveNext();
                     break;
                 case 49:
@@ -123,14 +123,18 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 59:
-                    attributes.UnderlineColor = default;
+                    attributes.ClearUnderlineColor();
                     hasMore = enumerator.MoveNext();
                     break;
                 case 38:
-                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var fg);
+                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var fg, out int fgIndex);
                     if (hasMore || !fg.IsEmpty)
                     {
-                        if (!fg.IsEmpty) attributes.Foreground = fg;
+                        if (!fg.IsEmpty)
+                        {
+                            if (fgIndex >= 0) attributes.SetForegroundIndexed(fgIndex, fg);
+                            else attributes.SetForegroundRgb(fg);
+                        }
                     }
                     else
                     {
@@ -138,7 +142,7 @@ public static class SgrParserArgb
                     }
                     break;
                 case 48:
-                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var bg);
+                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var bg, out _);
                     if (hasMore || !bg.IsEmpty)
                     {
                         if (!bg.IsEmpty) attributes.Background = bg;
@@ -149,10 +153,14 @@ public static class SgrParserArgb
                     }
                     break;
                 case 58:
-                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var ul);
+                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var ul, out int ulIndex);
                     if (hasMore || !ul.IsEmpty)
                     {
-                        if (!ul.IsEmpty) attributes.UnderlineColor = ul;
+                        if (!ul.IsEmpty)
+                        {
+                            if (ulIndex >= 0) attributes.SetUnderlineColorIndexed(ulIndex, ul);
+                            else attributes.SetUnderlineColorRgb(ul);
+                        }
                     }
                     else
                     {
@@ -163,7 +171,7 @@ public static class SgrParserArgb
                     var fgColor = SgrColorArgb.FromAnsiCode(code, palette);
                     if (!fgColor.IsEmpty)
                     {
-                        attributes.Foreground = fgColor;
+                        attributes.SetForegroundIndexed(code <= 37 ? code - 30 : code - 90 + 8, fgColor);
                     }
                     else if (SgrColorArgb.TryFromBackgroundCode(code, palette, out var bgColor))
                     {
@@ -177,9 +185,10 @@ public static class SgrParserArgb
         return attributes;
     }
 
-    private static bool TryParseExtendedColor(ref ParametersEnumerator enumerator, TerminalPalette palette, out SgrColorArgb color)
+    private static bool TryParseExtendedColor(ref ParametersEnumerator enumerator, TerminalPalette palette, out SgrColorArgb color, out int paletteIndex)
     {
         color = default;
+        paletteIndex = -1;
         if (!enumerator.MoveNext()) return false;
 
         int mode = enumerator.Current;
@@ -208,6 +217,7 @@ public static class SgrParserArgb
             {
                 int idx = enumerator.Current;
                 color = SgrColorArgb.From256(idx, palette);
+                if (!color.IsEmpty) paletteIndex = idx;
                 return enumerator.MoveNext();
             }
             return false;

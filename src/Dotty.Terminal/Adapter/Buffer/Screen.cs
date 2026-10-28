@@ -319,7 +319,7 @@ public unsafe partial class Screen : IDisposable
         int offset = pRow * Columns + col;
         UnsafeAsRef<ColdCell>(_coldCellsPtr, offset).GraphemeIndex = graphemeIndex;
         UnsafeAsRef<CellHot>(_cellsPtr, offset).HasGrapheme = graphemeIndex > 0;
-        if (graphemeIndex >= 0) _rowColdFlags[pRow] = true;
+        if (graphemeIndex != -1) _rowColdFlags[pRow] = true;
     }
 
     public string GetScrollbackRow(int scrollbackIndex)
@@ -425,7 +425,7 @@ public unsafe partial class Screen : IDisposable
             ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + col);
             ref var cold = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + col);
             if (cell.Rune != 0 || cell.PackedFlags != 0 || cell.StyleId != 0
-                || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                || cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
             {
                 end = col;
                 break;
@@ -461,10 +461,10 @@ public unsafe partial class Screen : IDisposable
             {
                 ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + c);
                 ref var cold = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + c);
-                if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                if (cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
                     rowHasCold = true;
                 if (cell.Rune != 0 || cell.PackedFlags != 0 || cell.StyleId != 0
-                    || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                    || cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
                     lastDataCol = c;
                 if (cell.IsContinuation)
                 {

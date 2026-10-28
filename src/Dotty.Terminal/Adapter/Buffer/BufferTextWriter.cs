@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using Dotty.Terminal.Adapter.Buffer;
+using Dotty.Terminal.Graphics;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -228,7 +229,7 @@ internal sealed class BufferTextWriter
                 for (int j = 0; j < chunkLen; j++)
                 {
                     ref var cold = ref Unsafe.Add(ref coldData, baseIdx + j);
-                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
                         cold.Reset();
                 }
             }
@@ -387,7 +388,7 @@ internal sealed class BufferTextWriter
                 for (int j = 0; j < chunkLen; j++)
                 {
                     ref var cold = ref Unsafe.Add(ref coldData, baseIdx + j);
-                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
                         cold.Reset();
                 }
             }
@@ -498,7 +499,7 @@ internal sealed class BufferTextWriter
             cell = ref buf.GetCellRef(currentRow, startCol);
         }
 
-        bool hadCold = cell.HasHyperlink || cell.HasGrapheme;
+        bool hadCold = cell.HasHyperlink || cell.HasGrapheme || cell.Rune == PlaceholderTable.PlaceholderRune;
         ApplyCellTemplate(ref cell, styleId);
         cell.Rune = ch;
 
@@ -543,7 +544,9 @@ internal sealed class BufferTextWriter
     private void WriteGrapheme(string grapheme, ushort styleId, ushort hyperlinkId)
     {
         if (string.IsNullOrEmpty(grapheme)) return;
-        int width = UnicodeWidth.GetWidth(grapheme);
+        // A Unicode-placeholder cluster (U+10EEEE + diacritics) is always one cell wide and never enters the grapheme store.
+        bool placeholder = PlaceholderTable.IsPlaceholderCluster(grapheme);
+        int width = placeholder ? 1 : UnicodeWidth.GetWidth(grapheme);
         if (width == 0)
         {
             if (AttachCombiningMark(grapheme)) return;
@@ -587,14 +590,19 @@ internal sealed class BufferTextWriter
         cell.Width = (byte)Math.Clamp(width, 1, 2);
         cell.IsContinuation = false;
         cell.HasHyperlink = hyperlinkId != 0;
-        cell.HasGrapheme = grapheme.Length > 1;
+        cell.HasGrapheme = !placeholder && grapheme.Length > 1;
 
         if (hyperlinkId != 0)
         {
             buf.SetColdHyperlink(currentRow, startCol, hyperlinkId);
         }
 
-        if (grapheme.Length > 1)
+        if (placeholder)
+        {
+            short code = PlaceholderTable.Encode(grapheme.AsSpan(2));
+            if (code != -1) buf.SetColdGraphemeIndex(currentRow, startCol, code);
+        }
+        else if (grapheme.Length > 1)
         {
             buf.SetColdGraphemeIndex(currentRow, startCol, GraphemeHelper.StoreGrapheme(grapheme));
         }
@@ -605,6 +613,8 @@ internal sealed class BufferTextWriter
             cont.Reset();
             cont.IsContinuation = true;
             cont.StyleId = styleId;
+            // The cell may have held a placeholder code (or other cold data); a continuation never keeps it.
+            buf.GetColdCellRef(_cursor.Row, startCol + i).Reset();
             if (hyperlinkId != 0)
             {
                 cont.HasHyperlink = true;
@@ -648,6 +658,20 @@ internal sealed class BufferTextWriter
         var buf = _ctx.ActiveBuffer;
         ref var cell = ref buf.GetCellRef(row, col);
         var cold = buf.GetColdCell(row, col);
+        if (cell.Rune == PlaceholderTable.PlaceholderRune)
+        {
+            // Diacritics arriving after the placeholder (e.g. in a later OnPrint call) complete its row/column/msb;
+            // any other mark is consumed and dropped.
+            short current = cold.GraphemeIndex;
+            short updated = PlaceholderTable.Append(current, mark);
+            if (updated != current)
+            {
+                buf.SetColdGraphemeIndex(row, col, updated);
+                RequestMarkRowDirty(row);
+            }
+            return true;
+        }
+
         var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
         if (string.IsNullOrEmpty(grapheme)) return false;
 

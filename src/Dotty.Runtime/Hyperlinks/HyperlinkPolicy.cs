@@ -210,18 +210,20 @@ public sealed class HyperlinkPolicy
             return false;
         }
 
+        // Decide on the scheme text before the platform parser gets a say, so a hard-denied scheme is
+        // reported as blocked even when its payload would not parse as a URI.
+        string textScheme = text.Substring(0, colon).ToLowerInvariant();
+        if (HardDeniedSchemes.Contains(textScheme))
+        {
+            error = $"scheme '{textScheme}' is blocked";
+            return false;
+        }
+
         // The textual scheme must survive parsing: "C:\\x.exe" parses as a file path, not a "c" URL.
         if (!Uri.TryCreate(text, UriKind.Absolute, out Uri? parsed)
             || !parsed.Scheme.Equals(text.Substring(0, colon), StringComparison.OrdinalIgnoreCase))
         {
             error = "not a valid URL";
-            return false;
-        }
-
-        string scheme = parsed.Scheme.ToLowerInvariant();
-        if (HardDeniedSchemes.Contains(scheme))
-        {
-            error = $"scheme '{scheme}' is blocked";
             return false;
         }
 

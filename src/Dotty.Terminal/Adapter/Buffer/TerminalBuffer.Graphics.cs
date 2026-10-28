@@ -1,3 +1,4 @@
+using System;
 using Dotty.Terminal.Graphics;
 
 namespace Dotty.Terminal.Adapter;
@@ -63,6 +64,19 @@ public partial class TerminalBuffer
     }
 
     /// <summary>
+    /// Clock behind animation playback: the capture advances animations by its timestamps and reports the next
+    /// deadline in them. The owning <c>TerminalAdapter</c> sets its own provider here so the capture and
+    /// <c>IKittyGraphicsHost.NowTicks</c> read one clock; defaults to <see cref="TimeProvider.System"/>.
+    /// </summary>
+    internal TimeProvider GraphicsClock
+    {
+        get => _graphicsClock;
+        set => _graphicsClock = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    private TimeProvider _graphicsClock = TimeProvider.System;
+
+    /// <summary>
     /// Attaches the active screen's visible placements to <paramref name="snapshot"/>. Free when the store does not
     /// exist or has no placements (a null check and a count test).
     /// </summary>
@@ -73,8 +87,12 @@ public partial class TerminalBuffer
             return;
         // Playing animations of the visible placements step first, so the capture sees the frame that is due now;
         // the earliest next change travels with the snapshot as the host's wake-up deadline (same clock as
-        // IKittyGraphicsHost.NowTicks: TimeProvider.System timestamps).
-        long deadline = store.AdvanceAnimations(System.TimeProvider.System.GetTimestamp(), Rows, scrollOffset);
+        // IKittyGraphicsHost.NowTicks: the timestamps of GraphicsClock).
+        var clock = _graphicsClock;
+        if (store.TicksPerSecond != clock.TimestampFrequency)
+            store.TicksPerSecond = clock.TimestampFrequency;
+        // The captured cells tell which virtual placements are on screen (placeholder cells name them).
+        long deadline = store.AdvanceAnimations(clock.GetTimestamp(), Rows, scrollOffset, new RenderSnapshotPlaceholderSource(snapshot));
         var graphics = snapshot.BeginGraphics();
         store.CaptureVisible(graphics, Rows, scrollOffset);
         graphics.NextAnimationDeadlineTicks = deadline;

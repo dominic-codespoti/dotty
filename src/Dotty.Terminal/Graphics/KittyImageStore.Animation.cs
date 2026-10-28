@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using Dotty.Terminal.Adapter;
 
 namespace Dotty.Terminal.Graphics;
 
@@ -29,28 +31,70 @@ internal sealed partial class KittyImageStore
     // ---- clock ---------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Advances the playing animations of images that have a placement in the viewport (same visibility rule as
-    /// <see cref="CaptureVisible"/>; normal placements only) and returns the earliest absolute deadline, in
-    /// <paramref name="nowTicks"/> units, at which one of them changes frame; 0 = none. At most one frame step per
-    /// image per call. Images without a visible placement are not touched, so a hidden animation neither advances
-    /// nor asks for a wake-up. Must run under the same lock hold as the capture it precedes.
+    /// Advances the playing animations of images displayed in the viewport and returns the earliest absolute
+    /// deadline, in <paramref name="nowTicks"/> units, at which one of them changes frame; 0 = none. At most one
+    /// frame step per image per call. Images that are not displayed are not touched, so a hidden animation neither
+    /// advances nor asks for a wake-up. Must run under the same lock hold as the capture it precedes. An image is
+    /// displayed (same rules as <see cref="CaptureVisible"/>) when it has
+    /// <list type="bullet">
+    /// <item>a normal placement in the viewport;</item>
+    /// <item>a relative placement whose resolved position (the root's anchor plus the summed offsets) is in the
+    /// viewport; a chain rooted at a virtual placement counts as displayed when that virtual placement is;</item>
+    /// <item>a virtual placement, which is displayed through placeholder cells that this overload cannot see: it
+    /// counts as displayed whenever the screen is captured (conservative: a virtual placement scrolled out of view
+    /// keeps its animation, and its wake-ups, running). Use the overload taking the captured cells to be exact.</item>
+    /// </list>
     /// </summary>
-    public long AdvanceAnimations(long nowTicks, int rows, int scrollOffset)
+    public long AdvanceAnimations(long nowTicks, int rows, int scrollOffset) =>
+        AdvanceAnimations(nowTicks, rows, scrollOffset, default(NoPlaceholderCells), cellsKnown: false);
+
+    /// <summary>
+    /// As <see cref="AdvanceAnimations(long, int, int)"/>, with the cells of the screen being captured: a virtual
+    /// placement (or a relative chain rooted at one) counts as displayed only when some placeholder cell in
+    /// <paramref name="cells"/> names its image (<see cref="PlaceholderResolver.CollectImageIds"/>; the grid and the
+    /// placement id are not checked, so this errs towards advancing). The cells are scanned at most once per call and
+    /// only when an animated image has such a placement.
+    /// </summary>
+    public long AdvanceAnimations<TSource>(long nowTicks, int rows, int scrollOffset, TSource cells)
+        where TSource : IPlaceholderSource =>
+        AdvanceAnimations(nowTicks, rows, scrollOffset, cells, cellsKnown: true);
+
+    private long AdvanceAnimations<TSource>(long nowTicks, int rows, int scrollOffset, TSource cells, bool cellsKnown)
+        where TSource : IPlaceholderSource
     {
         if (_placements.Count == 0 || rows <= 0)
             return 0;
 
         long epoch = ++_advanceEpoch;
         long earliest = 0;
+        bool placeholdersScanned = false;
         foreach (var p in _placements.Values)
         {
-            if (p.Kind != PlacementKind.Normal)
-                continue;
             var image = p.Image;
             if (image.AdvanceStamp == epoch || image.AnimationState == KittyAnimationState.Stopped || image.Frames.Count < 2)
                 continue;
-            long viewRow = p.AnchorRow - _viewTop + scrollOffset;
-            if (viewRow + p.Geometry.EffRows <= 0 || viewRow >= rows)
+
+            bool displayed;
+            switch (p.Kind)
+            {
+                case PlacementKind.Normal:
+                    displayed = RowsOverlap(p.AnchorRow - _viewTop + scrollOffset, p.Geometry.EffRows, rows);
+                    break;
+                case PlacementKind.Virtual:
+                    displayed = ShownThroughPlaceholders(p, cells, cellsKnown, ref placeholdersScanned);
+                    break;
+                default:
+                {
+                    var root = FindRelativeRoot(p, out _, out long dy);
+                    if (root == null)
+                        continue;
+                    displayed = root.Kind == PlacementKind.Virtual
+                        ? ShownThroughPlaceholders(root, cells, cellsKnown, ref placeholdersScanned)
+                        : RowsOverlap(root.AnchorRow - _viewTop + scrollOffset + dy, p.Geometry.EffRows, rows);
+                    break;
+                }
+            }
+            if (!displayed)
                 continue;
 
             image.AdvanceStamp = epoch;
@@ -61,12 +105,48 @@ internal sealed partial class KittyImageStore
         return earliest;
     }
 
+    private static bool RowsOverlap(long viewRow, int effRows, int rows) => viewRow + effRows > 0 && viewRow < rows;
+
+    private readonly HashSet<uint> _placeholderImageIds = new();
+
+    // A virtual placement is captured only for images with a client id (nothing else can name it); it is drawn only
+    // where a placeholder cell names its image.
+    private bool ShownThroughPlaceholders<TSource>(KittyPlacement virtualPlacement, TSource cells, bool cellsKnown,
+        ref bool scanned)
+        where TSource : IPlaceholderSource
+    {
+        uint id = virtualPlacement.Image.ClientId;
+        if (id == 0)
+            return false;
+        if (!cellsKnown)
+            return true;
+        if (!scanned)
+        {
+            _placeholderImageIds.Clear();
+            PlaceholderResolver.CollectImageIds(cells, _placeholderImageIds);
+            scanned = true;
+        }
+        return _placeholderImageIds.Contains(id);
+    }
+
+    /// <summary>Stand-in cells for the overload that does not look at the screen.</summary>
+    private readonly struct NoPlaceholderCells : IPlaceholderSource
+    {
+        public int Rows => 0;
+        public int Columns => 0;
+        public ReadOnlySpan<CellHot> GetRowCells(int row) => default;
+        public ReadOnlySpan<ColdCell> GetRowColdCells(int row) => default;
+        public ref readonly CellAttributes GetStyle(ushort styleId) => ref CellAttributes.Default;
+    }
+
     // ---- a=f -----------------------------------------------------------------------------------------------------
 
     /// <summary>
     /// Key-only checks for a frame load that can run before any payload exists: the frame numbers
-    /// (<c>r</c>: 0 = new frame, else an existing one; <c>c</c>: 0 = none, else an existing one), the per-image frame
-    /// cap and the quota for the canvas the command would store.
+    /// (<c>r</c>: 0 = new frame, else an existing one; <c>c</c>: 0 = none, else an existing one), for raw formats
+    /// (<c>s</c> and <c>v</c> declare the data size) that the data rectangle at <c>(x, y)</c> lies inside the image, the
+    /// per-image frame cap and the quota for the canvas the command would store. A PNG's size is only known once its
+    /// header has arrived, so <see cref="LoadFrame"/> checks the rectangle again at commit.
     /// </summary>
     public KittyStatus CheckFrameTarget(KittyImage image, in KittyGraphicsCommand cmd)
     {
@@ -75,6 +155,12 @@ internal sealed partial class KittyImageStore
         bool isNew = r == 0;
         if (r > count || c > count)
             return KittyStatus.FrameNotFound;
+        if (cmd.Format != 100 && cmd.Width != 0 && cmd.Height != 0)
+        {
+            var root = image.Frames[0].Canvas;
+            if ((long)cmd.SrcX + cmd.Width > root.Width || (long)cmd.SrcY + cmd.Height > root.Height)
+                return KittyStatus.RectOutOfBounds;
+        }
         if (isNew && count >= KittyAnimation.MaxFramesPerImage)
             return KittyStatus.StorageQuota;
         long delta = CanvasDelta(image, isNew ? -1 : (int)r - 1);
@@ -232,7 +318,9 @@ internal sealed partial class KittyImageStore
     /// <summary>
     /// Animation control. <c>s</c>: 1 stop, 2 loading (run to the last frame and wait), 3 run (0 = unchanged; other
     /// values are invalid). <c>v</c>: loop count, <c>max_loops = v - 1</c> so 1 is infinite (0 = unchanged); setting it
-    /// restarts the loop counter, as does entering the running state. <c>r</c> with a non-zero <c>z</c> sets the gap of
+    /// restarts the loop counter. Stopping resets the loop counter too (spec: "stopping the animation resets the loop
+    /// counter"), and so does starting from the stopped state, which an animation that ran into its loop limit is in;
+    /// switching between loading and running keeps it. <c>r</c> with a non-zero <c>z</c> sets the gap of
     /// frame <c>r</c> (<c>z</c> &lt; 0 gapless). <c>c</c> selects the displayed frame (0 = unchanged). Everything is
     /// validated first: a failing command changes nothing. Changing the state or the displayed frame restarts the frame
     /// timer; changing a gap or the loop count only lifts a loading-wait (the armed deadline is kept).
@@ -269,7 +357,7 @@ internal sealed partial class KittyImageStore
         if (state != 0)
         {
             var next = (KittyAnimationState)state;
-            if (next == KittyAnimationState.Running && image.AnimationState != KittyAnimationState.Running)
+            if (next == KittyAnimationState.Stopped || image.AnimationState == KittyAnimationState.Stopped)
                 image.LoopsDone = 0;
             image.AnimationState = next;
         }

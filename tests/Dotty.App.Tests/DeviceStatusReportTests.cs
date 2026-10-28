@@ -26,6 +26,6 @@ public class DeviceStatusReportTests
 
         adapter.OnCursorPositionReport();
 
-        Assert.Equal("\u001b[?1;1R", reply);
+        Assert.Equal("\u001b[?1;1;1R", reply);
     }
 }

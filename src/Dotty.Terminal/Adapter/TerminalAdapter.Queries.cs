@@ -14,6 +14,7 @@ public partial class TerminalAdapter
         int state = (mode, isPrivate) switch
         {
             (1, true) => ApplicationCursorKeysEnabled ? 1 : 2, // DECCKM
+            (67, true) => BackarrowSendsBackspace ? 1 : 2, // DECBKM
             (6, true) => _buffer.OriginMode ? 1 : 2, // DECOM
             (7, true) => _buffer.AutoWrap ? 1 : 2, // DECAWM
             (25, true) => _buffer.CursorVisible ? 1 : 2, // DECTCEM

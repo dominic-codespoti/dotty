@@ -22,7 +22,8 @@ public class TerminalInputEncoder
         bool keypadApplicationMode = false,
         bool applicationCursorKeys = false,
         int shiftedCodepoint = 0,
-        int baseCodepoint = 0)
+        int baseCodepoint = 0,
+        bool backarrowSendsBackspace = false)
     {
         int modifier = GetModifier(modifiers);
         bool keypadMapped = TryGetKeypadCode(key, out int codepoint);
@@ -34,12 +35,14 @@ public class TerminalInputEncoder
         if (primaryCodepoint > 0 && !keypadMapped)
             codepoint = primaryCodepoint;
         else if (!mapped && !unknownTextEvent)
-            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys);
+            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys,
+                modifyOtherKeysLevel: 0, backarrowSendsBackspace: backarrowSendsBackspace);
 
         bool selected = unknownTextEvent || (kittyFlags & 8) != 0 ||
             ((kittyFlags & 1) != 0 && (IsDisambiguationKey(key) || modifier != 1));
         if (!selected)
-            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys);
+            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys,
+                modifyOtherKeysLevel: 0, backarrowSendsBackspace: backarrowSendsBackspace);
 
         int offset = WriteLiteral(destination, "\x1b[");
         offset = WriteNumber(destination, offset, codepoint);
@@ -158,7 +161,8 @@ public class TerminalInputEncoder
         Span<byte> destination,
         bool keypadApplicationMode = false,
         bool applicationCursorKeys = false,
-        int modifyOtherKeysLevel = 0)
+        int modifyOtherKeysLevel = 0,
+        bool backarrowSendsBackspace = false)
     {
         if (TryEncodeKeypad(key, modifiers, keypadApplicationMode, destination, out int keypadLength))
             return keypadLength;
@@ -172,8 +176,9 @@ public class TerminalInputEncoder
         {
             if (ctrl && alt) return WriteLiteral(destination, "\x1b\x17");
             if (ctrl) return WriteLiteral(destination, "\x17");
-            if (alt) return WriteLiteral(destination, "\x1b\x7f");
-            return WriteLiteral(destination, "\x7f");
+            // DECBKM (mode 67) only swaps the plain/Alt forms; Ctrl+Backspace stays word-erase.
+            if (alt) return WriteLiteral(destination, backarrowSendsBackspace ? "\x1b\x08" : "\x1b\x7f");
+            return WriteLiteral(destination, backarrowSendsBackspace ? "\x08" : "\x7f");
         }
         if (key == TerminalKey.Delete)
         {

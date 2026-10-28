@@ -325,32 +325,6 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         _buffer.SetBracketedPasteMode(enabled);
     }
 
-    public void OnDeviceStatusReport(int code)
-    {
-        switch (code)
-        {
-            case 6:
-                // Cursor Position Report (CPR) requested via DSR variant:
-                SendTwoNumberReply("\x1b[".AsSpan(), _buffer.CursorRow + 1, _buffer.CursorCol + 1, 'R');
-                break;
-            case 5:
-            case 0:
-                // Terminal status OK
-                ReplyRequested?.Invoke("\x1b[0n".AsSpan());
-                break;
-            default:
-                // Unknown/unsupported: return failure
-                ReplyRequested?.Invoke("\x1b[3n".AsSpan());
-                break;
-        }
-    }
-
-    public void OnCursorPositionReport()
-    {
-        // DEC private CPR response for CSI ? 6 n requests.
-        SendTwoNumberReply("\x1b[?".AsSpan(), _buffer.CursorRow + 1, _buffer.CursorCol + 1, 'R');
-    }
-
     public void OnInsertChars(int n)
     {
         _buffer.InsertChars(n);

@@ -613,8 +613,8 @@ internal static class DottyWindowHost
             if (_clipboardSubscriptions.ContainsKey(session))
                 continue;
 
-            // Panes created by split actions never pass through a creation site above; configure them on first sight.
-            SilkConfig.ApplyConfigToAdapter(session.Adapter, _activeTheme);
+            // Split panes are created outside the six ApplyConfigToAdapter sites; give them the OSC 8 ingest switch on first sight.
+            HyperlinkIngestConfig.Apply(session.Adapter, UserConfigService.Current.Hyperlinks);
 
             Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> callback = CreateClipboardHandler(session);
             session.ClipboardWriteRequested += callback;

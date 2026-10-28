@@ -134,6 +134,7 @@ public static class SilkConfig
         if (adapter == null) return;
         ApplyThemeToAdapter(adapter, theme);
         HyperlinkIngestConfig.Apply(adapter, UserConfigService.Current.Hyperlinks);
+        VtAdapterConfig.Apply(adapter, UserConfigService.Current.Vt);
     }
 
     public static (SgrColorArgb Foreground, SgrColorArgb Background) InitializeTheme(

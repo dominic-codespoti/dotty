@@ -615,6 +615,7 @@ internal static class DottyWindowHost
 
             // Split panes are created outside the six ApplyConfigToAdapter sites; give them the OSC 8 ingest switch on first sight.
             HyperlinkIngestConfig.Apply(session.Adapter, UserConfigService.Current.Hyperlinks);
+            VtAdapterConfig.Apply(session.Adapter, UserConfigService.Current.Vt);
 
             Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> callback = CreateClipboardHandler(session);
             session.ClipboardWriteRequested += callback;

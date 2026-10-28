@@ -61,6 +61,9 @@ public sealed class DottyUserConfig
     public System.Collections.Generic.Dictionary<string, string> Keybindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [JsonPropertyName("clipboard")]
     public ClipboardUserConfig Clipboard { get; set; } = new();
+
+    [JsonPropertyName("vt")]
+    public VtUserConfig Vt { get; set; } = new();
 }
 public sealed class FontUserConfig
 {
@@ -270,6 +273,7 @@ public static class UserConfigService
         {
             config.Clipboard ??= new ClipboardUserConfig();
             config.Hyperlinks ??= new HyperlinksUserConfig();
+            config.Vt ??= new VtUserConfig();
         }
         return config;
     }

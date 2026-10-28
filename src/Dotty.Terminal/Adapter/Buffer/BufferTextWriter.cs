@@ -16,6 +16,7 @@ internal sealed class BufferTextWriter
     private readonly BufferEraser _eraser;
     private readonly TerminalBuffer _ctx;
     private readonly StyleSet _styleSet;
+    private const int MaxGraphemeCacheEntries = 4096;
     private static readonly ConcurrentDictionary<string, string> _graphemeCache = new();
     private int _lastDirtyRow = -1;
 
@@ -74,13 +75,22 @@ internal sealed class BufferTextWriter
                     continue;
                 }
 
+                // Clustering is always on (DECRQM 2027 reports "permanently set"), but the segmentation window is
+                // this text run, not the byte stream: a cluster split across parser runs/Feeds is only re-joined for
+                // trailing width-0 marks (AttachCombiningMark), not for ZWJ/regional-indicator/Hangul continuations.
                 int len = StringInfo.GetNextTextElementLength(text.Slice(i));
                 if (len > 0)
                 {
-                    var slice = text.Slice(i, len);
+                    // Cap the cluster at base + 64 combining code points; the rest is consumed but dropped.
+                    int keep = len <= GraphemeHelper.MaxScalarsPerCell
+                        ? len
+                        : GraphemeHelper.TruncateToScalars(text.Slice(i, len), GraphemeHelper.MaxScalarsPerCell);
+                    var slice = text.Slice(i, keep);
                     var lookup = _graphemeCache.GetAlternateLookup<ReadOnlySpan<char>>();
                     if (!lookup.TryGetValue(slice, out string? element))
                     {
+                        // The cache is process-wide and keyed by arbitrary program output: keep it bounded.
+                        if (_graphemeCache.Count > MaxGraphemeCacheEntries) _graphemeCache.Clear();
                         element = slice.ToString();
                         lookup.TryAdd(slice, element);
                     }
@@ -641,20 +651,21 @@ internal sealed class BufferTextWriter
         var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
         if (string.IsNullOrEmpty(grapheme)) return false;
 
-        var newGrapheme = grapheme + mark;
-        if (newGrapheme.Length > 1)
+        // A cell holds at most base + 64 combining code points; further marks are consumed and dropped.
+        int room = GraphemeHelper.MaxScalarsPerCell - GraphemeHelper.CountScalars(grapheme);
+        if (room <= 0) return true;
+
+        int markLength = GraphemeHelper.TruncateToScalars(mark, room);
+        Span<char> combined = stackalloc char[GraphemeHelper.MaxCellChars];
+        grapheme.AsSpan().CopyTo(combined);
+        mark.AsSpan(0, markLength).CopyTo(combined[grapheme.Length..]);
+        short index = GraphemeHelper.StoreGrapheme((ReadOnlySpan<char>)combined[..(grapheme.Length + markLength)]);
+        // A full grapheme store (index <= 0) keeps the cell as it was rather than losing its existing marks.
+        if (index > 0)
         {
-            try { cell.Rune = (uint)char.ConvertToUtf32(newGrapheme, 0); }
-            catch (ArgumentException) { cell.Rune = 0; }
-            buf.SetColdGraphemeIndex(row, col, GraphemeHelper.StoreGrapheme(newGrapheme));
+            buf.SetColdGraphemeIndex(row, col, index);
+            RequestMarkRowDirty(row);
         }
-        else
-        {
-            try { cell.Rune = (uint)char.ConvertToUtf32(newGrapheme, 0); }
-            catch (ArgumentException) { cell.Rune = 0; }
-            buf.SetColdGraphemeIndex(row, col, -1);
-        }
-        RequestMarkRowDirty(row);
         return true;
     }
 

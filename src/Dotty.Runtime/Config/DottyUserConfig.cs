@@ -133,6 +133,12 @@ public sealed class ClipboardUserConfig
 {
     [JsonPropertyName("allowOsc52Write")]
     public bool AllowOsc52Write { get; set; }
+
+    [JsonPropertyName("confirmPaste")]
+    public bool ConfirmPaste { get; set; } = true;
+
+    [JsonPropertyName("bracketedPasteIsSafe")]
+    public bool BracketedPasteIsSafe { get; set; } = true;
 }
 public sealed class PanesUserConfig
 {

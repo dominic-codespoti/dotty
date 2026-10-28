@@ -273,6 +273,19 @@ public class LuaScriptingTests : IDisposable
         Assert.Contains("font.size", error.Message);
     }
 
+    /// <summary>Verifies Lua can set the paste safety options and rejects wrong types with the config path.</summary>
+    [Fact]
+    public void LuaConfig_SetsPasteSafetyOptions()
+    {
+        Assert.True(_config.Clipboard.ConfirmPaste);
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.confirm_paste=false"));
+        Assert.False(_config.Clipboard.ConfirmPaste);
+        Assert.True(_host.ExecuteString("dotty.config.apply_table({clipboard={bracketed_paste_is_safe=false}})"));
+        Assert.False(_config.Clipboard.BracketedPasteIsSafe);
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => _host.ExecuteString("dotty.config.clipboard.confirm_paste='no'"));
+        Assert.Contains("clipboard.confirm_paste", error.Message);
+    }
+
     /// <summary>Verifies runtime config writes coalesce application until posted work is drained.</summary>
     [Fact]
     public void RuntimeConfigWrites_CoalesceApplyUntilPostDrain()

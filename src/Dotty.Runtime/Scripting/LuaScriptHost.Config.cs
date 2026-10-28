@@ -70,6 +70,12 @@ public sealed partial class LuaScriptHost
         ["vt.window_resize_allowed"] = new(ConfigValueKind.Boolean, c => c.Vt.WindowResizeAllowed, (c, v) => c.Vt.WindowResizeAllowed = (bool)v!),
         ["scrollback.limit_lines"] = new(ConfigValueKind.Integer, c => c.Scrollback.LimitLines, (c, v) => c.Scrollback.LimitLines = (int)v!),
         ["scrollback.limit_bytes"] = new(ConfigValueKind.Long, c => c.Scrollback.LimitBytes, (c, v) => c.Scrollback.LimitBytes = (long)v!),
+        ["graphics.kitty_protocol"] = new(ConfigValueKind.Boolean, c => c.Graphics.KittyProtocol, (c, v) => c.Graphics.KittyProtocol = (bool)v!),
+        ["graphics.image_storage_limit_mib"] = new(ConfigValueKind.Integer, c => c.Graphics.ImageStorageLimitMiB, (c, v) => c.Graphics.ImageStorageLimitMiB = (int)v!),
+        ["graphics.max_payload_mib"] = new(ConfigValueKind.Integer, c => c.Graphics.MaxPayloadMiB, (c, v) => c.Graphics.MaxPayloadMiB = (int)v!),
+        ["graphics.allow_file_transfer"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowFileTransfer, (c, v) => c.Graphics.AllowFileTransfer = (bool)v!),
+        ["graphics.allow_temp_file_transfer"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowTempFileTransfer, (c, v) => c.Graphics.AllowTempFileTransfer = (bool)v!),
+        ["graphics.allow_shared_memory"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowSharedMemory, (c, v) => c.Graphics.AllowSharedMemory = (bool)v!),
         ["mouse.copy_on_select"] = new(ConfigValueKind.String, c => c.Mouse.CopyOnSelect, (c, v) => c.Mouse.CopyOnSelect = (string)v!),
         ["mouse.middle_click_action"] = new(ConfigValueKind.String, c => c.Mouse.MiddleClickAction, (c, v) => c.Mouse.MiddleClickAction = (string)v!)
     };
@@ -114,7 +120,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics")
         {
             host.PushConfigProxyTable(lua, key);
             return 1;
@@ -149,7 +155,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics")
         {
             if (lua.Type(3) != LuaType.Table)
             {
@@ -192,7 +198,7 @@ public sealed partial class LuaScriptHost
         }
 
         string path = NormalizeConfigKey(parent + "." + key);
-        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback")
+        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics")
         {
             host.PushConfigProxyTable(lua, path);
             return 1;
@@ -366,7 +372,7 @@ public sealed partial class LuaScriptHost
             {
                 string path = NormalizeConfigKey((prefix.Length == 0 ? "" : prefix + ".") + key);
                 if (lua.Type(-1) == LuaType.Table
-                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback"))
+                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics"))
                 {
                     ApplyConfigTable(lua, -1, path);
                 }

@@ -21,6 +21,13 @@ public static class DottyDefaults
     public const int ScrollbackLines = 5000;
     public const long ScrollbackLimitBytes = 64L * 1024 * 1024;
 
+    // Kitty graphics protocol (enabled stays false until the renderer lands)
+    public const bool KittyGraphicsEnabled = false;
+    public const long KittyImageStorageLimitBytes = 320L * 1024 * 1024;
+    public const long KittyMaxPayloadBytes = 65L * 1024 * 1024;
+    public const int KittyMaxImageDimension = 10000;
+    public const int KittyMaxPlacementsPerScreen = 8192;
+
     // UI Colors (ARGB format)
     public const uint SelectionColor = 0xA03385DB;
     public const uint TabBarBackgroundColor = 0xFF1A1A1A;

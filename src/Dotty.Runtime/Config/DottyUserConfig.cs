@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Graphics;
 
 namespace Dotty.Runtime.Config;
 
@@ -77,6 +78,13 @@ public sealed class DottyUserConfig
     /// </summary>
     [JsonPropertyName("shellIntegration")]
     public string ShellIntegration { get; set; } = "none";
+
+    /// <summary>Kitty graphics protocol settings. Applies to sessions created after a change.</summary>
+    [JsonPropertyName("graphics")]
+    public GraphicsUserConfig Graphics { get; set; } = new();
+
+    /// <summary>Normalized Kitty graphics options derived from <see cref="Graphics"/>.</summary>
+    public KittyGraphicsOptions ToKittyGraphicsOptions() => (Graphics ?? new GraphicsUserConfig()).ToOptions();
 }
 public sealed class FontUserConfig
 {
@@ -204,6 +212,56 @@ public sealed class ScrollbackUserConfig
     /// <summary>The normalized policy these settings describe.</summary>
     public ScrollbackPolicy ToPolicy() => new ScrollbackPolicy(LimitLines, LimitBytes).Normalize();
 }
+public sealed class GraphicsUserConfig
+{
+    /// <summary>Largest accepted <see cref="ImageStorageLimitMiB"/>.</summary>
+    public const int MaxStorageLimitMiB = 4096;
+    /// <summary>Largest accepted <see cref="MaxPayloadMiB"/>.</summary>
+    public const int MaxPayloadMiBLimit = 1024;
+
+    /// <summary>Enable the Kitty graphics protocol (APC G).</summary>
+    [JsonPropertyName("kittyProtocol")]
+    public bool KittyProtocol { get; set; } = DottyDefaults.KittyGraphicsEnabled;
+
+    /// <summary>Per-session image memory budget in MiB; non-positive falls back to the default, capped at 4096.</summary>
+    [JsonPropertyName("imageStorageLimitMiB")]
+    public int ImageStorageLimitMiB { get; set; } = (int)(DottyDefaults.KittyImageStorageLimitBytes / (1024 * 1024));
+
+    /// <summary>Largest single transmission in MiB; non-positive falls back to the default, capped at 1024.</summary>
+    [JsonPropertyName("maxPayloadMiB")]
+    public int MaxPayloadMiB { get; set; } = (int)(DottyDefaults.KittyMaxPayloadBytes / (1024 * 1024));
+
+    /// <summary>Allow <c>t=f</c> regular-file transmission.</summary>
+    [JsonPropertyName("allowFileTransfer")]
+    public bool AllowFileTransfer { get; set; } = true;
+
+    /// <summary>Allow <c>t=t</c> temporary-file transmission.</summary>
+    [JsonPropertyName("allowTempFileTransfer")]
+    public bool AllowTempFileTransfer { get; set; } = true;
+
+    /// <summary>Allow <c>t=s</c> shared-memory transmission.</summary>
+    [JsonPropertyName("allowSharedMemory")]
+    public bool AllowSharedMemory { get; set; } = true;
+
+    /// <summary>The normalized options these settings describe (Direct transmission is always allowed).</summary>
+    public KittyGraphicsOptions ToOptions()
+    {
+        KittyMediaFlags media = KittyMediaFlags.Direct;
+        if (AllowFileTransfer) media |= KittyMediaFlags.File;
+        if (AllowTempFileTransfer) media |= KittyMediaFlags.TempFile;
+        if (AllowSharedMemory) media |= KittyMediaFlags.SharedMemory;
+        return new KittyGraphicsOptions
+        {
+            Enabled = KittyProtocol,
+            StorageLimitBytes = ToBytes(ImageStorageLimitMiB, MaxStorageLimitMiB, DottyDefaults.KittyImageStorageLimitBytes),
+            MaxPayloadBytes = ToBytes(MaxPayloadMiB, MaxPayloadMiBLimit, DottyDefaults.KittyMaxPayloadBytes),
+            Media = media,
+        }.Normalize();
+    }
+
+    private static long ToBytes(int mib, int maxMiB, long defaultBytes) =>
+        mib <= 0 ? defaultBytes : (long)Math.Min(mib, maxMiB) * 1024 * 1024;
+}
 public sealed class PanesUserConfig
 {
     [JsonPropertyName("dividerThickness")]
@@ -308,6 +366,7 @@ public static class UserConfigService
             config.Vt ??= new VtUserConfig();
             config.Mouse ??= new MouseUserConfig();
             config.Scrollback ??= new ScrollbackUserConfig();
+            config.Graphics ??= new GraphicsUserConfig();
         }
         return config;
     }

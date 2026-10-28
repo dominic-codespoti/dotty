@@ -1,3 +1,6 @@
+using System.Collections.Generic;
+using System.Text;
+using Dotty.Terminal.Parser;
 using System;
 using System.Linq;
 using Dotty.Abstractions.Graphics;
@@ -479,13 +482,15 @@ public sealed class KittyPlacementTests
     [InlineData(4, 0, 10, 6, 5, 1, 3, 5, 1, 1)]    // row 4+2 = 6 > 5: scroll 1
     [InlineData(5, 0, 10, 6, 5, 1, 1, 5, 1, 0)]
     [InlineData(5, 9, 10, 6, 5, 1, 1, 5, 0, 1)]    // wrap on the last row scrolls
-    [InlineData(0, 0, 10, 6, 5, 1, 100, 5, 1, 6)]  // taller than the screen: scroll clamps to the row count
+    [InlineData(0, 0, 10, 6, 5, 1, 100, 5, 1, 94)] // taller than the screen: the whole overshoot (99 - 5) scrolls
     [InlineData(2, 2, 10, 6, 5, 1, 0, 2, 3, 0)]    // zero rows counts as one
     [InlineData(4, 0, 10, 6, 2, 1, 3, 5, 1, 0)]    // started below the margins: clamp to the screen, no scroll
     [InlineData(2, 0, 10, 6, 2, 1, 1, 2, 1, 0)]
     [InlineData(2, 0, 10, 6, 2, 1, 2, 2, 1, 1)]    // bottom margin 2: scroll the region once
     [InlineData(0, 0, 10, 6, 5, 65535, 1, 1, 0, 0)]
-    [InlineData(0, 0, 10, 3, 2, 1, 100, 2, 1, 3)]  // scroll clamps to the 3-row screen
+    [InlineData(0, 0, 10, 3, 2, 1, 100, 2, 1, 97)] // 99 - 2
+    [InlineData(5, 0, 10, 6, 5, 1, 65535, 5, 1, 65534)] // the largest cell box: the overshoot is 5 + 65534 - 5
+    [InlineData(0, 9, 10, 6, 5, 2, 1, 1, 0, 0)]    // a cursor waiting on the last column: 9 + 2 >= 10, wraps
     public void CursorAdvancesPastThePlacement(int row, int col, int columns, int rows, int bottom, int effCols, int effRows,
         int expRow, int expCol, int expScroll)
     {
@@ -830,5 +835,134 @@ public sealed class KittyPlacementTests
         before = rig.Host.GraphicsChangedCalls;
         rig.Apc("a=p,i=404"); // nothing changed
         Assert.Equal(before, rig.Host.GraphicsChangedCalls);
+    }
+
+    [Fact]
+    public void QuotaEvictionOfADisplayedImageAnnouncesAGraphicsChange()
+    {
+        using var rig = new KittyRig(new KittyGraphicsOptions { Enabled = true, StorageLimitBytes = 1500 });
+        rig.Apc("a=T,i=1,s=250,v=1,f=32,c=1,r=1", B64(new byte[1000]));
+        Assert.Equal(1, rig.Store.PlacementCount);
+
+        int before = rig.Host.GraphicsChangedCalls;
+        rig.Apc("i=2,s=250,v=1,f=32", B64(new byte[1000]));        // evicts the displayed image 1
+        Assert.Null(rig.Store.FindByClientId(1));
+        Assert.Equal(0, rig.Store.PlacementCount);
+        Assert.True(rig.Host.GraphicsChangedCalls > before);
+
+        before = rig.Host.GraphicsChangedCalls;
+        rig.Apc("i=3,s=250,v=1,f=32", B64(new byte[1000]));        // evicts image 2, which showed nothing
+        Assert.Null(rig.Store.FindByClientId(2));
+        Assert.Equal(before, rig.Host.GraphicsChangedCalls);
+    }
+
+    // ------------------------------------------------------------------------- deferred put / delete
+
+    [Fact]
+    public void APutIgnoresItsPayload()
+    {
+        using var rig = new KittyRig();
+        rig.Apc("i=1,s=1,v=1,f=24", "AAAA");
+        rig.Replies.Clear();
+        rig.Apc("a=p,i=1,p=3", "AAAA");
+        Assert.Equal(new[] { Ok("i=1,p=3") }, rig.Replies);
+        Assert.Equal(1, rig.Store.PlacementCount);
+    }
+
+    [Fact]
+    public void ACancelledPutOrDeleteDoesNothing()
+    {
+        using var rig = new KittyRig();
+        rig.Apc("i=1,s=1,v=1,f=24", "AAAA");
+        rig.Apc("a=p,i=1,c=2,r=2");
+        rig.Replies.Clear();
+        var cursor = (rig.Host.CursorRow, rig.Host.CursorCol);
+
+        rig.CancelledApc("a=p,i=1,p=5", "AAAA");      // cut off after its ';'
+        rig.CancelledApc("a=d,d=A", "AAAA");
+        rig.CancelledApc("a=p,i=404");
+
+        Assert.Empty(rig.Replies);
+        Assert.Equal(1, rig.Store.PlacementCount);
+        Assert.NotNull(rig.Store.FindByClientId(1));
+        Assert.Single(rig.Host.CursorMoves);
+        Assert.Equal(cursor, (rig.Host.CursorRow, rig.Host.CursorCol));
+    }
+
+    [Fact]
+    public void ACancelledPutOrDeleteLeavesAnOpenUploadRunning()
+    {
+        using var rig = new KittyRig();
+        rig.Apc("i=1,s=2,v=1,f=24,m=1", B64(new byte[] { 1, 2, 3 }));
+        rig.CancelledApc("a=d,d=A", "AAAA");
+        rig.CancelledApc("a=p,i=1", "AAAA");
+        Assert.True(rig.Controller.HasOpenTransfer);
+
+        rig.Apc("m=0", B64(new byte[] { 4, 5, 6 }));
+        Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+        Assert.Equal(1, rig.Store.Count);
+    }
+
+    [Fact]
+    public void ACompletedPutEndsAnOpenUpload()
+    {
+        using var rig = new KittyRig();
+        rig.Apc("i=1,s=1,v=1,f=24", "AAAA");
+        rig.Apc("i=2,s=2,v=1,f=24,m=1", B64(new byte[] { 1, 2, 3 }));
+        Assert.True(rig.Controller.HasOpenTransfer);
+        rig.Replies.Clear();
+
+        rig.Apc("a=p,i=1");
+        Assert.False(rig.Controller.HasOpenTransfer);
+        rig.Apc("m=0", B64(new byte[] { 4, 5, 6 }));       // the rest of the abandoned upload is dropped
+        Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+        Assert.Null(rig.Store.FindByClientId(2));
+    }
+
+    [Fact]
+    public void ThePutReplyIsQueuedBeforeAFollowingDa1Reply()
+    {
+        var replies = new List<string>();
+        using var adapter = KittyTransferTests.NewAdapter(replies: replies);
+        var parser = new BasicAnsiParser { Handler = adapter };
+
+        parser.Feed(Encoding.ASCII.GetBytes(
+            "\u001b_Gi=1,s=1,v=1,f=24;AAAA\u001b\\" + "\u001b_Ga=p,i=1,p=2\u001b\\" + "\u001b[c"));
+
+        Assert.Equal(new[] { Ok("i=1"), Ok("i=1,p=2"), "\u001b[?1;0c" }, replies);
+    }
+
+    [Fact]
+    public void PutWithAnExistingPlacementIdReplacesThePlacement()
+    {
+        using var rig = new KittyRig();
+        rig.Apc("i=1,s=1,v=1,f=24", "AAAA");
+        rig.Host.CursorRow = 2;
+        rig.Host.CursorCol = 3;
+        rig.Apc("a=p,i=1,p=4,c=2,r=1,C=1");
+        rig.Host.CursorRow = 5;
+        rig.Host.CursorCol = 0;
+        rig.Apc("a=p,i=1,p=4,c=3,r=2,C=1");
+
+        var placement = Assert.Single(rig.Store.Placements);
+        Assert.Equal((5L, 0, 3, 2), (placement.AnchorRow, placement.AnchorCol, placement.EffCols, placement.EffRows));
+        Assert.Equal(new[] { Ok("i=1"), Ok("i=1,p=4"), Ok("i=1,p=4") }, rig.Replies);
+        Assert.Empty(rig.Host.CursorMoves);
+    }
+
+    [Fact]
+    public void ValidateInvariantsDetectsDanglingReflowAnchorsAndEmptyGeometry()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var p = store.Place(Img40x20(store), "p=1");
+        store.ValidateInvariants();
+
+        store.CaptureAnchors(0, 10, (row, col) => 0);
+        Assert.Throws<InvalidOperationException>(store.ValidateInvariants);
+        store.RebaseAnchors(0, 10, (int slot, out long row, out int col) => { row = 0; col = 0; return true; });
+        store.ValidateInvariants();
+
+        p.Geometry = default;
+        Assert.Throws<InvalidOperationException>(store.ValidateInvariants);
     }
 }

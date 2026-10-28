@@ -266,6 +266,24 @@ public sealed class KittyDeleteTests
         Assert.Equal(1, f.Delete("d=I,i=5"));           // image only
     }
 
+    [Fact]
+    public void AnAnonymousImageLivesUntilItsLastPlacementIsDeleted()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var anonymous = store.AddImage(40, 20);
+        store.Place(anonymous, "c=1,r=1", anchorRow: 0);
+        store.Place(anonymous, "c=1,r=1", anchorRow: 5);
+
+        Assert.Equal(1, store.ApplyDelete(Parse("a=d,d=y,y=1"), 0, 0, Rows));
+        Assert.False(anonymous.IsDeleted);
+        Assert.Equal(1, store.PlacementCount);
+
+        Assert.Equal(1, store.ApplyDelete(Parse("a=d,d=y,y=6"), 0, 0, Rows)); // the sweep of the image is not counted
+        Assert.True(anonymous.IsDeleted);
+        Assert.Equal(0, store.Count);
+        store.ValidateInvariants();
+    }
+
     // --------------------------------------------------------------------------------- virtual placements
 
     [Theory]

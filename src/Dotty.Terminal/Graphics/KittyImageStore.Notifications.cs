@@ -67,10 +67,15 @@ internal sealed partial class KittyImageStore
     /// <summary>
     /// A scroll of the region of rows <c>[top, bottom]</c> (visible rows, inclusive) by <paramref name="delta"/>
     /// rows that did not rotate the ring (<paramref name="delta"/> &gt; 0 scrolls up, &lt; 0 down). Kitty margin
-    /// semantics: only placements wholly inside the region move; a moved placement that leaves the region is
-    /// cropped at the margin (<see cref="PlacementGeometry.CropTop"/>/<see cref="PlacementGeometry.CropBottom"/>,
-    /// the source rectangle shrinks proportionally) and deleted when nothing of it stays inside; placements wholly
-    /// outside the region, and those that straddle a margin, are left alone.
+    /// semantics (the design plan's "only placements entirely inside the margins move, are cropped when they cross a
+    /// margin and deleted when fully outside" read as a sequence: inside → moves → crop/delete): only placements
+    /// wholly inside the region move; a moved placement that leaves the region is cropped at the margin
+    /// (<see cref="PlacementGeometry.CropTop"/>/<see cref="PlacementGeometry.CropBottom"/>, the source rectangle
+    /// shrinks proportionally, the cropped part never grows back) and deleted when nothing of it stays inside.
+    /// Placements that are not wholly inside before the scroll are left alone: those wholly outside the region
+    /// (above, below or in the history), and those that straddle a margin (they overhang it, so they were not
+    /// "inside" to begin with; this includes a tall image placed at the bottom margin, which therefore stays put
+    /// while the text under it scrolls).
     /// </summary>
     /// <returns>Placements moved, cropped or deleted.</returns>
     public int OnRegionScrolled(int top, int bottom, int delta, int rows)

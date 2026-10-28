@@ -34,14 +34,29 @@ public partial class TerminalBuffer
     /// <summary>
     /// Moves the cursor past a just-placed image (<see cref="KittyCursorPolicy.Advance"/>). A move past the bottom
     /// margin scrolls the scroll region through the normal scroll path, so the placement (registered before this
-    /// call) scrolls with the text and the scroll hooks see it. Clears the wrap-pending state and the row's
-    /// continuation flag like any explicit cursor move.
+    /// call) scrolls with the text and the scroll hooks see it. The whole overshoot is applied: a full-screen
+    /// region scrolls in steps of at most <see cref="Rows"/> (one ring rotation is capped at the screen height), so
+    /// the last row of an image taller than the screen ends on the bottom row; a margin region is emptied by its own
+    /// height and scrolling it further changes nothing. Clears the wrap-pending state and the row's continuation
+    /// flag like any explicit cursor move.
     /// </summary>
     internal void MoveCursorAfterImage(int effCols, int effRows)
     {
         var advance = KittyCursorPolicy.Advance(_cursor.Row, _cursor.Col, Columns, Rows, _scrollBottom, effCols, effRows);
-        if (advance.ScrollRows > 0)
-            ScrollRegionUp(_scrollTop, _scrollBottom, advance.ScrollRows);
+        int remaining = advance.ScrollRows;
+        if (remaining > 0)
+        {
+            bool fullScreen = _scrollTop == 0 && _scrollBottom == Rows - 1;
+            int step = Math.Max(fullScreen ? Rows : _scrollBottom - _scrollTop + 1, 1);
+            if (!fullScreen)
+                remaining = Math.Min(remaining, step);
+            while (remaining > 0)
+            {
+                int n = Math.Min(remaining, step);
+                ScrollRegionUp(_scrollTop, _scrollBottom, n);
+                remaining -= n;
+            }
+        }
         _cursor.Set(advance.Row, advance.Col, Rows, Columns);
         ActiveBuffer.ClearRowContinuation(_cursor.Row);
         BumpGraphicsGeneration();

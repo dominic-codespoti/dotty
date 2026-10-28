@@ -229,6 +229,7 @@ internal sealed partial class KittyImageStore
         }
         Require(total == _placements.Count, "per-image placement counts do not add up to the store's placements");
         Require(_reportedPlacements == _placements.Count, "placement metric is out of step with the live placements");
+        Require(_anchors.Count == 0, "captured reflow anchors were never rebased or abandoned");
 
         int withId = 0;
         foreach (var (internalId, p) in _placements)
@@ -247,7 +248,10 @@ internal sealed partial class KittyImageStore
                     "placement id index misses a live placement");
             }
             if (p.Kind != PlacementKind.Virtual)
+            {
                 Require(p.EndRow >= _minEndRow, "cached minimum end row is above a placement's end row");
+                Require(p.AnchorCol >= 0, "placement with a negative anchor column");
+            }
             if (p.Parent != null)
             {
                 var step = p.Parent;

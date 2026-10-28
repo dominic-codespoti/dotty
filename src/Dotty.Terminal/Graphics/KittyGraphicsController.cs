@@ -13,7 +13,8 @@ namespace Dotty.Terminal.Graphics;
 /// stray one with no open transfer is dropped silently, which is also how the rest of a failed load is swallowed).
 /// Any other command first aborts an open transfer, then runs: <c>a=t</c>/<c>a=T</c> start a transfer,
 /// <c>a=q</c> starts a query transfer (needs <c>i</c>, else it is ignored), <c>a=p</c> places a stored image,
-/// <c>a=d</c> deletes; the animation actions (<c>f a c</c>) are parsed and ignored for now
+/// <c>a=d</c> deletes (both run when the APC is terminated: a cancelled one does nothing and leaves an open load
+/// alone, a completed one ends it first); the animation actions (<c>f a c</c>) are parsed and ignored for now
 /// (<see cref="HandleOtherAction"/> is their seam).</para>
 /// <para>Replies are produced when the APC terminator arrives (never for a cancelled APC), in parse order, so a
 /// reply is queued before anything the application sends after the APC. An OK is sent only when image data was
@@ -189,6 +190,8 @@ internal sealed class KittyGraphicsController : IDisposable
         {
             if (deferred)
             {
+                // Only a completed put/delete ends an open chunked load; a cancelled one leaves it alone.
+                AbortTransfer();
                 if (_deferred.Action == KittyAction.Put)
                     HandlePut(in _deferred);
                 else
@@ -226,6 +229,15 @@ internal sealed class KittyGraphicsController : IDisposable
             return;
         }
 
+        if (parse == KittyParseResult.Ok && cmd.Action is KittyAction.Put or KittyAction.Delete)
+        {
+            // Runs when the APC is terminated (OnEnd): a command cut off by CAN/SUB/ESC after its ';' does nothing,
+            // and leaves an open chunked load alone like any other cancelled APC.
+            _deferred = cmd;
+            _hasDeferred = true;
+            return;
+        }
+
         AbortTransfer();
         if (parse == KittyParseResult.Invalid)
         {
@@ -239,12 +251,6 @@ internal sealed class KittyGraphicsController : IDisposable
             case KittyAction.TransmitAndPut:
             case KittyAction.Query:
                 StartTransfer(cmd);
-                break;
-            case KittyAction.Put:
-            case KittyAction.Delete:
-                // Runs when the APC is terminated: a command cut off by CAN/SUB/ESC after its ';' does nothing.
-                _deferred = cmd;
-                _hasDeferred = true;
                 break;
             case KittyAction.Frame:
             case KittyAction.Animate:
@@ -414,6 +420,7 @@ internal sealed class KittyGraphicsController : IDisposable
 
         uint clientId = first.ImageId;
         KittyImage? image = null;
+        int placementsBefore = store.PlacementCount;
         bool added;
         try
         {
@@ -431,6 +438,8 @@ internal sealed class KittyGraphicsController : IDisposable
             pixels.Dispose();
             throw;
         }
+        if (store.PlacementCount < placementsBefore)
+            _host.GraphicsChanged(); // the replacement or the quota eviction took displayed images with it
         if (!added || image == null)
         {
             // Over the quota, or the whole I= id range is taken.

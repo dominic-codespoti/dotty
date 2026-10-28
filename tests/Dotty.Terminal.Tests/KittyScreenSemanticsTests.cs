@@ -114,6 +114,35 @@ public sealed class KittyScreenSemanticsTests
     }
 
     [Fact]
+    public void AnImageOverhangingTheBottomMarginIsNotScrolledWithTheRegion()
+    {
+        using var t = new Term(6, 10);
+        t.Feed(Esc + "[2;4r" + Esc + "[3;1H");   // margins rows index 1..3, cursor at (2, 0)
+        t.Apc("a=T,i=1,s=1,v=1,f=24,c=1,r=3", OnePixel);
+
+        // Rows 2..4 reach past the bottom margin: like kitty, only placements wholly inside the margins scroll
+        // with the text, so this one stays where it was put although the region scrolled.
+        Assert.Equal((3, 1), t.Cursor);
+        var placement = t.Store.Placements.Single();
+        Assert.Equal((2L, 3), (placement.AnchorRow - t.Store.ViewTop, placement.EffRows));
+    }
+
+    [Fact]
+    public void AnImageWhollyInsideTheMarginsScrollsWithTheRegionWhenTheCursorMoveScrollsIt()
+    {
+        using var t = new Term(6, 10);
+        t.FillRows();
+        t.Feed(Esc + "[2;4r" + Esc + "[4;1H");   // margins rows index 1..3, cursor on the bottom margin row
+        t.Apc("a=T,i=1,s=1,v=1,f=24,c=10,r=1", OnePixel);   // full width: the cursor wraps below the margin
+
+        Assert.Equal((3, 0), t.Cursor);
+        Assert.Equal(new[] { "R0", "R2", "R3", "", "R4", "R5" }, Enumerable.Range(0, 6).Select(r => t.Row(r)));
+        var placement = t.Store.Placements.Single();
+        Assert.Equal(2, placement.AnchorRow - t.Store.ViewTop);   // moved up with its text line "R3"
+        Assert.Equal(1, placement.EffRows);
+    }
+
+    [Fact]
     public void ATallerThanScreenImageScrollsEverythingAwayAndLeavesTheCursorOnTheLastRow()
     {
         using var t = new Term(6, 10);
@@ -125,6 +154,11 @@ public sealed class KittyScreenSemanticsTests
         Assert.All(Enumerable.Range(0, 6), r => Assert.Equal("", t.Row(r)));
         var placement = t.Store.Placements.Single();
         Assert.Equal(100, placement.EffRows);
+        // The whole overshoot (99 - 5 = 94 rows) scrolled, so the image's last row is the bottom screen row.
+        Assert.Equal(-94, placement.AnchorRow - t.Store.ViewTop);
+        using var snapshot = t.Buffer.CaptureRenderSnapshotVisible();
+        var captured = Assert.Single(snapshot.Graphics!.Placements.ToArray());
+        Assert.Equal((-94, 100), (captured.ViewRow, captured.Rows));
     }
 
     [Fact]
@@ -326,6 +360,36 @@ public sealed class KittyScreenSemanticsTests
         Assert.Equal(0, alt.Count);
         Assert.Equal(0, main.PlacementCount);
         Assert.False(t.Buffer.IsAlternateScreenActive);
+    }
+
+    [Fact]
+    public void APutOnTheAlternateScreenCannotSeeTheMainScreensImages()
+    {
+        using var t = new Term(6, 10);
+        t.Apc("a=T,i=1,s=1,v=1,f=24,c=1,r=1,C=1", OnePixel);
+        t.Feed(Esc + "[?1049h");
+        t.Apc("a=p,i=1");
+        Assert.Equal(0, t.Store.PlacementCount);
+
+        t.Feed(Esc + "[?1049l");
+        t.Apc("a=p,i=1,p=2");
+        Assert.Equal(2, t.Store.PlacementCount);
+        Assert.Equal(new[] { Ok("i=1"), Err("i=1", "ENOENT:Image not found"), Ok("i=1,p=2") }, t.Replies);
+    }
+
+    [Fact]
+    public void ScrollingErasingResizingAndResettingNeverCreateStores()
+    {
+        using var t = new Term(6, 10);
+        t.FillRows();
+        t.Feed("\r\n\r\n" + Esc + "[2S" + Esc + "[T" + Esc + "[2;4r" + Esc + "[S" + Esc + "[T" + Esc + "[r");
+        t.Feed(Esc + "[2J" + Esc + "[3J" + Esc + "[?1049h" + "\r\n\r\n\r\n\r\n\r\n\r\n\r\n" + Esc + "[?1049l");
+        t.Buffer.ClearScrollback();
+        t.Buffer.Resize(8, 12);
+        t.Adapter.SetCellPixelSize(9, 18);
+        t.Feed(Esc + "c");
+        Assert.Null(t.Buffer.MainImageStore);
+        Assert.Null(t.Buffer.AlternateImageStore);
     }
 
     [Fact]
@@ -682,6 +746,21 @@ public sealed class KittyScreenSemanticsTests
         Assert.Equal(1, store.OnRegionScrolled(2, 7, 1, 10));
         Assert.Equal((4, 8), (p.SrcX, p.SrcW));
         Assert.Equal(2, p.EffRows);
+    }
+
+    [Fact]
+    public void APlacementFillingTheWholeRegionIsCroppedByEachScrollAndKeepsItsSourceWindow()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = Named(store);
+        var p = InRegion(store, image, "c=2,r=3", 2);       // rows 2..4 = exactly the region
+        Assert.Equal(1, store.OnRegionScrolled(2, 4, 1, 10));
+        Assert.Equal((2L, 2, 16, 32), (p.AnchorRow, p.EffRows, p.SrcY, p.SrcH));
+
+        // The lost row does not grow back; the remaining two rows move down and still fit.
+        Assert.Equal(1, store.OnRegionScrolled(2, 4, -1, 10));
+        Assert.Equal((3L, 2, 16, 32), (p.AnchorRow, p.EffRows, p.SrcY, p.SrcH));
+        store.ValidateInvariants();
     }
 
     // ------------------------------------------------------------------------------------ history

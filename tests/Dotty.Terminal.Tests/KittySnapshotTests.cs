@@ -87,6 +87,17 @@ public sealed class KittySnapshotTests
     }
 
     [Fact]
+    public void AScrollOffsetFarBeyondTheHistoryNeverOverflowsAndShowsNothing()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = store.AddImage(40, 20, 1);
+        store.Place(image, "c=1,r=1", anchorRow: -3);
+        store.Place(image, "c=1,r=1", anchorRow: 4);
+        Assert.Empty(Capture(store, 10, int.MaxValue));
+        Assert.Equal(new[] { 6 }, Capture(store, 10, 2).Select(p => p.ViewRow));
+    }
+
+    [Fact]
     public void EmptyStoresAndDegenerateViewportsAppendNothing()
     {
         using var store = new KittyImageStore(1_000_000);
@@ -183,6 +194,22 @@ public sealed class KittySnapshotTests
         Assert.Equal((2, 2), (p.ViewRow, p.Rows));
         Close(0, p.U0); Close(1, p.U1);
         Close(16.0 / 48, p.V0); Close(1, p.V1);
+    }
+
+    [Fact]
+    public void ACroppedNativePlacementCapturesItsCroppedNativeSizeAndConsumedOffset()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = store.AddImage(16, 48, 1);
+        store.Place(image, "Y=8", anchorRow: 2);          // native 16x48 px with an 8 px offset: 2 x 4 cells
+        store.OnRegionScrolled(2, 7, 1, 10);              // the top row goes: 16 - 8 = 8 px of the image with it
+        var p = Assert.Single(Capture(store, 10));
+        Assert.Equal((2, 2, 3), (p.ViewRow, p.Cols, p.Rows));
+        Assert.True(p.NativeSize);
+        Assert.Equal((16, 40), (p.NativeW, p.NativeH));
+        Close(0, p.U0); Close(1, p.U1);
+        Close(8.0 / 48, p.V0); Close(1, p.V1);
+        Close(0, p.OffYCells);
     }
 
     [Fact]

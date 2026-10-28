@@ -10,9 +10,11 @@ internal static class KittyCursorPolicy
 {
     /// <summary>
     /// <c>col += cols; row += max(rows - 1, 0)</c>; a column at or past the right edge wraps to column 0 of the next
-    /// row; a row past <paramref name="scrollBottom"/> scrolls the region up by the overshoot (at most
-    /// <paramref name="rows"/>) and stays on the bottom margin. A cursor that started below the scroll region
-    /// (outside the margins) never scrolls it: it only clamps to the last screen row.
+    /// row; a row past <paramref name="scrollBottom"/> scrolls the region up by the whole overshoot and stays on the
+    /// bottom margin, so the last row of a tall image ends on the bottom margin like an image printed line by line
+    /// (the overshoot is not bounded by the screen height: a 100-row image on a 6-row screen scrolls 94 rows; the
+    /// caller applies it in screen-sized steps). A cursor that started below the scroll region (outside the
+    /// margins) never scrolls it: it only clamps to the last screen row.
     /// </summary>
     /// <param name="row">Cursor row at placement time (0-based, screen relative).</param>
     /// <param name="col">Cursor column at placement time.</param>
@@ -36,7 +38,7 @@ internal static class KittyCursorPolicy
         {
             if (row <= scrollBottom)
             {
-                scroll = (int)Math.Min(newRow - scrollBottom, rows);
+                scroll = (int)(newRow - scrollBottom);
                 newRow = scrollBottom;
             }
             else

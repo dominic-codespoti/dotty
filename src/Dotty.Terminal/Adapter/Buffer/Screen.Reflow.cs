@@ -330,8 +330,11 @@ public unsafe partial class Screen
 
     /// <summary>
     /// Reflows this screen's <paramref name="layout"/> into a <paramref name="rows"/> x <paramref name="columns"/>
-    /// screen. The anchors registered on <paramref name="mapping"/> beforehand (<see cref="ReflowMapping.AddAnchor"/>)
-    /// are resolved against the result; nothing else is tracked per cell.
+    /// screen whose ring keeps up to <paramref name="destinationScrollbackCapacity"/> history rows (the capacity may
+    /// differ from this screen's: it follows the column count under a byte cap; when it is smaller than the history
+    /// being carried over, the oldest rows are dropped). The anchors registered on <paramref name="mapping"/>
+    /// beforehand (<see cref="ReflowMapping.AddAnchor"/>) are resolved against the result; nothing else is tracked
+    /// per cell.
     /// </summary>
     internal Screen ReflowWithOptions(
         int rows,
@@ -341,6 +344,7 @@ public unsafe partial class Screen
         ReflowMapping mapping,
         int scrollbackRows,
         bool includeScrollback,
+        int destinationScrollbackCapacity,
         Screen? destination = null)
     {
         rows = Math.Max(1, rows);
@@ -375,13 +379,13 @@ public unsafe partial class Screen
             }
         }
 
-        int targetTotal = (includeScrollback ? _scrollbackCapacity : 0) + rows;
+        int targetTotal = (includeScrollback ? destinationScrollbackCapacity : 0) + rows;
         if (!hasData && retainedScrollbackRows == 0)
             targetTotal = rows;
         int retainedStart = Math.Max(0, emitted.Count - targetTotal);
         int retainedCount = emitted.Count - retainedStart;
         int newScrollbackRows = includeScrollback
-            ? Math.Min(_scrollbackCapacity, Math.Max(0, retainedCount - rows))
+            ? Math.Min(destinationScrollbackCapacity, Math.Max(0, retainedCount - rows))
             : 0;
         mapping.RetainedStart = retainedStart;
         mapping.NewScrollbackRows = newScrollbackRows;
@@ -390,12 +394,12 @@ public unsafe partial class Screen
         Screen resized;
         if (destination is null)
         {
-            resized = new Screen(rows, columns, _scrollbackCapacity);
+            resized = new Screen(rows, columns, destinationScrollbackCapacity);
         }
         else
         {
             resized = destination;
-            resized.ResetForReflow(rows, columns);
+            resized.ResetForReflow(rows, columns, destinationScrollbackCapacity);
         }
         // History is written at the end of the destination ring, outside the visible-window extent.
         resized.NoteReflowDestinationHistory(newScrollbackRows);

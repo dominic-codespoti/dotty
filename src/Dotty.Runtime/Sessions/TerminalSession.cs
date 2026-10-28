@@ -190,10 +190,11 @@ public partial class TerminalSession : IDisposable
         _ptyFactory = ptyFactory ?? throw new ArgumentNullException(nameof(ptyFactory));
         _checkPtySupport = checkPtySupport;
         Parser = new BasicAnsiParser();
-        // The arena is allocated at construction, so the configured scrollback policy is resolved here;
-        // a later config change only affects sessions created afterwards.
-        int scrollbackLines = UserConfigService.Current.Scrollback.ToPolicy().CapacityFor(rows, columns);
-        Adapter = new TerminalAdapter(rows: rows, columns: columns, scrollbackCapacity: scrollbackLines);
+        // The arena is allocated at construction, so the configured scrollback policy is resolved here; a later
+        // config change only affects sessions created afterwards. The buffer keeps the policy: under a byte cap the
+        // history capacity is recomputed for the new size on every resize.
+        ScrollbackPolicy scrollbackPolicy = UserConfigService.Current.Scrollback.ToPolicy();
+        Adapter = new TerminalAdapter(rows: rows, columns: columns, scrollbackPolicy: scrollbackPolicy);
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;

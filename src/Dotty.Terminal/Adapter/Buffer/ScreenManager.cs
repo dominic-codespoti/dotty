@@ -1,4 +1,5 @@
 using System;
+using Dotty.Abstractions.Config;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -11,7 +12,7 @@ internal sealed class ScreenManager : IDisposable
     private Screen? _alt;
     private Screen? _savedMain;
     private bool _usingAlt;
-    private readonly int _scrollbackCapacity;
+    private readonly ScrollbackPolicy _policy;
     private readonly List<Screen> _spareScreens = new();
     private readonly Screen.ReflowWorkspace _reflowWorkspace = new();
     private readonly Screen.SourceLayout _mainLayout = new();
@@ -26,11 +27,23 @@ internal sealed class ScreenManager : IDisposable
         screen.BuildSourceLayout(scrollbackRows, _alternateLayout);
 
 
-    public ScreenManager(int rows, int columns, int scrollbackCapacity = global::Dotty.Abstractions.Config.DottyDefaults.ScrollbackLines)
+    public ScreenManager(int rows, int columns)
+        : this(rows, columns, ScrollbackPolicy.Default)
     {
-        _scrollbackCapacity = scrollbackCapacity;
-        _main = new Screen(rows, columns, scrollbackCapacity);
     }
+
+    /// <summary>
+    /// The ring capacity is <c>policy.CapacityFor(rows, columns)</c> at construction and again after every resize: under
+    /// a byte cap, wider screens hold fewer history lines.
+    /// </summary>
+    public ScreenManager(int rows, int columns, ScrollbackPolicy policy)
+    {
+        _policy = policy;
+        _main = new Screen(rows, columns, policy.CapacityFor(rows, columns));
+    }
+
+    /// <summary>The policy that sizes every ring this manager creates (see <see cref="ScrollbackPolicy.CapacityFor"/>).</summary>
+    internal ScrollbackPolicy Policy => _policy;
 
     public Screen Active => _usingAlt ? _alt! : _main;
 
@@ -58,7 +71,7 @@ internal sealed class ScreenManager : IDisposable
             _usingAlt = true;
             if (_alt is null)
             {
-                _alt = new Screen(_savedMain.Rows, _savedMain.Columns, _scrollbackCapacity);
+                _alt = new Screen(_savedMain.Rows, _savedMain.Columns, _savedMain.ScrollbackCapacity);
             }
             _alt.Clear();
         }
@@ -98,6 +111,8 @@ internal sealed class ScreenManager : IDisposable
         Screen.SourceLayout? alternateLayout,
         int alternateScrollbackRows)
     {
+        // Every ring of the new size shares one capacity (the alternate screen keeps the main screen's).
+        int capacity = _policy.CapacityFor(rows, columns);
         bool mainIsSaved = _savedMain != null && ReferenceEquals(_main, _savedMain);
 
         var oldMain = _main;
@@ -105,6 +120,7 @@ internal sealed class ScreenManager : IDisposable
             oldMain,
             rows,
             columns,
+            capacity,
             mainLayout,
             mainScrollbackRows,
             includeScrollback: true,
@@ -122,6 +138,7 @@ internal sealed class ScreenManager : IDisposable
                 oldAlt,
                 rows,
                 columns,
+                capacity,
                 alternateLayout!,
                 alternateScrollbackRows,
                 includeScrollback: false,
@@ -133,12 +150,13 @@ internal sealed class ScreenManager : IDisposable
         Screen source,
         int rows,
         int columns,
+        int capacity,
         Screen.SourceLayout layout,
         int scrollbackRows,
         bool includeScrollback,
         ReflowMapping mapping)
     {
-        Screen destination = TakeSpareScreen(rows, columns);
+        Screen destination = TakeSpareScreen(rows, columns, capacity);
         Screen resized = source.ReflowWithOptions(
             rows,
             columns,
@@ -147,15 +165,19 @@ internal sealed class ScreenManager : IDisposable
             mapping,
             scrollbackRows,
             includeScrollback,
+            capacity,
             destination);
-        // The spare keeps its virtual reservation (so the next resize allocates nothing) but holds no pages.
-        source.ResetForReuse(rows, columns);
+        // The spare keeps its virtual reservation (so the next resize allocates nothing) but holds no pages. It is
+        // parked with the size and capacity just served, whose reservation the next resize back and forth fits.
+        source.ResetForReuse(rows, columns, capacity);
         _spareScreens.Add(source);
         return resized;
     }
 
 
-    private Screen TakeSpareScreen(int rows, int columns)
+    // Any parked spare will do: ReflowWithOptions resets it to the requested size and capacity (a spare's own
+    // capacity is whatever it last served with), so a wrong-capacity ring is never used as is.
+    private Screen TakeSpareScreen(int rows, int columns, int capacity)
     {
         if (_spareScreens.Count > 0)
         {
@@ -165,8 +187,7 @@ internal sealed class ScreenManager : IDisposable
             return screen;
         }
 
-        var created = new Screen(rows, columns, _scrollbackCapacity);
-        return created;
+        return new Screen(rows, columns, capacity);
     }
 
     public void Dispose()

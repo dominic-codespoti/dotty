@@ -51,9 +51,19 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
     public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
 
-    public TerminalAdapter(int rows = 24, int columns = 80, int scrollbackCapacity = DottyDefaults.ScrollbackLines, TimeProvider? timeProvider = null)
+    public TerminalAdapter(int rows = 24, int columns = 80, TimeProvider? timeProvider = null)
+        : this(rows, columns, ScrollbackPolicy.Default, timeProvider)
     {
-        _buffer = new TerminalBuffer(rows, columns, scrollbackCapacity);
+    }
+
+    public TerminalAdapter(int rows, int columns, int scrollbackCapacity, TimeProvider? timeProvider = null)
+        : this(rows, columns, ScrollbackPolicy.Fixed(scrollbackCapacity), timeProvider)
+    {
+    }
+
+    public TerminalAdapter(int rows, int columns, ScrollbackPolicy scrollbackPolicy, TimeProvider? timeProvider = null)
+    {
+        _buffer = new TerminalBuffer(rows, columns, scrollbackPolicy);
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 

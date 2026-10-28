@@ -38,7 +38,8 @@ public sealed class ReflowAnchorMappingOracleTests
             int rows,
             int columns,
             int scrollbackRows,
-            bool includeScrollback)
+            bool includeScrollback,
+            int destinationScrollbackCapacity)
         {
             var mapping = new ReflowMapping();
             mapping.BeginAnchors(anchors.Count);
@@ -52,7 +53,8 @@ public sealed class ReflowAnchorMappingOracleTests
                 new Screen.ReflowWorkspace(),
                 mapping,
                 scrollbackRows,
-                includeScrollback);
+                includeScrollback,
+                destinationScrollbackCapacity);
             return mapping;
         }
 
@@ -69,6 +71,7 @@ public sealed class ReflowAnchorMappingOracleTests
         {
             int sourceColumns = random.Next(1, 10);
             int capacity = random.Next(0, 8);
+            int destinationCapacity = random.Next(0, 8); // differs from the source's under a byte cap
             int rows = random.Next(1, 6);
             int columns = random.Next(1, 9);
             int lineCount = random.Next(1, 14);
@@ -104,10 +107,11 @@ public sealed class ReflowAnchorMappingOracleTests
 
             using var source = new Screen(1, sourceColumns, capacity);
             var legacy = LegacyDenseReflowReplay.Replay(
-                layout, sourceColumns, capacity, rows, columns, scrollbackRows, includeScrollback);
-            var current = CurrentMapping.Resolve(source, layout, anchors, rows, columns, scrollbackRows, includeScrollback);
+                layout, sourceColumns, capacity, destinationCapacity, rows, columns, scrollbackRows, includeScrollback);
+            var current = CurrentMapping.Resolve(
+                source, layout, anchors, rows, columns, scrollbackRows, includeScrollback, destinationCapacity);
 
-            string context = $"seed {seed} round {round} -> {rows}x{columns} capacity {capacity} scrollbackRows {scrollbackRows} include {includeScrollback}";
+            string context = $"seed {seed} round {round} -> {rows}x{columns} capacity {capacity} -> {destinationCapacity} scrollbackRows {scrollbackRows} include {includeScrollback}";
             AssertWindowMatches(legacy, current, context);
             for (int slot = 0; slot < anchors.Count; slot++)
                 AssertSame(legacy, current, slot, anchors[slot], context);
@@ -133,8 +137,15 @@ public sealed class ReflowAnchorMappingOracleTests
                 {
                     var (rows, columns) = ReflowScenario.NextSize(random, buffer.Rows, buffer.Columns);
                     var layout = source.BuildSourceLayout(scrollbackRows, new Screen.SourceLayout());
+                    int destinationCapacity = random.Next(4) switch
+                    {
+                        0 => 0,
+                        1 => source.ScrollbackCapacity / 2,
+                        2 => source.ScrollbackCapacity + 7,
+                        _ => source.ScrollbackCapacity,
+                    };
                     var legacy = LegacyDenseReflowReplay.Replay(
-                        layout, source.Columns, source.ScrollbackCapacity, rows, columns, scrollbackRows, includeScrollback);
+                        layout, source.Columns, source.ScrollbackCapacity, destinationCapacity, rows, columns, scrollbackRows, includeScrollback);
 
                     var anchors = new List<ReflowCursorAnchor>();
                     foreach (var line in layout.Lines)
@@ -151,7 +162,8 @@ public sealed class ReflowAnchorMappingOracleTests
                     anchors.Add(new ReflowCursorAnchor(-1, 0));
                     anchors.Add(new ReflowCursorAnchor(layout.Lines.Count, 0));
 
-                    var current = CurrentMapping.Resolve(source, layout, anchors, rows, columns, scrollbackRows, includeScrollback);
+                    var current = CurrentMapping.Resolve(
+                        source, layout, anchors, rows, columns, scrollbackRows, includeScrollback, destinationCapacity);
 
                     string context = $"seed {seed} {kind} -> {rows}x{columns}";
                     AssertWindowMatches(legacy, current, context);

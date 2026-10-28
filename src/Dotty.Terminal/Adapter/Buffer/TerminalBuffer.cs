@@ -96,12 +96,28 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     // so the composer's per-row classification cache can key on identity
     // without false hits after a scroll rotation.
 
-    public TerminalBuffer(int rows = 24, int columns = 80, int scrollbackCapacity = DottyDefaults.ScrollbackLines)
+    /// <summary>A buffer with the built-in scrollback policy (<see cref="ScrollbackPolicy.Default"/>).</summary>
+    public TerminalBuffer(int rows = 24, int columns = 80)
+        : this(rows, columns, ScrollbackPolicy.Default)
+    {
+    }
+
+    /// <summary>A buffer that keeps exactly <paramref name="scrollbackCapacity"/> history lines at any size (no byte cap).</summary>
+    public TerminalBuffer(int rows, int columns, int scrollbackCapacity)
+        : this(rows, columns, ScrollbackPolicy.Fixed(scrollbackCapacity))
+    {
+    }
+
+    /// <summary>
+    /// A buffer whose history capacity is <c>scrollbackPolicy.CapacityFor(rows, columns)</c>, recomputed on every
+    /// resize: under a byte cap a wider (or taller) screen keeps fewer lines, and a narrower one more.
+    /// </summary>
+    public TerminalBuffer(int rows, int columns, ScrollbackPolicy scrollbackPolicy)
     {
         Rows = rows;
         Columns = columns;
         _rowGenerations = new ulong[rows];
-        _screens = new ScreenManager(rows, columns, scrollbackCapacity);
+        _screens = new ScreenManager(rows, columns, scrollbackPolicy);
         _writer = CreateWriter();
         _scrollBottom = rows - 1;
         InitializeTabStops();

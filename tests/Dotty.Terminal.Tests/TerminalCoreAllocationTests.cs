@@ -1,4 +1,5 @@
 using System.Text;
+using Dotty.Abstractions.Config;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
 using Xunit;
@@ -94,6 +95,35 @@ public sealed class TerminalCoreAllocationTests
             },
             warmupIterations: 0,
             measuredIterationsPerWindow: 2,
+            windows: 3);
+    }
+
+    [Fact]
+    public void ResizeWithColumnDependentCapacityAllocatesNothingAfterWarmup()
+    {
+        // Under a 1 MiB byte cap the ring holds 1068 history lines at 80 columns and 412 at 200 (plan 03, WI-4b), so
+        // every resize also changes the ring capacity. Parked spares are retargeted to the requested capacity, whose
+        // reservation and metadata arrays reach their peak during warm-up and are then reused.
+        var buffer = new TerminalBuffer(rows: 24, columns: 80, scrollbackPolicy: new ScrollbackPolicy(5000, 1_048_576));
+        FillWrappedScrollback(buffer, new string('x', 120), lines: 1_200);
+        Assert.Equal(1068, buffer.ScrollbackCount);
+
+        for (int i = 0; i < 6; i++)
+        {
+            buffer.Resize(24, 200);
+            Assert.Equal(412, buffer.ActiveBuffer.ScrollbackCapacity);
+            buffer.Resize(24, 80);
+            Assert.Equal(1068, buffer.ActiveBuffer.ScrollbackCapacity);
+        }
+
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                buffer.Resize(24, 200);
+                buffer.Resize(24, 80);
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 4,
             windows: 3);
     }
 

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using Dotty.Abstractions.Config;
 using Dotty.Terminal.Adapter;
 using Xunit;
 
@@ -37,11 +38,24 @@ public sealed class ReflowRandomizedEquivalenceTests
 
     [Theory]
     [MemberData(nameof(Seeds))]
-    public void MappingConsumersMatchLegacyDenseOracleAcrossRandomResizes(int seed)
+    public void MappingConsumersMatchLegacyDenseOracleAcrossRandomResizes(int seed) =>
+        AssertConsumersMatchLegacyOracle(seed, policy: null);
+
+    /// <summary>
+    /// The same differential check while the history capacity follows the size under a byte cap. The budget of 120 cells
+    /// gives <c>min(60, 120 / columns - rows)</c> history lines (tens at 4 columns, none from about 12 columns up), so a
+    /// resize changes the ring capacity as well as the layout. The oracle's retained window uses the new size's capacity.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Seeds))]
+    public void MappingConsumersMatchLegacyDenseOracleWhenCapacityFollowsTheByteCap(int seed) =>
+        AssertConsumersMatchLegacyOracle(seed, new ScrollbackPolicy(60, 12L * 120));
+
+    private static void AssertConsumersMatchLegacyOracle(int seed, ScrollbackPolicy? policy)
     {
         foreach (ReflowScenarioKind kind in Enum.GetValues<ReflowScenarioKind>())
         {
-            var buffer = ReflowScenario.Build(seed, kind).Buffer;
+            var buffer = ReflowScenario.Build(seed, kind, policy).Buffer;
             try
             {
                 var random = new Random(seed * 7919 + 13);

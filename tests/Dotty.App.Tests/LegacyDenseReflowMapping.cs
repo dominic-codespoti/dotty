@@ -96,10 +96,16 @@ internal sealed class LegacyDenseReflowMapping
 /// </summary>
 internal static class LegacyDenseReflowReplay
 {
+    /// <param name="scrollbackCapacity">Capacity of the source ring: it bounds how many history rows the layout holds.</param>
+    /// <param name="destinationScrollbackCapacity">
+    /// Capacity of the destination ring, which sets the retained window. The pre-rewrite code used one capacity for both
+    /// (every screen had the same); it differs only when the capacity follows the column count under a byte cap.
+    /// </param>
     internal static LegacyDenseReflowMapping Replay(
         Screen.SourceLayout layout,
         int sourceColumns,
         int scrollbackCapacity,
+        int destinationScrollbackCapacity,
         int rows,
         int columns,
         int scrollbackRows,
@@ -165,13 +171,13 @@ internal static class LegacyDenseReflowReplay
             emitted.Add(0);
 
         bool hasData = emitted.Exists(cells => cells > 0);
-        int targetTotal = (includeScrollback ? scrollbackCapacity : 0) + rows;
+        int targetTotal = (includeScrollback ? destinationScrollbackCapacity : 0) + rows;
         if (!hasData && retainedScrollbackRows == 0)
             targetTotal = rows;
         int retainedStart = Math.Max(0, emitted.Count - targetTotal);
         int retainedCount = emitted.Count - retainedStart;
         int newScrollbackRows = includeScrollback
-            ? Math.Min(scrollbackCapacity, Math.Max(0, retainedCount - rows))
+            ? Math.Min(destinationScrollbackCapacity, Math.Max(0, retainedCount - rows))
             : 0;
         mapping.RetainedStart = retainedStart;
         mapping.NewScrollbackRows = newScrollbackRows;

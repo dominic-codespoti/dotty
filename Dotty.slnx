@@ -15,6 +15,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Dotty.App.SkiaTests/Dotty.App.SkiaTests.csproj" />
     <Project Path="tests/Dotty.App.Tests/Dotty.App.Tests.csproj" />
+    <Project Path="tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj" />
     <Project Path="tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj" />
     <Project Path="tests/Dotty.Performance.Tests/Dotty.Performance.Tests.csproj" />
     <Project Path="tests/Dotty.Terminal.Tests/Dotty.Terminal.Tests.csproj" />

@@ -1,0 +1,99 @@
+name: esctest Baseline
+
+# Manual capture of tests/esctest/expected-failures.txt. The file is always uploaded as the
+# 'esctest-expectations' artifact; it is committed back only when 'commit' is 'true'
+# (default false: expectations shrink via reviewed PRs, not automation). Downloading the
+# artifact and committing it in a PR is the expected flow. Committing the file arms the CI
+# esctest gate (it carries the '# baseline-captured:' marker).
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit the regenerated expectations back to the branch'
+        required: false
+        default: 'false'
+      quarantine_not_run:
+        description: 'Add skip entries for tests that hung or crashed during capture'
+        required: false
+        default: 'false'
+      os:
+        description: 'Runner (macOS is for comparison only and is never gated)'
+        required: false
+        default: 'ubuntu-latest'
+        type: choice
+        options:
+          - ubuntu-latest
+          - macos-15
+
+env:
+  DOTNET_VERSION: '11.0.x'
+
+jobs:
+  capture:
+    name: Capture esctest baseline (${{ inputs.os }})
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
+
+      - name: Python version
+        run: python3 --version
+
+      - name: Build native pty-helper
+        run: make -C src/Dotty.NativePty
+
+      - name: Build conformance host
+        run: |
+          dotnet restore tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj
+          dotnet build tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj -c Release --no-restore
+
+      - name: Capture expectations
+        shell: bash
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "${{ inputs.quarantine_not_run }}" = "true" ]; then extra+=(--quarantine-not-run); fi
+          python3 scripts/esctest/run_esctest.py --update-expectations --jobs 2 --out artifacts/esctest ${extra[@]+"${extra[@]}"}
+
+      - name: Upload expectations
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: esctest-expectations
+          path: tests/esctest/expected-failures.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload esctest results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: esctest-baseline-results
+          path: artifacts/esctest/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Commit expectations back
+        if: inputs.commit == 'true' && inputs.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/esctest/expected-failures.txt
+          if git diff --cached --quiet; then
+            echo "No expectation changes to commit."
+            exit 0
+          fi
+          git commit -m "Capture esctest expectations on ubuntu-latest runner"
+          git push origin "HEAD:${{ github.ref_name }}"

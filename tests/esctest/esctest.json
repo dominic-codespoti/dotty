@@ -1,0 +1,17 @@
+{
+  "repository": "https://github.com/ThomasDickey/esctest2",
+  "commit": "2798f12149a19c3295e9b4853ab2da4b2eff1b2b",
+  "rows": 25,
+  "columns": 80,
+  "hostArgs": ["--checksum-reports", "--window-resize"],
+  "esctestArgs": [
+    "--expected-terminal=xterm",
+    "--xterm-checksum=334",
+    "--max-vt-level=5",
+    "--options", "xtermWinopsEnabled",
+    "--timeout", "1",
+    "--v", "2"
+  ],
+  "perClassTimeoutSeconds": 300,
+  "minPassed": 0
+}

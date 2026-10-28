@@ -269,6 +269,83 @@ jobs:
       - name: Run benchmark script tests
         run: python3 -m unittest discover -s scripts/perf/tests
 
+      - name: Run esctest script tests
+        run: python3 -m unittest discover -s scripts/esctest/tests
+
+  # esctest2 conformance (Linux only; esctest needs Unix tty/termios, so no Windows).
+  # NOT GATING UNTIL A BASELINE EXISTS: while tests/esctest/expected-failures.txt has no
+  # "# baseline-captured:" marker (written by the esctest-baseline workflow's
+  # --update-expectations), every step below is continue-on-error and the runner downgrades
+  # gate failures to exit 0 ("NOT GATING" in its output and the step summary). Once the
+  # marker is committed the same steps gate on regressions, unexpected passes, stale
+  # entries, hangs and harness faults.
+  esctest-linux:
+    name: esctest conformance (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Detect captured baseline
+        id: baseline
+        shell: bash
+        run: |
+          if grep -Eq '^#[[:space:]]*baseline-captured:[[:space:]]*[0-9a-f]+' tests/esctest/expected-failures.txt; then
+            echo "captured=true" >> "$GITHUB_OUTPUT"
+            echo "esctest baseline captured: gating."
+          else
+            echo "captured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::esctest has no captured baseline yet; results are reported but do not gate."
+          fi
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@v6
+        continue-on-error: ${{ steps.baseline.outputs.captured != 'true' }}
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-esctest-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            nuget-esctest-
+
+      - name: Cache esctest2 checkout
+        uses: actions/cache@v6
+        with:
+          path: .esctest
+          key: esctest2-${{ hashFiles('tests/esctest/esctest.json') }}
+
+      - name: Python version
+        run: python3 --version
+
+      - name: Build native pty-helper
+        continue-on-error: ${{ steps.baseline.outputs.captured != 'true' }}
+        run: make -C src/Dotty.NativePty
+
+      - name: Build conformance host
+        continue-on-error: ${{ steps.baseline.outputs.captured != 'true' }}
+        run: |
+          dotnet restore tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj
+          dotnet build tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj -c Release --no-restore
+
+      - name: Run esctest2
+        continue-on-error: ${{ steps.baseline.outputs.captured != 'true' }}
+        run: python3 scripts/esctest/run_esctest.py --jobs 2 --out artifacts/esctest
+
+      - name: Upload esctest results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: esctest-results
+          path: artifacts/esctest/
+          retention-days: 14
+          if-no-files-found: warn
+
   # Job to run performance benchmarks
   performance-tests:
     name: Performance Tests (Linux)
@@ -326,7 +403,7 @@ jobs:
   # Summary job that depends on all others
   ci-summary:
     name: CI Summary
-    needs: [build-and-test, gui-smoke-linux, code-quality, performance-tests]
+    needs: [build-and-test, gui-smoke-linux, code-quality, performance-tests, esctest-linux]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -352,6 +429,10 @@ jobs:
 
           if [ "${{ needs.gui-smoke-linux.result }}" = "failure" ]; then
             echo "GUI smoke checks failed!"
+            exit 1
+          fi
+          if [ "${{ needs.esctest-linux.result }}" = "failure" ]; then
+            echo "esctest conformance regression; see the esctest-results artifact."
             exit 1
           fi
           echo "All CI checks passed!"

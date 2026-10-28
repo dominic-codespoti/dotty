@@ -1,0 +1,5 @@
+# esctest2 expected failures for the Dotty conformance run.
+# Regenerate with: python3 scripts/esctest/run_esctest.py --update-expectations
+# Directives (one per line, exact Class.test_name, no wildcards):
+#   xfail Class.test_name  # note   test must fail; passing it is an error (remove the line)
+#   skip  Class.test_name  # note   test is not executed (hang/crash quarantine)

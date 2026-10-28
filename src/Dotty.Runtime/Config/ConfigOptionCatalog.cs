@@ -299,7 +299,7 @@ public static class ConfigOptionCatalog
             "URI schemes that may be opened (case-insensitive); hard-blocked schemes cannot be enabled by listing them."),
 
         Opt("mouse.copyOnSelect", "mouse.copy_on_select", "string", ["none", "primary", "clipboard", "both"], c => c.Mouse.CopyOnSelect,
-            "Where a finished local selection is copied automatically; it does not clear the selection and does not affect middle-click. Case-insensitive; the legacy booleans true (primary on Linux, clipboard elsewhere) and false (none) are also accepted, and unknown values mean none.",
+            "Where a finished local selection is copied automatically; it does not clear the selection and does not affect middle-click. Case-insensitive; the legacy spellings \"true\" (primary on Linux, clipboard elsewhere) and \"false\" (none) are also accepted as strings, and unknown values mean none.",
             "Selections made after the change."),
         Opt("mouse.middleClickAction", "mouse.middle_click_action", "string", ["primary-paste", "clipboard-paste", "ignore"], c => c.Mouse.MiddleClickAction,
             "What a middle-click in a pane does when the application is not capturing the mouse: paste the primary selection, paste the clipboard, or nothing. Unknown values mean clipboard-paste.",

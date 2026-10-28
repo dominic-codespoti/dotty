@@ -26,8 +26,9 @@ public static class MouseOptions
     public const MiddleClickAction DefaultMiddleClick = MiddleClickAction.ClipboardPaste;
 
     /// <summary>
-    /// Case-insensitive, trimmed. Also accepts the legacy Ghostty booleans: <c>true</c> means <c>primary</c> on Linux and
-    /// <c>clipboard</c> elsewhere (<paramref name="isLinux"/>), <c>false</c> means <c>none</c>.
+    /// Case-insensitive, trimmed. Also accepts the legacy Ghostty boolean spellings given as strings (the setting is a
+    /// JSON string, so an unquoted <c>true</c> is a type mismatch): <c>"true"</c>/<c>"on"</c> mean <c>primary</c> on Linux and
+    /// <c>clipboard</c> elsewhere (<paramref name="isLinux"/>), <c>"false"</c>/<c>"off"</c> mean <c>none</c>.
     /// </summary>
     public static CopyOnSelectMode ParseCopyOnSelect(string? value, bool isLinux)
     {

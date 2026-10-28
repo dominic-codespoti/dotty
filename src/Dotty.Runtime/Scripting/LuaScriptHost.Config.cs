@@ -53,7 +53,9 @@ public sealed partial class LuaScriptHost
         ["panes.divider_thickness"] = new(ConfigValueKind.Number, c => c.Panes.DividerThickness, (c, v) => c.Panes.DividerThickness = (double)v!),
         ["panes.active_border"] = new(ConfigValueKind.Boolean, c => c.Panes.ActiveBorder, (c, v) => c.Panes.ActiveBorder = (bool)v!),
         ["keybindings"] = new(ConfigValueKind.Map, c => c.Keybindings, (c, v) => c.Keybindings = (Dictionary<string, string>)v!),
-        ["clipboard.allow_osc52_write"] = new(ConfigValueKind.Boolean, c => c.Clipboard.AllowOsc52Write, (c, v) => c.Clipboard.AllowOsc52Write = (bool)v!)
+        ["clipboard.allow_osc52_write"] = new(ConfigValueKind.Boolean, c => c.Clipboard.AllowOsc52Write, (c, v) => c.Clipboard.AllowOsc52Write = (bool)v!),
+        ["clipboard.confirm_paste"] = new(ConfigValueKind.Boolean, c => c.Clipboard.ConfirmPaste, (c, v) => c.Clipboard.ConfirmPaste = (bool)v!),
+        ["clipboard.bracketed_paste_is_safe"] = new(ConfigValueKind.Boolean, c => c.Clipboard.BracketedPasteIsSafe, (c, v) => c.Clipboard.BracketedPasteIsSafe = (bool)v!)
     };
 
     private unsafe partial void RegisterConfig(Lua lua, int dottyIndex)

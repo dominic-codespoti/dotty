@@ -182,18 +182,18 @@ public sealed class P0TerminalCompatibilityTests
     }
 
     [Theory]
-    [InlineData(false, "a\nb")]
+    [InlineData(false, "a\rb")]
     [InlineData(true, "\x1b[200~a\nb\x1b[201~")]
     public void BracketedPaste_PreservesExactUtf8Payload(bool enabled, string expected)
     {
-        var bytes = BracketedPasteEncoder.Encode("a\nb", enabled);
+        var bytes = PasteEncoder.Encode("a\nb", enabled);
 
         Assert.Equal(expected, Encoding.UTF8.GetString(bytes));
     }
 
 
     [Theory]
-    [InlineData(false, "a\nb")]
+    [InlineData(false, "a\rb")]
     [InlineData(true, "\x1b[200~a\nb\x1b[201~")]
     public void ClipboardPasteRouter_UsesActiveAdapterMode(bool enabled, string expected)
     {
@@ -207,7 +207,7 @@ public sealed class P0TerminalCompatibilityTests
     [Fact]
     public void BracketedPaste_EmptyTextIsNoOp()
     {
-        Assert.Empty(BracketedPasteEncoder.Encode(string.Empty, bracketed: true));
+        Assert.Empty(PasteEncoder.Encode(string.Empty, bracketed: true));
     }
 
     [Fact]

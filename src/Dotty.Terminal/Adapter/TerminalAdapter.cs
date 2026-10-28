@@ -65,7 +65,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public event Action? PaletteChanged;
     public event Action? Bell;
 
-    public void OnHyperlink(string uri) => _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri);
+    public void OnHyperlink(string uri) => SetActiveHyperlink(uri.AsSpan());
 
     public event TerminalReplyHandler? ReplyRequested;
     private void SendTwoNumberReply(ReadOnlySpan<char> prefix, int first, int second, char suffix)
@@ -243,10 +243,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         }
         else if (code == 8)
         {
-            int semiIdx = payload.IndexOf(';');
-            _currentAttributes.HyperlinkId = semiIdx >= 0
-                ? _buffer.GetOrCreateHyperlinkId(payload[(semiIdx + 1)..])
-                : (ushort)0;
+            HandleOsc8(payload);
         }
         else if (code == 52)
         {

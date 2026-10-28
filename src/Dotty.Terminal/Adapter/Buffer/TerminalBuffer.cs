@@ -96,9 +96,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     // so the composer's per-row classification cache can key on identity
     // without false hits after a scroll rotation.
 
-    private List<string> _hyperlinks = new List<string> { string.Empty };
-    private Dictionary<string, ushort> _hyperlinkLookup = new Dictionary<string, ushort>();
-
     public TerminalBuffer(int rows = 24, int columns = 80, int scrollbackCapacity = 10000)
     {
         Rows = rows;
@@ -178,37 +175,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         // DECSTBM homes the cursor after setting margins.
         _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
         ActiveBuffer.ClearRowContinuation(_cursor.Row);
-    }
-    public ushort GetOrCreateHyperlinkId(string uri) =>
-        GetOrCreateHyperlinkId(uri.AsSpan());
-
-    internal ushort GetOrCreateHyperlinkId(ReadOnlySpan<char> uri)
-    {
-        if (uri.IsEmpty)
-            return 0;
-
-        var lookup = _hyperlinkLookup.GetAlternateLookup<ReadOnlySpan<char>>();
-        if (lookup.TryGetValue(uri, out ushort id))
-            return id;
-
-        string value = uri.ToString();
-        ushort idx = (ushort)_hyperlinks.Count;
-        _hyperlinks.Add(value);
-        _hyperlinkLookup[value] = idx;
-        return idx;
-    }
-
-    /// <summary>
-    /// Gets the hyperlink URL for a given hyperlink ID.
-    /// Returns null if the ID is invalid or not found.
-    /// </summary>
-    public string? GetHyperlinkUrl(ushort hyperlinkId)
-    {
-        if (hyperlinkId == 0 || hyperlinkId >= _hyperlinks.Count)
-        {
-            return null;
-        }
-        return _hyperlinks[hyperlinkId];
     }
 
     private int _totalScrolled = 0;

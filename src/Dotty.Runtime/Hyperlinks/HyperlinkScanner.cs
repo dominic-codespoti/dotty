@@ -24,7 +24,12 @@ public static partial class HyperlinkScanner
     /// <param name="source">The terminal render source.</param>
     /// <param name="row">0-based visible row index.</param>
     /// <returns>A read-only list of detected <see cref="HyperlinkSpan"/> instances.</returns>
-    public static IReadOnlyList<HyperlinkSpan> ScanRow(IRenderSource source, int row)
+    public static IReadOnlyList<HyperlinkSpan> ScanRow(IRenderSource source, int row) =>
+        ScanRow(source, row, HyperlinkScanOptions.Default);
+
+    /// <inheritdoc cref="ScanRow(IRenderSource, int)"/>
+    /// <param name="options">Scan options (e.g. whether OSC 8 links are honored).</param>
+    public static IReadOnlyList<HyperlinkSpan> ScanRow(IRenderSource source, int row, in HyperlinkScanOptions options)
     {
         if (source == null || row < 0 || row >= source.Rows)
         {
@@ -42,7 +47,7 @@ public static partial class HyperlinkScanner
         var coldCells = source.GetRowColdCells(row);
 
         // 1. Scan explicit OSC 8 hyperlinks stored in ColdCells
-        if (!coldCells.IsEmpty)
+        if (options.IncludeExplicit && !coldCells.IsEmpty)
         {
             ScanExplicitHyperlinks(source, row, cols, hotCells, coldCells, results);
         }
@@ -65,17 +70,21 @@ public static partial class HyperlinkScanner
     private static HoverScratch? t_hoverScratch;
 
     /// <summary>Tests link coverage without materializing URLs or allocating per hover event.</summary>
-    public static bool ContainsLinkAt(IRenderSource source, int row, int col)
+    public static bool ContainsLinkAt(IRenderSource source, int row, int col) =>
+        ContainsLinkAt(source, row, col, HyperlinkScanOptions.Default);
+
+    /// <inheritdoc cref="ContainsLinkAt(IRenderSource, int, int)"/>
+    public static bool ContainsLinkAt(IRenderSource source, int row, int col, in HyperlinkScanOptions options)
     {
         if (source == null || row < 0 || row >= source.Rows || col < 0 || col >= source.Columns)
             return false;
 
         var hotCells = source.GetRowCells(row);
         var coldCells = source.GetRowColdCells(row);
-        if (col < coldCells.Length)
+        if (options.IncludeExplicit && col < coldCells.Length)
         {
             ushort id = coldCells[col].HyperlinkId;
-            if (id != 0 && source is TerminalBuffer buffer && !string.IsNullOrEmpty(buffer.GetHyperlinkUrl(id)))
+            if (id != 0 && !string.IsNullOrEmpty(source.GetHyperlinkUrl(id)))
                 return true;
         }
 
@@ -139,7 +148,7 @@ public static partial class HyperlinkScanner
             int endCol = scratch.Columns[end - 1];
             if (col < startCol || col > endCol)
                 continue;
-            if (OverlapsExplicitLink(source, startCol, endCol, coldCells))
+            if (options.IncludeExplicit && OverlapsExplicitLink(source, startCol, endCol, coldCells))
                 continue;
             return true;
         }
@@ -152,13 +161,11 @@ public static partial class HyperlinkScanner
         int endCol,
         ReadOnlySpan<ColdCell> coldCells)
     {
-        if (source is not TerminalBuffer buffer)
-            return false;
         int limit = Math.Min(endCol, coldCells.Length - 1);
         for (int col = Math.Max(0, startCol); col <= limit; col++)
         {
             ushort id = coldCells[col].HyperlinkId;
-            if (id != 0 && !string.IsNullOrEmpty(buffer.GetHyperlinkUrl(id)))
+            if (id != 0 && !string.IsNullOrEmpty(source.GetHyperlinkUrl(id)))
                 return true;
         }
         return false;
@@ -205,14 +212,18 @@ public static partial class HyperlinkScanner
         Array.Resize(ref scratch.Columns, size);
     }
     /// <summary>Returns the matching link with its URL materialized for activation.</summary>
-    public static HyperlinkSpan? FindLinkAt(IRenderSource source, int row, int col)
+    public static HyperlinkSpan? FindLinkAt(IRenderSource source, int row, int col) =>
+        FindLinkAt(source, row, col, HyperlinkScanOptions.Default);
+
+    /// <inheritdoc cref="FindLinkAt(IRenderSource, int, int)"/>
+    public static HyperlinkSpan? FindLinkAt(IRenderSource source, int row, int col, in HyperlinkScanOptions options)
     {
         if (source == null || row < 0 || row >= source.Rows || col < 0 || col >= source.Columns)
         {
             return null;
         }
 
-        var spans = ScanRow(source, row);
+        var spans = ScanRow(source, row, options);
         for (int i = 0; i < spans.Count; i++)
         {
             var span = spans[i];
@@ -223,6 +234,48 @@ public static partial class HyperlinkScanner
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Visible text covered by <paramref name="span"/> (wide-character continuation cells skipped,
+    /// empty cells as spaces, control characters as spaces). Allocates: click path only, never hover.
+    /// </summary>
+    public static string GetSpanText(IRenderSource source, in HyperlinkSpan span)
+    {
+        if (source == null || span.Row < 0 || span.Row >= source.Rows)
+        {
+            return string.Empty;
+        }
+
+        var hotCells = source.GetRowCells(span.Row);
+        var coldCells = source.GetRowColdCells(span.Row);
+        int start = Math.Max(0, span.StartCol);
+        int end = Math.Min(span.EndCol, Math.Min(source.Columns, hotCells.Length) - 1);
+        var sb = new StringBuilder(Math.Max(0, end - start + 1));
+        for (int c = start; c <= end; c++)
+        {
+            var hot = hotCells[c];
+            if (hot.IsContinuation)
+            {
+                continue;
+            }
+
+            short graphemeIndex = c < coldCells.Length ? coldCells[c].GraphemeIndex : (short)-1;
+            string? grapheme = GraphemeHelper.Resolve(hot.Rune, graphemeIndex);
+            if (string.IsNullOrEmpty(grapheme))
+            {
+                sb.Append(' ');
+                continue;
+            }
+
+            for (int i = 0; i < grapheme.Length; i++)
+            {
+                char ch = grapheme[i];
+                sb.Append(ch < ' ' || ch == '\u007F' ? ' ' : ch);
+            }
+        }
+
+        return sb.ToString();
     }
 
     private static void ScanExplicitHyperlinks(
@@ -252,15 +305,10 @@ public static partial class HyperlinkScanner
             }
             int endCol = col - 1;
 
-            string? url = null;
-            if (source is TerminalBuffer tb)
-            {
-                url = tb.GetHyperlinkUrl(linkId);
-            }
-
+            string? url = source.GetHyperlinkUrl(linkId);
             if (!string.IsNullOrEmpty(url))
             {
-                results.Add(new HyperlinkSpan(row, startCol, endCol, url, linkId.ToString()));
+                results.Add(new HyperlinkSpan(row, startCol, endCol, url, linkId.ToString(), HyperlinkSource.Explicit));
             }
         }
     }
@@ -355,7 +403,7 @@ public static partial class HyperlinkScanner
 
             if (!overlapsExplicit && !string.IsNullOrWhiteSpace(cleanedUrl))
             {
-                results.Add(new HyperlinkSpan(row, startCol, endCol, cleanedUrl, null));
+                results.Add(new HyperlinkSpan(row, startCol, endCol, cleanedUrl, null, HyperlinkSource.Detected));
             }
         }
     }

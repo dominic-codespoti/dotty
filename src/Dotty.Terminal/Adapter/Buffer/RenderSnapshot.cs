@@ -31,6 +31,10 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     public ReadOnlySpan<ulong> RowGenerations =>
         RowGenerationsArray.AsSpan(0, Math.Min(Rows, RowGenerationsArray.Length));
     private CellAttributes[] _styles = Array.Empty<CellAttributes>();
+    // Append-only URI table captured by reference from the owner; entries below
+    // _hyperlinkCount never change, so lookups need no lock.
+    private string[] _hyperlinkTable = Array.Empty<string>();
+    private int _hyperlinkCount;
     public int ScrollbackCount { get; set; }
     public int Rows { get; set; }
     public int Columns { get; set; }
@@ -75,6 +79,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         int cols = screen.Columns;
         int visibleCellCount = rows * cols;
         var snap = owner.RentRenderSnapshot();
+        owner.GetHyperlinkTable(out snap._hyperlinkTable, out snap._hyperlinkCount);
         snap.Rows = rows;
         snap.Columns = cols;
         snap.TotalRows = screen.TotalRows;
@@ -150,6 +155,7 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         int totalRows = screen.TotalRows;
         int cellCount = totalRows * columns;
         var snap = owner.RentRenderSnapshot();
+        owner.GetHyperlinkTable(out snap._hyperlinkTable, out snap._hyperlinkCount);
         snap.Rows = rows;
         snap.Columns = columns;
         snap.TotalRows = totalRows;
@@ -234,6 +240,8 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         RowOffsets = Array.Empty<int>();
         ScrollbackText = Array.Empty<string>();
         _styles = Array.Empty<CellAttributes>();
+        _hyperlinkTable = Array.Empty<string>();
+        _hyperlinkCount = 0;
     }
 
     public void Dispose()
@@ -253,6 +261,8 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
             BufferMemoryMetrics.ChangeSnapshotCapacity((long)ScrollbackText.Length * IntPtr.Size, 0);
         ScrollbackText = Array.Empty<string>();
         _styles = Array.Empty<CellAttributes>();
+        _hyperlinkTable = Array.Empty<string>();
+        _hyperlinkCount = 0;
         NextPooled = null;
         owner?.ReturnRenderSnapshot(this);
     }
@@ -287,6 +297,9 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
             return ref CellAttributes.Default;
         return ref _styles[styleId];
     }
+
+    public string? GetHyperlinkUrl(ushort id) =>
+        TerminalBuffer.LookupHyperlink(_hyperlinkTable, _hyperlinkCount, id);
 
     public string GetScrollbackLineText(int index)
     {

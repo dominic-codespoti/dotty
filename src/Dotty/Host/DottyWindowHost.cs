@@ -2382,11 +2382,51 @@ internal static class DottyWindowHost
         public void WriteInput(TerminalTab activeTab, ReadOnlySpan<byte> bytes) =>
             activeTab.Session.WriteInput(bytes);
 
-        public void OpenHyperlink(string url)
+        private HyperlinkActivator? _hyperlinks;
+
+        private HyperlinkActivator Hyperlinks => _hyperlinks ??= new HyperlinkActivator(
+            () => HyperlinkOptions.From(UserConfigService.Current.Hyperlinks),
+            (url, source) => _luaHost.Hooks.TryOpenUrl(
+                url, source == HyperlinkSource.Explicit ? "explicit" : "detected"),
+            new SystemHyperlinkOpener());
+
+        public HyperlinkScanOptions HyperlinkScan => new(UserConfigService.Current.Hyperlinks.Osc8);
+
+        public void OpenHyperlink(string url, HyperlinkSource source, string? displayText)
         {
-            if (!_luaHost.Hooks.TryOpenUrl(url))
+            HyperlinkActivation activation = Hyperlinks.Activate(url, source, displayText);
+            switch (activation.Kind)
             {
-                _ = new DefaultHyperlinkHandler().OpenUrlAsync(url);
+                case HyperlinkActivationKind.Open:
+                    OpenApprovedHyperlink(activation.Target!);
+                    break;
+                case HyperlinkActivationKind.NeedsConfirmation:
+                    ConfirmHyperlink(activation);
+                    break;
+                case HyperlinkActivationKind.Blocked:
+                    DebugLog.Log($"[hyperlink] blocked: {activation.Message}");
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Asks the user to confirm a risky link. No prompt UI is wired yet, so this fails safe and
+        /// blocks; the prompt wiring (open on approval via <see cref="OpenApprovedHyperlink"/>)
+        /// replaces only this method.
+        /// </summary>
+        private void ConfirmHyperlink(HyperlinkActivation activation)
+        {
+            DebugLog.Log($"[hyperlink] blocked pending confirmation ({activation.Risks}): {activation.Target?.Canonical}");
+        }
+
+        private void OpenApprovedHyperlink(HyperlinkTarget target) => _ = OpenApprovedHyperlinkAsync(target);
+
+        private async Task OpenApprovedHyperlinkAsync(HyperlinkTarget target)
+        {
+            HyperlinkOpenResult result = await Hyperlinks.OpenApprovedAsync(target).ConfigureAwait(false);
+            if (!result.Success)
+            {
+                DebugLog.Log($"[hyperlink] open failed: {result.Error}");
             }
         }
 

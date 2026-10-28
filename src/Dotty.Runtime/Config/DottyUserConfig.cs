@@ -23,6 +23,9 @@ public sealed class DottyUserConfig
     [JsonPropertyName("cursor")]
     public CursorUserConfig Cursor { get; set; } = new();
 
+    [JsonPropertyName("hyperlinks")]
+    public HyperlinksUserConfig Hyperlinks { get; set; } = new();
+
     [JsonPropertyName("theme")]
     public string Theme { get; set; } = "DarkPlus";
 
@@ -239,6 +242,7 @@ public static class UserConfigService
             DottyUserConfigJsonContext.Default.DottyUserConfig);
         if (config is not null)
             config.Clipboard ??= new ClipboardUserConfig();
+            config.Hyperlinks ??= new HyperlinksUserConfig();
         return config;
     }
 

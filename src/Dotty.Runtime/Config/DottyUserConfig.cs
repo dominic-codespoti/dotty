@@ -67,6 +67,10 @@ public sealed class DottyUserConfig
 
     [JsonPropertyName("vt")]
     public VtUserConfig Vt { get; set; } = new();
+
+    /// <summary>History limits. Applies to sessions created after a change; existing tabs keep theirs.</summary>
+    [JsonPropertyName("scrollback")]
+    public ScrollbackUserConfig Scrollback { get; set; } = new();
     /// <summary>
     /// Shell integration auto-injection: <c>none</c> (default, opt-in) or <c>detect</c>. Any other value
     /// is treated as <c>none</c>. Applies to sessions created after the change.
@@ -181,6 +185,25 @@ public sealed class ClipboardUserConfig
     [JsonPropertyName("bracketedPasteIsSafe")]
     public bool BracketedPasteIsSafe { get; set; } = true;
 }
+public sealed class ScrollbackUserConfig
+{
+    /// <summary>
+    /// Maximum history lines per session: 0 = no history, capped at <see cref="ScrollbackPolicy.HardMaxLines"/>.
+    /// Negative values fall back to the default.
+    /// </summary>
+    [JsonPropertyName("limitLines")]
+    public int LimitLines { get; set; } = DottyDefaults.ScrollbackLines;
+
+    /// <summary>
+    /// Maximum raw ring bytes per session, counted as <c>(lines + rows) * columns * 12</c>; 0 = no byte cap.
+    /// Non-zero values below 1 MiB and negative values fall back to the default. The first limit reached applies.
+    /// </summary>
+    [JsonPropertyName("limitBytes")]
+    public long LimitBytes { get; set; } = DottyDefaults.ScrollbackLimitBytes;
+
+    /// <summary>The normalized policy these settings describe.</summary>
+    public ScrollbackPolicy ToPolicy() => new ScrollbackPolicy(LimitLines, LimitBytes).Normalize();
+}
 public sealed class PanesUserConfig
 {
     [JsonPropertyName("dividerThickness")]
@@ -284,6 +307,7 @@ public static class UserConfigService
             config.Hyperlinks ??= new HyperlinksUserConfig();
             config.Vt ??= new VtUserConfig();
             config.Mouse ??= new MouseUserConfig();
+            config.Scrollback ??= new ScrollbackUserConfig();
         }
         return config;
     }

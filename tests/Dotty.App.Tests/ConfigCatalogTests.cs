@@ -278,7 +278,8 @@ public sealed class ConfigCatalogTests
     {
         Assert.Equal("\"a\\\"b\\\\c\"", ConfigOptionCatalog.FormatDefault("a\"b\\c"));
         Assert.Equal("{ \"k\": \"v\" }", ConfigOptionCatalog.FormatDefault(new Dictionary<string, string> { ["k"] = "v" }));
-        Assert.Throws<ArgumentException>(() => ConfigOptionCatalog.FormatDefault(1L));
+        Assert.Equal("67108864", ConfigOptionCatalog.FormatDefault(67_108_864L));
+        Assert.Throws<ArgumentException>(() => ConfigOptionCatalog.FormatDefault(1.5f));
     }
 
     [Fact]

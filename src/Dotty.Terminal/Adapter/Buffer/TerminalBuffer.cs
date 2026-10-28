@@ -96,7 +96,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     // so the composer's per-row classification cache can key on identity
     // without false hits after a scroll rotation.
 
-    public TerminalBuffer(int rows = 24, int columns = 80, int scrollbackCapacity = 10000)
+    public TerminalBuffer(int rows = 24, int columns = 80, int scrollbackCapacity = DottyDefaults.ScrollbackLines)
     {
         Rows = rows;
         Columns = columns;
@@ -384,20 +384,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         _promptMarks.Clear();
     }
 
-    /// <summary>
-    /// Aggressively reduces scrollback to a smaller size while keeping the session running.
-    /// This is used when a tab becomes inactive to free memory while preserving some context.
-    /// The Screen's ring buffer cannot be partially trimmed; this only adjusts the count.
-    /// </summary>
-    public void TrimScrollback(int maxLines)
-    {
-        if (maxLines < 0) maxLines = 0;
-        int trimStart = _totalScrolled - maxLines; // lines being dropped
-        if (trimStart > 0)
-            _promptMarks.RemoveAll(m => m.AbsoluteRow < trimStart);
-        _totalScrolled = Math.Min(_totalScrolled, maxLines);
-    }
-
     public void FullReset()
     {
         // RIS - Reset to Initial State: leave the alternate screen, clear everything, then the DECSTR core.
@@ -621,48 +607,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             pooled.ReleaseCapacity();
             pooled = next;
         }
-    }
-
-    /// <summary>
-    /// Captures the render state under the caller's SyncRoot hold: one bounded
-    /// memcpy of the cell arenas plus style/generation/scrollback metadata.
-    /// The returned snapshot is immutable and can be rasterized without holding
-    /// the buffer lock.
-    /// The visible scrollback range [<paramref name="sbStart"/>, <paramref name="sbEnd"/>]
-    /// (negative row indices, -1 = newest) is materialized as text.
-    /// </summary>
-    public RenderSnapshot CaptureRenderSnapshot(int sbStart, int sbEnd)
-    {
-        var styles = StyleSet.CaptureStylesShared();
-        var snapshot = RenderSnapshot.Capture(
-            this,
-            ActiveBuffer,
-            _rowGenerations,
-            styles,
-            ScrollbackCount,
-            IsAlternateScreenActive,
-            CursorRow,
-            CursorCol,
-            CursorShape,
-            CursorBlinking);
-        snapshot.GlobalGeneration = Generation;
-
-        int count = sbEnd - sbStart + 1;
-        if (count > 0)
-        {
-            snapshot.CapturedSbStart = sbStart;
-            var text = new string[count];
-            BufferMemoryMetrics.ChangeSnapshotCapacity(0, (long)count * IntPtr.Size);
-            for (int r = sbStart; r <= sbEnd; r++)
-            {
-                int idx = r + ScrollbackCount;
-                idx = Math.Max(0, Math.Min(ScrollbackCount - 1, idx));
-                text[r - sbStart] = GetScrollbackLine(idx).Text ?? string.Empty;
-            }
-            snapshot.ScrollbackText = text;
-        }
-
-        return snapshot;
     }
 
     /// <summary>

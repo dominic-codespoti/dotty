@@ -20,17 +20,6 @@ public sealed class RenderSnapshotHyperlinkTests
     }
 
     [Fact]
-    public void FullCaptureSnapshot_ResolvesUrl()
-    {
-        using var buffer = new TerminalBuffer(rows: 4, columns: 20, scrollbackCapacity: 10);
-        ushort id = buffer.GetOrCreateHyperlinkId("https://e.test/full");
-
-        using RenderSnapshot snapshot = buffer.CaptureRenderSnapshot(0, -1);
-
-        Assert.Equal("https://e.test/full", snapshot.GetHyperlinkUrl(id));
-    }
-
-    [Fact]
     public void Snapshot_KeepsResolvingAfterBufferAppendsMoreLinks()
     {
         using var buffer = new TerminalBuffer(rows: 4, columns: 20, scrollbackCapacity: 10);

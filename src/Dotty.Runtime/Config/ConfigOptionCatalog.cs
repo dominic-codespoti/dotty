@@ -143,6 +143,7 @@ public static class ConfigOptionCatalog
         bool b => b ? "true" : "false",
         double d => d.ToString("R", CultureInfo.InvariantCulture),
         int i => i.ToString(CultureInfo.InvariantCulture),
+        long l => l.ToString(CultureInfo.InvariantCulture),
         List<string> list => FormatList(list),
         Dictionary<string, string> map => FormatMap(map),
         _ => throw new ArgumentException($"Unsupported config value type '{value.GetType().Name}'.", nameof(value)),
@@ -308,6 +309,13 @@ public static class ConfigOptionCatalog
         Opt("shellIntegration", "shell_integration", "string", ["detect", "none"], c => c.ShellIntegration,
             "Automatically inject Dotty's shell-integration scripts (OSC 7 / OSC 133) into recognized interactive shells: 'detect' injects, 'none' never does; any other value is treated as none. An explicit command and the DOTTY_SHELL_INTEGRATION opt-out are never overridden.",
             "Applies to new tabs and panes only."),
+
+        Opt("scrollback.limitLines", "scrollback.limit_lines", "integer", null, c => c.Scrollback.LimitLines,
+            "Maximum history lines kept per session; 0 keeps no history. Clamped to at most 1000000; negative values fall back to the default. The first of this and limitBytes to be reached applies.",
+            "Applies to sessions created after the change; existing tabs keep their capacity."),
+        Opt("scrollback.limitBytes", "scrollback.limit_bytes", "integer", null, c => c.Scrollback.LimitBytes,
+            "Maximum raw history ring bytes per session, counted as (lines + rows) * columns * 12; 0 means no byte cap. Non-zero values below 1048576 and negative values fall back to the default. The first of this and limitLines to be reached applies.",
+            "Applies to sessions created after the change; existing tabs keep their capacity."),
 
         Opt("vt.checksumReportEnabled", "vt.checksum_report_enabled", "boolean", null, c => c.Vt.ChecksumReportEnabled,
             "Answer DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y) rectangular-area checksum requests; off by default because the reply lets a program read back screen content. When false no reply is sent.",

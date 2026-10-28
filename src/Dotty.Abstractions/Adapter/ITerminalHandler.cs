@@ -109,8 +109,23 @@ namespace Dotty.Abstractions.Adapter
         // Focus reporting (DEC 1004)
         void OnSetFocusReporting(bool enabled);
 
-        // Window manipulation / report (CSI Ps t)
-        void OnWindowReport(int command);
+        // Window manipulation / report (CSI Ps ; Ps ; Ps t). Omitted parameters are 0.
+        void OnWindowOperation(int operation, int arg1, int arg2) { }
+
+        // DECSTR soft terminal reset (CSI ! p)
+        void OnSoftReset() { }
+
+        // Private device status report (CSI ? Ps n, Ps != 6; Ps == 6 is OnCursorPositionReport)
+        void OnPrivateDeviceStatusReport(int code) { }
+
+        // DECBKM (CSI ? 67 h/l): true = Backspace sends BS (0x08), false = DEL (0x7F)
+        void OnSetBackarrowKeyMode(bool sendsBackspace) { }
+
+        // Visibility reports (CSI ? 2033 h/l)
+        void OnSetVisibilityReports(bool enabled) { }
+
+        // DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y); omitted parameters are 0.
+        void OnRequestChecksum(int id, int page, int top, int left, int bottom, int right) { }
 
         // Render batching
         void FlushRender();

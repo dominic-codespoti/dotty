@@ -207,7 +207,6 @@ public class BasicAnsiParserTests
         void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) { }
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) { }
-        void ITerminalHandler.OnWindowReport(int command) { }
     }
 
     [Fact]
@@ -373,6 +372,9 @@ public class BasicAnsiParserTests
         parser.Feed(Encoding.UTF8.GetBytes("73\u001b[31mignored\u001b"));
         parser.Feed(Encoding.UTF8.GetBytes("\\after\u001bPcancelled-by-can\u0018mid\u001bPcancelled-by-sub\u001aend"));
 
-        Assert.Equal("beforeaftermidend", string.Concat(handler.PrintCalls));
+        // ESC [ inside the DCS abandons it (only ESC \ terminates a string),
+        // so "ignored" is ordinary text; the CAN/SUB-cancelled strings drop
+        // their payload up to the cancel.
+        Assert.Equal("beforeignoredaftermidend", string.Concat(handler.PrintCalls));
     }
 }

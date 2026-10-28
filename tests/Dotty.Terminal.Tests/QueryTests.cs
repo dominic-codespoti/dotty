@@ -31,6 +31,20 @@ public sealed class QueryTests
     }
 
     [Fact]
+    public void Decrqm_HugeModeNumberDoesNotWrap()
+    {
+        var (_, parser, replies) = Setup();
+        // 4294967303 wraps to 7 (DECAWM, set) when parsed with unchecked int math.
+        Feed(parser, "\u001b[?4294967303$p");
+        Feed(parser, "\u001b[?40000$p");
+        Feed(parser, "\u001b[?65537$p");
+        Feed(parser, "\u001b[4294967303$p");
+        Assert.Equal(
+            new[] { "\u001b[?2147483647;0$y", "\u001b[?40000;0$y", "\u001b[?65537;0$y", "\u001b[2147483647;0$y" },
+            replies);
+    }
+
+    [Fact]
     public void Xtgettcap_AnswersMultipleNamesAndCancelsQuery()
     {
         var (_, parser, replies) = Setup();

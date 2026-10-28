@@ -93,7 +93,6 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) => Events.Add($"KITTY:{introducer}:{flags}:{argument}");
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) => FocusReports.Add(enabled ? "FOCUS:True" : "FOCUS:False");
-        void ITerminalHandler.OnWindowReport(int command) { }
     }
 
     private static (BasicAnsiParser, CaptureHandler) Setup()

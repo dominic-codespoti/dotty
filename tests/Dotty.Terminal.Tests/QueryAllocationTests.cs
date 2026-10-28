@@ -50,4 +50,22 @@ public sealed class QueryAllocationTests
     [Fact]
     public void RepeatedModifyOtherKeysSetResetDoesNotAllocate() =>
         AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001b[>4;1m"), Encoding.UTF8.GetBytes("\u001b[>4;0m"), Encoding.UTF8.GetBytes("\u001b[>4m"));
+
+    [Fact]
+    public void RepeatedApcPmSosDiscardDoesNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b_Gi=31,s=1,v=1,a=q;AAAAAAAAAAAAAAAAAAAAAAAA\u001b\\"),
+            Encoding.UTF8.GetBytes("\u001b^privacy\u001b\\"),
+            Encoding.UTF8.GetBytes("\u001bXstart\u001b\\"));
+
+    [Fact]
+    public void RepeatedRoutedCsiHooksDoNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b[!p"),
+            Encoding.UTF8.GetBytes("\u001b[?998n"),
+            Encoding.UTF8.GetBytes("\u001b[8;24;80t"),
+            Encoding.UTF8.GetBytes("\u001b[7;1;1;1;1;2*y"),
+            Encoding.UTF8.GetBytes("\u001b[?2027h"));
 }

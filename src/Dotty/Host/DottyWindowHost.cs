@@ -57,6 +57,7 @@ internal static class DottyWindowHost
     private static IInputContext _input = null!;
     private static IKeyboard? _keyboard;
     private static ITerminalClipboard? _clipboard;
+    private static ClipboardPasteRouter? _pasteRouter;
     private static IMouse? _mouse;
     private static TerminalKeyboardController _keyboardController = null!;
     private static TerminalKeyboardDispatcher _keyboardDispatcher = null!;
@@ -419,6 +420,11 @@ internal static class DottyWindowHost
         {
             _keyboard = _input.Keyboards[0];
             _clipboard = new KeyboardClipboard(_keyboard);
+            _pasteRouter = new ClipboardPasteRouter(
+                _clipboard,
+                static () => UserConfigService.Current.Clipboard,
+                static prompt => _mouseHost.ShowPrompt(prompt),
+                static pane => IsPaneAlive(pane));
         }
         InstallNativeKeyboardCallbacks();
         _nativeTextInput = new NativeTextInputBridge(_glfwApi!, _window.Native?.Glfw ?? 0, OnNativePreeditChanged);
@@ -2124,12 +2130,23 @@ internal static class DottyWindowHost
     {
         if (_keyboard == null) return;
 
-        var text = _clipboard?.GetText();
-        if (!string.IsNullOrEmpty(text))
+        _pasteRouter?.Paste(targetPane);
+    }
+
+    private static bool IsPaneAlive(LeafPane pane)
+    {
+        if (_closed || _tabManager == null)
+            return false;
+        foreach (var tab in _tabManager.Tabs)
         {
-            var bytes = ClipboardPasteRouter.Encode(text, targetPane.Session.Adapter);
-            targetPane.Session.WriteInput(bytes);
+            foreach (var leaf in tab.PaneTree.Leaves)
+            {
+                if (ReferenceEquals(leaf, pane))
+                    return true;
+            }
         }
+
+        return false;
     }
 
     private static void OnClosing()
@@ -2212,6 +2229,7 @@ internal static class DottyWindowHost
         _tabManager?.Dispose();
         _input?.Dispose();
         _clipboard = null;
+        _pasteRouter = null;
         _renderer?.Dispose();
         if (_atlas != null)
         {
@@ -2441,7 +2459,7 @@ internal static class DottyWindowHost
         }
 
         /// <summary>Shows a host prompt at the pointer (the layout clamps it into the viewport).</summary>
-        private void ShowPrompt(ContextMenuModel prompt)
+        internal void ShowPrompt(ContextMenuModel prompt)
         {
             if (_closed)
                 return;

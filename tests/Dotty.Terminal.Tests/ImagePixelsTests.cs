@@ -45,7 +45,6 @@ public sealed class ImagePixelsTests
         Assert.True(b.Serial < c.Serial);
         // A retained reference is the same object, hence the same GL cache key.
         Assert.Same(a, a.Retain());
-        Assert.Equal(a.Serial, a.Serial);
         a.Release();
     }
 

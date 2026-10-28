@@ -243,6 +243,13 @@ public sealed class GraphicsUserConfig
     [JsonPropertyName("allowSharedMemory")]
     public bool AllowSharedMemory { get; set; } = true;
 
+    /// <summary>
+    /// Windows only, experimental: create the ConPTY with <c>PSEUDOCONSOLE_PASSTHROUGH_MODE</c> so graphics APC is
+    /// not dropped. May change how ConPTY forwards VT; verify on Windows before relying on it. Ignored elsewhere.
+    /// </summary>
+    [JsonPropertyName("windowsPassthrough")]
+    public bool WindowsPassthrough { get; set; } = DottyDefaults.GraphicsWindowsPassthrough;
+
     /// <summary>The normalized options these settings describe (Direct transmission is always allowed).</summary>
     public KittyGraphicsOptions ToOptions()
     {

@@ -76,6 +76,7 @@ public sealed partial class LuaScriptHost
         ["graphics.allow_file_transfer"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowFileTransfer, (c, v) => c.Graphics.AllowFileTransfer = (bool)v!),
         ["graphics.allow_temp_file_transfer"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowTempFileTransfer, (c, v) => c.Graphics.AllowTempFileTransfer = (bool)v!),
         ["graphics.allow_shared_memory"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowSharedMemory, (c, v) => c.Graphics.AllowSharedMemory = (bool)v!),
+        ["graphics.windows_passthrough"] = new(ConfigValueKind.Boolean, c => c.Graphics.WindowsPassthrough, (c, v) => c.Graphics.WindowsPassthrough = (bool)v!),
         ["mouse.copy_on_select"] = new(ConfigValueKind.String, c => c.Mouse.CopyOnSelect, (c, v) => c.Mouse.CopyOnSelect = (string)v!),
         ["mouse.middle_click_action"] = new(ConfigValueKind.String, c => c.Mouse.MiddleClickAction, (c, v) => c.Mouse.MiddleClickAction = (string)v!)
     };

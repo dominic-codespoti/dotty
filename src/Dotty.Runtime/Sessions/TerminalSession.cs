@@ -174,7 +174,7 @@ public partial class TerminalSession : IDisposable
     }
 
     public TerminalSession(int rows = 24, int columns = 80)
-        : this(rows, columns, PtyFactory.Create, checkPtySupport: true)
+        : this(rows, columns, () => PtyFactory.Create(UserConfigService.Current.Graphics.WindowsPassthrough), checkPtySupport: true)
     {
     }
 

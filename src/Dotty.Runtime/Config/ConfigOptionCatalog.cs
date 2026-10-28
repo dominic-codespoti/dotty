@@ -335,6 +335,9 @@ public static class ConfigOptionCatalog
         Opt("graphics.allowSharedMemory", "graphics.allow_shared_memory", "boolean", null, c => c.Graphics.AllowSharedMemory,
             "Let graphics clients transmit images through a POSIX shared-memory object (t=s).",
             "Applies to sessions created after the change."),
+        Opt("graphics.windowsPassthrough", "graphics.windows_passthrough", "boolean", null, c => c.Graphics.WindowsPassthrough,
+            "Windows only, experimental: create the ConPTY in passthrough mode so graphics sequences are not dropped. May change how ConPTY forwards VT output; verify before enabling. Ignored on other platforms.",
+            "Applies to sessions created after the change."),
 
         Opt("vt.checksumReportEnabled", "vt.checksum_report_enabled", "boolean", null, c => c.Vt.ChecksumReportEnabled,
             "Answer DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y) rectangular-area checksum requests; off by default because the reply lets a program read back screen content. When false no reply is sent.",

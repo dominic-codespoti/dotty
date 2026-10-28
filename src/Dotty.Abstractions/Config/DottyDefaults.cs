@@ -27,6 +27,8 @@ public static class DottyDefaults
     public const long KittyMaxPayloadBytes = 65L * 1024 * 1024;
     public const int KittyMaxImageDimension = 10000;
     public const int KittyMaxPlacementsPerScreen = 8192;
+    /// <summary>Experimental: request ConPTY passthrough mode (Windows) so graphics APC reaches the terminal.</summary>
+    public const bool GraphicsWindowsPassthrough = false;
 
     // UI Colors (ARGB format)
     public const uint SelectionColor = 0xA03385DB;

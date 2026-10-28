@@ -52,11 +52,27 @@ public sealed class WindowsPty : IPty
     /// <summary>
     /// Creates a new Windows ConPTY instance.
     /// </summary>
-    public WindowsPty()
+    /// <param name="requestGraphicsPassthrough">
+    /// Request <c>PSEUDOCONSOLE_PASSTHROUGH_MODE</c> so ConPTY forwards VT (notably Kitty graphics APC, which it
+    /// otherwise drops) verbatim. Experimental: passthrough may change how ConPTY forwards VT output and must be
+    /// verified on a Windows machine before being enabled by default. Falls back to a plain pseudo console when
+    /// the host rejects the flag; see <see cref="GraphicsPassthroughActive"/>.
+    /// </param>
+    public WindowsPty(bool requestGraphicsPassthrough = false)
     {
+        GraphicsPassthroughRequested = requestGraphicsPassthrough;
         _pseudoConsoleHandle = IntPtr.Zero;
         _processInfo = new ProcessInformation();
     }
+
+    /// <summary>Whether passthrough mode was requested at construction.</summary>
+    public bool GraphicsPassthroughRequested { get; }
+
+    /// <summary>
+    /// True when the pseudo console was actually created with <c>PSEUDOCONSOLE_PASSTHROUGH_MODE</c>; false when
+    /// not requested, not yet started, or the flagged attempt failed and the plain fallback was used.
+    /// </summary>
+    public bool GraphicsPassthroughActive { get; private set; }
 
     /// <inheritdoc />
     public void Start(
@@ -270,22 +286,59 @@ public sealed class WindowsPty : IPty
         CreatePipe(out _outputReadHandle, out _outputWriteHandle, childInheritsReadEnd: false);
 
         var size = new Coord((short)columns, (short)rows);
-        
-        // Create the pseudo console
+        IntPtr inputRead = _inputReadHandle!.DangerousGetHandle();
+        IntPtr outputWrite = _outputWriteHandle!.DangerousGetHandle();
+
         // The input read handle is where PTY reads from (our writes go here)
         // The output write handle is where PTY writes to (we read from the other end)
-        var result = NativeMethods.CreatePseudoConsole(
-            size,
-            _inputReadHandle!.DangerousGetHandle(),
-            _outputWriteHandle!.DangerousGetHandle(),
-            0, // No flags
-            out _pseudoConsoleHandle);
+        int result = CreateWithFallback(
+            GraphicsPassthroughRequested,
+            flags => NativeMethods.CreatePseudoConsole(size, inputRead, outputWrite, flags, out _pseudoConsoleHandle),
+            out bool passthroughActive);
+        GraphicsPassthroughActive = passthroughActive;
 
         if (result != 0)
         {
             throw new Win32Exception(result, "Failed to create pseudo console");
         }
 
+    }
+
+    /// <summary><c>PSEUDOCONSOLE_PASSTHROUGH_MODE</c> flag for <c>CreatePseudoConsole</c>.</summary>
+    internal const uint PseudoConsolePassthroughMode = 0x8;
+
+    /// <summary>Maps the passthrough request to the <c>dwFlags</c> value passed to <c>CreatePseudoConsole</c>.</summary>
+    internal static uint ResolvePseudoConsoleFlags(bool passthrough) =>
+        passthrough ? PseudoConsolePassthroughMode : 0u;
+
+    /// <summary>
+    /// Creates the pseudo console through <paramref name="create"/> (which receives <c>dwFlags</c> and returns an
+    /// HRESULT). When passthrough is requested and the call fails (non-zero HRESULT or exception, e.g. an older
+    /// conhost that rejects the flag) it is retried once with no flags.
+    /// </summary>
+    /// <param name="active">True only when the passthrough-flagged call succeeded.</param>
+    /// <returns>The HRESULT of the last attempt (0 on success).</returns>
+    internal static int CreateWithFallback(bool passthrough, Func<uint, int> create, out bool active)
+    {
+        if (passthrough)
+        {
+            try
+            {
+                int hr = create(ResolvePseudoConsoleFlags(true));
+                if (hr == 0)
+                {
+                    active = true;
+                    return 0;
+                }
+            }
+            catch (Exception)
+            {
+                // Fall through to the plain attempt.
+            }
+        }
+
+        active = false;
+        return create(ResolvePseudoConsoleFlags(false));
     }
 
     private void CreatePipe(

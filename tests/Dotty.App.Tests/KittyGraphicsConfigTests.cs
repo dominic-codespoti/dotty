@@ -169,10 +169,40 @@ public sealed class KittyGraphicsConfigTests
     }
 
     [Fact]
-    public void Catalog_ListsAllSixGraphicsOptions()
+    public void Catalog_ListsAllSevenGraphicsOptions()
     {
-        Assert.Equal(6, ConfigOptionCatalog.FindGroup("graphics").Count);
+        Assert.Equal(7, ConfigOptionCatalog.FindGroup("graphics").Count);
         Assert.Equal("graphics.max_payload_mib", ConfigOptionCatalog.Find("graphics.maxPayloadMiB")!.LuaKey);
         Assert.Equal("320", ConfigOptionCatalog.Find("graphics.imageStorageLimitMiB")!.Default());
+        Assert.Equal("graphics.windows_passthrough", ConfigOptionCatalog.Find("graphics.windowsPassthrough")!.LuaKey);
+    }
+
+    [Fact]
+    public void WindowsPassthrough_DefaultsFalse_AndRoundTripsJson()
+    {
+        Assert.False(DottyDefaults.GraphicsWindowsPassthrough);
+        Assert.False(new DottyUserConfig().Graphics.WindowsPassthrough);
+
+        var c = JsonSerializer.Deserialize<DottyUserConfig>("{\"graphics\":{\"windowsPassthrough\":true}}")!;
+        Assert.True(c.Graphics.WindowsPassthrough);
+        Assert.Equal(320, c.Graphics.ImageStorageLimitMiB);
+
+        using JsonDocument doc = JsonDocument.Parse(JsonSerializer.Serialize(c));
+        Assert.True(doc.RootElement.GetProperty("graphics").GetProperty("windowsPassthrough").GetBoolean());
+        Assert.False(JsonSerializer.Deserialize<DottyUserConfig>("{\"graphics\":{}}")!.Graphics.WindowsPassthrough);
+    }
+
+    [Fact]
+    public void WindowsPassthrough_LuaKeyRoundTrips()
+    {
+        var config = new DottyUserConfig();
+        using var tabManager = new TerminalTabManager(SilentPty.Create);
+        using var host = new LuaScriptHost(new FakeLuaHostServices(tabManager), tabManager);
+        Assert.True(host.Evaluate(config, null));
+
+        Assert.True(host.ExecuteString("dotty.config.graphics.windows_passthrough=true; assert(dotty.config.graphics.windows_passthrough==true)"));
+        Assert.True(config.Graphics.WindowsPassthrough);
+        Assert.True(host.ExecuteString("dotty.config.apply_table({graphics={windows_passthrough=false}})"));
+        Assert.False(config.Graphics.WindowsPassthrough);
     }
 }

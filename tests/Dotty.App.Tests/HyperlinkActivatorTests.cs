@@ -60,7 +60,8 @@ public sealed class HyperlinkActivatorTests
     [Fact]
     public void HookReturningTrue_HandlesLinkWithoutPolicyOrOpener()
     {
-        var h = new Harness { Hook = url => url == "dotty://handled" };
+        // Uri may or may not append a trailing slash to an empty path for unregistered schemes.
+        var h = new Harness { Hook = url => url.TrimEnd('/') == "dotty://handled" };
 
         var activation = h.Activator.Activate("dotty://handled", HyperlinkSource.Detected, null);
 

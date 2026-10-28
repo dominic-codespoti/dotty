@@ -261,7 +261,8 @@ public sealed class HyperlinkPolicyTests
         var policy = Policy();
 
         Assert.True(policy.TryCanonicalize("dotty://handled", out string? canonical, out _));
-        Assert.Equal("dotty://handled", canonical);
+        // Uri may or may not append a trailing slash to an empty path for unregistered schemes.
+        Assert.Equal("dotty://handled", canonical!.TrimEnd('/'));
 
         Assert.False(policy.TryCanonicalize("javascript:alert(1)", out _, out string? reason));
         Assert.Contains("blocked", reason, StringComparison.OrdinalIgnoreCase);

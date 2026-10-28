@@ -241,8 +241,10 @@ public static class UserConfigService
             stream,
             DottyUserConfigJsonContext.Default.DottyUserConfig);
         if (config is not null)
+        {
             config.Clipboard ??= new ClipboardUserConfig();
             config.Hyperlinks ??= new HyperlinksUserConfig();
+        }
         return config;
     }
 

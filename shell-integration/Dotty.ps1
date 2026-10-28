@@ -20,7 +20,7 @@ try {
     $script:DottyPreviousPrompt = (Get-Item Function:prompt -ErrorAction SilentlyContinue).ScriptBlock
     $script:DottyPreviousHistoryHandler = (Get-PSReadLineOption).AddToHistoryHandler
 
-    # Builds the OSC 7 payload by hand (no [Uri]: it does not re-encode '%' and throws for
+    # Builds the OSC 7 payload by hand (no System.Uri: it does not re-encode '%' and throws for
     # non-filesystem providers). Everything outside [A-Za-z0-9/._~-] becomes %XX of the UTF-8 bytes.
     $script:DottyOsc7Payload = {
         $location = Get-Location

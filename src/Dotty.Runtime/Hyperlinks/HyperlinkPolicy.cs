@@ -232,7 +232,7 @@ public sealed class HyperlinkPolicy
 
     private string? CheckCanonical(Uri uri, out string canonical)
     {
-        canonical = uri.AbsoluteUri;
+        canonical = EscapeCommandLineUnsafe(uri.AbsoluteUri);
         if (canonical.Length > HyperlinkUri.MaxLength)
             return "link is too long";
         if (_isWindows && canonical.Length > WindowsMaxUrlLength)
@@ -241,6 +241,43 @@ public sealed class HyperlinkPolicy
             return "link could not be canonicalized";
         return null;
     }
+
+    /// <summary>
+    /// Percent-encodes the characters that are not valid in a URI and could break out of a Windows
+    /// handler command line (<c>space " &lt; &gt; \ ^ ` { | }</c>). <see cref="Uri.AbsoluteUri"/> already escapes them
+    /// in paths; this keeps the guarantee independent of runtime canonicalization details (queries, fragments).
+    /// </summary>
+    private static string EscapeCommandLineUnsafe(string value)
+    {
+        int first = -1;
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (IsCommandLineUnsafe(value[i]))
+            {
+                first = i;
+                break;
+            }
+        }
+
+        if (first < 0)
+            return value;
+
+        var sb = new System.Text.StringBuilder(value.Length + 8);
+        sb.Append(value, 0, first);
+        for (int i = first; i < value.Length; i++)
+        {
+            char c = value[i];
+            if (IsCommandLineUnsafe(c))
+                sb.Append('%').Append(((int)c).ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
+            else
+                sb.Append(c);
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsCommandLineUnsafe(char c) =>
+        c is ' ' or '"' or '<' or '>' or '\\' or '^' or '`' or '{' or '|' or '}';
 
     private static HyperlinkDecision Block(string reason) =>
         new(HyperlinkVerdict.Block, null, HyperlinkRisk.None, reason);

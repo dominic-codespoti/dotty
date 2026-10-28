@@ -1,19 +1,22 @@
 using System;
 using System.Collections.Generic;
+using Dotty.Runtime.Hyperlinks;
 using Xunit;
 
 namespace Dotty.App.Tests;
 
 /// <summary>
-/// Validates the platform <see cref="Uri"/> behavior the hyperlink policy relies on: the canonical
-/// string handed to openers is ASCII and has no characters that could break out of a Windows
-/// handler command line.
+/// Validates the canonical string the hyperlink policy hands to openers: it is ASCII and has no
+/// characters that could break out of a Windows handler command line. The policy percent-encodes
+/// those characters itself, so the first test does not depend on <see cref="Uri"/> escaping details.
+/// The IDN/ASCII tests pin platform <see cref="Uri"/> behavior (needs-runtime-verification).
 /// </summary>
 public sealed class UriCanonicalizationTests
 {
     [Fact]
-    public void AbsoluteUri_EscapesCommandLineBreakingCharactersInPaths()
+    public void PolicyCanonical_EscapesCommandLineBreakingCharacters()
     {
+        var policy = new HyperlinkPolicy(HyperlinkOptions.Default, "devbox", isWindows: false);
         const string forbidden = " \"<>\\^`{|}";
         var failures = new List<string>();
 
@@ -22,10 +25,9 @@ public sealed class UriCanonicalizationTests
             if (c is '#' or '?' or '%')
                 continue;
 
-            if (!Uri.TryCreate("https://example.com/a" + c + "b", UriKind.Absolute, out Uri? uri))
+            if (!policy.TryCanonicalize("https://example.com/a" + c + "b", out string? canonical, out _))
                 continue;
 
-            string canonical = uri.AbsoluteUri;
             foreach (char bad in forbidden)
             {
                 if (canonical.Contains(bad))
@@ -39,6 +41,7 @@ public sealed class UriCanonicalizationTests
     [Fact]
     public void AbsoluteUri_CanonicalizesIdnHostToPunycode()
     {
+        // needs-runtime-verification
         var uri = new Uri("https://b\u00FCcher.de/p");
 
         Assert.Equal("https://xn--bcher-kva.de/p", uri.AbsoluteUri);
@@ -48,6 +51,7 @@ public sealed class UriCanonicalizationTests
     [Fact]
     public void AbsoluteUri_IsAlwaysAscii()
     {
+        // needs-runtime-verification
         var uri = new Uri("https://example.com/\u4E2D\u6587?q=\u00E9#\u00F1");
 
         foreach (char c in uri.AbsoluteUri)

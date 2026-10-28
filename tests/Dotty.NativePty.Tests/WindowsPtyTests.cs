@@ -457,7 +457,7 @@ public class WindowsPtyTests : IDisposable
         _pty.Start(columns: 80, rows: 24);
 
         // Act & Assert - should not throw
-        var exception = Record.Exception(() => _pty.Resize(120, 30));
+        var exception = Record.Exception(() => _pty.Resize(120, 30, 0, 0));
         exception.Should().BeNull("Resize should not throw");
     }
 
@@ -485,7 +485,7 @@ public class WindowsPtyTests : IDisposable
 
         foreach (var (cols, rows) in dimensions)
         {
-            var exception = Record.Exception(() => _pty.Resize(cols, rows));
+            var exception = Record.Exception(() => _pty.Resize(cols, rows, 0, 0));
             exception.Should().BeNull($"Resize to {cols}x{rows} should not throw");
         }
     }
@@ -500,7 +500,7 @@ public class WindowsPtyTests : IDisposable
         using var pty = new Windows.WindowsPty();
 
         // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => pty.Resize(80, 24));
+        Assert.Throws<InvalidOperationException>(() => pty.Resize(80, 24, 0, 0));
     }
 
     /// <summary>
@@ -514,7 +514,7 @@ public class WindowsPtyTests : IDisposable
         pty.Dispose();
 
         // Act & Assert
-        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24));
+        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24, 0, 0));
     }
 
     [Fact]

@@ -66,8 +66,11 @@ public sealed class WindowsPty : IPty
         string? workingDirectory = null,
         System.Collections.Generic.IDictionary<string, string>? environmentVariables = null,
         System.Collections.Generic.IReadOnlyList<string>? command = null,
-        bool shellIsExecutable = false)
+        bool shellIsExecutable = false,
+        int initialPixelWidth = 0,
+        int initialPixelHeight = 0)
     {
+        // ConPTY has no pixel-size channel, so the initial pixel size is ignored.
         lock (_stateLock)
         {
             if (_isStarted)
@@ -124,8 +127,9 @@ public sealed class WindowsPty : IPty
     }
 
     /// <inheritdoc />
-    public void Resize(int columns, int rows)
+    public void Resize(int columns, int rows, int pixelWidth, int pixelHeight)
     {
+        // ConPTY has no pixel-size channel; the pixel arguments are ignored.
         lock (_stateLock)
         {
             if (_isDisposed)

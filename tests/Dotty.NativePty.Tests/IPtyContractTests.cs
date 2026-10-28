@@ -315,14 +315,14 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        mockPty.Setup(p => p.Resize(columns, rows));
+        mockPty.Setup(p => p.Resize(columns, rows, 0, 0));
 
         // Act
-        var exception = Record.Exception(() => mockPty.Object.Resize(columns, rows));
+        var exception = Record.Exception(() => mockPty.Object.Resize(columns, rows, 0, 0));
 
         // Assert
         exception.Should().BeNull("Resize with valid dimensions should not throw");
-        mockPty.Verify(p => p.Resize(columns, rows), Times.Once);
+        mockPty.Verify(p => p.Resize(columns, rows, 0, 0), Times.Once);
     }
 
     /// <summary>
@@ -334,11 +334,11 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        mockPty.Setup(p => p.Resize(It.IsAny<int>(), It.IsAny<int>()))
+        mockPty.Setup(p => p.Resize(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
             .Throws(new ObjectDisposedException("WindowsPty"));
 
         // Act & Assert
-        var exception = Assert.Throws<ObjectDisposedException>(() => mockPty.Object.Resize(80, 24));
+        var exception = Assert.Throws<ObjectDisposedException>(() => mockPty.Object.Resize(80, 24, 0, 0));
         exception.ObjectName.Should().NotBeNullOrEmpty();
     }
 
@@ -351,11 +351,11 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        mockPty.Setup(p => p.Resize(It.IsAny<int>(), It.IsAny<int>()))
+        mockPty.Setup(p => p.Resize(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
             .Throws(new InvalidOperationException("Pseudo console is not created."));
 
         // Act & Assert
-        var exception = Assert.Throws<InvalidOperationException>(() => mockPty.Object.Resize(80, 24));
+        var exception = Assert.Throws<InvalidOperationException>(() => mockPty.Object.Resize(80, 24, 0, 0));
         exception.Message.Should().NotBeNullOrEmpty();
     }
 
@@ -649,12 +649,12 @@ public class IPtyContractTests
     {
         // Arrange
         var mockPty = new Mock<IPty>();
-        mockPty.Setup(p => p.Resize(It.IsAny<int>(), It.IsAny<int>()))
+        mockPty.Setup(p => p.Resize(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<int>()))
             .Throws(new ObjectDisposedException("WindowsPty"));
 
         // Act & Assert
         Assert.Throws<ObjectDisposedException>(() =>
-            mockPty.Object.Resize(80, 24));
+            mockPty.Object.Resize(80, 24, 0, 0));
     }
 
     #endregion

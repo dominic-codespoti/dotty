@@ -120,11 +120,11 @@ public sealed class ScrollbackSessionConfigTests : IDisposable
         using var session = new TerminalSession(24, 80, SilentPty.Create);
         Assert.Equal(1068, session.Adapter.Buffer.ActiveBuffer.ScrollbackCapacity);
 
-        session.Resize(200, 24); // TerminalSession.Resize takes (columns, rows)
+        session.Resize(200, 24, 0, 0); // TerminalSession.Resize takes (columns, rows)
         Assert.Equal(200, session.Adapter.Buffer.Columns);
         Assert.Equal(1048576 / (200 * 12) - 24, session.Adapter.Buffer.ActiveBuffer.ScrollbackCapacity);
 
-        session.Resize(80, 24);
+        session.Resize(80, 24, 0, 0);
         Assert.Equal(1068, session.Adapter.Buffer.ActiveBuffer.ScrollbackCapacity);
     }
 

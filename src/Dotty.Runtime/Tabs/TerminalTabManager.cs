@@ -251,12 +251,12 @@ public sealed class TerminalTabManager : IDisposable
         SelectTab(prevIndex);
     }
 
-    public void ResizeAll(int cols, int rows)
+    public void ResizeAll(int cols, int rows, int pixelWidth, int pixelHeight)
     {
         ThrowIfDisposed();
         foreach (var tab in _tabs)
         {
-            tab.Session.Resize(cols, rows);
+            tab.Session.Resize(cols, rows, pixelWidth, pixelHeight);
         }
     }
 

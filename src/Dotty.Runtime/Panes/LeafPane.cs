@@ -13,6 +13,12 @@ public sealed class LeafPane : PaneNode, IDisposable
     public PaneRect Bounds { get; internal set; }
     public int Columns { get; internal set; }
     public int Rows { get; internal set; }
+
+    /// <summary>Physical pixel size of the text grid (<c>Columns * cell width px</c>); 0 until the first layout.</summary>
+    public int PixelWidth { get; internal set; }
+
+    /// <summary>Physical pixel height of the text grid (<c>Rows * cell height px</c>); 0 until the first layout.</summary>
+    public int PixelHeight { get; internal set; }
     public int ScrollOffset { get; private set; }
 
     public LeafPane(TerminalSession session, string? id = null)

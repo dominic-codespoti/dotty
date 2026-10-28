@@ -1230,7 +1230,10 @@ internal static class DottyWindowHost
 
         _cols = Math.Max(1, (int)((size.X - padX) / (_cellWidth * _scale)));
         _rows = Math.Max(1, (int)((size.Y - topOffset - padY) / (_cellHeight * _scale)));
-        _tabManager?.ResizeAll(_cols, _rows);
+        // Physical text-area pixels: the same rounded cell size the VT metrics report, times the grid.
+        int cellPixelWidth = Math.Max(1, (int)MathF.Round(_cellWidth * _scale));
+        int cellPixelHeight = Math.Max(1, (int)MathF.Round(_cellHeight * _scale));
+        _tabManager?.ResizeAll(_cols, _rows, _cols * cellPixelWidth, _rows * cellPixelHeight);
     }
     private static void StartControlServer()
     {

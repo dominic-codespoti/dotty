@@ -60,6 +60,8 @@ public partial class TerminalSession : IDisposable
     private bool _hasReceivedInitialResize = false;
     private int _initialCols = 0;
     private int _initialRows = 0;
+    private int _initialPixelWidth = 0;
+    private int _initialPixelHeight = 0;
     private int _isStarted;
     private int _pendingOutputChunks;
     private long _ptyBytesRead;
@@ -220,6 +222,8 @@ public partial class TerminalSession : IDisposable
             LaunchShellIsExecutable = false;
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
+            _initialPixelWidth = 0;
+            _initialPixelHeight = 0;
             _hasReceivedInitialResize = false;
             ShellLaunch integration = PrepareShellIntegration(shell, false, null);
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows, workingDirectory: LaunchWorkingDirectory,
@@ -257,6 +261,8 @@ public partial class TerminalSession : IDisposable
             LaunchWorkingDirectory = Path.GetFullPath(workingDirectory ?? GetDefaultLaunchWorkingDirectory());
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
+            _initialPixelWidth = 0;
+            _initialPixelHeight = 0;
             _hasReceivedInitialResize = false;
             ShellLaunch integration = PrepareShellIntegration(shell, shellIsExecutable, command);
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows,
@@ -597,8 +603,15 @@ public partial class TerminalSession : IDisposable
         }
     }
 
-    public void Resize(int cols, int rows)
+    /// <summary>
+    /// Resizes the grid and forwards the size to the PTY. <paramref name="pixelWidth"/>/<paramref name="pixelHeight"/>
+    /// are the physical pixel size of the text area (0 when unknown); a pixel-only change (zoom, DPI)
+    /// is forwarded even when the grid is unchanged so <c>TIOCGWINSZ</c> stays accurate.
+    /// </summary>
+    public void Resize(int cols, int rows, int pixelWidth, int pixelHeight)
     {
+        if (pixelWidth < 0) pixelWidth = 0;
+        if (pixelHeight < 0) pixelHeight = 0;
         try
         {
             lock (Adapter.Buffer.SyncRoot)
@@ -611,16 +624,21 @@ public partial class TerminalSession : IDisposable
         if (!_hasReceivedInitialResize)
         {
             _hasReceivedInitialResize = true;
-            if (cols == _initialCols && rows == _initialRows) return;
+            if (cols == _initialCols && rows == _initialRows
+                && pixelWidth == _initialPixelWidth && pixelHeight == _initialPixelHeight)
+                return;
         }
 
-        if (cols != _initialCols || rows != _initialRows)
+        if (cols != _initialCols || rows != _initialRows
+            || pixelWidth != _initialPixelWidth || pixelHeight != _initialPixelHeight)
         {
             try
             {
-                _pty?.Resize(cols, rows);
+                _pty?.Resize(cols, rows, pixelWidth, pixelHeight);
                 _initialCols = cols;
                 _initialRows = rows;
+                _initialPixelWidth = pixelWidth;
+                _initialPixelHeight = pixelHeight;
             }
             catch { }
         }

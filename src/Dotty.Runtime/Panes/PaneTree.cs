@@ -219,11 +219,17 @@ public sealed class PaneTree : IDisposable
                 {
                     var cols = Math.Max(1, (int)Math.Floor(bounds.Width / cellWidth));
                     var rows = Math.Max(1, (int)Math.Floor(bounds.Height / cellHeight));
-                    if (cols != leaf.Columns || rows != leaf.Rows)
+                    // Cell pixels use the same rounding as the host's cell metrics (rounded physical size, at least 1).
+                    int pixelWidth = cols * Math.Max(1, (int)MathF.Round(cellWidth));
+                    int pixelHeight = rows * Math.Max(1, (int)MathF.Round(cellHeight));
+                    if (cols != leaf.Columns || rows != leaf.Rows
+                        || pixelWidth != leaf.PixelWidth || pixelHeight != leaf.PixelHeight)
                     {
                         leaf.Columns = cols;
                         leaf.Rows = rows;
-                        leaf.Session.Resize(cols, rows);
+                        leaf.PixelWidth = pixelWidth;
+                        leaf.PixelHeight = pixelHeight;
+                        leaf.Session.Resize(cols, rows, pixelWidth, pixelHeight);
                     }
                 }
                 break;

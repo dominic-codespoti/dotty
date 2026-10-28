@@ -71,38 +71,39 @@ internal static class KittyControlParser
     {
         uint u;
         int s;
+        byte b;
         switch (key)
         {
-            case 'a': if (!Char(v, out r.A)) return false; break;
-            case 't': if (!Char(v, out r.T)) return false; break;
-            case 'o': if (!Char(v, out r.O)) return false; break;
-            case 'd': if (!Char(v, out r.D)) return false; break;
-            case 'e': if (!Char(v, out r.E)) return false; break;
+            case 'a': if (!Char(v, out b)) return false; r.A = b; break;
+            case 't': if (!Char(v, out b)) return false; r.T = b; break;
+            case 'o': if (!Char(v, out b)) return false; r.O = b; break;
+            case 'd': if (!Char(v, out b)) return false; r.D = b; break;
+            case 'e': if (!Char(v, out b)) return false; r.E = b; break;
 
             case 'q': if (!Unsigned(v, out u)) return false; r.Q = (byte)Math.Min(u, 2u); break;
             case 'm': if (!Unsigned(v, out u)) return false; r.M = Saturate(u); break;
             case 'C': if (!Unsigned(v, out u)) return false; r.C = Saturate(u); break;
             case 'U': if (!Unsigned(v, out u)) return false; r.U = Saturate(u); break;
 
-            case 'f': if (!Unsigned(v, out r.F)) return false; break;
-            case 's': if (!Unsigned(v, out r.S)) return false; break;
-            case 'v': if (!Unsigned(v, out r.V)) return false; break;
-            case 'S': if (!Unsigned(v, out r.BigS)) return false; break;
-            case 'O': if (!Unsigned(v, out r.BigO)) return false; break;
-            case 'i': if (!Unsigned(v, out r.I)) return false; break;
-            case 'I': if (!Unsigned(v, out r.BigI)) return false; break;
-            case 'p': if (!Unsigned(v, out r.P)) return false; break;
-            case 'x': if (!Unsigned(v, out r.X)) return false; break;
-            case 'y': if (!Unsigned(v, out r.Y)) return false; break;
-            case 'w': if (!Unsigned(v, out r.W)) return false; break;
-            case 'h': if (!Unsigned(v, out r.H)) return false; break;
-            case 'X': if (!Unsigned(v, out r.BigX)) return false; break;
-            case 'Y': if (!Unsigned(v, out r.BigY)) return false; break;
-            case 'c': if (!Unsigned(v, out r.Cc)) return false; break;
-            case 'r': if (!Unsigned(v, out r.R)) return false; break;
-            case 'P': if (!Unsigned(v, out r.BigP)) return false; break;
-            case 'Q': if (!Unsigned(v, out r.BigQ)) return false; break;
-            case 'N': if (!Unsigned(v, out r.N)) return false; break;
+            case 'f': if (!Unsigned(v, out u)) return false; r.F = u; break;
+            case 's': if (!Unsigned(v, out u)) return false; r.S = u; break;
+            case 'v': if (!Unsigned(v, out u)) return false; r.V = u; break;
+            case 'S': if (!Unsigned(v, out u)) return false; r.BigS = u; break;
+            case 'O': if (!Unsigned(v, out u)) return false; r.BigO = u; break;
+            case 'i': if (!Unsigned(v, out u)) return false; r.I = u; break;
+            case 'I': if (!Unsigned(v, out u)) return false; r.BigI = u; break;
+            case 'p': if (!Unsigned(v, out u)) return false; r.P = u; break;
+            case 'x': if (!Unsigned(v, out u)) return false; r.X = u; break;
+            case 'y': if (!Unsigned(v, out u)) return false; r.Y = u; break;
+            case 'w': if (!Unsigned(v, out u)) return false; r.W = u; break;
+            case 'h': if (!Unsigned(v, out u)) return false; r.H = u; break;
+            case 'X': if (!Unsigned(v, out u)) return false; r.BigX = u; break;
+            case 'Y': if (!Unsigned(v, out u)) return false; r.BigY = u; break;
+            case 'c': if (!Unsigned(v, out u)) return false; r.Cc = u; break;
+            case 'r': if (!Unsigned(v, out u)) return false; r.R = u; break;
+            case 'P': if (!Unsigned(v, out u)) return false; r.BigP = u; break;
+            case 'Q': if (!Unsigned(v, out u)) return false; r.BigQ = u; break;
+            case 'N': if (!Unsigned(v, out u)) return false; r.N = u; break;
 
             case 'z': if (!Signed(v, out s)) return false; r.Z = s; break;
             case 'H': if (!Signed(v, out s)) return false; r.BigH = s; break;

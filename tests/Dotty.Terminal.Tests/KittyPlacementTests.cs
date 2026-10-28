@@ -461,12 +461,10 @@ public sealed class KittyPlacementTests
         using var store = new KittyImageStore(1_000_000);
         var image = Img40x20(store);
         var a = store.Place(image, "p=1");
-        var b = store.Place(image, "p=2");
-        var c = store.Place(image, "p=3");
-        c.Parent = b;
-        b.Parent = a;
+        Assert.Equal(KittyStatus.Ok, store.TryPlaceRelative(image, Parse("p=2,P=1,Q=1"), 8, 16, out var b));
+        Assert.Equal(KittyStatus.Ok, store.TryPlaceRelative(image, Parse("p=3,P=1,Q=2"), 8, 16, out var c));
         store.ValidateInvariants();
-        a.Parent = c;
+        b!.Parent = c; // b -> c -> b
         Assert.Throws<InvalidOperationException>(store.ValidateInvariants);
     }
 

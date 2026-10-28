@@ -74,7 +74,7 @@ public sealed class BoundedInflateTests
     [Fact]
     public void EmptyPayloadWithEmptyDestinationIsOk()
     {
-        var z = Zlib([]);
+        byte[] z = [0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]; // header, empty final fixed block, Adler-32 of "" = 1
         Assert.Equal(BoundedInflateResult.Ok, BoundedInflate.Inflate(z, Span<byte>.Empty, out int written));
         Assert.Equal(0, written);
     }

@@ -112,6 +112,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
 
     private SilkImageTextureCache? _imageTextures;
     private SilkImageRenderer? _images;
+    private uint _frameAtlasTexture;
 
     /// <summary>
     /// True when the last frame skipped an image texture upload because of the per-frame budget; the host should
@@ -350,6 +351,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
         uint texId = TextureManager.UpdateTexture();
+        _frameAtlasTexture = texId;
         UseProgram(_program);
         Uniform2CellFramebuffer((float)framebufferWidth, (float)framebufferHeight);
         Uniform2CellSize(cellW, cellH);
@@ -969,9 +971,12 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
 
     private void DrawImageLayer(ImageLayer layer, ImageDrawList? images)
     {
-        if (_images is null || images is null)
+        if (_images is null || images is null || images.DrawCount == 0)
             return;
         _images.DrawLayer(layer, images, (int)_lastFramebufferWidth, (int)_lastFramebufferHeight);
+        // The image pass binds its textures to unit 0, where the glyph pass samples the atlas: put the atlas back
+        // (a cache hit, no GL call, when the layer drew nothing).
+        BindAtlasTexture(_frameAtlasTexture);
     }
 
     private void UseProgram(uint program)

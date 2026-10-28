@@ -102,6 +102,26 @@ public sealed class SilkImageTextureCacheTests
     }
 
     [Fact]
+    public void ReuploadAfterDeletingTheBoundTextureBindsTheNewTexture()
+    {
+        using ImageGlHost? host = ImageGlHost.TryCreate();
+        if (host is null) return;
+        using var cache = new SilkImageTextureCache(host.Gl, new DirectGlBindingCache(host.Gl));
+        using ImagePixels px = Image(4, 4, 200);
+        cache.BeginFrame();
+        Assert.True(cache.TryGetTexture(px, out _));   // the upload leaves this texture bound
+
+        // Deleting it resets the GL binding to 0 and a driver may hand the same name out again: the binding cache must
+        // have been told, or the second upload would be skipped-bound and land in texture 0.
+        cache.Retire(px.Serial);
+        Assert.True(cache.TryGetTexture(px, out uint again));
+
+        Assert.False(cache.HasFailed(px.Serial));
+        host.Gl.GetInteger(global::Silk.NET.OpenGL.GetPName.TextureBinding2D, out int bound);
+        Assert.Equal((int)again, bound);
+    }
+
+    [Fact]
     public void DeferredUploadKeepsOrderAndReportsDeferred()
     {
         using ImageGlHost? host = ImageGlHost.TryCreate();

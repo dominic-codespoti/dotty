@@ -246,7 +246,12 @@ public sealed unsafe class SilkImageTextureCache : IDisposable
         if (!_entries.Remove(serial, out Entry? e))
             return;
         if (e.Texture != 0)
+        {
             _gl.DeleteTexture(e.Texture);
+            // Deleting a bound texture resets the binding to 0 in GL; a binding cache that still believes the
+            // deleted name is bound would skip the next bind of a re-generated (recycled) name.
+            _bindings.BindTexture2D(0);
+        }
         _textureBytes -= e.Bytes;
     }
 

@@ -2208,6 +2208,9 @@ internal static class DottyWindowHost
             {
                 if (ReferenceEquals(_activeContextMenu, value))
                     return;
+                var previousMenu = _activeContextMenu;
+                if (previousMenu is { IsVisible: true })
+                    previousMenu.Close();
                 _nativeTextInput?.Cancel();
                 _activeContextMenu = value;
                 _nativeTextInput?.SetFocus((_lastWindowFocus ?? _initialWindowInputFocus) && value?.IsVisible != true);

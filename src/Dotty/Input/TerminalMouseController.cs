@@ -234,7 +234,8 @@ public sealed class TerminalMouseController
             activeContextMenu.HoveredIndex = hitItemIndex;
             if (hitItemIndex >= 0) activeContextMenu.ExecuteHovered();
             else activeContextMenu.Close();
-            _host.ActiveContextMenu = null;
+            if (ReferenceEquals(_host.ActiveContextMenu, activeContextMenu))
+                _host.ActiveContextMenu = null;
             return;
         }
 

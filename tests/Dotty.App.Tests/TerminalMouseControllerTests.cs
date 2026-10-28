@@ -337,6 +337,58 @@ public sealed class TerminalMouseControllerTests
     }
 
     [Fact]
+    public void HandleMouseDown_ActionThatOpensNewMenu_KeepsNewMenuActive()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+
+        var prompt = new ContextMenuModel(10f, 10f, new[]
+        {
+            new ContextMenuItem("deny", "Deny", action: () => { })
+        });
+        var menu = new ContextMenuModel(10f, 10f, new[]
+        {
+            new ContextMenuItem("open", "Open prompt", action: () => host.ActiveContextMenu = prompt)
+        });
+        host.ActiveContextMenu = menu;
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(20f, 20f) };
+
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+
+        Assert.Same(prompt, host.ActiveContextMenu);
+        Assert.True(prompt.IsVisible);
+    }
+
+    [Fact]
+    public void HandleMouseDown_ClickOutside_FiresDismissedAndClearsMenu()
+    {
+        using var host = new FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+
+        int dismissed = 0;
+        var menu = new ContextMenuModel(10f, 10f, new[]
+        {
+            new ContextMenuItem("action", "Action", action: () => { })
+        })
+        {
+            Dismissed = () => dismissed++
+        };
+        host.ActiveContextMenu = menu;
+
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(700f, 500f) };
+
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+
+        Assert.Equal(1, dismissed);
+        Assert.Null(host.ActiveContextMenu);
+    }
+
+    [Fact]
     public void HandleMouseDown_RightClick_OpensContextMenu()
     {
         using var host = new FakeTerminalMouseHost();

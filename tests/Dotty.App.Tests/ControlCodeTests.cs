@@ -146,6 +146,5 @@ public class ControlCodeTests
         void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) { }
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) { }
-        void ITerminalHandler.OnWindowReport(int command) { }
     }
 }

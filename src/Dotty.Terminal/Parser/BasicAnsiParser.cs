@@ -32,7 +32,8 @@ namespace Dotty.Terminal.Parser
             DcsEscape,
             DiscardCsi,
             DiscardOsc,
-            DiscardDcs,
+            DiscardString,
+            DiscardStringEscape,
         }
 
         private byte[] _leftover = new byte[32];
@@ -259,6 +260,11 @@ namespace Dotty.Terminal.Parser
                     {
                         ResetSequence();
                     }
+                    else if (b < 0x20)
+                    {
+                        // Controls execute without disturbing the discarded CSI.
+                        ExecuteControl(b);
+                    }
                     break;
                 case SequenceState.DiscardOsc:
                     if (b == 0x07 || b == 0x18 || b == 0x1A)
@@ -275,15 +281,34 @@ namespace Dotty.Terminal.Parser
                         _sequenceState = SequenceState.Escape;
                     }
                     break;
-                case SequenceState.DiscardDcs:
-                    if (b == 0x18 || b == 0x1A || b == 0x9C) ResetSequence();
-                    else if (b == ESC) _sequenceState = SequenceState.DcsEscape;
+                case SequenceState.DiscardString:
+                    ProcessDiscardStringByte(b);
+                    break;
+                case SequenceState.DiscardStringEscape:
+                    ProcessDiscardStringEscapeByte(b);
                     break;
             }
         }
 
+        // APC (ESC _), PM (ESC ^) and SOS (ESC X) strings are consumed and
+        // dropped.  This is the single entry point a future APC capture state
+        // (Kitty graphics) replaces; nothing is buffered here.
+        private void BeginDiscardedString()
+        {
+            _leftoverLen = 0;
+            _sequenceState = SequenceState.DiscardString;
+        }
+
         private void ProcessEscapeByte(byte b)
         {
+            if (b < 0x20 && b != ESC && b != 0x18 && b != 0x1A)
+            {
+                // xterm executes controls inside an escape sequence and
+                // keeps waiting for its final byte.
+                ExecuteControl(b);
+                return;
+            }
+
             switch (b)
             {
                 case (byte)'[':
@@ -298,7 +323,13 @@ namespace Dotty.Terminal.Parser
                     _leftoverLen = 0;
                     _sequenceState = SequenceState.Dcs;
                     break;
+                case (byte)'_':
+                case (byte)'^':
+                case (byte)'X':
+                    BeginDiscardedString();
+                    break;
                 case (byte)'c':
+                    _charset = Charset.Ascii;
                     Handler?.OnFullReset();
                     ResetSequence();
                     break;
@@ -356,6 +387,12 @@ namespace Dotty.Terminal.Parser
             {
                 ResetSequence();
             }
+            else if (b < 0x20 || b == 0x7F)
+            {
+                // Controls execute and the CSI continues (xterm); they never
+                // become part of the parameter string.
+                ExecuteControl(b);
+            }
             else if (!AppendSequenceByte(b, MaxCsiParameterBytes))
             {
                 // Once the cap is crossed, discard the accumulated
@@ -380,6 +417,10 @@ namespace Dotty.Terminal.Parser
             {
                 ResetSequence();
             }
+            else if (b < 0x20)
+            {
+                AbortStringAndExecute(b);
+            }
             else if (!AppendSequenceByte(b, MaxOscPayloadBytes))
             {
                 BeginDiscard(SequenceState.DiscardOsc);
@@ -393,33 +434,15 @@ namespace Dotty.Terminal.Parser
                 HandleOscPayload(_leftover.AsSpan(0, _leftoverLen));
                 ResetSequence();
             }
-            else if (b == ESC)
+            else if (b != ESC)
             {
-                // The first ESC was payload; the second may begin ST.
-                if (!AppendSequenceByte(ESC, MaxOscPayloadBytes))
-                {
-                    BeginDiscard(SequenceState.DiscardOsc);
-                }
-                else
-                {
-                    _sequenceState = SequenceState.OscEscape;
-                }
+                // Only ESC \ terminates the string.  Any other byte abandons
+                // it without dispatch and is interpreted as an escape.
+                AbortStringAndReprocessAsEscape(b);
             }
-            else if (b == 0x18 || b == 0x1A)
-            {
-                ResetSequence();
-            }
-            else if (!AppendSequenceByte(ESC, MaxOscPayloadBytes))
-            {
-                BeginDiscard(SequenceState.DiscardOsc);
-                ProcessSequenceByte(b);
-            }
-            else
-            {
-                _sequenceState = SequenceState.Osc;
-                ProcessOscByte(b);
-            }
+            // A doubled ESC is not payload; the second one may begin ST.
         }
+
         private void ProcessDcsByte(byte b)
         {
             if (b == ESC)
@@ -430,40 +453,98 @@ namespace Dotty.Terminal.Parser
             {
                 ResetSequence();
             }
-            else if (b == 0x9C)
+            else if (b < 0x20)
             {
-                HandleDcsPayload(_leftover.AsSpan(0, _leftoverLen));
-                ResetSequence();
+                AbortStringAndExecute(b);
             }
             else if (!AppendSequenceByte(b, MaxDcsPayloadBytes))
             {
                 // Query payloads are short; longer DCS strings keep consuming
                 // until ST without dispatch.
-                BeginDiscard(SequenceState.DiscardDcs);
+                BeginDiscard(SequenceState.DiscardString);
             }
         }
 
         private void ProcessDcsEscapeByte(byte b)
         {
-            if (b == (byte)'\\' || b == 0x9C)
+            if (b == (byte)'\\')
             {
                 HandleDcsPayload(_leftover.AsSpan(0, _leftoverLen));
                 ResetSequence();
             }
-            else if (b == 0x18 || b == 0x1A) ResetSequence();
-            else if (b == ESC)
+            else if (b != ESC)
             {
-                // A second ESC may introduce the ST terminator; the payload
-                // stays captured until ST, CAN, SUB, or ST-as-0x9C.
+                AbortStringAndReprocessAsEscape(b);
             }
-            else
+            // A doubled ESC is not payload; the second one may begin ST.
+        }
+
+        private void ProcessDiscardStringByte(byte b)
+        {
+            if (b == ESC)
             {
-                // A non-ST ESC is part of the DCS payload, not a new sequence.
-                _sequenceState = SequenceState.Dcs;
-                if (!AppendSequenceByte(ESC, MaxDcsPayloadBytes))
-                    BeginDiscard(SequenceState.DiscardDcs);
-                else
-                    ProcessDcsByte(b);
+                _sequenceState = SequenceState.DiscardStringEscape;
+            }
+            else if (b == 0x18 || b == 0x1A)
+            {
+                ResetSequence();
+            }
+            else if (b < 0x20)
+            {
+                AbortStringAndExecute(b);
+            }
+            // Everything else (including 0x9C, a UTF-8 continuation byte) is
+            // dropped; only ESC \ ends the string.
+        }
+
+        private void ProcessDiscardStringEscapeByte(byte b)
+        {
+            if (b == (byte)'\\')
+            {
+                ResetSequence();
+            }
+            else if (b != ESC)
+            {
+                AbortStringAndReprocessAsEscape(b);
+            }
+        }
+
+        private void AbortStringAndExecute(byte control)
+        {
+            ResetSequence();
+            ExecuteControl(control);
+        }
+
+        private void AbortStringAndReprocessAsEscape(byte b)
+        {
+            ResetSequence();
+            _sequenceState = SequenceState.Escape;
+            ProcessEscapeByte(b);
+        }
+
+        // C0 controls executed from inside a sequence; mirrors the ground
+        // handling in Feed.  Other controls are ignored.
+        private void ExecuteControl(byte b)
+        {
+            switch (b)
+            {
+                case 0x07:
+                    Handler?.OnBell();
+                    break;
+                case 0x08:
+                    Handler?.OnCursorBack(1);
+                    break;
+                case 0x09:
+                    Handler?.OnTab();
+                    break;
+                case 0x0A:
+                case 0x0B:
+                case 0x0C:
+                    Handler?.OnLineFeed();
+                    break;
+                case 0x0D:
+                    Handler?.OnCarriageReturn();
+                    break;
             }
         }
 
@@ -579,6 +660,10 @@ namespace Dotty.Terminal.Parser
                 return;
             }
             if (final == 'p' && TryHandleDecrqm(paramBytes))
+                return;
+            if (final == 'p' && TryHandleSoftReset(paramBytes))
+                return;
+            if (final == 'y' && TryHandleChecksumRequest(paramBytes))
                 return;
             if (final == 'm' && TryHandleModifyOtherKeys(paramBytes))
                 return;
@@ -724,18 +809,26 @@ namespace Dotty.Terminal.Parser
                     Handler?.OnScrollDown(paramCount > 0 ? parsedParams[0] : 1);
                     break;
                 case 'n':
-                    if (paramCount > 0 && parsedParams[0] == 6)
                     {
-                        if (isPrivate)
-                            Handler?.OnCursorPositionReport();
+                        int dsrCode = paramCount > 0 ? parsedParams[0] : 0;
+                        byte dsrLead = paramBytes.IsEmpty ? (byte)0 : paramBytes[0];
+                        if (dsrLead == (byte)'>')
+                        {
+                            // CSI > Ps n is XTMODKEYS reset territory, not a DSR.
+                        }
+                        else if (dsrLead == (byte)'?')
+                        {
+                            if (dsrCode == 6)
+                                Handler?.OnCursorPositionReport();
+                            else
+                                Handler?.OnPrivateDeviceStatusReport(dsrCode);
+                        }
                         else
-                            Handler?.OnDeviceStatusReport(6);
+                        {
+                            Handler?.OnDeviceStatusReport(dsrCode);
+                        }
+                        break;
                     }
-                    else
-                    {
-                        Handler?.OnDeviceStatusReport(paramCount > 0 ? parsedParams[0] : 0);
-                    }
-                    break;
                 case 'c':
                     Handler?.OnSendDeviceAttributes(isPrivate ? 2 : 0);
                     break;
@@ -751,8 +844,15 @@ namespace Dotty.Terminal.Parser
                     Handler?.OnSaveCursor();
                     break;
                 case 't':
-                    // Window manipulation: CSI Ps t
-                    Handler?.OnWindowReport(paramCount > 0 ? parsedParams[0] : 0);
+                    // Window manipulation: CSI Ps ; Ps ; Ps t.  The ?/>/<
+                    // forms are different sequences and are ignored.
+                    if (!isPrivate && !isMouse)
+                    {
+                        Handler?.OnWindowOperation(
+                            paramCount > 0 ? parsedParams[0] : 0,
+                            paramCount > 1 ? parsedParams[1] : 0,
+                            paramCount > 2 ? parsedParams[2] : 0);
+                    }
                     break;
                 case 'u':
                     Handler?.OnRestoreCursor();
@@ -847,6 +947,32 @@ namespace Dotty.Terminal.Parser
             return true;
         }
 
+        private bool TryHandleSoftReset(ReadOnlySpan<byte> parameters)
+        {
+            // DECSTR: CSI ! p.  Numeric parameters before the intermediate
+            // are ignored, like xterm.  Anything else falls through to the
+            // numeric parser, which rejects it.
+            if (parameters.IsEmpty || parameters[^1] != (byte)'!')
+                return false;
+            if (!TryParseNumericFields(parameters[..^1], Span<int>.Empty))
+                return false;
+            _charset = Charset.Ascii;
+            Handler?.OnSoftReset();
+            return true;
+        }
+
+        private bool TryHandleChecksumRequest(ReadOnlySpan<byte> parameters)
+        {
+            // DECRQCRA: CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y.  Omitted
+            // fields are 0; fields beyond the sixth are ignored.
+            if (parameters.IsEmpty || parameters[^1] != (byte)'*')
+                return false;
+            Span<int> fields = stackalloc int[6];
+            if (TryParseNumericFields(parameters[..^1], fields))
+                Handler?.OnRequestChecksum(fields[0], fields[1], fields[2], fields[3], fields[4], fields[5]);
+            return true;
+        }
+
         private bool TryHandleModifyOtherKeys(ReadOnlySpan<byte> parameters)
         {
             // Consume all CSI > ... m forms; only parameter 4 negotiates this mode.
@@ -934,6 +1060,7 @@ namespace Dotty.Terminal.Parser
                 case 1004:
                     Handler?.OnSetFocusReporting(enabled);
                     break;
+                case 9:
                 case 1000:
                 case 1002:
                 case 1003:
@@ -944,6 +1071,20 @@ namespace Dotty.Terminal.Parser
                     break;
                 case 2026:
                     Handler?.OnSetSynchronizedUpdate(enabled);
+                    break;
+                case 66:
+                    // DECNKM shares its state with DECKPAM/DECKPNM (ESC = / ESC >).
+                    Handler?.OnSetKeypadApplicationMode(enabled);
+                    break;
+                case 67:
+                    Handler?.OnSetBackarrowKeyMode(enabled);
+                    break;
+                case 2027:
+                    // Grapheme clustering is always on (permanently set):
+                    // accept the request and ignore it.
+                    break;
+                case 2033:
+                    Handler?.OnSetVisibilityReports(enabled);
                     break;
             }
         }
@@ -1030,6 +1171,11 @@ namespace Dotty.Terminal.Parser
             }
         }
 
+        // Appends one decimal digit, saturating at int.MaxValue instead of
+        // wrapping (a wrapped mode or OSC code would alias a real one).
+        private static int AppendDigitSaturating(int value, int digit)
+            => value > (int.MaxValue - digit) / 10 ? int.MaxValue : (value * 10) + digit;
+
         private static bool TryParseAsciiInt(ReadOnlySpan<byte> bytes, out int value)
         {
             value = 0;
@@ -1039,8 +1185,38 @@ namespace Dotty.Terminal.Parser
             {
                 byte b = bytes[i];
                 if (b < '0' || b > '9') return false;
-                value = (value * 10) + (b - '0');
+                value = AppendDigitSaturating(value, b - '0');
             }
+            return true;
+        }
+
+        // Parses ';'-separated decimal fields into fields (omitted fields are
+        // 0; fields past the span are validated and dropped).  Rejects any
+        // byte that is neither a digit nor ';'.
+        private static bool TryParseNumericFields(ReadOnlySpan<byte> bytes, Span<int> fields)
+        {
+            fields.Clear();
+            int index = 0;
+            int current = 0;
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                byte b = bytes[i];
+                if (b >= '0' && b <= '9')
+                {
+                    current = AppendDigitSaturating(current, b - '0');
+                }
+                else if (b == ';')
+                {
+                    if (index < fields.Length) fields[index] = current;
+                    index++;
+                    current = 0;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            if (index < fields.Length) fields[index] = current;
             return true;
         }
 

@@ -153,7 +153,7 @@ public sealed class BoundedSequenceTests
         Assert.Contains("text", handler.PrintCalls);
     }
 
-    private sealed class RecordingHandler : ITerminalHandler
+    internal sealed class RecordingHandler : ITerminalHandler
     {
         public List<string> PrintCalls { get; } = new();
         public List<string> GraphicsCalls { get; } = new();
@@ -162,6 +162,17 @@ public sealed class BoundedSequenceTests
         public List<int> CursorDownCalls { get; } = new();
         public List<(int code, string payload)> OscCalls { get; } = new();
         public List<(int mode, bool enabled)> PrivateModeCalls { get; } = new();
+        public List<string> ControlCalls { get; } = new();
+        public List<int> DeviceStatusReportCodes { get; } = new();
+        public List<int> PrivateDeviceStatusReportCodes { get; } = new();
+        public List<(int operation, int arg1, int arg2)> WindowOperationCalls { get; } = new();
+        public List<bool> KeypadApplicationModeCalls { get; } = new();
+        public List<bool> BackarrowKeyModeCalls { get; } = new();
+        public List<bool> VisibilityReportCalls { get; } = new();
+        public List<(int mode, bool isPrivate)> RequestModeCalls { get; } = new();
+        public List<(int id, int page, int top, int left, int bottom, int right)> ChecksumCalls { get; } = new();
+        public int CursorPositionReportCalls { get; private set; }
+        public int SoftResetCalls { get; private set; }
 
         object? ITerminalHandler.Buffer => null;
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
@@ -176,7 +187,7 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnEraseDisplay(int mode) { }
         void ITerminalHandler.OnClearScrollback() { }
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> parameters) => GraphicsCalls.Add(parameters.ToString());
-        void ITerminalHandler.OnBell() { }
+        void ITerminalHandler.OnBell() => ControlCalls.Add("BEL");
 
         void ITerminalHandler.OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload) => OscCalls.Add((code, payload.ToString()));
 
@@ -184,10 +195,10 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnCursorUp(int n) => CursorUpCalls.Add(n);
         void ITerminalHandler.OnCursorDown(int n) => CursorDownCalls.Add(n);
         void ITerminalHandler.OnCursorForward(int n) { }
-        void ITerminalHandler.OnCursorBack(int n) { }
+        void ITerminalHandler.OnCursorBack(int n) => ControlCalls.Add("BS");
         void ITerminalHandler.OnEraseLine(int mode) { }
-        void ITerminalHandler.OnCarriageReturn() { }
-        void ITerminalHandler.OnLineFeed() { }
+        void ITerminalHandler.OnCarriageReturn() => ControlCalls.Add("CR");
+        void ITerminalHandler.OnLineFeed() => ControlCalls.Add("LF");
         void ITerminalHandler.OnSetScrollRegion(int top1Based, int bottom1Based) { }
         void ITerminalHandler.OnSetOriginMode(bool enabled) => PrivateModeCalls.Add((6, enabled));
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) => PrivateModeCalls.Add((1049, enabled));
@@ -203,10 +214,10 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnSetTabStop() { }
         void ITerminalHandler.OnClearTabStop() { }
         void ITerminalHandler.OnClearAllTabStops() { }
-        void ITerminalHandler.OnReverseIndex() { }
+        void ITerminalHandler.OnReverseIndex() => ControlCalls.Add("RI");
         void ITerminalHandler.OnSetBracketedPasteMode(bool enabled) => PrivateModeCalls.Add((2004, enabled));
-        void ITerminalHandler.OnDeviceStatusReport(int code) { }
-        void ITerminalHandler.OnCursorPositionReport() { }
+        void ITerminalHandler.OnDeviceStatusReport(int code) => DeviceStatusReportCodes.Add(code);
+        void ITerminalHandler.OnCursorPositionReport() => CursorPositionReportCalls++;
         void ITerminalHandler.OnCursorHorizontalAbsolute(int col) { }
         void ITerminalHandler.OnCursorVerticalAbsolute(int row) { }
         void ITerminalHandler.OnCursorNextLine(int n) { }
@@ -215,9 +226,9 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnScrollDown(int n) { }
         void ITerminalHandler.OnFullReset() { }
         void ITerminalHandler.OnRepeatCharacter(int n) { }
-        void ITerminalHandler.OnTab() { }
+        void ITerminalHandler.OnTab() => ControlCalls.Add("HT");
         void ITerminalHandler.OnBackTab(int n) { }
-        void ITerminalHandler.OnSetKeypadApplicationMode(bool enabled) { }
+        void ITerminalHandler.OnSetKeypadApplicationMode(bool enabled) => KeypadApplicationModeCalls.Add(enabled);
         void ITerminalHandler.OnSetCursorShape(int shape) { }
         void ITerminalHandler.OnSetApplicationCursorKeys(bool enabled) { }
         void ITerminalHandler.OnSendDeviceAttributes(int daType) { }
@@ -227,6 +238,12 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) { }
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) => PrivateModeCalls.Add((1004, enabled));
-        void ITerminalHandler.OnWindowReport(int command) { }
+        void ITerminalHandler.OnWindowOperation(int operation, int arg1, int arg2) => WindowOperationCalls.Add((operation, arg1, arg2));
+        void ITerminalHandler.OnSoftReset() => SoftResetCalls++;
+        void ITerminalHandler.OnPrivateDeviceStatusReport(int code) => PrivateDeviceStatusReportCodes.Add(code);
+        void ITerminalHandler.OnSetBackarrowKeyMode(bool sendsBackspace) => BackarrowKeyModeCalls.Add(sendsBackspace);
+        void ITerminalHandler.OnSetVisibilityReports(bool enabled) => VisibilityReportCalls.Add(enabled);
+        void ITerminalHandler.OnRequestMode(int mode, bool isPrivate) => RequestModeCalls.Add((mode, isPrivate));
+        void ITerminalHandler.OnRequestChecksum(int id, int page, int top, int left, int bottom, int right) => ChecksumCalls.Add((id, page, top, left, bottom, right));
     }
 }

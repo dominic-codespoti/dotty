@@ -18,7 +18,6 @@ internal sealed class ScreenManager : IDisposable
     private readonly Screen.SourceLayout _alternateLayout = new();
     private readonly ReflowMapping _mainMapping = new();
     private readonly ReflowMapping _alternateMapping = new();
-    private readonly ReflowMapping _scratchMapping = new();
 
     internal Screen.SourceLayout BuildMainLayout(Screen screen, int scrollbackRows) =>
         screen.BuildSourceLayout(scrollbackRows, _mainLayout);
@@ -80,20 +79,25 @@ internal sealed class ScreenManager : IDisposable
     }
 
 
+    /// <summary>Where the anchors registered before <see cref="Reflow"/> land on the reflowed main screen.</summary>
+    internal ReflowMapping MainMapping => _mainMapping;
+
+    /// <summary>Where the anchors registered before <see cref="Reflow"/> land on the reflowed alternate screen.</summary>
+    internal ReflowMapping AlternateMapping => _alternateMapping;
+
+    /// <summary>
+    /// Reflows the main screen (with its history) and the alternate screen, if one exists, to the new size. Callers
+    /// register the anchors they need on <see cref="MainMapping"/> / <see cref="AlternateMapping"/> first and read
+    /// them back by slot afterwards.
+    /// </summary>
     internal void Reflow(
         int rows,
         int columns,
-        ReflowCursorAnchor mainAnchor,
         Screen.SourceLayout mainLayout,
         int mainScrollbackRows,
-        ReflowCursorAnchor alternateAnchor,
         Screen.SourceLayout? alternateLayout,
-        int alternateScrollbackRows,
-        out ReflowMapping? mainMapping,
-        out ReflowMapping? alternateMapping)
+        int alternateScrollbackRows)
     {
-        mainMapping = _mainMapping;
-        alternateMapping = null;
         bool mainIsSaved = _savedMain != null && ReferenceEquals(_main, _savedMain);
 
         var oldMain = _main;
@@ -101,39 +105,23 @@ internal sealed class ScreenManager : IDisposable
             oldMain,
             rows,
             columns,
-            mainAnchor,
             mainLayout,
             mainScrollbackRows,
             includeScrollback: true,
             _mainMapping);
 
+        // _savedMain is only ever set together with _main (entering the alternate screen) and cleared when leaving
+        // it, so a saved main screen is always the main screen itself.
         if (mainIsSaved)
-        {
             _savedMain = _main;
-        }
-        else if (_savedMain != null)
-        {
-            var oldSaved = _savedMain;
-            _savedMain = ReflowScreen(
-                oldSaved,
-                rows,
-                columns,
-                mainAnchor,
-                mainLayout,
-                mainScrollbackRows,
-                includeScrollback: true,
-                _scratchMapping);
-        }
 
         if (_alt != null)
         {
             var oldAlt = _alt;
-            alternateMapping = _alternateMapping;
             _alt = ReflowScreen(
                 oldAlt,
                 rows,
                 columns,
-                alternateAnchor,
                 alternateLayout!,
                 alternateScrollbackRows,
                 includeScrollback: false,
@@ -145,7 +133,6 @@ internal sealed class ScreenManager : IDisposable
         Screen source,
         int rows,
         int columns,
-        ReflowCursorAnchor anchor,
         Screen.SourceLayout layout,
         int scrollbackRows,
         bool includeScrollback,
@@ -155,7 +142,6 @@ internal sealed class ScreenManager : IDisposable
         Screen resized = source.ReflowWithOptions(
             rows,
             columns,
-            anchor,
             layout,
             _reflowWorkspace,
             mapping,

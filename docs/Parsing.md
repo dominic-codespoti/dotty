@@ -96,7 +96,7 @@ The parser handles all standard CSI sequences:
 | `P` | `[n]` | Delete Chars | `OnDeleteChars(n)` |
 | `S` | `[n]` | Scroll Up | `OnScrollUp(n)` |
 | `T` | `[n]` | Scroll Down | `OnScrollDown(n)` |
-| `X` | `[n]` | Erase Chars | (future) |
+| `X` | `[n]` | Erase Chars | `OnEraseCharacters(n)` |
 | `@` | `[n]` | Insert Chars | `OnInsertChars(n)` |
 | `d` | `[n]` | Cursor Vertical Absolute | `OnCursorVerticalAbsolute(n)` |
 | `m` | `[attrs]` | SGR (Graphics) | `OnSetGraphicsRendition(attrs)` |
@@ -112,6 +112,29 @@ Kitty keyboard protocol CSI commands (`CSI =`, `>`, `<`, and `?` ending in `u`) 
 Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather than `OnEraseDisplay(3)`.
 `CSI ? 6 n` (DEC private CPR query) is routed to `OnCursorPositionReport()` so shells like PSReadLine
 receive a private CPR response (`ESC[?row;colR`) instead of the standard DSR response format.
+`CSI ? Ps n` with `Ps` other than 6 is routed to `OnPrivateDeviceStatusReport(Ps)`; `CSI > Ps n` is not a status report and is ignored. The adapter does not implement `OnPrivateDeviceStatusReport`, so these queries receive no reply.
+`CSI Ps ; Ps ; Ps t` is routed to `OnWindowOperation(operation, arg1, arg2)`; omitted parameters are 0 and the `?`, `>` and `<` forms are ignored. The adapter implements operation 14 (reply `CSI 4 ; height ; width t` in pixels), 18 (reply `CSI 8 ; rows ; cols t`) and 20/21 (reply an empty `ESC ] 0 ; ST` title); every other operation is ignored. This handler replaces the former `OnWindowReport(int)`.
+
+#### Routed sequences with default no-op handlers
+
+The parser routes the sequences below to `ITerminalHandler` methods that have empty default bodies. Only the rows marked "implemented" change terminal state or produce replies; the rest are recognized, consumed whole, and otherwise ignored, so they no longer leak into the cursor, SGR, or text path.
+
+| Sequence | Handler | Behaviour in `TerminalAdapter` |
+|---|---|---|
+| `CSI ! p` (DECSTR; numeric parameters before `!` are ignored) | `OnSoftReset()` | Not implemented: the adapter has no override, so terminal state is **not** reset. The parser does reset its own G0/G1 charset to ASCII. |
+| `CSI ? Ps n`, `Ps != 6` | `OnPrivateDeviceStatusReport(Ps)` | Not implemented; no reply. (`CSI ? 6 n` is implemented via `OnCursorPositionReport()`.) |
+| `CSI Ps ; Ps ; Ps t` | `OnWindowOperation(op, a1, a2)` | Implemented for operations 14, 18, 20 and 21 (see above). |
+| `CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` (DECRQCRA) | `OnRequestChecksum(...)` | Not implemented; no reply. A well-formed request is consumed; a malformed one is rejected by the numeric parser and dropped. |
+| `CSI ? 66 h/l` (DECNKM) | `OnSetKeypadApplicationMode(enabled)` | Implemented: shares state with `ESC =` / `ESC >` (DECKPAM/DECKPNM). |
+| `CSI ? 67 h/l` (DECBKM) | `OnSetBackarrowKeyMode(sendsBackspace)` | Not implemented; Backspace encoding is unchanged. |
+| `CSI ? 2027 h/l` | none | Accepted and ignored: grapheme clustering is always on. |
+| `CSI ? 2033 h/l` | `OnSetVisibilityReports(enabled)` | Not implemented; no visibility reports are sent. |
+
+DECRQM replies are unchanged by this routing: modes 66, 67, 2027, and 2033 still report `0` (not recognized). Mode 9 (X10 mouse) is deliberately **not** routed because the input encoder has no press-only X10 encoding.
+
+#### Cursor and character-edit clamping
+
+Saturated CSI parameters never overflow cursor arithmetic. Relative cursor moves add with saturation (`MoveCursorBy`), ICH (`CSI @`) and DCH (`CSI P`) clamp the count to the cells remaining from the cursor to the right margin, and ECH (`CSI X`) computes its end column in 64-bit before clamping. REP (`CSI b`) is bounded; see [REP bound](#rep-bound).
 
 ### Parameter Parsing
 
@@ -121,6 +144,7 @@ CSI parameters are parsed using a fast, span-based numeric parser that handles:
 - **Private markers**: `?`, `>`, `<` prefixes for mode sequences
 - **Default values**: Empty parameters default to 0 or 1 as per spec
 - **Colon sub-params**: Basic support for SGR colon-separated RGB values
+- **Saturating integers**: each numeric field accumulates decimal digits and saturates at `int.MaxValue` instead of wrapping, so an enormous value can never alias a real mode, OSC code, or small count. The same rule applies to OSC codes, DECSTR/DECRQCRA fields, and the DEC private modes. At most the first eight numeric CSI fields are retained.
 
 ```csharp
 // Example: Parsing "ESC[38;5;208m" (256-color foreground)
@@ -194,6 +218,23 @@ inputSpan = concat;  // Now contains "ESC[31m"
                                  ▼           ▼
                             CSI Handler  OSC Handler
 ```
+
+### String states and controls inside sequences
+
+| Situation | Behaviour |
+|---|---|
+| `ESC` inside OSC or DCS | Only `ESC \` (ST) terminates the string and dispatches it. `ESC ESC` is not payload: the second `ESC` may still begin ST. `ESC` followed by any other byte abandons the string **without dispatch** and that byte is processed as an escape sequence. |
+| `BEL` | Terminates and dispatches an OSC. Inside DCS it is a control that aborts the string. |
+| `CAN` (0x18) / `SUB` (0x1A) | Abandon the current string or sequence without dispatch. |
+| Any other C0 control inside OSC/DCS/APC/PM/SOS | Aborts the string without dispatch, then executes as a control. |
+| C0 control inside CSI or after a bare `ESC` | Executes (BEL, BS, TAB, LF/VT/FF, CR) and the sequence continues; the control never becomes part of the parameter string. DEL inside CSI is ignored the same way. Other controls are ignored. |
+| C1 `0x9C` | Not an ST. Bytes `0x80-0x9F` are UTF-8 continuation bytes in the stream and are never interpreted as C1 controls; only `ESC \` ends a string. |
+| APC (`ESC _`), PM (`ESC ^`), SOS (`ESC X`) | Consumed up to ST and discarded; nothing is buffered or dispatched. |
+| DCS longer than 4 KiB | Consumed until ST without dispatch (only short XTGETTCAP queries are captured). |
+| CSI longer than 256 parameter bytes, OSC longer than 1 MiB | Consumed until the terminating byte or ST without dispatch. |
+| `ESC c` (RIS) | Also resets the parser's charset to ASCII. |
+
+The sequence buffer (`_leftover`) grows on demand up to the string's cap. When a sequence ends or is abandoned and the buffer exceeds 4096 bytes it is reallocated back to 32 bytes, so one large OSC 52 does not pin a megabyte for the life of the session.
 
 ---
 
@@ -281,15 +322,16 @@ The parser supports OSC sequences for:
 
 | Code | Purpose | Handler |
 |------|---------|---------|
-| 0 | Set icon name and window title | `OnOperatingSystemCommand(0, title)` |
+| 0 | Set icon name and window title | `OnOperatingSystemCommand(0, title)`; title truncated to `TerminalAdapter.MaxTitleChars` (4096 UTF-16 chars, never splitting a surrogate pair) |
 | 1 | Set icon name | `OnOperatingSystemCommand(1, name)` |
-| 2 | Set window title | `OnOperatingSystemCommand(2, title)` |
+| 2 | Set window title | `OnOperatingSystemCommand(2, title)`; same 4096-char cap |
 | 4 | Set/query session palette (index ; spec pairs; ? queries) | OSC 4 sets are silent; replies are ESC ] 4 ; index ; rgb:RRRR/GGGG/BBBB ESC backslash with 16-bit components; malformed colors are ignored. ANSI indices 0-15 remap existing ANSI-colored styles in this session; indices 16-255 affect later SGR lookups. |
-| 8 | Hyperlink (OSC 8) | `OnOperatingSystemCommand(8, params)` |
+| 7 | Working directory (shell integration) | `OnOperatingSystemCommand(7, uri)`; strict acceptance rules in [OSC 7](#osc-7-working-directory). |
+| 8 | Hyperlink (OSC 8) | `OnOperatingSystemCommand(8, params)`; validated at ingest, see [OSC 8](#osc-8-hyperlinks) |
 | 9 | iTerm2 notifications | (future) |
 | 10-12 | Query dynamic foreground/background/cursor colors | OSC 10/11 queries return rgb:RRRR/GGGG/BBBB ESC backslash; sets store per-session foreground/background overrides without replying. OSC 12 queries reply in the same format; set/reset are accepted but cursor color is not rendered. |
 | 13-19 | Set foreground/background/highlight colors | (future) |
-| 52 | Manipulate selection/data | (future) |
+| 52 | Manipulate selection data (clipboard write and read) | `OnOperatingSystemCommand(52, ...)`; see [OSC 52](#osc-52-clipboard) |
 | 777 | rxvt extension notifications | (future) |
 | 1337 | PromptMark (shell integration) | `OnPromptMark(level)` — tracks shell prompt start/end via `OSC 1337 ; A` / `OSC 1337 ; B` |
 | 104 | Reset palette entries | No payload resets all OSC 4 overrides; index ; ... resets listed indices, ignoring invalid and empty tokens. |
@@ -297,6 +339,55 @@ The parser supports OSC sequences for:
 | 112 | Reset cursor color | Accepted without effect; cursor color is not rendered. |
 
 Palette overrides and dynamic-color overrides are scoped to one terminal adapter/session. OSC 4/10/11 set requests never reply; only ? queries do. OSC 104 resets to the current ANSI theme baseline and stock xterm ramp. RIS (ESC c) clears all palette and OSC 10/11 overrides to their baselines. Changing the theme ANSI baseline also clears OSC 4 overrides; reapplying an identical baseline is a no-op and preserves them.
+
+#### OSC payload limit
+
+The OSC payload buffer is capped at 1 MiB (1,048,576 bytes, counted after `ESC ]` and including the `52;c;` style prefix). It was 64 KiB before OSC 52 transport needed larger strings. A longer string is consumed to ST and **discarded without dispatch**. Because the cap covers the whole payload, the largest OSC 52 write the parser can deliver carries slightly less than 1,048,576 base64 characters. The buffer shrinks back after each sequence (see above).
+
+#### OSC 52 (clipboard)
+
+Format: `ESC ] 52 ; Pc ; Pd ST`. Handled by `TerminalAdapter.HandleOsc52`; the adapter only decodes and raises events, and policy lives in the host.
+
+| Part | Behaviour |
+|---|---|
+| `Pc` selectors | Empty or `c` = system clipboard; `p` or `s` = Primary selection; letters combine (`cp`); unknown letters are ignored. If no recognized selector remains, or the payload has no `;`, the request is ignored. |
+| `Pd` = `?` | Clipboard **read** request: raises `TerminalAdapter.ClipboardReadRequested(ClipboardReadRequest)` (concrete adapter only, not on `ITerminalHandler`); `TerminalSession` forwards it. |
+| `Pd` empty | Write of the empty string. |
+| other `Pd` | Base64 decoded, then UTF-8 decoded, then `ClipboardWriteRequested(ClipboardWriteRequest(selection, text))`. Invalid base64 is ignored. |
+
+**Write policy (host, `DottyWindowHost.EnqueueClipboardWrite`):** dropped unless `clipboard.allowOsc52Write` is true; dropped when the selection does not include the clipboard (Primary-only writes are ignored until an X11 selection helper exists, so they never clobber the clipboard); dropped when the decoded text exceeds `MaxOsc52WriteBytes` = 786,432 bytes (checked as UTF-16 length and as UTF-8 byte count). Accepted writes are coalesced (a session's newer write replaces its pending one) and queued with at most 32 entries and 4 MiB of pending text; excess is dropped. The Lua `clipboard_write` hook can still veto. See [Configuration](Configuration.md#clipboard).
+
+**Read policy (`osc52Read`, `ClipboardReadService`):** `deny` (default), `ask`, `allow`; unknown values mean `deny`.
+
+- The request is dropped before queueing when the selection does not include the clipboard (Primary reads are not served), when the mode is `deny`, or when the window is closing. Denials never produce a reply: not for policy, a Lua `clipboard_read` veto, a user "Deny", an oversize clipboard (more than `osc52ReadLimitBytes` UTF-8 bytes), an unavailable clipboard, or expiry. Only a genuinely empty clipboard answers (with an empty payload).
+- Pending requests live in a queue of at most 4 requests in total and 1 per session (the oldest wins; later ones are dropped), and expire after 30 s. They are served on the UI thread only while the window is focused and the requesting session's tab is the active tab; under `ask` they also wait while another menu or prompt is visible. Lowering the mode to `deny` while requests wait clears the queue.
+- The clipboard is read once. `allow` replies immediately with `ESC ] 52 ; c ; base64(text) ESC \` (always ST-terminated). `ask` shows a centered host prompt naming the (sanitized, truncated) tab title and previewing the same snapshot that will be sent, with **Deny** focused; Escape, click-outside, or replacement by another menu send nothing. Choosing **Allow** re-validates first: if `osc52Read` was changed to `deny` or the session left the window while the prompt was open, no reply is sent.
+
+#### OSC 8 (hyperlinks)
+
+Format: `ESC ] 8 ; params ; URI ST`; an empty URI closes the link. `HyperlinkUri` validates at ingest and rejects the whole link (never strips or rewrites):
+
+- `params` must not contain controls, bidi/invisible format characters, or surrogates, and the `id=` value must not exceed 250 characters. A payload without `;` is invalid. The URI is everything after the first `;`, so it may contain semicolons.
+- The URI must be non-empty, at most 8192 UTF-16 code units, and free of C0/C1 controls, DEL, U+2028/U+2029, bidi and zero-width format characters, and unpaired surrogates. A space is allowed (it is percent-escaped when the link is activated).
+- Any invalid, over-length, or unstorable URI **closes** the active link rather than leaving the previous one active. Scheme filtering is deliberately not done at ingest; it happens when a link is activated (see [Configuration](Configuration.md#hyperlinks)).
+- With `hyperlinks.osc8` set to false the adapter ignores OSC 8 entirely: nothing is stored and any active link is closed. The host applies the setting to each adapter when its tab or pane is created, when a session is first seen by the host (so panes made by the built-in split actions are covered), and to every pane on each configuration reload.
+
+The per-buffer URI table is append-only and bounded: at most 65,535 distinct URIs (`TerminalBuffer.MaxHyperlinkEntries`; ids are 16-bit with 0 meaning none) and 4 Mi UTF-16 characters (`MaxHyperlinkChars`, 8 MiB of text) in total. When either limit is reached **new** URIs are refused (the cell gets no link); ids are never reused or wrapped, so existing cells keep their own URL and already-known URIs still resolve. Render snapshots capture the table by reference (`IRenderSource.GetHyperlinkUrl`), so a click resolves an OSC 8 link from the same snapshot that was drawn. Ctrl+click on OSC 8 links now works because of this: the click-time lookup runs on a snapshot, and the previous lookup only resolved ids against a live `TerminalBuffer`.
+
+#### OSC 7 (working directory)
+
+`Osc7WorkingDirectory.TryParse` is a pure, strict parser; the adapter stores the result and raises `CurrentWorkingDirectoryChanged`. A report that fails any rule is ignored and the previously reported directory is kept.
+
+- Scheme `file://` (case-insensitive); the host must be empty, `localhost`, `127.0.0.1`, `[::1]`, or this machine's name (`Environment.MachineName` or the DNS host name; one trailing dot is tolerated). Hosts containing `@`, `%`, or `:` and every other host are rejected, so UNC and remote paths never become a working directory.
+- `?` and `#` must be percent-encoded: a raw `?` or `#` rejects the report. The raw payload (at most 9 x 4096 + 16 characters) must not contain controls, DEL, C1, or U+FFFD, nor a backslash on Windows.
+- Percent-escapes must be well-formed and decode to valid UTF-8; the decoded path must be non-empty, at most 4096 UTF-16 characters, and contain no controls, C1, or U+FFFD.
+- The path is normalized: `.` and empty segments dropped, `..` resolved (never above the root). POSIX paths must start with `/`. Windows paths must be `/X:` or `/X:/...` (rendered `X:\...`) and may not contain `<>:"|?*\`.
+
+Reported directories are not checked against the filesystem here; existence is resolved when a new tab or pane is opened (see [Shell Integration](ShellIntegration.md)).
+
+#### REP bound
+
+`CSI n b` repeats the previous printable character. Printable ASCII is capped at the buffer's cell capacity (`rows + scrollback + 1` rows of columns) plus the remainder modulo the column count, which is output-equivalent to the unbounded repeat because every further full row of identical characters is a no-op on the visible grid and cursor column. Other characters (possibly wide or zero-width) are capped at that capacity; only the final cursor parity can differ from an unbounded repeat when the count exceeds it. `CSI 2147483647 b` therefore cannot stall the parser.
 
 **Implementation details:**
 
@@ -329,7 +420,7 @@ private void HandleOscPayload(ReadOnlySpan<byte> payloadBytes)
 
 Format: `ESC P <intermediates> <params> <final byte> <data> ESC \`
 
-Currently recognized but minimal implementation. Reserved for future VT52/VT100 compatibility extensions.
+DCS strings are recognized, and short ones (up to 4 KiB) are captured for XTGETTCAP (`DCS + q`); everything else is consumed to ST and ignored. APC, PM, and SOS strings are discarded unconditionally (see [String states](#string-states-and-controls-inside-sequences)); `BeginDiscardedString` is the single place a future APC capture, such as the Kitty graphics protocol, would hook in.
 
 ### CSI (Control Sequence Introducer)
 
@@ -490,6 +581,13 @@ Typical performance on modern hardware:
 | `tests/Dotty.App.Tests/ControlCodeTests.cs` | Tests for C0 control character handling |
 | `tests/Dotty.App.Tests/MouseModeTests.cs` | Tests for mouse protocol parsing |
 | `tests/Dotty.Terminal.Tests/Osc8ParserTests.cs` | Tests for OSC 8 hyperlink parsing |
+| `tests/Dotty.Terminal.Tests/ParserStringStateTests.cs` | ESC/CAN/SUB/C0 handling in OSC, DCS, APC/PM/SOS, and CSI |
+| `tests/Dotty.Terminal.Tests/ParserRoutingTests.cs` | DECSTR, `CSI ? Ps n`, `CSI Ps t`, DECRQCRA, and modes 66/67/2027/2033 routing |
+| `tests/Dotty.Terminal.Tests/SaturatedParameterTests.cs` | Saturating numeric parsing and cursor/ICH/DCH/ECH clamping |
+| `tests/Dotty.Terminal.Tests/RepeatCharacterTests.cs` | REP bound and equivalence |
+| `tests/Dotty.Terminal.Tests/Osc52Tests.cs` | OSC 52 selectors, write/read decoding |
+| `tests/Dotty.Terminal.Tests/Osc8IngestValidationTests.cs`, `HyperlinkUriTests.cs`, `HyperlinkTableLimitTests.cs`, `RenderSnapshotHyperlinkTests.cs` | OSC 8 validation, URI table caps, snapshot lookup |
+| `tests/Dotty.Terminal.Tests/Osc7WorkingDirectoryTests.cs`, `ShellIntegrationOsc7Tests.cs` | Strict OSC 7 parsing and adapter integration |
 
 ---
 
@@ -507,10 +605,11 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-28 | Hardening pass: ESC/C0-correct string states (no 0x9C ST), APC/PM/SOS discard, saturating integers, routed DECSTR/`CSI ? Ps n`/`CSI Ps t`/DECRQCRA/modes 66,67,2027,2033 (default no-op handlers unless noted), `OnWindowOperation`, 1 MiB OSC cap with shrink-on-reset, window title cap, REP bound, ICH/DCH/ECH clamp, OSC 52 write/read policy, OSC 8 ingest validation and bounded URI table, strict OSC 7. |
 | 2026-10-07 | Palette behavior: adapter-local ANSI/xterm palette and dynamic-color overrides; OSC 4/10/11 set requests are silent, queries use rgb:RRRR/GGGG/BBBB and ST; OSC 104/110/111/112 resets and RIS restore overrides. |
 | 2026-10-06 | P0/P1: DECRQM (CSI ? Ps $ p / CSI Ps $ p), XTGETTCAP (DCS + q), modifyOtherKeys (CSI > 4 ; Pv m), OSC 4/10/11/12 behavior |
 | 2026-06-17 | Updated OSC table: OSC 1337 PromptMark (shell integration) |
 | 2026-06-05 | Updated DECSTBM/DECOM interaction with alternate screen and origin mode |
 | 2026-06-05 | Documented PromptMark OSC 1337 sequence support |
 *Document version: 1.1*  
-*Last updated: 2026-10-07*
+*Last updated: 2026-10-28*

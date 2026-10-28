@@ -62,6 +62,12 @@ make -C src/Dotty.NativePty
 dotnet build Dotty.slnx -c Release
 ```
 
+### Environment contract
+
+`TerminalSession` builds the environment passed to `IPty.Start` on every backend: `TERM_PROGRAM=dotty`, `TERM_PROGRAM_VERSION` (release version, SemVer build metadata stripped), and `DOTTY_SURFACE_ID` (a per-session identifier that is also the owning pane's `Id`) first, then the caller's variables, which win on a name clash. The caller's dictionary is not modified; names compare case-insensitively on Windows and case-sensitively elsewhere. See [Configuration](Configuration.md#session-launch-context).
+
+On Unix the host passes the helper its own protocol variables, `DOTTY_CONTROL_SOCKET`, `DOTTY_INITIAL_COLS`, and `DOTTY_INITIAL_ROWS`. The helper consumes them and calls `unsetenv` on all three after closing its descriptors and immediately before `exec`, so the user's shell or command never sees them. `UnixPty_DoesNotLeakHelperProtocolVariablesIntoCommand` covers this on Unix runners; the Windows ConPTY backend has no helper and never sets them.
+
 ## Windows backend
 
 WindowsPty uses ConPTY directly:

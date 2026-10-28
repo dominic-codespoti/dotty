@@ -35,6 +35,16 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `font.size` | number | `14` |
 | `font.line_height` | number | `1.25` |
 | `font.symbol_map` | array of strings | empty |
+| `clipboard.allow_osc52_write` | boolean | `false` |
+| `clipboard.osc52_read` | string (`"deny"`, `"ask"`, `"allow"`) | `"deny"` |
+| `clipboard.osc52_read_limit_bytes` | integer | `1048576` (clamped to 1 through 8388608) |
+| `clipboard.confirm_paste` | boolean | `true` |
+| `clipboard.bracketed_paste_is_safe` | boolean | `true` |
+| `hyperlinks.osc8` | boolean | `true` |
+| `hyperlinks.confirm` | string (`"risky"`, `"always"`, `"never"`) | `"risky"` |
+| `hyperlinks.allowed_schemes` | array of strings | `{"http", "https", "mailto", "file", "ssh", "git"}` |
+
+The clipboard and hyperlink keys behave exactly like the JSON `clipboard` and `hyperlinks` options in the [configuration reference](../Configuration.md#clipboard). In particular `clipboard.osc52_read = "allow"` lets any program that can write to the terminal read the clipboard without a prompt; prefer `"ask"`.
 `font.symbol_map` entries use `U+START-END: Preferred Font, Fallback Font`; the first installed family that contains the glyph wins. OpenType features and ligatures are not supported: rendering is one grapheme per terminal cell.
 Nested reads and writes work directly. `dotty.config.apply_table(table)` and its alias `dotty.config.apply(table)` apply recognized values recursively. Assigning a table to a nested section applies its fields; assigning a table to `keybindings` replaces the map. Reads of `keybindings` return a copy. Unknown fields are ignored.
 
@@ -107,9 +117,10 @@ Register callbacks with `dotty.on(name, function(...) ... end)`. Event callbacks
 | `pane_focused` | `tab`, `pane` | When the focused pane changes; `pane` is the newly focused pane. |
 | `pane_layout_changed` | `tab` | When the pane layout changes. |
 | `format_tab_title` | `tab` | Value hook: the first non-empty string sets the title used in the window title and tab bar; otherwise the terminal title is used. |
-| `open_url` | `url` (string) | Value hook: return `true` to mark the URL as handled. |
+| `open_url` | `url` (string), `source` (string) | Value hook run when a link is activated (Ctrl+click) **after** structural validation and the hard scheme blocks but **before** the scheme allowlist and confirmation prompts. `url` is the canonical, ASCII, control-character-free URL; `source` is `"explicit"` for an OSC 8 link or `"detected"` for a URL found in text. Return `true` to mark the link handled, which skips the built-in open and any prompt (so a handling hook is responsible for its own safety checks); `false` continues with the built-in policy. Hooks run in registration order and the first non-`nil` result decides, so only the first hook that returns a value is consulted; a hook that raises an error is skipped. A callback declared with one parameter ignores `source`. |
 | `update_status` | none | Value hook: the first non-empty string is shown in the tab bar status area. Refreshed about once per second and when tabs are added, closed, or activated, the active tab title changes, window focus changes, or configuration changes. |
 | `clipboard_write` | `pane`, `text` (string) | Value hook for OSC 52 clipboard writes: the global `allowOsc52Write` setting must be enabled; with permission enabled, no hook or a non-vetoing result allows the write, while an explicit `false` or callback invocation error denies it. Hook errors remain logged through normal Lua diagnostics. |
+| `clipboard_read` | `pane`, `selection` (string, currently always `"clipboard"`) | Value hook for OSC 52 clipboard reads: only consulted when `clipboard.osc52_read` is `ask` or `allow`, just before the clipboard is read and the reply or prompt is produced. The first non-`nil` result decides: `false` denies (no reply is sent), anything else allows; a callback invocation error denies; no hook allows. The hook cannot grant a read when the policy is `deny`. |
 
 Lua errors from script evaluation, API calls, and callbacks are logged and stored as the latest Lua error. While an error is stored, it takes precedence over `update_status` and appears in the tab bar as `⚠ Lua: ` followed by the first error line (truncated to 120 characters). A successful config evaluation clears the stored error; a successful callback does not.
 

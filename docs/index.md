@@ -12,16 +12,16 @@ Start here: [README and quick start](../Readme.md) for the application, [Contrib
 | [Incremental Scroll Rendering](architecture/IncrementalScrollRendering.md) | Scroll-aware dirty tracking + region-memmove rendering: reverted from the live path, primitives tested for a future re-attempt |
 | [State Coordination Hardening](architecture/StateCoordinationPlan.md) | Executed: library-owned buffer invariants, single-owner scroll state, dormant incremental machinery removed, alt-screen invalidation locked in |
 | [Lock-Free Snapshot Design](architecture/LockFreeSnapshotDesign.md) | Snapshot ownership and lock-free rendering considerations |
-| [Parsing Engine](Parsing.md) | ANSI/VT parser state machine, escape sequences, handler dispatch |
+| [Parsing Engine](Parsing.md) | ANSI/VT parser state machine, string/control rules, escape sequences, handler dispatch, OSC 7/8/52 behavior and limits |
 | [Keyboard Protocol](KeyboardProtocol.md) | Kitty negotiation, native key phases, alternate identities, and committed Unicode |
 
 ## Configuration
 
 | Document | Description |
 |----------|-------------|
-| [Configuration Guide](Configuration.md) | User-facing config: fonts, colors, themes, key bindings, hot-reload, clipboard authorization |
+| [Configuration Guide](Configuration.md) | User-facing config: fonts, colors, themes, key bindings, hot-reload, clipboard (OSC 52 write/read, paste confirmation) and hyperlink policy, launch environment |
 | [Command-Line Usage](CommandLine.md) | Literal command arguments, launch directories, shell selection, and exit status |
-| [Shell Integration](ShellIntegration.md) | Opt-in shell hooks, live working directories, prompt navigation, and output copy |
+| [Shell Integration](ShellIntegration.md) | Opt-in shell hooks, live working directories (strict OSC 7), prompt navigation, and output copy |
 | [Advanced Configuration](ConfigurationAdvanced.md) | Platform-independent JSON details, themes, and safe reload |
 | [Implementation Summary](ConfigurationImplementationSummary.md) | Technical summary of the config system implementation |
 | [Configuration Roadmap](ConfigurationRoadmap.md) | Phased feature roadmap for the config system |
@@ -34,7 +34,7 @@ Start here: [README and quick start](../Readme.md) for the application, [Contrib
 | Document | Description |
 |----------|-------------|
 | [Testing Guide](Testing.md) | Test architecture, unit/integration/render tests |
-| [E2E Testing](E2ETesting.md) | End-to-end testing via TCP command interface |
+| [E2E Testing](E2ETesting.md) | End-to-end testing via TCP command interface; manual OSC 52 read, paste, and link confirmation smoke |
 | [Performance Guide](Performance.md) | Benchmark workloads, recorded machine-specific measurements, and limitations; results are not universal performance guarantees |
 | [GUI Harness Benchmarking](GuiHarnessBenchmarking.md) | Visual benchmark harness for render quality verification |
 

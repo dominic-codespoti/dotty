@@ -59,9 +59,16 @@ handling. Holding Shift overrides reporting and restores the local controls.
 When local handling is active, left-drag selects characters, double-click
 selects a word, triple-click selects a line, and dragging outside the pane
 autoscrolls while extending the selection. Middle-click pastes into the target
-pane. Ctrl+left-click opens a hyperlink resolved from a fresh buffer snapshot
-at click time; a reporting pane receives the click as a terminal mouse event
-unless Shift is held.
+pane; a paste that contains line breaks (outside an application's bracketed
+paste), control characters, or a paste-end marker first asks for confirmation
+unless `clipboard.confirmPaste` is false. Ctrl+left-click opens a hyperlink,
+whether it is an OSC 8 link or a detected URL, resolved from a fresh buffer
+snapshot at click time; risky links (non-web schemes, local files, embedded
+credentials, look-alike text) ask first, and some schemes are always blocked.
+A reporting pane receives the click as a terminal mouse event unless Shift is
+held. See the `clipboard` and `hyperlinks` sections of the
+[Configuration reference](../Configuration.md#clipboard) for the options, the
+OSC 52 clipboard read policy (`osc52Read`, denied by default), and the prompts.
 
 ## Safe edits and troubleshooting
 

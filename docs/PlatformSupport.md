@@ -196,6 +196,27 @@ host failures, scopes its PID/state files, and only terminates the PID it
 started. CI uses `xvfb-run` for Linux X11 smoke only. Wayland, macOS, and
 Windows desktop runs are manual/local.
 
+## Manual link opener checks
+
+Ctrl+click on a link hands an approved, canonical URI to the operating system
+(`SystemHyperlinkOpener`): `xdg-open` on Linux, `open` on macOS, and ShellExecute
+on Windows. Unit tests cover the policy and the launch arguments
+(`HyperlinkPolicyTests`, `HyperlinkLauncherTests`) but **nothing in CI starts a
+real handler or draws the confirmation prompt**, so the following are manual,
+per-platform checks to run on a native desktop session before a release (setup
+and prompt expectations are in
+[E2E Testing](E2ETesting.md#manual-smoke-osc-52-read-paste-confirm-and-link-confirm)):
+
+| Platform | Check |
+|---|---|
+| Windows 10 build 17763+ / 11 | An `https` link opens the default browser; a `mailto:` link opens the mail client (or shows a "Could not open link" notice when none is registered). Print an OSC 8 link whose target contains a space, a double quote, or `^` (for example `https://example.com/a b"c`): exactly one page opens and nothing else is executed. A `file:///C:/Users/<you>/note.txt` link opens in the associated application; `file://server/share/x.txt` (UNC), a path with `..`, and `file:///C:/tools/x.exe` show a "Link blocked" notice. A target longer than 2083 characters is blocked. |
+| macOS (Intel and Apple Silicon) | `https` and `mailto:` links open in the default handlers; a `file:///` link to a text file opens it; a `.app`, `.command`, or `.dmg` target and any file with an execute bit are refused. |
+| Linux | With `xdg-open` installed, `https`, `mailto:`, and a `file:///` link to a text file open in the desktop defaults; a script with an execute bit is refused. With `xdg-open` absent from `PATH` the user sees a "Could not open link" notice naming `xdg-open`. Verify on X11 and on Wayland. |
+
+On every platform, confirm that Cancel (and Escape or a click outside the prompt)
+launches nothing, and that **Copy link address** copies the canonical URL, not the
+text printed in the terminal.
+
 ## Promotion gates
 
 Support promotion is staged:

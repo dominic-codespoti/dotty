@@ -77,6 +77,47 @@ Allocation tests measure `GC.GetAllocatedBytesForCurrentThread()` on the thread
 doing the work, never process-wide counters, so concurrent test classes cannot
 contaminate them.
 
+## Clipboard, paste, hyperlink, OSC 7, and parser hardening tests
+
+Deterministic coverage for the paste, OSC 52, OSC 8, OSC 7, environment, and
+parser-string-state behavior documented in [Parsing](Parsing.md),
+[Configuration](Configuration.md), and [Shell Integration](ShellIntegration.md).
+These test the pure logic and host seams (builders, router, service, queue,
+policy, parser, adapter); they do not draw a prompt or open a link, so the
+behavior in [E2E Testing](E2ETesting.md#manual-smoke-osc-52-read-paste-confirm-and-link-confirm)
+is manual verification with no CI coverage.
+
+`tests/Dotty.Terminal.Tests`:
+
+| Class | Covers |
+|---|---|
+| `ParserStringStateTests` | ESC/CAN/SUB/C0 handling in OSC, DCS, APC/PM/SOS, and CSI; no 0x9C terminator |
+| `ParserRoutingTests` | DECSTR, `CSI ? Ps n`, `CSI Ps t`, DECRQCRA, modes 66/67/2027/2033 routing |
+| `SaturatedParameterTests` | saturating integers; ICH/DCH/ECH/cursor clamping |
+| `RepeatCharacterTests` | REP bound and equivalence with an unbounded repeat |
+| `Osc52Tests` | OSC 52 selectors, write decoding, `?` read request |
+| `Osc8IngestValidationTests`, `HyperlinkUriTests` | OSC 8 payload/URI validation, link closing on invalid input |
+| `HyperlinkTableLimitTests`, `RenderSnapshotHyperlinkTests` | URI table caps (refuse-new) and snapshot lookup |
+| `Osc7WorkingDirectoryTests`, `ShellIntegrationOsc7Tests` | strict OSC 7 parsing and adapter integration |
+
+`tests/Dotty.App.Tests`:
+
+| Class | Covers |
+|---|---|
+| `PasteEncoderTests`, `PasteSafetyTests` | paste sanitizing, bracketing, newline normalization, risk classification, preview |
+| `PastePromptBuilderTests`, `ClipboardPasteRouterTests` | paste prompt contents and the confirm/skip/re-check decisions |
+| `Osc52ReplyTests`, `ClipboardReadQueueTests` | OSC 52 reply encoding; queue bounds and expiry |
+| `ClipboardReadServiceTests`, `ClipboardReadPromptBuilderTests` | read policy (deny/ask/allow), limits, focus/active-tab gating, prompt |
+| `ClipboardUserConfigTests`, `HyperlinksUserConfigTests` | config defaults, clamping, and parsing |
+| `HyperlinkPolicyTests`, `HyperlinkTextMismatchTests`, `UriCanonicalizationTests` | scheme policy, hard blocks, file rules, canonicalization, text mismatch |
+| `HyperlinkActivatorTests`, `HyperlinkLauncherTests`, `HyperlinkScannerTests`, `HyperlinkIngestConfigTests`, `HyperlinkPromptBuilderTests` | activation order and Lua hook, launch start info, scanning, ingest switch, link prompts |
+| `InheritableWorkingDirectoryTests`, `SessionLaunchEnvironmentTests` | use-time directory fallback; `TERM_PROGRAM*`/`DOTTY_SURFACE_ID` environment |
+| `ContextMenuTests`, `TerminalMouseControllerTests`, `TerminalKeyboardDispatcherTests`, `LuaScriptingTests` | `Dismissed` and `HostPrompt` layout/sanitizing, menu replacement guards, Ctrl+click on OSC 8 links, `clipboard_read`/`open_url(url, source)` hooks and new config keys |
+
+`tests/Dotty.NativePty.Tests`: `ShellIntegrationScriptTests` (Bash exercised for
+real on Unix when present; zsh/fish/PowerShell are content checks) and
+`UnixPtyTests` (the helper's protocol variables do not reach the child).
+
 ## Desktop smoke
 
 Linux X11:

@@ -105,6 +105,107 @@ dotnet run --project src\Dotty\Dotty.csproj -c Release
 Exercise `cmd.exe`, Windows PowerShell, and `pwsh.exe`; verify ConPTY input,
 output, resize, focus, clipboard, process exit, and shutdown.
 
+## Manual smoke: OSC 52 read, paste confirm, and link confirm
+
+**These checks are manual. No CI job exercises them**: the Xvfb smoke only proves
+startup, and the loopback control interface cannot press Ctrl+click or answer a
+prompt. Run them in a real Dotty window on each platform you ship (Linux X11 and
+Wayland, macOS, Windows), using a throw-away configuration directory so your own
+settings are untouched:
+
+```sh
+export DOTTY_CONFIG_HOME=/tmp/dotty-manual-smoke
+mkdir -p "$DOTTY_CONFIG_HOME"
+# edit $DOTTY_CONFIG_HOME/config.json between runs; reload is live
+dotnet run --project src/Dotty/Dotty.csproj -c Release
+```
+
+### OSC 52 clipboard read
+
+Put the text `hello` on the system clipboard from another application, then in
+Dotty (Bash) request it and show whatever the terminal sends back:
+
+```sh
+printf '\033]52;c;?\033\\'; IFS= read -rs -t 5 -d '\\' reply; printf '%s\n' "$reply" | cat -v
+```
+
+| `clipboard.osc52Read` | Expected |
+|---|---|
+| `"deny"` (or unset, or any unknown value) | No prompt, no reply; `read` times out after 5 s and prints an empty line. |
+| `"ask"` | A centered prompt `Tab "..." wants to read the clipboard` shows the preview `hello` and `(5 characters)` with **Deny** focused. Enter or Escape or a click outside: no reply. **Allow**: `^[]52;c;aGVsbG8=^[` is printed. |
+| `"allow"` | `^[]52;c;aGVsbG8=^[` is printed immediately with no prompt. |
+
+Then, under `"ask"`, also verify:
+
+1. `printf '\033]52;p;?\033\\'` never prompts or replies (Primary reads are not served).
+2. With `"osc52ReadLimitBytes": 4`, the `hello` request is dropped silently.
+3. Issue the request, switch to another tab or focus another window before
+   answering: no prompt appears until the requesting tab is active and Dotty is
+   focused; a request left unanswered for 30 s is discarded.
+4. A clipboard containing control characters (set `"allowOsc52Write": true`, then run
+   `printf '\033]52;c;%s\033\\' "$(printf 'a\033[31mb' | base64)"`) shows visible `\x1B`
+   escapes in the preview, never live escape sequences.
+5. A Lua hook `dotty.on("clipboard_read", function() return false end)` suppresses the
+   prompt and the reply in both `ask` and `allow`.
+
+### Paste confirmation
+
+Prepare clipboard text `echo one` newline `echo two` from another application. In
+a plain shell run `stty -icanon -icrnl -echo; cat -v` (leave with Ctrl+C, then
+`stty sane`) and press Ctrl+Shift+V (repeat with middle-click and the context-menu Paste):
+
+1. Default config: a prompt `Paste 2 lines, N characters?` shows a preview and the
+   row `Multiple lines: the shell would run them immediately.` with **Cancel**
+   focused. Cancel, Escape, or a click outside pastes nothing. **Paste** delivers
+   the text with each line break as `^M`.
+2. Run `printf '\033[?2004h'` first: the same multi-line paste now goes through
+   without a prompt, wrapped as `^[[200~`...`^[[201~` with the line breaks kept.
+   With `"bracketedPasteIsSafe": false` it prompts again.
+3. Set `"allowOsc52Write": true` and put text with an escape character on the clipboard:
+   `printf '\033]52;c;%s\033\\' "$(printf 'a\033[201~b' | base64)"`. Pasting it, even in
+   bracketed mode, prompts, lists the control-character and paste-end-marker reasons,
+   and after **Paste** the escape arrives as a space.
+4. With `"confirmPaste": false` no prompt appears, but the text is still sanitized.
+5. Put multi-line text containing an escape character on the clipboard as in step 3
+   (add a `\n`), keep bracketed paste on, and run `(sleep 10; printf '\033[?2004l') &`
+   before pasting. The prompt lists only the control-character reasons. Wait for the
+   `sleep` to finish, then choose **Paste**: nothing is pasted, because ending bracketed
+   mode exposed a newline risk the prompt had not shown.
+
+### Link confirmation
+
+Print one link of each kind, then Ctrl+click each. Plain left-click must do nothing,
+and with mouse reporting enabled the click goes to the application unless Shift is held.
+
+```sh
+printf '\033]8;;https://example.com\033\\plain web link\033]8;;\033\\\n'
+printf '\033]8;;https://evil.example\033\\https://paypal.com\033]8;;\033\\\n'
+printf '\033]8;;file:///etc/hostname\033\\local file\033]8;;\033\\\n'
+printf '\033]8;;ssh://host.example\033\\ssh link\033]8;;\033\\\n'
+printf '\033]8;;javascript:alert(1)\033\\blocked\033]8;;\033\\\n'
+```
+
+| Link | Expected with the default `confirm: "risky"` |
+|---|---|
+| plain web link | Opens in the default browser with no prompt. Ctrl+click works for OSC 8 links (and for plain `https://...` text). |
+| `https://paypal.com` pointing at `evil.example` | Prompt `Open link?` with `Link text differs from the target:`, the text, and the canonical `https://evil.example/`. **Cancel** focused. |
+| local file | Prompt `Opens a local file`. Executables and files with an execute bit are refused (a notice, not a prompt). |
+| ssh link | Prompt `Non-web link (ssh)`. |
+| `javascript:` | A `Link blocked` notice with a **Dismiss** row; nothing is launched. |
+
+Also verify: **Copy link address** places the canonical URL on the clipboard;
+Escape and click-outside never open anything; `"confirm": "always"` prompts even for the
+plain link and `"never"` opens everything that is allowed (the `javascript:` notice still
+appears); removing `ssh` from `allowedSchemes` turns the ssh link into a blocked notice;
+`"osc8": false` makes OSC 8 text neither hoverable nor clickable (new output after the
+reload), while a typed `https://example.com` still is; a Lua
+`dotty.on("open_url", function(url, source) dotty.log(source, url) return true end)` logs
+`explicit` or `detected` and suppresses the prompt and the open.
+
+Opening itself goes through `xdg-open` (Linux), `open` (macOS), and ShellExecute
+(Windows); see [Platform Support](PlatformSupport.md#manual-link-opener-checks) for the
+per-platform checks.
+
 ## Artifact smoke
 
 Release verification inspects every published archive and automatically

@@ -72,6 +72,40 @@ creating renderer resources and reports initialization failures before closing
 the window. Framebuffer scale changes recompute font metrics, rebuild the glyph
 atlas when required, update renderer resources, and resize sessions.
 
+## Host prompts, paste, clipboard, and links
+
+Decisions that need the user (risky paste, OSC 52 clipboard read, risky or
+blocked link) are shown as host-owned prompts, drawn by the same renderer as the
+context menu and never produced by terminal output.
+
+| Piece | Project | Role |
+|---|---|---|
+| `HostPrompt` | `Dotty.Runtime` (`Prompt/`) | Builds a `ContextMenuModel`: a disabled title row, at most `MaxLines` = 8 disabled body rows of at most `MaxLineChars` = 60 characters, then one row per action (`Build`) or a single Dismiss row (`BuildNotice`). Every untrusted string goes through `SanitizeLine` (controls become visible `\xNN` escapes, bidi marks `\u{XXXX}`, truncation with an ellipsis), and the safe action (Deny/Cancel) is the initially focused row. |
+| `ContextMenuModel.Dismissed` | `Dotty.Runtime` | Callback fired at most once when a visible menu closes without any item action running (Escape, click outside, replaced by another menu), then cleared. `Close()` is idempotent. |
+| `PastePromptBuilder`, `ClipboardReadPromptBuilder`, `HyperlinkPromptBuilder` | `Dotty` (`Host/`) | Assemble the three prompts on top of `HostPrompt`. Link and paste prompts are placed at the pointer; the OSC 52 read prompt is centered in the window. |
+| `PasteSafety`, `PasteEncoder` | `Dotty.Runtime` (`Input/`) | Pure classification (newlines, controls, paste-end marker), preview building, and sanitizing/bracketing of the bytes written to the PTY. |
+| `ClipboardPasteRouter` | `Dotty` | Single funnel for Ctrl+Shift+V, middle click, and the context-menu Paste: reads the clipboard, evaluates `PasteSafety` against `clipboard.confirmPaste`/`bracketedPasteIsSafe` and the pane's bracketed-paste mode, then writes immediately or shows the prompt. It re-checks pane liveness and bracketed-paste state when the user confirms. |
+| `ClipboardReadService`, `ClipboardReadQueue`, `Osc52Reply` | `Dotty` / `Dotty.Runtime` (`Clipboard/`) | OSC 52 read policy and flow. The queue (1 per session, 4 total, 30 s expiry) is filled on PTY consumer threads under a private lock and drained on the UI thread by the host loop; `Osc52Reply` encodes the reply. |
+| `HyperlinkScanner` → `HyperlinkActivator` → `HyperlinkPolicy` (+ `FileTargetRules`, `HyperlinkTextMismatch`) → `SystemHyperlinkOpener` | `Dotty.Runtime` (`Hyperlinks/`) | Hit-testing, activation decision, policy, and the platform launch (`HyperlinkLauncher` builds the `ProcessStartInfo`). `Activate` does no I/O; opening is a separate asynchronous step so a prompt can intervene. This replaces the former `IHyperlinkHandler`/`DefaultHyperlinkHandler`. |
+
+The context-menu slot (`ActiveContextMenu`) is a single shared slot. Setting it
+to a different menu closes the previous visible menu **after** the swap, so a
+`Dismissed` callback may install a follow-up prompt without being overwritten.
+The mouse and keyboard handlers therefore clear the slot only when it still holds
+the menu they just acted on (`ReferenceEquals` guard), because an item action or
+`Dismissed` callback may already have replaced it.
+
+Threading: the parser and adapter run on the PTY consumer thread and only raise
+events (`ClipboardWriteRequested`, `ClipboardReadRequested`); policy, prompts, and
+clipboard access run on the window thread. Render snapshots share the buffer's
+append-only hyperlink table by reference, so activation resolves a link from the
+snapshot it was drawn from without taking the buffer lock.
+
+These flows are covered by unit tests of the pure pieces (see
+[Testing](Testing.md)); prompt rendering, focus behavior, and native link
+opening have no automated GUI coverage and are verified manually
+([E2E Testing](E2ETesting.md#manual-smoke-osc-52-read-paste-confirm-and-link-confirm)).
+
 ## Configuration and control seams
 
 `UserConfigService` uses the same platform path resolver for JSON config, Lua,

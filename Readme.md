@@ -29,7 +29,8 @@ Dotty is a modern terminal emulator composed of:
 - Runtime JSON configuration hot-reload with platform-specific paths
 - [Kitty keyboard negotiation](docs/KeyboardProtocol.md), native press/repeat/release, and committed Unicode scalars
 - [Direct command launches](docs/CommandLine.md) with literal arguments, working directories, and child exit status
-- Explicit OSC 52 clipboard-write authorization (denied by default)
+- OSC 52 clipboard policy: writes denied by default, reads (`osc52Read`) `deny` by default with an `ask` prompt option
+- Confirmation prompts for risky pastes and risky or blocked links (OSC 8 and detected URLs), with a hard scheme blocklist and `hyperlinks` policy
 - Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy
 - [Performance regression snapshots](docs/Performance.md) and [native desktop verification lanes](docs/NativeDesktopAndIme.md)
 
@@ -164,10 +165,18 @@ dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained t
 For macOS, replace `linux-x64` with `osx-x64` (Intel) or `osx-arm64` (Apple
 Silicon) in both paths. Build and publish on the target OS and architecture.
 
-Clipboard writes requested by terminal applications through OSC 52 require
-`"clipboard": { "allowOsc52Write": true }` in `config.json`. This permission
-does not disable user-initiated copy/paste, and Lua hooks may veto but cannot
-override a global denial. See the [clipboard policy](docs/Configuration.md#clipboard).
+Clipboard access requested by terminal applications is denied by default.
+Writes through OSC 52 require `"clipboard": { "allowOsc52Write": true }`; reads
+require `"clipboard": { "osc52Read": "ask" }` (prompt each time) or `"allow"`
+(silent: any program that can print to the terminal can then read your
+clipboard, so prefer `ask`). These settings do not affect user-initiated
+copy/paste, and Lua hooks may veto but cannot override a global denial. Pastes
+that contain line breaks (outside bracketed paste), control characters, or a
+paste-end marker ask for confirmation (`clipboard.confirmPaste`), and
+Ctrl+click on a risky link asks first (`hyperlinks.confirm`). See the
+[clipboard policy](docs/Configuration.md#clipboard) and
+[hyperlink policy](docs/Configuration.md#hyperlinks). The prompts and native
+link opening are verified manually, not in CI.
 
 ### Test
 

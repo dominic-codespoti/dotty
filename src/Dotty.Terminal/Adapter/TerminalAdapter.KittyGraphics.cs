@@ -17,6 +17,11 @@ public partial class TerminalAdapter : IKittyGraphicsHost
     /// <summary>The graphics controller; null until <see cref="ConfigureGraphics"/> enabled the protocol once.</summary>
     internal KittyGraphicsController? KittyGraphics => _kittyGraphics;
 
+    private KittyMediumReader? _kittyMediumReader;
+
+    /// <summary>The session's file/temp-file/shared-memory reader: one per adapter, because it carries the abandoned-open budget.</summary>
+    internal KittyMediumReader MediumReader => _kittyMediumReader ??= new KittyMediumReader();
+
     /// <summary>
     /// Applies the Kitty graphics settings and the PNG decoder (<c>null</c>: PNG payloads, <c>f=100</c>, are
     /// answered as an unknown format). Takes the buffer lock. Lowering the storage limit evicts immediately;
@@ -30,7 +35,7 @@ public partial class TerminalAdapter : IKittyGraphicsHost
             return;
         _buffer.WithSyncRoot(() =>
         {
-            _kittyGraphics ??= new KittyGraphicsController(this);
+            _kittyGraphics ??= new KittyGraphicsController(this, MediumReader);
             _kittyGraphics.Configure(options, decoder);
         });
     }

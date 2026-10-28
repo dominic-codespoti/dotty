@@ -47,6 +47,9 @@ internal sealed unsafe class KittyTransfer : IDisposable
     private readonly KittyGraphicsCommand _first;
     private readonly KittyGraphicsOptions _options;
     private readonly IImageDecoder? _decoder;
+    private readonly IKittyMediumReader? _reader;
+    // t=f/t/s: the payload is a path/name, replaced by the medium's content at completion.
+    private readonly bool _pathMode;
     private readonly KittyBase64Decoder _base64 = new();
     private readonly bool _isPng;
     private readonly bool _compressed;
@@ -70,9 +73,11 @@ internal sealed unsafe class KittyTransfer : IDisposable
     private volatile bool _busy;
 
     private KittyTransfer(
-        in KittyGraphicsCommand first, KittyGraphicsOptions options, IImageDecoder? decoder,
-        bool isPng, bool compressed, ImagePixelFormat rawFormat, long expectedBytes)
+        in KittyGraphicsCommand first, KittyGraphicsOptions options, IImageDecoder? decoder, IKittyMediumReader? reader,
+        bool pathMode, bool isPng, bool compressed, ImagePixelFormat rawFormat, long expectedBytes)
     {
+        _reader = reader;
+        _pathMode = pathMode;
         _first = first;
         _options = options;
         _decoder = decoder;
@@ -110,19 +115,33 @@ internal sealed unsafe class KittyTransfer : IDisposable
     /// <summary>Marks the transfer as cancelled without freeing anything (safe while <see cref="Busy"/>).</summary>
     public void Cancel() => _cancelled = true;
 
+    /// <summary>The longest file path / shared-memory name (decoded bytes) a t=f/t/s payload may carry.</summary>
+    public const int MaxPathBytes = 2048;
+
     /// <summary>
-    /// The single seam for transmission media: which <c>t</c> values this build can read. Only direct payloads
-    /// are implemented; file, temporary-file and shared-memory transmission answer
-    /// <see cref="KittyStatus.UnsupportedMedium"/> until a medium reader exists.
+    /// The single seam for transmission media: which <c>t</c> values the session's options allow. Direct payloads
+    /// are always available; file, temporary-file and shared-memory transmission need their
+    /// <see cref="KittyMediaFlags"/> (and a reader; platform support is the reader's call at completion).
     /// </summary>
-    internal static KittyStatus MediumStatus(char medium, KittyGraphicsOptions options) =>
-        medium == 'd' && (options.Media & KittyMediaFlags.Direct) != 0 ? KittyStatus.Ok : KittyStatus.UnsupportedMedium;
+    internal static KittyStatus MediumStatus(char medium, KittyGraphicsOptions options)
+    {
+        KittyMediaFlags needed = medium switch
+        {
+            'd' => KittyMediaFlags.Direct,
+            'f' => KittyMediaFlags.File,
+            't' => KittyMediaFlags.TempFile,
+            's' => KittyMediaFlags.SharedMemory,
+            _ => KittyMediaFlags.None,
+        };
+        return needed != KittyMediaFlags.None && (options.Media & needed) != 0 ? KittyStatus.Ok : KittyStatus.UnsupportedMedium;
+    }
 
     /// <summary>
     /// Validates the first chunk's keys and creates the transfer. Returns null with the error in
     /// <paramref name="status"/> when the command can never succeed; nothing has been allocated then.
+    /// <paramref name="reader"/> serves <c>t=f/t/s</c>; without one those media are unsupported.
     /// </summary>
-    public static KittyTransfer? TryStart(in KittyGraphicsCommand first, KittyGraphicsOptions options, IImageDecoder? decoder, out KittyStatus status)
+    public static KittyTransfer? TryStart(in KittyGraphicsCommand first, KittyGraphicsOptions options, IImageDecoder? decoder, IKittyMediumReader? reader, out KittyStatus status)
     {
         ArgumentNullException.ThrowIfNull(options);
         status = KittyStatus.Ok;
@@ -148,8 +167,11 @@ internal sealed unsafe class KittyTransfer : IDisposable
         }
 
         status = MediumStatus(first.Medium, options);
+        if (status == KittyStatus.Ok && first.Medium != 'd' && reader == null)
+            status = KittyStatus.UnsupportedMedium;
         if (status != KittyStatus.Ok)
             return null;
+        bool pathMode = first.Medium != 'd';
 
         bool compressed;
         switch (first.Compression)
@@ -166,8 +188,9 @@ internal sealed unsafe class KittyTransfer : IDisposable
         {
             if (compressed)
             {
-                // The inflated size of a compressed PNG is not derivable from the keys; S carries it.
-                if (first.DataSize == 0)
+                // The inflated size of a compressed PNG is not derivable from the keys; S carries it. For a medium S
+                // is the read length instead, so the two cannot be told apart: that combination is refused.
+                if (first.DataSize == 0 || pathMode)
                 {
                     status = KittyStatus.InvalidKeyValue;
                     return null;
@@ -212,7 +235,7 @@ internal sealed unsafe class KittyTransfer : IDisposable
             expected = (long)bytes;
         }
 
-        return new KittyTransfer(in first, options, decoder, isPng, compressed, rawFormat, expected);
+        return new KittyTransfer(in first, options, decoder, reader, pathMode, isPng, compressed, rawFormat, expected);
     }
 
     /// <summary>Starts a continuation chunk (only <c>m</c> and <c>q</c> keys): updates "more" and the quiet override.</summary>
@@ -229,6 +252,12 @@ internal sealed unsafe class KittyTransfer : IDisposable
         if (_status != KittyStatus.Ok || base64.IsEmpty)
             return;
         bool final = !_more;
+
+        if (_pathMode)
+        {
+            AddPathPayload(base64, final);
+            return;
+        }
 
         if (!_isPng && !_compressed)
         {
@@ -282,6 +311,30 @@ internal sealed unsafe class KittyTransfer : IDisposable
     }
 
     /// <summary>
+    /// For t=f/t/s the payload is the path: it accumulates (base64-decoded) up to <see cref="MaxPathBytes"/>; a
+    /// longer one can never name a file and fails like any other unreadable file.
+    /// </summary>
+    private void AddPathPayload(ReadOnlySpan<byte> base64, bool final)
+    {
+        long need = _accLen + ((long)_base64.PendingChars + base64.Length) / 4 * 3;
+        if (need > MaxPathBytes + 2)
+        {
+            Fail(KittyStatus.BadFile);
+            return;
+        }
+        EnsureAccumulator((int)(need + 3));
+        var st = _base64.Decode(base64, _acc!.AsSpan(_accLen), out int written, final);
+        if (st != KittyBase64Status.Ok)
+        {
+            Fail(MapBase64(st));
+            return;
+        }
+        _accLen += written;
+        if (_accLen > MaxPathBytes)
+            Fail(KittyStatus.BadFile);
+    }
+
+    /// <summary>
     /// Finishes the final chunk: flushes the base64 tail, inflates / decodes, premultiplies. On success the caller
     /// owns <paramref name="pixels"/> (format <see cref="ImagePixelFormat.Rgb8"/> for <c>f=24</c>, otherwise
     /// premultiplied RGBA). Large work runs with the buffer lock released through <paramref name="host"/>; the caller
@@ -304,13 +357,95 @@ internal sealed unsafe class KittyTransfer : IDisposable
         return st;
     }
 
+    /// <summary>
+    /// Medium transfers: flushes the base64 tail of the path, reads the medium with the buffer lock released (file
+    /// I/O may block) and installs the content as if it had arrived as a direct payload: raw uncompressed formats
+    /// get their destination (the content must be exactly <c>s*v*bpp</c> bytes), everything else is left in the
+    /// accumulator for inflate / PNG decode. Every size rule of the direct path still applies.
+    /// </summary>
+    private KittyStatus ReadMedium(IKittyGraphicsHost host)
+    {
+        EnsureAccumulator(_accLen + 3);
+        var tail = _base64.Finish(_acc!.AsSpan(_accLen), out int tailWritten);
+        if (tail != KittyBase64Status.Ok)
+            return MapBase64(tail);
+        _accLen += tailWritten;
+        if (_accLen == 0 || _accLen > MaxPathBytes)
+            return KittyStatus.BadFile;
+
+        Span<byte> path = stackalloc byte[MaxPathBytes];
+        _acc!.AsSpan(0, _accLen).CopyTo(path);
+        path = path.Slice(0, _accLen);
+        ReleaseBuffers();
+
+        KittyMediumReadResult result;
+        bool released = false;
+        _busy = true;
+        try
+        {
+            released = host.ReleaseSyncRootForBlockingWork();
+            result = _reader!.Read(_first.Medium, path, _first.DataOffset, _first.DataSize, _options.MaxPayloadBytes, _options.Media);
+        }
+        catch (Exception)
+        {
+            result = KittyMediumReadResult.BadFile;
+        }
+        finally
+        {
+            if (released)
+                host.ReacquireSyncRoot();
+            _busy = false;
+        }
+
+        using (result)
+        {
+            // Cancelled or torn down while the lock was released: the caller drops the outcome silently.
+            if (_cancelled || host.IsDisposed)
+                return KittyStatus.DecodeFailed;
+            if (!result.IsOk)
+                return result.Status;
+            var data = result.Data;
+            if (result.ExceedsCap || data.Length > _options.MaxPayloadBytes)
+                return KittyStatus.PayloadTooLarge;
+
+            if (!_isPng && !_compressed)
+            {
+                if (data.Length < _expectedBytes)
+                    return KittyStatus.InsufficientData;
+                if (data.Length > _expectedBytes)
+                    return KittyStatus.PayloadTooLarge;
+                var dest = ImagePixels.Allocate((int)_first.Width, (int)_first.Height, _rawFormat);
+                if (dest.ByteLength != _expectedBytes)
+                {
+                    dest.Dispose();
+                    return KittyStatus.SizeMismatch;
+                }
+                data.CopyTo(dest.AsWritableSpan());
+                _dest = dest;
+                return KittyStatus.Ok;
+            }
+
+            EnsureAccumulator(data.Length + 3);
+            data.CopyTo(_acc!.AsSpan());
+            _accLen = data.Length;
+            return KittyStatus.Ok;
+        }
+    }
+
     private KittyStatus CompleteCore(IKittyGraphicsHost host, out ImagePixels? pixels)
     {
         pixels = null;
         bool raw = !_isPng;
 
         // 1. Flush the base64 carry.
-        if (raw && !_compressed)
+        if (_pathMode)
+        {
+            // t=f/t/s: the payload was the path; the medium's content replaces it (after the unlocked read).
+            var mediumStatus = ReadMedium(host);
+            if (mediumStatus != KittyStatus.Ok)
+                return mediumStatus;
+        }
+        else if (raw && !_compressed)
         {
             if (_raw == null)
                 return KittyStatus.InsufficientData;

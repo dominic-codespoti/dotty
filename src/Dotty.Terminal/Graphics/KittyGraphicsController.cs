@@ -49,15 +49,20 @@ internal sealed class KittyGraphicsController : IDisposable
     private KittyGraphicsOptions _options;
     private IImageDecoder? _decoder;
     private KittyTransfer? _transfer;
+    private readonly IKittyMediumReader _reader;
+    private KittyGraphicsCommand _deferred;
+    private bool _hasDeferred;
     private CommandKind _kind;
     private PendingReply _pending;
     private uint _curImageId, _curImageNumber, _curPlacementId;
     private byte _curQuiet;
     private bool _disposed;
 
-    public KittyGraphicsController(IKittyGraphicsHost host)
+    /// <param name="reader">Serves <c>t=f/t/s</c> transmissions; one per session (it holds the abandoned-open budget). Null creates a private one.</param>
+    public KittyGraphicsController(IKittyGraphicsHost host, IKittyMediumReader? reader = null)
     {
         _host = host ?? throw new ArgumentNullException(nameof(host));
+        _reader = reader ?? new KittyMediumReader();
         _options = new KittyGraphicsOptions().Normalize();
     }
 
@@ -134,6 +139,7 @@ internal sealed class KittyGraphicsController : IDisposable
     public void OnBegin(ReadOnlySpan<byte> control)
     {
         _kind = CommandKind.Ignore;
+        _hasDeferred = false;
         _pending = default;
         if (!Enabled)
             return;
@@ -168,6 +174,8 @@ internal sealed class KittyGraphicsController : IDisposable
     {
         var kind = _kind;
         _kind = CommandKind.Ignore;
+        bool deferred = _hasDeferred;
+        _hasDeferred = false;
         if (!completed)
         {
             // A cancelled chunk kills the whole load; nothing was committed and nothing is answered.
@@ -179,7 +187,14 @@ internal sealed class KittyGraphicsController : IDisposable
 
         try
         {
-            if (kind == CommandKind.Chunk)
+            if (deferred)
+            {
+                if (_deferred.Action == KittyAction.Put)
+                    HandlePut(in _deferred);
+                else
+                    HandleDelete(in _deferred);
+            }
+            else if (kind == CommandKind.Chunk)
                 FinishChunk();
         }
         catch (Exception)
@@ -226,10 +241,10 @@ internal sealed class KittyGraphicsController : IDisposable
                 StartTransfer(cmd);
                 break;
             case KittyAction.Put:
-                HandlePut(cmd);
-                break;
             case KittyAction.Delete:
-                HandleDelete(cmd);
+                // Runs when the APC is terminated: a command cut off by CAN/SUB/ESC after its ';' does nothing.
+                _deferred = cmd;
+                _hasDeferred = true;
                 break;
             case KittyAction.Frame:
             case KittyAction.Animate:
@@ -320,7 +335,7 @@ internal sealed class KittyGraphicsController : IDisposable
         if (!query && cmd.ImageId != 0 && Store.DeleteByClientId(cmd.ImageId))
             _host.GraphicsChanged();
 
-        var transfer = KittyTransfer.TryStart(cmd, _options, _decoder, out var status);
+        var transfer = KittyTransfer.TryStart(cmd, _options, _decoder, _reader, out var status);
         if (transfer == null)
         {
             SetPending(status, cmd.ImageId, cmd.ImageNumber, cmd.PlacementId, cmd.Quiet);

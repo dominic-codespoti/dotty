@@ -30,6 +30,7 @@ internal sealed partial class KittyImageStore : IDisposable
     private long _usedBytes;
     private int _anonymousCount;
     private long _storageLimitBytes;
+    private int _maxImages = DefaultMaxImages;
     private bool _disposed;
 
     public KittyImageStore(long storageLimitBytes)
@@ -40,6 +41,12 @@ internal sealed partial class KittyImageStore : IDisposable
     }
 
     public long StorageLimitBytes => _storageLimitBytes;
+
+    /// <summary>Default for <see cref="MaxImages"/>: a flood of tiny images cannot grow the maps without bound.</summary>
+    public const int DefaultMaxImages = 4096;
+
+    /// <summary>Most images the store keeps; adding beyond it evicts like the byte quota does.</summary>
+    public int MaxImages => _maxImages;
 
     /// <summary>Sum of the byte lengths of all live images' frames.</summary>
     public long UsedBytes => _usedBytes;
@@ -150,6 +157,15 @@ internal sealed partial class KittyImageStore : IDisposable
         EnforceQuota(protect: null);
     }
 
+    /// <summary>Changes the image-count cap and evicts down to it immediately (same order as the byte quota).</summary>
+    public void SetMaxImages(int maxImages)
+    {
+        if (maxImages <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxImages));
+        _maxImages = maxImages;
+        EnforceQuota(protect: null);
+    }
+
     /// <summary>Deletes every image. Ids already handed out are not reused.</summary>
     public void Clear()
     {
@@ -203,6 +219,7 @@ internal sealed partial class KittyImageStore : IDisposable
         foreach (var (number, image) in _newestByNumber)
             Require(newest.TryGetValue(number, out long best) && best == image.InternalId, "newest-by-number entry is not the newest");
         Require(_usedBytes <= _storageLimitBytes, "store is over its storage limit");
+        Require(_byInternalId.Count <= _maxImages, "store is over its image count limit");
         ValidatePlacements();
     }
 
@@ -245,19 +262,40 @@ internal sealed partial class KittyImageStore : IDisposable
                 Delete(doomed[i]);
         }
 
-        // 2. Still over the limit: unreferenced first, then transient first, then least recently used.
-        if (_usedBytes <= _storageLimitBytes)
-            return;
-        var candidates = new List<KittyImage>(_byInternalId.Count);
-        foreach (var image in _byInternalId.Values)
+        // 2. Still over a limit (bytes or image count): unreferenced first, then transient first, then least recently
+        //    used. The first few victims are found by linear scans, so the common "one tiny image pushed one old
+        //    image out" add costs O(n) instead of a sort; a large overshoot (limit shrink, many evictions) sorts once.
+        const int ScanVictims = 8;
+        int scanned = 0;
+        while (OverLimits())
         {
-            if (!ReferenceEquals(image, protect))
-                candidates.Add(image);
+            if (scanned == ScanVictims)
+            {
+                var candidates = new List<KittyImage>(_byInternalId.Count);
+                foreach (var image in _byInternalId.Values)
+                {
+                    if (!ReferenceEquals(image, protect))
+                        candidates.Add(image);
+                }
+                candidates.Sort(CompareForEviction);
+                for (int i = 0; i < candidates.Count && OverLimits(); i++)
+                    Delete(candidates[i]);
+                return;
+            }
+            KittyImage? victim = null;
+            foreach (var image in _byInternalId.Values)
+            {
+                if (!ReferenceEquals(image, protect) && (victim == null || CompareForEviction(image, victim) < 0))
+                    victim = image;
+            }
+            if (victim == null)
+                return;
+            Delete(victim);
+            scanned++;
         }
-        candidates.Sort(CompareForEviction);
-        for (int i = 0; i < candidates.Count && _usedBytes > _storageLimitBytes; i++)
-            Delete(candidates[i]);
     }
+
+    private bool OverLimits() => _usedBytes > _storageLimitBytes || _byInternalId.Count > _maxImages;
 
     private static int CompareForEviction(KittyImage a, KittyImage b)
     {

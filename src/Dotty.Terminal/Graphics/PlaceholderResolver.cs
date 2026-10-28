@@ -79,7 +79,8 @@ public static class PlaceholderResolver
     /// <summary>
     /// Appends the quads for every placeholder cell of <paramref name="source"/> that names one of
     /// <paramref name="graphics"/>'s virtual placements, followed by the relative placements rooted at those virtual
-    /// placements (positioned from the top-left of their placeholder cells; none when no placeholder was found).
+    /// placements (positioned from the screen position of the grid's cell (0, 0), inferred from every visible placeholder cell of the
+    /// grid so it does not move while the grid's top rows scroll off; none when no placeholder was found).
     /// The appended placements reference pixels the snapshot keeps alive.
     /// </summary>
     /// <param name="cellWidth">Cell width in pixels (only its ratio to the height matters).</param>
@@ -98,13 +99,18 @@ public static class PlaceholderResolver
         int start = output.Count;
         int rows = source.Rows, columns = source.Columns;
         var children = graphics.VirtualChildren;
-        int[]? minRow = null, minCol = null;
+        int[]? originRow = null, originCol = null;
         if (!children.IsEmpty)
         {
-            minRow = new int[virtuals.Length];
-            minCol = new int[virtuals.Length];
-            Array.Fill(minRow, int.MaxValue);
-            Array.Fill(minCol, int.MaxValue);
+            // Reused per thread: the resolver runs once per pane per frame, so nothing is allocated per frame.
+            originRow = s_originRow;
+            if (originRow == null || originRow.Length < virtuals.Length)
+                s_originRow = originRow = new int[Math.Max(virtuals.Length, 8)];
+            originCol = s_originCol;
+            if (originCol == null || originCol.Length < virtuals.Length)
+                s_originCol = originCol = new int[Math.Max(virtuals.Length, 8)];
+            Array.Fill(originRow, int.MaxValue, 0, virtuals.Length);
+            Array.Fill(originCol, int.MaxValue, 0, virtuals.Length);
         }
 
         uint cachedImage = 0, cachedPlacement = 0;
@@ -115,79 +121,32 @@ public static class PlaceholderResolver
             var cold = source.GetRowColdCells(row);
             int width = Math.Min(columns, cells.Length);
             var run = new Run { V = -1 };
-            bool havePrev = false;
-            int prevRow = 0, prevCol = 0, prevMsb = 0;
-            uint prevFg = 0, prevUl = 0;
+            var inherit = default(Inherit);
 
             for (int column = 0; column < width; column++)
             {
                 ref readonly CellHot cell = ref cells[column];
                 if (cell.Rune != PlaceholderTable.PlaceholderRune)
                 {
-                    havePrev = false;
+                    inherit.Have = false;
                     continue;
                 }
 
-                PlaceholderIndices indices = PlaceholderIndices.None;
-                if (column < cold.Length)
-                {
-                    short code = cold[column].GraphemeIndex;
-                    if (code <= PlaceholderTable.AbsentCode)
-                        PlaceholderTable.TryGet(code, out indices);
-                }
+                DecodedCell decoded = Decode(ref inherit, in source.GetStyle(cell.StyleId), cold, column);
+                int r = decoded.Row, c = decoded.Col;
 
-                ref readonly CellAttributes style = ref source.GetStyle(cell.StyleId);
-                ColorKind fgKind = style.ForegroundKind;
-                ColorKind ulKind = style.UnderlineColorKind;
-                uint fgValue = ColorValue(fgKind, style.ForegroundIndex, style.Foreground.Argb);
-                uint ulValue = ColorValue(ulKind, style.UnderlineColorIndex, style.UnderlineColor.Argb);
-                uint fgKey = fgValue | KindOf(fgKind);
-                uint ulKey = ulValue | KindOf(ulKind);
-
-                int r = indices.HasRow ? indices.Row : 0;
-                int c = indices.HasCol ? indices.Col : 0;
-                int m = indices.HasMsb ? indices.Msb : 0;
-                if (havePrev && fgKey == prevFg && ulKey == prevUl)
-                {
-                    if (!indices.HasRow && !indices.HasCol && !indices.HasMsb)
-                    {
-                        r = prevRow;
-                        c = prevCol + 1;
-                        m = prevMsb;
-                    }
-                    else if (indices.HasRow && !indices.HasCol && !indices.HasMsb)
-                    {
-                        if (prevRow == r)
-                        {
-                            c = prevCol + 1;
-                            m = prevMsb;
-                        }
-                    }
-                    else if (indices.HasRow && indices.HasCol && !indices.HasMsb)
-                    {
-                        if (prevRow == r && prevCol + 1 == c)
-                            m = prevMsb;
-                    }
-                }
-                havePrev = true;
-                prevRow = r;
-                prevCol = c;
-                prevMsb = m;
-                prevFg = fgKey;
-                prevUl = ulKey;
-
-                if (fgKind == ColorKind.Default || m > 255)
+                if (decoded.FgKind == ColorKind.Default || decoded.Msb > 255)
                 {
                     FlushRun(ref run, virtuals, cellWidth, cellHeight, output);
                     continue;
                 }
-                uint imageId = fgValue | ((uint)m << 24);
+                uint imageId = decoded.FgValue | ((uint)decoded.Msb << 24);
                 if (imageId == 0)
                 {
                     FlushRun(ref run, virtuals, cellWidth, cellHeight, output);
                     continue;
                 }
-                uint placementId = ulValue;
+                uint placementId = decoded.UlValue;
 
                 int v;
                 if (cachedIndex != -2 && imageId == cachedImage && placementId == cachedPlacement)
@@ -204,18 +163,19 @@ public static class PlaceholderResolver
                     FlushRun(ref run, virtuals, cellWidth, cellHeight, output);
                     continue;
                 }
-                if (minRow != null && minCol != null)
-                {
-                    // (min row, min col) of the placeholder cells: the two minima are tracked independently.
-                    if (row < minRow[v]) minRow[v] = row;
-                    if (column < minCol[v]) minCol[v] = column;
-                }
 
                 ref readonly KittyVirtualPlacement virtualPlacement = ref virtuals[v];
                 if ((uint)r >= (uint)virtualPlacement.Rows || (uint)c >= (uint)virtualPlacement.Cols)
                 {
                     FlushRun(ref run, virtuals, cellWidth, cellHeight, output);
                     continue;
+                }
+                if (originRow != null && originCol != null)
+                {
+                    // Where the grid's cell (0, 0) is (or would be) on this screen, from every visible cell of the
+                    // grid; the minima are taken independently. Stable while the top rows of the grid scroll away.
+                    if (row - r < originRow[v]) originRow[v] = row - r;
+                    if (column - c < originCol[v]) originCol[v] = column - c;
                 }
 
                 if (run.V == v && run.GridRow == r && run.GridCol + run.Count == c && run.Col + run.Count == column)
@@ -229,16 +189,16 @@ public static class PlaceholderResolver
             FlushRun(ref run, virtuals, cellWidth, cellHeight, output);
         }
 
-        if (minRow != null && minCol != null)
+        if (originRow != null && originCol != null)
         {
             for (int i = 0; i < children.Length; i++)
             {
                 int v = IndexOfInternalId(virtuals, children[i].VirtualInternalId);
-                if (v < 0 || minRow[v] == int.MaxValue)
+                if (v < 0 || originRow[v] == int.MaxValue)
                     continue;
                 KittyRenderPlacement placement = children[i].Placement;
-                long viewRow = (long)minRow[v] + placement.ViewRow;
-                long col = (long)minCol[v] + placement.Col;
+                long viewRow = (long)originRow[v] + placement.ViewRow;
+                long col = (long)originCol[v] + placement.Col;
                 if (viewRow + placement.Rows <= 0 || viewRow >= rows)
                     continue;
                 output.Add(placement with
@@ -249,6 +209,110 @@ public static class PlaceholderResolver
             }
         }
         return output.Count - start;
+    }
+
+    /// <summary>
+    /// Adds to <paramref name="imageIds"/> the id of every image some placeholder cell of <paramref name="source"/>
+    /// names (identity and inheritance exactly as <see cref="Resolve{TSource}"/>; whether a virtual placement, its
+    /// grid or its placement id exists is not looked at). Lets the store tell which animated images a screen shows
+    /// through placeholders.
+    /// </summary>
+    public static void CollectImageIds<TSource>(TSource source, HashSet<uint> imageIds)
+        where TSource : IPlaceholderSource
+    {
+        ArgumentNullException.ThrowIfNull(imageIds);
+        int rows = source.Rows, columns = source.Columns;
+        for (int row = 0; row < rows; row++)
+        {
+            var cells = source.GetRowCells(row);
+            var cold = source.GetRowColdCells(row);
+            int width = Math.Min(columns, cells.Length);
+            var inherit = default(Inherit);
+            for (int column = 0; column < width; column++)
+            {
+                ref readonly CellHot cell = ref cells[column];
+                if (cell.Rune != PlaceholderTable.PlaceholderRune)
+                {
+                    inherit.Have = false;
+                    continue;
+                }
+                DecodedCell decoded = Decode(ref inherit, in source.GetStyle(cell.StyleId), cold, column);
+                if (decoded.FgKind == ColorKind.Default || decoded.Msb > 255)
+                    continue;
+                uint imageId = decoded.FgValue | ((uint)decoded.Msb << 24);
+                if (imageId != 0)
+                    imageIds.Add(imageId);
+            }
+        }
+    }
+
+    [ThreadStatic] private static int[]? s_originRow;
+    [ThreadStatic] private static int[]? s_originCol;
+
+    /// <summary>The placeholder cell to the left, as far as inheritance needs it.</summary>
+    private struct Inherit
+    {
+        public bool Have;
+        public int Row, Col, Msb;
+        public uint Fg, Ul;
+    }
+
+    private struct DecodedCell
+    {
+        public int Row, Col, Msb;
+        public ColorKind FgKind;
+        public uint FgValue, UlValue;
+    }
+
+    /// <summary>
+    /// Identity of one placeholder cell: its diacritics, the colours, and the three inheritance rules against
+    /// <paramref name="left"/> (which is updated to this cell). A non-placeholder cell must clear
+    /// <see cref="Inherit.Have"/> instead.
+    /// </summary>
+    private static DecodedCell Decode(ref Inherit left, in CellAttributes style, ReadOnlySpan<ColdCell> cold, int column)
+    {
+        PlaceholderIndices indices = PlaceholderIndices.None;
+        if (column < cold.Length)
+        {
+            short code = cold[column].GraphemeIndex;
+            if (code <= PlaceholderTable.AbsentCode)
+                PlaceholderTable.TryGet(code, out indices);
+        }
+
+        ColorKind fgKind = style.ForegroundKind;
+        ColorKind ulKind = style.UnderlineColorKind;
+        uint fgValue = ColorValue(fgKind, style.ForegroundIndex, style.Foreground.Argb);
+        uint ulValue = ColorValue(ulKind, style.UnderlineColorIndex, style.UnderlineColor.Argb);
+        uint fgKey = fgValue | KindOf(fgKind);
+        uint ulKey = ulValue | KindOf(ulKind);
+
+        int r = indices.HasRow ? indices.Row : 0;
+        int c = indices.HasCol ? indices.Col : 0;
+        int m = indices.HasMsb ? indices.Msb : 0;
+        if (left.Have && fgKey == left.Fg && ulKey == left.Ul)
+        {
+            if (!indices.HasRow && !indices.HasCol && !indices.HasMsb)
+            {
+                r = left.Row;
+                c = left.Col + 1;
+                m = left.Msb;
+            }
+            else if (indices.HasRow && !indices.HasCol && !indices.HasMsb)
+            {
+                if (left.Row == r)
+                {
+                    c = left.Col + 1;
+                    m = left.Msb;
+                }
+            }
+            else if (indices.HasRow && indices.HasCol && !indices.HasMsb)
+            {
+                if (left.Row == r && left.Col + 1 == c)
+                    m = left.Msb;
+            }
+        }
+        left = new Inherit { Have = true, Row = r, Col = c, Msb = m, Fg = fgKey, Ul = ulKey };
+        return new DecodedCell { Row = r, Col = c, Msb = m, FgKind = fgKind, FgValue = fgValue, UlValue = ulValue };
     }
 
     private struct Run

@@ -168,4 +168,65 @@ public sealed class SgrColonColorTests
         Assert.Equal(SgrColorArgb.FromRgb(1, 2, 3), a.Background);
         Assert.Equal((ColorKind.Indexed, 7), (a.UnderlineColorKind, a.UnderlineColorIndex));
     }
+
+    [Theory]
+    [InlineData("4", UnderlineStyle.Single)]
+    [InlineData("4:", UnderlineStyle.Single)]
+    [InlineData("4:0", UnderlineStyle.None)]
+    [InlineData("4:1", UnderlineStyle.Single)]
+    [InlineData("4:2", UnderlineStyle.Double)]
+    [InlineData("4:3", UnderlineStyle.Curl)]
+    [InlineData("4:4", UnderlineStyle.Dotted)]
+    [InlineData("4:5", UnderlineStyle.Dashed)]
+    [InlineData("4:9", UnderlineStyle.Single)]
+    public void TheUnderlineStyleSubParameterSelectsTheStyle(string sgr, UnderlineStyle style)
+    {
+        Assert.Equal(style, Sgr(sgr).UnderlineStyle);
+    }
+
+    [Fact]
+    public void UnderlineStyleZeroTurnsAnActiveUnderlineOff()
+    {
+        var on = Sgr("4:3;58:5:7");
+
+        var off = Sgr("4:0", on);
+
+        Assert.Equal(UnderlineStyle.None, off.UnderlineStyle);
+        Assert.False(off.Underline);
+        Assert.Equal(7, off.UnderlineColorIndex);          // the colour is a separate attribute
+    }
+
+    [Fact]
+    public void ColonStyleAndColonColoursMixWithSemicolonParameters()
+    {
+        var a = Sgr("1;4:3;58:2::255:0:0;38:5:9;48;5;2;3");
+
+        Assert.True(a.Bold);
+        Assert.True(a.Italic);
+        Assert.Equal(UnderlineStyle.Curl, a.UnderlineStyle);
+        Assert.Equal((ColorKind.Rgb, -1), (a.UnderlineColorKind, a.UnderlineColorIndex));
+        Assert.Equal(SgrColorArgb.FromRgb(255, 0, 0), a.UnderlineColor);
+        Assert.Equal((ColorKind.Indexed, 9), (a.ForegroundKind, a.ForegroundIndex));
+        Assert.Equal(Sgr("48;5;2").Background, a.Background);
+    }
+
+    [Fact]
+    public void ASemicolonColourBeforeAColonColourConsumesOnlyItsOwnParameters()
+    {
+        var a = Sgr("38;5;1;48:5:2;1");
+
+        Assert.Equal((ColorKind.Indexed, 1), (a.ForegroundKind, a.ForegroundIndex));
+        Assert.Equal(Sgr("48;5;2").Background, a.Background);
+        Assert.True(a.Bold);
+    }
+
+    [Fact]
+    public void AMalformedColonColourDoesNotSwallowAFollowingColonColour()
+    {
+        var a = Sgr("38:5:300;48:2::1:2:3;4:2");
+
+        Assert.Equal(ColorKind.Default, a.ForegroundKind);
+        Assert.Equal(SgrColorArgb.FromRgb(1, 2, 3), a.Background);
+        Assert.Equal(UnderlineStyle.Double, a.UnderlineStyle);
+    }
 }

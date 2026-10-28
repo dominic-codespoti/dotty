@@ -229,7 +229,10 @@ public static class QuadFrameBuilder
 
             if (!glyphOk)
             {
-                if (bgA != 0 && written < destination.Length)
+                // A glyph-less cell still needs an instance for its background, and for its underline / strikethrough /
+                // overline (the renderer draws those from the flags), which also covers placeholder and space cells.
+                bool hasDecoration = (flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
+                if ((bgA != 0 || hasDecoration) && written < destination.Length)
                 {
                     destination[written++] = new CellInstance
                     {

@@ -854,6 +854,133 @@ public sealed class KittyPlaceholderResolverTests
 
         Assert.Equal(42u, Assert.Single(quads).ImageId);
     }
+
+    [Fact]
+    public void AChildStaysAtTheGridOriginWhileTheTopRowsOfTheGridScrollAway()
+    {
+        using var scene = new Scene();
+        scene.Image(42, 16, 32, "c=2,r=2,p=1");
+        var child = scene.Store.AddImage(40, 20, 7);
+        Assert.Equal(KittyStatus.Ok, scene.Store.TryPlaceRelative(child, Parse("P=42,Q=1,H=1,V=2"), 8, 16, out _));
+        var source = new FakePlaceholderSource(10, 12);
+        // only grid row 1 is on the screen, at screen row 0: the grid's cell (0, 0) is at (-1, 3)
+        source.Placeholder(0, 3, "38;5;42;58;5;1", D1, D0);
+        source.Placeholder(0, 4, "38;5;42;58;5;1");
+
+        var quads = scene.Resolve(source);
+
+        Assert.Equal(2, quads.Count);
+        var last = quads[^1];
+        Assert.Equal(7u, last.ImageId);
+        Assert.Equal((-1 + 2, 3 + 1), (last.ViewRow, last.Col));
+    }
+
+    [Fact]
+    public void CellsOutsideTheGridDoNotMoveTheChildsAnchor()
+    {
+        using var scene = new Scene();
+        scene.Image(42, 16, 32, "c=2,r=2,p=1");
+        var child = scene.Store.AddImage(40, 20, 7);
+        Assert.Equal(KittyStatus.Ok, scene.Store.TryPlaceRelative(child, Parse("P=42,Q=1"), 8, 16, out _));
+        var source = new FakePlaceholderSource(10, 12);
+        source.Placeholder(4, 6, "38;5;42;58;5;1", D0, D0);
+        source.Placeholder(1, 1, "38;5;42;58;5;1", D0, 5);        // column 5 of a 2-column grid: ignored
+
+        var last = scene.Resolve(source)[^1];
+
+        Assert.Equal(7u, last.ImageId);
+        Assert.Equal((4, 6), (last.ViewRow, last.Col));
+    }
+
+    [Fact]
+    public void CollectImageIdsFollowsTheSameIdentityAndInheritanceAsTheResolver()
+    {
+        var source = new FakePlaceholderSource(6, 8);
+        source.Placeholder(0, 0, "38;5;42", D0, D0, D2);
+        source.Placeholder(0, 1, "38;5;42");                        // inherits the high byte: still 42 | 2 << 24
+        source.Placeholder(1, 0, "38;2;1;2;3");                     // 0x010203
+        source.Placeholder(2, 0, "");                               // default foreground: none
+        source.Placeholder(3, 0, "38;5;0", D0, D0);                 // id 0: none
+        source.Placeholder(4, 0, "38;5;9", D0, D0, 296);            // high byte above 255: none
+        source.Text(5, 0, 'x');
+
+        var ids = new HashSet<uint>();
+        PlaceholderResolver.CollectImageIds(source, ids);
+
+        Assert.Equal(2, ids.Count);
+        Assert.True(ids.SetEquals(new uint[] { 33554474, 0x010203 }));
+    }
+
+    // ---------------------------------------------------------------- animation visibility (AdvanceAnimations)
+
+    // A running two-frame image (1x1, default 40 ms gap): the first pass that treats it as displayed arms its
+    // deadline at now + 40 ms (clock of 1000 ticks per second), a pass that does not returns 0.
+    private static KittyImage Animated(KittyRig rig, uint id)
+    {
+        rig.Store.TicksPerSecond = 1000;
+        AnimKit.Transmit(rig, id, 1, 1, new byte[] { 10, 0, 0, 255 });
+        AnimKit.LoadFrame(rig, id, 1, 1, new byte[] { 20, 0, 0, 255 });
+        rig.Apc($"a=a,i={id},s=3");
+        return AnimKit.Img(rig, id);
+    }
+
+    [Fact]
+    public void AnAnimatedImageWithAVirtualPlacementAdvancesWhenTheCellsAreNotKnown()
+    {
+        using var rig = new KittyRig();
+        rig.Store.Place(Animated(rig, 5), "U=1,c=2,r=2,p=1");
+
+        Assert.Equal(1040L, rig.Store.AdvanceAnimations(1000, 24, 0));
+    }
+
+    [Fact]
+    public void AVirtualPlacementAdvancesOnlyWhileAPlaceholderNamesItsImage()
+    {
+        foreach (var (sgr, expected) in new[] { ("38;5;5", 1040L), ("38;5;6", 0L), ("", 0L) })
+        {
+            using var rig = new KittyRig();
+            rig.Store.Place(Animated(rig, 5), "U=1,c=2,r=2,p=1");
+            var source = new FakePlaceholderSource(8, 20);
+            source.Placeholder(2, 3, sgr, D0, D0);
+
+            Assert.Equal(expected, rig.Store.AdvanceAnimations(1000, 24, 0, source));
+        }
+
+        using var empty = new KittyRig();
+        empty.Store.Place(Animated(empty, 5), "U=1,c=2,r=2,p=1");
+        Assert.Equal(0L, empty.Store.AdvanceAnimations(1000, 24, 0, new FakePlaceholderSource(8, 20)));
+    }
+
+    [Fact]
+    public void ARelativeChildOfAVirtualPlacementAdvancesWhileTheParentsPlaceholdersAreShown()
+    {
+        foreach (var (sgr, expected) in new[] { ("38;5;5", 1040L), ("38;5;6", 0L) })
+        {
+            using var rig = new KittyRig();
+            rig.Store.Place(rig.Store.AddImage(16, 32, 5), "U=1,c=2,r=2,p=1");
+            var child = Animated(rig, 8);
+            Assert.Equal(KittyStatus.Ok, rig.Store.TryPlaceRelative(child, Parse("P=5,Q=1,H=1"), 8, 16, out _));
+            var source = new FakePlaceholderSource(8, 20);
+            source.Placeholder(2, 3, sgr, D0, D0);
+
+            Assert.Equal(expected, rig.Store.AdvanceAnimations(1000, 24, 0, source));
+        }
+    }
+
+    [Theory]
+    [InlineData(30L, -20, 1040L)]    // the parent is below the viewport, the child (row 10) is in it
+    [InlineData(5L, 3, 1040L)]
+    [InlineData(5L, 40, 0L)]         // the parent is in view, the child (row 45) is not
+    [InlineData(5L, -10, 0L)]        // the child is above the viewport (row -5)
+    public void ARelativeChildAdvancesOnItsOwnResolvedPosition(long parentRow, int v, long expectedDeadline)
+    {
+        using var rig = new KittyRig();
+        rig.Store.Place(rig.Store.AddImage(8, 16, 1), "p=1", anchorRow: parentRow);
+        var child = Animated(rig, 2);
+        Assert.Equal(KittyStatus.Ok, rig.Store.TryPlaceRelative(child, Parse($"P=1,Q=1,V={v}"), 8, 16, out _));
+
+        Assert.Equal(expectedDeadline, rig.Store.AdvanceAnimations(1000, 24, 0));
+    }
 }
 
 /// <summary>
@@ -1052,5 +1179,43 @@ public sealed class KittyPlaceholderEndToEndTests
         t.Feed(Esc + "[10;1H\n");                                 // one scroll: everything moves up a row
         child = t.Resolve().Single(q => q.ImageId == 7);
         Assert.Equal((2, 7), (child.ViewRow, child.Col));
+    }
+}
+
+/// <summary>The per-frame path with virtual placements (capture and resolve) allocates nothing once its buffers have grown.</summary>
+[Collection("Allocation-sensitive tests")]
+public sealed class KittyPlaceholderAllocationTests
+{
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CaptureAndResolveAllocateNothingInSteadyState(bool withChild)
+    {
+        using var store = new KittyImageStore(100_000_000);
+        store.Place(store.AddImage(16, 32, 42), "U=1,c=2,r=2,p=1");
+        store.Place(store.AddImage(16, 32, 43), "U=1,c=2,r=2,p=1");
+        if (withChild)
+        {
+            var child = store.AddImage(40, 20, 7);
+            Assert.Equal(KittyStatus.Ok, store.TryPlaceRelative(child, Parse("P=42,Q=1,H=1"), 8, 16, out _));
+        }
+        var source = new FakePlaceholderSource(6, 10);
+        source.Placeholder(1, 2, "38;5;42;58;5;1", 0, 0);
+        source.Placeholder(1, 3, "38;5;42;58;5;1");
+        source.Placeholder(2, 2, "38;5;42;58;5;1", 1, 0);
+        source.Placeholder(2, 3, "38;5;42;58;5;1");
+        source.Placeholder(4, 0, "38;5;43", 0, 0);
+        using var snapshot = new KittyRenderSnapshot();
+        var output = new List<KittyRenderPlacement>();
+
+        AllocationAssert.NoAllocations(() =>
+        {
+            snapshot.Reset();
+            store.CaptureVisible(snapshot, 24, 0);
+            output.Clear();
+            PlaceholderResolver.Resolve(source, snapshot, 8f, 16f, output);
+        });
+
+        Assert.Equal(withChild ? 4 : 3, output.Count);
     }
 }

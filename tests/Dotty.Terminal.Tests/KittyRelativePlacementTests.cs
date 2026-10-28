@@ -622,6 +622,20 @@ public sealed class KittyRelativePlacementTests
     }
 
     [Fact]
+    public void NamingTheOwnImageWithoutAnyPlacementIdIsAlsoSelfParenting()
+    {
+        // No p and no Q: both ids are 0, so the placement would be its own parent (the same rule as p == Q).
+        using var rig = RigWithImages(1);
+        rig.Apc("a=p,i=1,p=1,C=1");
+        rig.Replies.Clear();
+
+        rig.Apc("a=p,i=1,P=1");
+
+        Assert.Equal(new[] { Err("i=1", SelfParent) }, rig.Replies);
+        Assert.Equal(1, rig.Store.PlacementCount);
+    }
+
+    [Fact]
     public void ADifferentPlacementOfTheSameImageIsAValidParent()
     {
         using var rig = RigWithImages(1);

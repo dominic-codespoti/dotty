@@ -104,12 +104,13 @@ public sealed class ImageQuadBuilderTests
     }
 
     [Fact]
-    public void FractionalCellSize_FloorsOriginKeepsSize()
+    public void FractionalCellSize_SnapsAllFourEdgesLikeCellBackgrounds()
     {
         using var px = Px();
         var l = Build(Scene(cw: 7.5f, ch: 15.25f), P(px, col: 3, row: 2, cols: 2, rows: 2));
         var q = l.Quads[0];
-        Assert.Equal((22f, 30f, 15f, 30.5f), (q.X, q.Y, q.W, q.H));   // 22.5->22, 30.5->30
+        // left 22.5 -> 23, right 37.5 -> 38, top 30.5 -> 31, bottom 61.0 -> 61 (round half up on both edges)
+        Assert.Equal((23f, 31f, 15f, 30f), (q.X, q.Y, q.W, q.H));
         l.Clear();
     }
 
@@ -124,8 +125,8 @@ public sealed class ImageQuadBuilderTests
         };
         var l = Build(Scene(cw: 7.5f, ch: 15.25f), native);
         var q = l.Quads[0];
-        Assert.Equal(22.5f, q.W);
-        Assert.Equal(61f * 15.25f / 20f, q.H, 4);
+        Assert.Equal(23f, q.W);                          // 22.5 wide from x 0 -> right edge 23
+        Assert.Equal(47f, q.H);                          // 61 * 15.25 / 20 = 46.5125 -> bottom edge 47
         l.Clear();
     }
 
@@ -138,14 +139,102 @@ public sealed class ImageQuadBuilderTests
     }
 
     [Fact]
-    public void SubCellOffsets_AreFractionsOfCell_ThenFloored()
+    public void SubCellOffsets_AreFractionsOfCell_ThenRounded()
     {
         using var px = Px();
         var l = Build(Scene(), P(px, col: 1, row: 1, cols: 1, rows: 1, ox: .25f, oy: .5f));
         var q = l.Quads[0];
-        Assert.Equal((12f, 30f), (q.X, q.Y));          // 10+2.5, 20+10
+        Assert.Equal((13f, 30f), (q.X, q.Y));          // 10+2.5 -> 13 (half rounds up), 20+10
         l.Clear();
     }
+
+    [Fact]
+    public void ASubPixelQuadKeepsOnePixel()
+    {
+        using var px = Px();
+        // 0.2 px wide at x 10.1 (both edges round to 10): kept as one pixel so a thin image does not vanish
+        var thin = new KittyRenderPlacement
+        {
+            Pixels = px, ImageSerial = px.Serial, Cols = 1, Rows = 1, U1 = 1, V1 = 1, OffXCells = 0.01f,
+            NativeSize = true, NativeW = 2, NativeH = 4096, BasisCellW = 100, BasisCellH = 4096,
+        };
+        var l = Build(Scene(), thin);
+        var q = Assert.Single(l.Quads.AsSpan(0, l.QuadCount).ToArray());
+        Assert.Equal((0f, 1f), (q.X, q.W));
+        l.Clear();
+    }
+
+    // Adjacent quads share an edge computed from the same absolute coordinates, so after snapping they must touch
+    // exactly: no background row between them (gap) and no doubly covered row (overlap) at any cell size.
+    [Theory]
+    [InlineData(18.4f, 0f, false)]
+    [InlineData(18.4f, 3.3f, false)]
+    [InlineData(18.75f, 0f, false)]
+    [InlineData(18.75f, 4.5f, false)]
+    [InlineData(22.5f, 0f, false)]
+    [InlineData(22.5f, 7f, false)]
+    [InlineData(18.4f, 3.3f, true)]
+    [InlineData(18.75f, 0f, true)]
+    [InlineData(22.5f, 7f, true)]
+    public void VerticallyAdjacentQuadsTouchAtFractionalCellHeights(float cellHeight, float padTop, bool native)
+    {
+        using var px = Px();
+        const int rows = 60;
+        var ps = new KittyRenderPlacement[rows];
+        for (int r = 0; r < rows; r++)
+            ps[r] = native ? Native(px, 0, r, pl: (uint)r) : P(px, row: r, pl: (uint)r);
+        var l = Build(Scene(padT: padTop, ch: cellHeight, cr: 10_000, cb: 100_000), ps);
+
+        Assert.Equal(rows, l.QuadCount);
+        Assert.Equal((float)Math.Floor(padTop + 0.5), l.Quads[0].Y);
+        for (int r = 1; r < rows; r++)
+            Assert.Equal(l.Quads[r - 1].Y + l.Quads[r - 1].H, l.Quads[r].Y);
+        // total height = the snapped bottom of the last row
+        var last = l.Quads[rows - 1];
+        Assert.Equal((float)Math.Floor(padTop + (double)rows * cellHeight + 0.5), last.Y + last.H);
+        l.Clear();
+    }
+
+    [Theory]
+    [InlineData(11.25f, 0f, false)]
+    [InlineData(11.25f, 6.6f, false)]
+    [InlineData(9.2f, 0f, false)]
+    [InlineData(9.2f, 2.5f, true)]
+    [InlineData(12.5f, 8f, true)]
+    public void HorizontallyAdjacentQuadsTouchAtFractionalCellWidths(float cellWidth, float padLeft, bool native)
+    {
+        using var px = Px();
+        const int cols = 80;
+        var ps = new KittyRenderPlacement[cols];
+        for (int c = 0; c < cols; c++)
+            ps[c] = native ? Native(px, c, 0, pl: (uint)c) : P(px, col: c, pl: (uint)c);
+        var l = Build(Scene(padL: padLeft, cw: cellWidth, cr: 100_000, cb: 10_000), ps);
+
+        Assert.Equal(cols, l.QuadCount);
+        for (int c = 1; c < cols; c++)
+            Assert.Equal(l.Quads[c - 1].X + l.Quads[c - 1].W, l.Quads[c].X);
+        l.Clear();
+    }
+
+    [Fact]
+    public void SnappedQuadStretchesItsTextureOverTheSnappedRectangle()
+    {
+        using var px = Px();
+        // top edge 15.25*2 = 30.5 -> 31, so a clip at y 40 keeps 9 of the snapped 30 rows: v1 = 9/30
+        var l = Build(Scene(cw: 7.5f, ch: 15.25f, cb: 40), P(px, row: 2, rows: 2));
+        var q = l.Quads[0];
+        Assert.Equal((31f, 9f), (q.Y, q.H));
+        Assert.Equal(9f / 30f, q.V1, 6);
+        l.Clear();
+    }
+
+    private static KittyRenderPlacement Native(ImagePixels px, int col, int row, uint pl)
+        => new()
+        {
+            Pixels = px, ImageSerial = px.Serial, Col = col, ViewRow = row, Cols = 1, Rows = 1, U1 = 1, V1 = 1,
+            NativeSize = true, NativeW = 4096, NativeH = 4096, BasisCellW = 4096, BasisCellH = 4096,
+            ImageId = 1, PlacementId = pl,
+        };
 
     [Fact]
     public void LayerBoundaries()

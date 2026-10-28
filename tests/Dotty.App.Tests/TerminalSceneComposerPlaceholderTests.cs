@@ -152,6 +152,26 @@ public sealed class TerminalSceneComposerPlaceholderTests
     }
 
     [Fact]
+    public void PlaceholderRowsTouchAtAFractionalDpiScale()
+    {
+        using var scene = new Scene(rows: 8, columns: 40);
+        scene.VirtualImage(42, 16, 32, "c=2,r=2");
+        PrintTwoByTwo(scene, row: 1, column: 2);
+
+        // Scaled cells are 11.25 x 22.5 px. Both edges snap like the cell backgrounds: x 22.5 -> 23 .. 45,
+        // the upper run's y 22.5 -> 23 .. 45 and the lower one's 45 .. 67.5 -> 68; they share the edge at y 45.
+        var frame = scene.Compose(450, 180, 9, 18, 1.25f, 8, 40);
+
+        Assert.Equal(2, frame.ImageDraws.QuadCount);
+        ImageQuadInstance top = frame.ImageDraws.Quads[0], bottom = frame.ImageDraws.Quads[1];
+        Assert.Equal((23f, 23f, 22f, 22f), (top.X, top.Y, top.W, top.H));
+        Assert.Equal((23f, 45f, 22f, 23f), (bottom.X, bottom.Y, bottom.W, bottom.H));
+        Assert.Equal(top.Y + top.H, bottom.Y);
+        Assert.Equal((0f, 0f, 1f, 0.5f), (top.U0, top.V0, top.U1, top.V1));
+        Assert.Equal((0f, 0.5f, 1f, 1f), (bottom.U0, bottom.V0, bottom.U1, bottom.V1));
+    }
+
+    [Fact]
     public void PlaceholderTextWithoutAVirtualPlacementDrawsNoImage()
     {
         using var scene = new Scene(rows: 8, columns: 40);

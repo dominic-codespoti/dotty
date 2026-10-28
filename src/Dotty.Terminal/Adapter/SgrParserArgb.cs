@@ -47,9 +47,12 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 4:
-                    // SGR 4 with colon subparameter: 4 → single, 4:3 → curl, 4:4 → dotted, 4:5 → dashed
+                    // SGR 4 with colon subparameter: 4 → single, 4:0 → none, 4:1 → single, 4:2 → double, 4:3 → curl,
+                    // 4:4 → dotted, 4:5 → dashed (anything else: single)
                     attributes.UnderlineStyle = enumerator.SubParameter switch
                     {
+                        0 => UnderlineStyle.None,
+                        2 => UnderlineStyle.Double,
                         3 => UnderlineStyle.Curl,
                         4 => UnderlineStyle.Dotted,
                         5 => UnderlineStyle.Dashed,

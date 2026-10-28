@@ -325,7 +325,7 @@ internal sealed partial class KittyImageStore
         Require(_reportedPlacements == _placements.Count, "placement metric is out of step with the live placements");
         Require(_anchors.Count == 0, "captured reflow anchors were never rebased or abandoned");
 
-        int withId = 0;
+        int withId = 0, relatives = 0, childLinks = 0;
         foreach (var (internalId, p) in _placements)
         {
             Require(p.InternalId == internalId, "placement stored under a foreign internal id");
@@ -346,6 +346,12 @@ internal sealed partial class KittyImageStore
                 Require(p.EndRow >= _minEndRow, "cached minimum end row is above a placement's end row");
                 Require(p.AnchorCol >= 0, "placement with a negative anchor column");
             }
+            else
+            {
+                Require(p.AnchorRow == 0 && p.AnchorCol == 0, "an unanchored placement carries an anchor");
+            }
+            if (p.Kind == PlacementKind.Relative)
+                relatives++;
             Require(p.Kind == PlacementKind.Relative == (p.Parent != null), "only relative placements have a parent, and all of them do");
             if (p.Parent != null)
             {
@@ -363,9 +369,19 @@ internal sealed partial class KittyImageStore
             {
                 Require(p.Children.Count > 0, "empty children list kept");
                 for (int i = 0; i < p.Children.Count; i++)
-                    Require(ReferenceEquals(p.Children[i].Parent, p), "child does not point back to its parent");
+                {
+                    var child = p.Children[i];
+                    Require(ReferenceEquals(child.Parent, p), "child does not point back to its parent");
+                    Require(child.Kind == PlacementKind.Relative, "a child that is not a relative placement");
+                    Require(_placements.TryGetValue(child.InternalId, out var liveChild) && ReferenceEquals(liveChild, child),
+                        "a child that is not a live placement");
+                    for (int j = 0; j < i; j++)
+                        Require(!ReferenceEquals(p.Children[j], child), "child listed twice");
+                }
+                childLinks += p.Children.Count;
             }
         }
         Require(withId == _placementsById.Count, "placement id index has stale entries");
+        Require(childLinks == relatives, "children lists do not account for every relative placement");
     }
 }

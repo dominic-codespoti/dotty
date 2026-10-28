@@ -155,13 +155,27 @@ public static class ImageQuadBuilder
             h = (double)p.Rows * ch;
         }
 
-        double x = Math.Floor(g.PaddingLeft + ((double)g.PaneColOffset + p.Col) * cw + (double)p.OffXCells * cw);
-        double y = Math.Floor(g.PaddingTop + ((double)g.PaneRowOffset + p.ViewRow) * ch + (double)p.OffYCells * ch);
+        double left = g.PaddingLeft + ((double)g.PaneColOffset + p.Col) * cw + (double)p.OffXCells * cw;
+        double top = g.PaddingTop + ((double)g.PaneRowOffset + p.ViewRow) * ch + (double)p.OffYCells * ch;
 
-        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(w) || !double.IsFinite(h) || w <= 0 || h <= 0)
+        if (!double.IsFinite(left) || !double.IsFinite(top) || !double.IsFinite(w) || !double.IsFinite(h) || w <= 0 || h <= 0)
             return false;
         if (!float.IsFinite(p.U0) || !float.IsFinite(p.V0) || !float.IsFinite(p.U1) || !float.IsFinite(p.V1))
             return false;
+
+        // Snap all four edges to device pixels from the same absolute coordinates, exactly like the cell
+        // background pass (SilkGlShaders: floor(v + 0.5) on both edges). Edges shared by adjacent quads (a
+        // placeholder grid is one quad per cell row) then land on the same pixel boundary at fractional cell
+        // sizes (DPI scales, zoom): snapping only the origin and keeping the size leaves one-pixel gaps or overlaps.
+        // A sub-pixel quad keeps one pixel. The texture coordinates stretch over the snapped rectangle.
+        double x = Math.Floor(left + 0.5);
+        double y = Math.Floor(top + 0.5);
+        double xRight = Math.Floor(left + w + 0.5);
+        double yBottom = Math.Floor(top + h + 0.5);
+        if (xRight <= x) xRight = x + 1;
+        if (yBottom <= y) yBottom = y + 1;
+        w = xRight - x;
+        h = yBottom - y;
 
         double x0 = Math.Max(x, g.ClipLeft), x1 = Math.Min(x + w, g.ClipRight);
         double y0 = Math.Max(y, g.ClipTop), y1 = Math.Min(y + h, g.ClipBottom);

@@ -263,4 +263,48 @@ public sealed class QuadFrameBuilderTests
         Assert.Equal(expectedFg.G, spaceInst.FgG);
         Assert.Equal(expectedFg.B, spaceInst.FgB);
     }
+
+    [Fact]
+    public void UnderlinedWhitespaceWithoutBackground_EmitsADecorationInstanceAndPlainWhitespaceStaysSkipped()
+    {
+        var buffer = new TerminalBuffer(rows: 2, columns: 10);
+        var underlined = new CellAttributes { UnderlineStyle = UnderlineStyle.Single };
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("A B".AsSpan(), underlined);
+        buffer.SetCursor(1, 0);
+        buffer.WriteText("A B".AsSpan(), CellAttributes.Default);
+
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var geo = new FrameGeometry(CellW, CellH, 2, 10);
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, geo);
+
+        Assert.Equal(5, result.InstanceCount);                   // A, space, B underlined; A, B plain
+        var space = result.Instances[1];
+        Assert.Equal(((ushort)1, (ushort)0), (space.Col, space.Row));
+        Assert.Equal((short)0, space.GlyphW);
+        Assert.Equal(0, space.BgA);
+        Assert.True((space.Flags & CellFlags.Underline) != 0);
+        Assert.Equal(((ushort)0, (ushort)1), (result.Instances[3].Col, result.Instances[3].Row));
+        Assert.Equal(((ushort)2, (ushort)1), (result.Instances[4].Col, result.Instances[4].Row));
+    }
+
+    [Fact]
+    public void PlaceholderCell_NeverDrawsAGlyphButKeepsItsDecoration()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 10);
+        var underlined = new CellAttributes { UnderlineStyle = UnderlineStyle.Single };
+        buffer.SetCursor(0, 0);
+        buffer.WriteText(char.ConvertFromUtf32(0x10EEEE).AsSpan(), underlined);
+
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var geo = new FrameGeometry(CellW, CellH, 1, 10);
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, geo);
+
+        var cell = Assert.Single(result.Instances.AsSpan(0, result.InstanceCount).ToArray());
+        Assert.Equal((short)0, cell.GlyphW);
+        Assert.Equal((short)0, cell.GlyphH);
+        Assert.True((cell.Flags & CellFlags.Underline) != 0);
+    }
 }

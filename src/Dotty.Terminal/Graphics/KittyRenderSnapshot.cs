@@ -81,8 +81,8 @@ public readonly struct KittyVirtualPlacement
 /// <summary>
 /// A relative placement whose root is a virtual placement: it can only be positioned once the placeholder cells are
 /// found. <see cref="Placement"/> carries the child's own geometry; its <see cref="KittyRenderPlacement.ViewRow"/> and
-/// <see cref="KittyRenderPlacement.Col"/> are the summed <c>V</c>/<c>H</c> offsets from the virtual placement's
-/// top-left placeholder cell.
+/// <see cref="KittyRenderPlacement.Col"/> are the summed <c>V</c>/<c>H</c> offsets from the screen position of
+/// the virtual placement's grid origin (cell (0, 0) of its <c>c</c> × <c>r</c> grid, found from the placeholder cells).
 /// </summary>
 public readonly struct KittyVirtualChild
 {
@@ -153,23 +153,47 @@ public sealed class KittyRenderSnapshot : IDisposable
         _virtualChildren[_virtualChildCount++] = child;
     }
 
-    /// <summary>Orders <see cref="Virtuals"/> for the resolver's binary search.</summary>
+    /// <summary>
+    /// Orders <see cref="Virtuals"/> for the resolver's binary search. An in-place heapsort: <c>Array.Sort</c> with an
+    /// <see cref="IComparer{T}"/> allocates a delegate per call, and this runs on every captured frame. The order
+    /// (image id, placement id, internal id) is total, so the sort being unstable does not matter.
+    /// </summary>
     internal void SortVirtuals()
     {
-        if (_virtualCount > 1)
-            Array.Sort(_virtuals, 0, _virtualCount, VirtualOrder.Instance);
+        int n = _virtualCount;
+        if (n < 2)
+            return;
+        KittyVirtualPlacement[] a = _virtuals;
+        for (int i = n / 2 - 1; i >= 0; i--)
+            SiftDown(a, i, n);
+        for (int end = n - 1; end > 0; end--)
+        {
+            (a[0], a[end]) = (a[end], a[0]);
+            SiftDown(a, 0, end);
+        }
     }
 
-    private sealed class VirtualOrder : IComparer<KittyVirtualPlacement>
+    private static void SiftDown(KittyVirtualPlacement[] a, int root, int n)
     {
-        public static readonly VirtualOrder Instance = new();
-
-        public int Compare(KittyVirtualPlacement x, KittyVirtualPlacement y)
+        while (true)
         {
-            if (x.ImageId != y.ImageId) return x.ImageId < y.ImageId ? -1 : 1;
-            if (x.PlacementId != y.PlacementId) return x.PlacementId < y.PlacementId ? -1 : 1;
-            return x.InternalId.CompareTo(y.InternalId);
+            int child = 2 * root + 1;
+            if (child >= n)
+                return;
+            if (child + 1 < n && Compare(in a[child], in a[child + 1]) < 0)
+                child++;
+            if (Compare(in a[root], in a[child]) >= 0)
+                return;
+            (a[root], a[child]) = (a[child], a[root]);
+            root = child;
         }
+    }
+
+    private static int Compare(in KittyVirtualPlacement x, in KittyVirtualPlacement y)
+    {
+        if (x.ImageId != y.ImageId) return x.ImageId < y.ImageId ? -1 : 1;
+        if (x.PlacementId != y.PlacementId) return x.PlacementId < y.PlacementId ? -1 : 1;
+        return x.InternalId.CompareTo(y.InternalId);
     }
 
     /// <summary>Releases all leases and empties the snapshot for reuse.</summary>

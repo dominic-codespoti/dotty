@@ -379,4 +379,68 @@ public sealed class KittySnapshotTests
         using var s = t.Capture();
         Assert.Null(s.Graphics);
     }
+
+    // ------------------------------------------------------------------ virtual placements and their children
+
+    [Fact]
+    public void VirtualPlacementsAreCapturedSortedByImageThenPlacementWhateverTheCreationOrder()
+    {
+        using var store = new KittyImageStore(10_000_000);
+        for (uint id = 20; id >= 1; id--)
+        {
+            var image = store.AddImage(16, 32, id);
+            foreach (uint p in new uint[] { 3, 1, 2 })
+                store.Place(image, $"U=1,c=1,r=1,p={p}");
+        }
+
+        using var snapshot = new KittyRenderSnapshot();
+        Assert.Equal(0, store.CaptureVisible(snapshot, 10, 0));
+
+        var keys = snapshot.Virtuals.ToArray().Select(v => (v.ImageId, v.PlacementId)).ToArray();
+        Assert.Equal(60, keys.Length);
+        Assert.Equal(keys.OrderBy(k => k.ImageId).ThenBy(k => k.PlacementId).ToArray(), keys);
+        Assert.Equal(((1u, 1u), (20u, 3u)), (keys[0], keys[^1]));
+        Assert.Equal(60, keys.Distinct().Count());
+    }
+
+    [Fact]
+    public void AVirtualPlacementOfAnImageWithoutAClientIdIsNotCaptured()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = store.AddImage(40, 20, 0, 5);
+        store.Place(image, "U=1,c=1,r=1");
+        Assert.Equal(1, store.PlacementCount);
+
+        using var snapshot = new KittyRenderSnapshot();
+        store.CaptureVisible(snapshot, 10, 0);
+
+        Assert.True(snapshot.Virtuals.IsEmpty);
+    }
+
+    [Fact]
+    public void VirtualPlacementsAndTheirChildrenHoldLeasesAndResetReleasesThem()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var store = new KittyImageStore(1_000_000))
+        {
+            var parent = store.AddImage(40, 20, 1);
+            store.Place(parent, "U=1,c=2,r=2,p=1");
+            var child = store.AddImage(16, 16, 2);
+            Assert.Equal(KittyStatus.Ok, store.TryPlaceRelative(child, Parse("P=1,Q=1"), 8, 16, out _));
+            var snapshot = new KittyRenderSnapshot();
+            store.CaptureVisible(snapshot, 10, 0);
+            Assert.Single(snapshot.Virtuals.ToArray());
+            Assert.Single(snapshot.VirtualChildren.ToArray());
+
+            store.Clear();                                           // the store lets go of both images ...
+            Assert.Equal(40 * 20 * 4 + 16 * 16 * 4, baseline.LiveBytesDelta);   // ... the snapshot's leases keep them
+
+            snapshot.Reset();
+            Assert.Equal(0, baseline.LiveBytesDelta);
+            Assert.True(snapshot.Virtuals.IsEmpty);
+            Assert.True(snapshot.VirtualChildren.IsEmpty);
+            snapshot.Dispose();                                      // idempotent
+        }
+        baseline.AssertRestored();
+    }
 }

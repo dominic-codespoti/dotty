@@ -1,4 +1,5 @@
 using System.Text;
+using Dotty.Abstractions.Config;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
 
@@ -39,13 +40,19 @@ internal static class ReflowScenario
 
     private static readonly string[] WideText = ["\u4e2d", "\u6587", "\u5b57", "\u754c", "\u6f22", "\u8bed"];
 
-    internal static TerminalAdapter Build(int seed, ReflowScenarioKind kind)
+    /// <summary>
+    /// Builds the scenario. <paramref name="policy"/>, when given, replaces the seed's fixed history capacity, so the
+    /// capacity then changes with the size under a byte cap (the random draws are the same either way).
+    /// </summary>
+    internal static TerminalAdapter Build(int seed, ReflowScenarioKind kind, ScrollbackPolicy? policy = null)
     {
         var random = new Random(seed);
         int rows = random.Next(2, 8);
         int columns = random.Next(4, 15);
         int capacity = random.Next(4) switch { 0 => 0, 1 => 5, 2 => 24, _ => 80 };
-        var adapter = new TerminalAdapter(rows, columns, capacity);
+        var adapter = policy is { } scrollbackPolicy
+            ? new TerminalAdapter(rows, columns, scrollbackPolicy)
+            : new TerminalAdapter(rows, columns, capacity);
         var parser = new BasicAnsiParser { Handler = adapter };
 
         int operations = random.Next(12, 90);

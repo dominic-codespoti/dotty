@@ -387,7 +387,7 @@ public sealed unsafe class ScreenLazyCommitTests
             model.ScrollUp(1);
         }
 
-        screen.ResetForReuse(6, 9);
+        screen.ResetForReuse(6, 9, 11);
 
         Assert.Equal(0, screen.DirtyRowCount);
         Assert.Equal(0, screen.CommittedBoundBytes);
@@ -397,7 +397,7 @@ public sealed unsafe class ScreenLazyCommitTests
         AssertClean(screen, "parked");
 
         // Becoming a reflow destination re-establishes the visible window.
-        screen.ResetForReflow(6, 9);
+        screen.ResetForReflow(6, 9, 11);
         Assert.Equal(6, screen.DirtyRowCount);
         AssertClean(screen, "reused");
     }

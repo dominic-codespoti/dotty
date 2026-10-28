@@ -5,7 +5,7 @@ namespace Dotty.Terminal.Adapter;
 
 public partial class TerminalBuffer
 {
-    private readonly record struct PromptAnchor(PromptMark Mark, ReflowCursorAnchor Anchor);
+    private readonly record struct PromptAnchor(PromptMark Mark, int Slot);
     private readonly List<PromptAnchor> _promptAnchorScratch = new();
 
     private void ResizeWithReflow(int requestedRows, int requestedColumns)
@@ -35,39 +35,49 @@ public partial class TerminalBuffer
             ? mainLayout
             : alternateLayout!;
 
-        var activeAnchor = oldActiveScreen.GetReflowAnchor(
+        // The reflow resolves exactly the anchors registered here (the cursor, the saved cursors and the prompt
+        // marks) and keeps no per-cell position table; each anchor is read back by its slot afterwards.
+        var mainMapping = _screens.MainMapping;
+        var alternateMapping = _screens.AlternateMapping;
+        var activeMapping = _isAlternate ? alternateMapping : mainMapping;
+        int markAnchors = _promptMarks.Count;
+        mainMapping.BeginAnchors(_isAlternate ? 1 : 2 + markAnchors);
+        alternateMapping.BeginAnchors(_isAlternate ? 2 + markAnchors : 0);
+
+        int cursorSlot = activeMapping.AddAnchor(oldActiveScreen.GetReflowAnchor(
             cursorState.Row,
             cursorState.Column,
             cursorState.WrapPending,
             oldActiveScrollback,
-            activeLayout);
+            activeLayout));
 
-        var mainAnchor = _isAlternate
-            ? oldMainScreen.GetReflowAnchor(
-                _alternateSavedCursorState.Row,
-                _alternateSavedCursorState.Column,
-                _alternateSavedCursorState.WrapPending,
-                oldMainScrollback,
-                mainLayout)
-            : activeAnchor;
-
-        var alternateAnchor = _isAlternate
-            ? activeAnchor
-            : new ReflowCursorAnchor(0, 0);
-        ReflowCursorAnchor savedAnchor = default;
+        int savedSlot = -1;
         if (_hasSavedCursor)
         {
-            savedAnchor = oldActiveScreen.GetReflowAnchor(
+            savedSlot = activeMapping.AddAnchor(oldActiveScreen.GetReflowAnchor(
                 _savedCursorState.Row,
                 _savedCursorState.Column,
                 _savedCursorState.WrapPending,
                 oldActiveScrollback,
-                activeLayout);
+                activeLayout));
+        }
+
+        // While the alternate screen is active the cursor saved on entry belongs to the hidden main screen.
+        int alternateSavedSlot = -1;
+        if (_isAlternate && _hasAlternateSavedCursor)
+        {
+            alternateSavedSlot = mainMapping.AddAnchor(oldMainScreen.GetReflowAnchor(
+                _alternateSavedCursorState.Row,
+                _alternateSavedCursorState.Column,
+                _alternateSavedCursorState.WrapPending,
+                oldMainScrollback,
+                mainLayout));
         }
 
         var promptAnchors = CapturePromptAnchors(
             oldActiveScreen,
             activeLayout,
+            activeMapping,
             oldActiveScrollback,
             oldRows,
             oldTotalScrolled);
@@ -75,46 +85,38 @@ public partial class TerminalBuffer
         _screens.Reflow(
             rows,
             columns,
-            mainAnchor,
             mainLayout,
             oldMainScrollback,
-            alternateAnchor,
             alternateLayout,
-            alternateScrollbackRows: 0,
-            out ReflowMapping? mainMapping,
-            out ReflowMapping? alternateMapping);
+            alternateScrollbackRows: 0);
 
         Rows = rows;
         Columns = columns;
 
-        var activeMapping = _isAlternate ? alternateMapping : mainMapping;
-        if (activeMapping is null)
-            throw new InvalidOperationException("Resize reflow did not produce an active mapping.");
-
-        var mappedCursor = MapCursorState(cursorState, activeAnchor, activeMapping, rows, columns);
+        var mappedCursor = MapCursorState(cursorState, activeMapping, cursorSlot, rows, columns);
         _cursor.RestoreState(mappedCursor, rows, columns);
 
         if (_hasSavedCursor)
         {
             _savedCursorState = MapCursorState(
                 _savedCursorState,
-                savedAnchor,
                 activeMapping,
+                savedSlot,
                 rows,
                 columns);
         }
 
-        if (_isAlternate && _hasAlternateSavedCursor && mainMapping is not null)
+        if (alternateSavedSlot >= 0)
         {
             _alternateSavedCursorState = MapCursorState(
                 _alternateSavedCursorState,
-                mainAnchor,
                 mainMapping,
+                alternateSavedSlot,
                 rows,
                 columns);
         }
 
-        int newMainScrollback = mainMapping?.NewScrollbackRows ?? 0;
+        int newMainScrollback = mainMapping.NewScrollbackRows;
         if (_isAlternate)
         {
             _savedTotalScrolled = newMainScrollback;
@@ -154,19 +156,19 @@ public partial class TerminalBuffer
 
         // Absolute rows were re-based above (_totalScrolled, prompt marks). History lives on the main screen, so its
         // mapping says whether the oldest rows were dropped to fit the capacity.
-        RaiseHistoryInvalidated(mainMapping is { RetainedStart: > 0 }
+        RaiseHistoryInvalidated(mainMapping.RetainedStart > 0
             ? HistoryDiscardReason.CapacityShrunk
             : HistoryDiscardReason.Rebased);
     }
 
     private static CursorState MapCursorState(
         CursorState original,
-        ReflowCursorAnchor anchor,
         ReflowMapping mapping,
+        int slot,
         int rows,
         int columns)
     {
-        if (mapping.TryMap(anchor, out var position) && !position.InScrollback)
+        if (mapping.TryMap(slot, out var position) && !position.InScrollback)
         {
             return original with
             {
@@ -195,6 +197,7 @@ public partial class TerminalBuffer
     private List<PromptAnchor> CapturePromptAnchors(
         Screen screen,
         Screen.SourceLayout layout,
+        ReflowMapping mapping,
         int scrollbackRows,
         int rows,
         int totalScrolled)
@@ -214,7 +217,7 @@ public partial class TerminalBuffer
                 wrapPending: false,
                 scrollbackRows,
                 layout);
-            anchors.Add(new PromptAnchor(mark, anchor));
+            anchors.Add(new PromptAnchor(mark, mapping.AddAnchor(anchor)));
         }
         return anchors;
     }
@@ -227,7 +230,7 @@ public partial class TerminalBuffer
         _promptMarks.Clear();
         foreach (var entry in anchors)
         {
-            if (!mapping.TryMap(entry.Anchor, out var position))
+            if (!mapping.TryMap(entry.Slot, out var position))
                 continue;
 
             int retainedIndex = position.OutputIndex - mapping.RetainedStart;

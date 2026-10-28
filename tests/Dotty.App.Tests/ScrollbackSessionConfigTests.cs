@@ -114,6 +114,21 @@ public sealed class ScrollbackSessionConfigTests : IDisposable
     }
 
     [Fact]
+    public void ExistingSession_CapacityFollowsColumnsAfterResizeUnderTheByteCap()
+    {
+        LoadConfig("{\"scrollback\":{\"limitLines\":100000,\"limitBytes\":1048576}}");
+        using var session = new TerminalSession(24, 80, SilentPty.Create);
+        Assert.Equal(1068, session.Adapter.Buffer.ActiveBuffer.ScrollbackCapacity);
+
+        session.Resize(200, 24); // TerminalSession.Resize takes (columns, rows)
+        Assert.Equal(200, session.Adapter.Buffer.Columns);
+        Assert.Equal(1048576 / (200 * 12) - 24, session.Adapter.Buffer.ActiveBuffer.ScrollbackCapacity);
+
+        session.Resize(80, 24);
+        Assert.Equal(1068, session.Adapter.Buffer.ActiveBuffer.ScrollbackCapacity);
+    }
+
+    [Fact]
     public void NewSession_ZeroBytesMeansNoByteCap_AndLinesAreCappedAtOneMillion()
     {
         LoadConfig("{\"scrollback\":{\"limitLines\":2000000,\"limitBytes\":0}}");

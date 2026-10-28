@@ -67,6 +67,9 @@ internal sealed class LegacyReflowPrediction
         int oldTotalScrolled = Required<int>(buffer, "_totalScrolled");
         int oldSavedTotalScrolled = Required<int>(buffer, "_savedTotalScrolled");
         var manager = Required<ScreenManager>(buffer, "_screens");
+
+        // Every ring of the new size has the capacity the scrollback policy gives that size (the alternate screen's too).
+        int destinationCapacity = manager.Policy.CapacityFor(rows, columns);
         var cursorState = Required<CursorController>(buffer, "_cursor").CaptureState();
 
         Screen main = manager.Main;
@@ -75,7 +78,7 @@ internal sealed class LegacyReflowPrediction
             : buffer.ScrollbackCount;
         var mainLayout = main.BuildSourceLayout(mainScrollback, new Screen.SourceLayout());
         var mainReplay = LegacyDenseReflowReplay.Replay(
-            mainLayout, main.Columns, main.ScrollbackCapacity, rows, columns, mainScrollback, includeScrollback: true);
+            mainLayout, main.Columns, main.ScrollbackCapacity, destinationCapacity, rows, columns, mainScrollback, includeScrollback: true);
 
         Screen active = buffer.ActiveBuffer;
         int activeScrollback = alternateActive ? 0 : mainScrollback;
@@ -85,7 +88,7 @@ internal sealed class LegacyReflowPrediction
         {
             activeLayout = active.BuildSourceLayout(0, new Screen.SourceLayout());
             activeReplay = LegacyDenseReflowReplay.Replay(
-                activeLayout, active.Columns, active.ScrollbackCapacity, rows, columns, 0, includeScrollback: false);
+                activeLayout, active.Columns, active.ScrollbackCapacity, destinationCapacity, rows, columns, 0, includeScrollback: false);
         }
 
         var activeAnchor = active.GetReflowAnchor(
@@ -130,7 +133,7 @@ internal sealed class LegacyReflowPrediction
         int newMainScrollback = mainReplay.NewScrollbackRows;
         int totalScrolled = alternateActive ? 0 : newMainScrollback;
         int savedTotalScrolled = alternateActive ? newMainScrollback : oldSavedTotalScrolled;
-        int scrollbackCount = Math.Min(totalScrolled, active.ScrollbackCapacity);
+        int scrollbackCount = Math.Min(totalScrolled, destinationCapacity);
         return new LegacyReflowPrediction(
             rows, columns, alternateActive, mappedCursor, mappedSaved, mappedAlternateSaved,
             totalScrolled, savedTotalScrolled, scrollbackCount, promptMarks);

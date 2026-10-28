@@ -4,15 +4,15 @@ using Xunit;
 namespace Dotty.App.Tests;
 
 /// <summary>
-/// Differential tests of the reflow position mapping against the frozen dense oracle
-/// (<see cref="LegacyDenseReflowMapping"/> / <see cref="LegacyDenseReflowReplay"/>), plan 08 WI-R1.
+/// Differential tests of the reflow anchor resolution against the frozen dense oracle
+/// (<see cref="LegacyDenseReflowMapping"/> / <see cref="LegacyDenseReflowReplay"/>) and of the lazy anchor location
+/// against the frozen unit table (<see cref="LegacyUnitAnchorOracle"/>), plan 08 WI-R1 / WI-R2.
 ///
-/// Both tests pass on the current dictionary implementation because it IS the oracle's twin. Their job is to keep passing
-/// when WI-R2 replaces the per-cell dictionary with anchor-only resolution: the rewrite must resolve every anchor exactly as
-/// the dense table did, including the probing fallback for offsets whose output row was trimmed out of the retained window.
-///
-/// When WI-R2 changes <c>ReflowMapping</c>'s API (<c>AddAnchor</c> / slot lookup instead of <c>Add</c> / <c>TryMap(anchor)</c>),
-/// adapt ONLY the two members of <see cref="CurrentMapping"/> below: everything else compares against the legacy side.
+/// The production reflow no longer keeps a per-cell position table: callers register the anchors they need with
+/// <c>ReflowMapping.AddAnchor</c> before <c>Screen.ReflowWithOptions</c>, which resolves exactly those, and read them back
+/// with <c>TryMap(slot)</c>. The rewrite must resolve every anchor exactly as the dense table did, including the probing
+/// fallback for offsets whose output row was trimmed out of the retained window. <see cref="CurrentMapping"/> is the one
+/// adaptation point to the production API; everything else compares against the legacy side.
 /// </summary>
 public sealed class ReflowAnchorMappingOracleTests
 {
@@ -24,123 +24,97 @@ public sealed class ReflowAnchorMappingOracleTests
         return data;
     }
 
-    /// <summary>The production mapping under test; the single adaptation point for the anchor-only rewrite.</summary>
+    /// <summary>The production mapping under test; the single adaptation point to the anchor-only API.</summary>
     private static class CurrentMapping
     {
-        /// <summary>Feeds a hand-built position table into a fresh production mapping (table-level test).</summary>
-        internal static ReflowMapping FromTable(
-            int rows,
-            int columns,
-            IReadOnlyList<(int Line, int Length)> lineLengths,
-            IReadOnlyList<(int Line, int Offset, ReflowPosition Position)> positions,
-            int retainedStart,
-            int newScrollbackRows)
-        {
-            var mapping = new ReflowMapping();
-            mapping.Reset(rows, columns);
-            foreach (var (line, length) in lineLengths)
-                mapping.SetLineLength(line, length);
-            foreach (var (line, offset, position) in positions)
-                mapping.Add(line, offset, position);
-            mapping.RetainedStart = retainedStart;
-            mapping.NewScrollbackRows = newScrollbackRows;
-            return mapping;
-        }
-
-        /// <summary>Production mapping produced by a real reflow of <paramref name="source"/>; the destination is discarded.</summary>
-        internal static ReflowMapping FromReflow(
+        /// <summary>
+        /// Registers <paramref name="anchors"/> (slot i is anchors[i]) on a fresh production mapping and reflows
+        /// <paramref name="layout"/> of <paramref name="source"/>; the destination is discarded.
+        /// </summary>
+        internal static ReflowMapping Resolve(
             Screen source,
             Screen.SourceLayout layout,
+            IReadOnlyList<ReflowCursorAnchor> anchors,
             int rows,
             int columns,
             int scrollbackRows,
-            bool includeScrollback)
+            bool includeScrollback,
+            int destinationScrollbackCapacity)
         {
             var mapping = new ReflowMapping();
+            mapping.BeginAnchors(anchors.Count);
+            for (int i = 0; i < anchors.Count; i++)
+                Assert.Equal(i, mapping.AddAnchor(anchors[i]));
+
             using Screen destination = source.ReflowWithOptions(
                 rows,
                 columns,
-                default,
                 layout,
                 new Screen.ReflowWorkspace(),
                 mapping,
                 scrollbackRows,
-                includeScrollback);
+                includeScrollback,
+                destinationScrollbackCapacity);
             return mapping;
         }
 
-        internal static bool TryMap(ReflowMapping mapping, ReflowCursorAnchor anchor, out ReflowPosition position) =>
-            mapping.TryMap(anchor, out position);
+        internal static bool TryMap(ReflowMapping mapping, int slot, out ReflowPosition position) =>
+            mapping.TryMap(slot, out position);
     }
 
     [Theory]
     [MemberData(nameof(Seeds))]
-    public void RandomPositionTablesMapIdenticallyToLegacyMapper(int seed)
+    public void RandomHandBuiltLayoutsMapIdenticallyToLegacyMapper(int seed)
     {
         var random = new Random(seed);
-        int rows = random.Next(1, 6);
-        int columns = random.Next(1, 9);
-        int lines = random.Next(1, 12);
-
-        var lineLengths = new List<(int Line, int Length)>();
-        var positions = new List<(int Line, int Offset, ReflowPosition Position)>();
-        var lengths = new int[lines];
-        int outputIndex = 0;
-        for (int line = 0; line < lines; line++)
+        for (int round = 0; round < 4; round++)
         {
-            int length = random.Next(0, 14);
-            lengths[line] = length;
-            if (random.Next(10) != 0) // now and then leave the length unregistered
-                lineLengths.Add((line, length));
+            int sourceColumns = random.Next(1, 10);
+            int capacity = random.Next(0, 8);
+            int destinationCapacity = random.Next(0, 8); // differs from the source's under a byte cap
+            int rows = random.Next(1, 6);
+            int columns = random.Next(1, 9);
+            int lineCount = random.Next(1, 14);
+            int scrollbackRows = random.Next(-1, capacity + 1); // -1: the whole capacity
+            bool includeScrollback = random.Next(4) != 0;
 
-            int used = 0;
-            for (int offset = 0; offset <= length; offset++)
+            // Logical lines of random length (some without cells) and random one/two column units.
+            var layout = new Screen.SourceLayout();
+            var lengths = new int[lineCount];
+            for (int line = 0; line < lineCount; line++)
             {
-                if (offset > 0 && used >= columns)
+                var logicalLine = layout.AddLine();
+                int cells = random.Next(5) == 0 ? 0 : random.Next(1, 20);
+                for (int cell = 0; cell < cells; cell++)
                 {
-                    outputIndex++;
-                    used = 0;
+                    int width = random.Next(4) == 0 ? 2 : 1;
+                    logicalLine.Cells.Add(new ReflowCell(new CellHot { Rune = 'x' }, default, width));
                 }
 
-                // Drop an entry now and then so the probing fallback (lower offsets) is exercised.
-                bool dropped = offset < length && random.Next(8) == 0;
-                if (!dropped)
-                {
-                    positions.Add((line, offset, new ReflowPosition(
-                        -1, Math.Min(used, columns - 1), random.Next(6) == 0, false, outputIndex)));
-                }
-
-                used++;
+                lengths[line] = cells == 0 ? sourceColumns : cells;
             }
 
-            outputIndex++;
-        }
-
-        int retainedStart = random.Next(0, Math.Max(1, outputIndex / 2));
-        int newScrollbackRows = random.Next(0, Math.Max(1, outputIndex - retainedStart));
-
-        var legacy = new LegacyDenseReflowMapping();
-        legacy.Reset(rows, columns);
-        foreach (var (line, length) in lineLengths)
-            legacy.SetLineLength(line, length);
-        foreach (var (line, offset, position) in positions)
-            legacy.Add(line, offset, position);
-        legacy.RetainedStart = retainedStart;
-        legacy.NewScrollbackRows = newScrollbackRows;
-
-        var current = CurrentMapping.FromTable(rows, columns, lineLengths, positions, retainedStart, newScrollbackRows);
-
-        for (int line = -1; line <= lines; line++)
-        {
-            int maxOffset = line >= 0 && line < lines ? lengths[line] + 4 : 4;
-            for (int offset = -2; offset <= maxOffset; offset++)
+            var anchors = new List<ReflowCursorAnchor>();
+            for (int line = -1; line <= lineCount; line++)
             {
-                foreach (bool wrapPending in new[] { false, true })
+                int maxOffset = line >= 0 && line < lineCount ? lengths[line] + 4 : 4;
+                for (int offset = -2; offset <= maxOffset; offset++)
                 {
-                    var anchor = new ReflowCursorAnchor(line, offset, wrapPending);
-                    AssertSame(legacy, current, anchor, $"seed {seed}");
+                    anchors.Add(new ReflowCursorAnchor(line, offset, false));
+                    anchors.Add(new ReflowCursorAnchor(line, offset, true));
                 }
             }
+
+            using var source = new Screen(1, sourceColumns, capacity);
+            var legacy = LegacyDenseReflowReplay.Replay(
+                layout, sourceColumns, capacity, destinationCapacity, rows, columns, scrollbackRows, includeScrollback);
+            var current = CurrentMapping.Resolve(
+                source, layout, anchors, rows, columns, scrollbackRows, includeScrollback, destinationCapacity);
+
+            string context = $"seed {seed} round {round} -> {rows}x{columns} capacity {capacity} -> {destinationCapacity} scrollbackRows {scrollbackRows} include {includeScrollback}";
+            AssertWindowMatches(legacy, current, context);
+            for (int slot = 0; slot < anchors.Count; slot++)
+                AssertSame(legacy, current, slot, anchors[slot], context);
         }
     }
 
@@ -163,29 +137,38 @@ public sealed class ReflowAnchorMappingOracleTests
                 {
                     var (rows, columns) = ReflowScenario.NextSize(random, buffer.Rows, buffer.Columns);
                     var layout = source.BuildSourceLayout(scrollbackRows, new Screen.SourceLayout());
+                    int destinationCapacity = random.Next(4) switch
+                    {
+                        0 => 0,
+                        1 => source.ScrollbackCapacity / 2,
+                        2 => source.ScrollbackCapacity + 7,
+                        _ => source.ScrollbackCapacity,
+                    };
                     var legacy = LegacyDenseReflowReplay.Replay(
-                        layout, source.Columns, source.ScrollbackCapacity, rows, columns, scrollbackRows, includeScrollback);
-                    var current = CurrentMapping.FromReflow(source, layout, rows, columns, scrollbackRows, includeScrollback);
+                        layout, source.Columns, source.ScrollbackCapacity, destinationCapacity, rows, columns, scrollbackRows, includeScrollback);
 
-                    string context = $"seed {seed} {kind} -> {rows}x{columns}";
-                    Assert.True(
-                        current.RetainedStart == legacy.RetainedStart && current.NewScrollbackRows == legacy.NewScrollbackRows,
-                        $"{context}: window start/scrollback {current.RetainedStart}/{current.NewScrollbackRows}, " +
-                        $"legacy {legacy.RetainedStart}/{legacy.NewScrollbackRows}");
-
+                    var anchors = new List<ReflowCursorAnchor>();
                     foreach (var line in layout.Lines)
                     {
                         int length = line.Cells.Count == 0 ? source.Columns : line.Cells.Count;
                         for (int offset = 0; offset <= length + 1; offset++)
                         {
-                            foreach (bool wrapPending in new[] { false, true })
-                                AssertSame(legacy, current, new ReflowCursorAnchor(line.Identity, offset, wrapPending), context);
+                            anchors.Add(new ReflowCursorAnchor(line.Identity, offset, false));
+                            anchors.Add(new ReflowCursorAnchor(line.Identity, offset, true));
                         }
                     }
 
                     // Anchors outside the table must agree too (unknown logical lines).
-                    AssertSame(legacy, current, new ReflowCursorAnchor(-1, 0), context);
-                    AssertSame(legacy, current, new ReflowCursorAnchor(layout.Lines.Count, 0), context);
+                    anchors.Add(new ReflowCursorAnchor(-1, 0));
+                    anchors.Add(new ReflowCursorAnchor(layout.Lines.Count, 0));
+
+                    var current = CurrentMapping.Resolve(
+                        source, layout, anchors, rows, columns, scrollbackRows, includeScrollback, destinationCapacity);
+
+                    string context = $"seed {seed} {kind} -> {rows}x{columns}";
+                    AssertWindowMatches(legacy, current, context);
+                    for (int slot = 0; slot < anchors.Count; slot++)
+                        AssertSame(legacy, current, slot, anchors[slot], context);
                 }
             }
             finally
@@ -195,14 +178,58 @@ public sealed class ReflowAnchorMappingOracleTests
         }
     }
 
+    [Theory]
+    [MemberData(nameof(Seeds))]
+    public void LazyAnchorLocationMatchesLegacyUnitTable(int seed)
+    {
+        foreach (ReflowScenarioKind kind in Enum.GetValues<ReflowScenarioKind>())
+        {
+            var buffer = ReflowScenario.Build(seed, kind).Buffer;
+            try
+            {
+                Screen screen = buffer.ActiveBuffer;
+                int scrollbackRows = buffer.IsAlternateScreenActive ? 0 : buffer.ScrollbackCount;
+                var layout = screen.BuildSourceLayout(scrollbackRows, new Screen.SourceLayout());
+                var legacy = LegacyUnitAnchorOracle.Build(screen, scrollbackRows);
+
+                // One row past each end and columns outside the screen exercise the clamps.
+                for (int logicalRow = -scrollbackRows - 1; logicalRow <= screen.Rows; logicalRow++)
+                {
+                    for (int column = -1; column <= screen.Columns; column++)
+                    {
+                        foreach (bool wrapPending in new[] { false, true })
+                        {
+                            var expected = legacy.Anchor(logicalRow, column, wrapPending);
+                            var actual = screen.GetReflowAnchor(logicalRow, column, wrapPending, scrollbackRows, layout);
+                            Assert.True(
+                                expected == actual,
+                                $"seed {seed} {kind}: row {logicalRow} column {column} wrapPending {wrapPending}: {actual}, legacy {expected}");
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                buffer.Dispose();
+            }
+        }
+    }
+
+    private static void AssertWindowMatches(LegacyDenseReflowMapping legacy, ReflowMapping current, string context) =>
+        Assert.True(
+            current.RetainedStart == legacy.RetainedStart && current.NewScrollbackRows == legacy.NewScrollbackRows,
+            $"{context}: window start/scrollback {current.RetainedStart}/{current.NewScrollbackRows}, " +
+            $"legacy {legacy.RetainedStart}/{legacy.NewScrollbackRows}");
+
     private static void AssertSame(
         LegacyDenseReflowMapping legacy,
         ReflowMapping current,
+        int slot,
         ReflowCursorAnchor anchor,
         string context)
     {
         bool legacyMapped = legacy.TryMap(anchor, out var expected);
-        bool currentMapped = CurrentMapping.TryMap(current, anchor, out var actual);
+        bool currentMapped = CurrentMapping.TryMap(current, slot, out var actual);
         string description = $"{context}: anchor line={anchor.LogicalLine} offset={anchor.CellOffset} wrapPending={anchor.WrapPending}";
         Assert.True(legacyMapped == currentMapped, $"{description}: mapped={currentMapped}, legacy mapped={legacyMapped}");
         if (legacyMapped)

@@ -321,13 +321,13 @@ public unsafe partial class Screen
     }
 
     /// <summary>
-    /// Resets a spare screen for later reuse as a reflow destination: contents discarded, dimensions set, and
-    /// nothing counted as dirty until <see cref="ResetForReflow"/> establishes the destination's window. Keeps the
-    /// virtual reservation so the next resize does not allocate.
+    /// Resets a spare screen for later reuse as a reflow destination: contents discarded, dimensions and ring
+    /// capacity set, and nothing counted as dirty until <see cref="ResetForReflow"/> establishes the destination's
+    /// window. Keeps the virtual reservation (when it still fits) so the next resize does not allocate.
     /// </summary>
-    internal void ResetForReuse(int rows, int columns)
+    internal void ResetForReuse(int rows, int columns, int scrollbackCapacity)
     {
-        PrepareForReuse(rows, columns);
+        PrepareForReuse(rows, columns, scrollbackCapacity);
         SetDirtyExtents(0, 0, 0, 0);
         UpdateCommittedBound();
     }

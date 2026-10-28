@@ -68,7 +68,9 @@ public unsafe partial class Screen : IDisposable
     public int Head => _head;
     private int _head;
     public int ScrollbackCapacity => _scrollbackCapacity;
-    private readonly int _scrollbackCapacity;
+    // Fixed for the life of a ring; a parked spare is the only thing that changes it (ResetForReuse / ResetForReflow
+    // carry the capacity the screen is about to serve with), because capacity follows the column count under a byte cap.
+    private int _scrollbackCapacity;
     public int TotalRows => _scrollbackCapacity + Rows;
 
     public int[] RowMaxCol => _rowMaxCol;
@@ -141,12 +143,11 @@ public unsafe partial class Screen : IDisposable
 
     public Screen(int rows, int columns, int scrollbackCapacity = global::Dotty.Abstractions.Config.DottyDefaults.ScrollbackLines)
     {
-        _scrollbackCapacity = scrollbackCapacity;
-        PrepareForReuse(rows, columns);
+        PrepareForReuse(rows, columns, scrollbackCapacity);
     }
 
-    internal void ResetForReflow(int rows, int columns) =>
-        PrepareForReuse(rows, columns);
+    internal void ResetForReflow(int rows, int columns, int scrollbackCapacity) =>
+        PrepareForReuse(rows, columns, scrollbackCapacity);
 
     internal void EnsureCapacity(int rows, int columns)
     {
@@ -172,14 +173,15 @@ public unsafe partial class Screen : IDisposable
             Array.Resize(ref _rowEndCol, total);
     }
 
-    private void PrepareForReuse(int rows, int columns)
+    private void PrepareForReuse(int rows, int columns, int scrollbackCapacity)
     {
         int newRows = Math.Max(1, rows);
         int newColumns = Math.Max(1, columns);
+        _scrollbackCapacity = scrollbackCapacity;
 
-        // Zero what was written, using the old row stride, unless the arena is about to be replaced anyway.
-        // Nothing here touches pages that were never written, and no cell is ever bulk-initialised: all-zero
-        // bytes are the blank cell.
+        // Zero what was written, using the old row stride (the dirty rows are physical row numbers and need no
+        // capacity), unless the arena is about to be replaced anyway. Nothing here touches pages that were never
+        // written, and no cell is ever bulk-initialised: all-zero bytes are the blank cell.
         if ((long)(_scrollbackCapacity + newRows) * newColumns <= _reservedCells)
             DiscardDirtyRows();
 

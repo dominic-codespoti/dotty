@@ -175,6 +175,90 @@ public sealed class ReflowResizeTests
         Assert.True(buffer.ScrollbackCount <= 8);
     }
 
+    // Anchor placement (plan 08, WI-R2): the reflow resolves only the cursor, saved cursors and prompt marks. These pin
+    // that each lands on its own character, in the middle of a wrapped line, and where its row was trimmed away.
+
+    [Fact]
+    public void CursorInsideWrappedLineStaysOnItsCharacterAcrossResizes()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 8);
+        buffer.WriteText("abcdefghijkl".AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(1, 1); // on 'j'
+
+        buffer.Resize(3, 4); // abcd / efgh / ijkl
+        Assert.Equal("ijkl", buffer.GetRowText(2));
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal(1, buffer.CursorCol);
+
+        buffer.Resize(3, 8); // abcdefgh / ijkl
+        Assert.Equal("ijkl    ", buffer.GetRowText(1));
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(1, buffer.CursorCol);
+    }
+
+    [Fact]
+    public void SavedCursorFollowsItsCharacterAcrossResize()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 8);
+        buffer.WriteText("abcdefghijkl".AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(1, 1); // on 'j'
+        buffer.SaveCursor();
+        buffer.SetCursor(0, 0);
+
+        buffer.Resize(3, 4);
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(0, buffer.CursorCol);
+
+        buffer.RestoreCursor();
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal(1, buffer.CursorCol);
+    }
+
+    [Fact]
+    public void PromptMarkInsideWrappedLineFollowsItsCharacter()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 8);
+        buffer.WriteText("abcdefghijkl".AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(1, 1); // on 'j'
+        buffer.AddPromptMark(PromptKind.Prompt);
+
+        buffer.Resize(3, 4);
+        AssertMarks(buffer, (2, PromptKind.Prompt, 1));
+
+        buffer.Resize(3, 8);
+        AssertMarks(buffer, (1, PromptKind.Prompt, 1));
+    }
+
+    [Fact]
+    public void CursorOnATrimmedOrScrolledOffRowFallsBackToItsClampedPosition()
+    {
+        // "abcdefgh" reflowed to 2 columns is four rows (ab / cd / ef / gh) followed by "12": five rows, of which the
+        // ring keeps rows + capacity = 3 (ef scrollback, gh and 12 visible).
+        TerminalBuffer Prepare(int row, int column)
+        {
+            var buffer = new TerminalBuffer(rows: 2, columns: 8, scrollbackCapacity: 1);
+            buffer.WriteText("abcdefgh".AsSpan(), CellAttributes.Default);
+            buffer.CarriageReturn();
+            buffer.LineFeed();
+            buffer.WriteText("12".AsSpan(), CellAttributes.Default);
+            buffer.SetCursor(row, column);
+            buffer.Resize(2, 2);
+            Assert.Equal(1, buffer.ScrollbackCount);
+            Assert.Equal("gh", buffer.GetRowText(0));
+            Assert.Equal("12", buffer.GetRowText(1));
+            return buffer;
+        }
+
+        var onG = Prepare(0, 6); // inside the window: maps onto the 'g' cell
+        Assert.Equal((0, 0), (onG.CursorRow, onG.CursorCol));
+
+        var onE = Prepare(0, 4); // scrollback row: not a visible position, the clamped original is kept
+        Assert.Equal((0, 1), (onE.CursorRow, onE.CursorCol));
+
+        var onC = Prepare(0, 2); // row trimmed out of the ring: the clamped original is kept
+        Assert.Equal((0, 1), (onC.CursorRow, onC.CursorCol));
+    }
+
     private static void AssertMarks(TerminalBuffer buffer, params (int Row, PromptKind Kind, int Column)[] expected)
     {
         var marks = buffer.GetPromptMarks();

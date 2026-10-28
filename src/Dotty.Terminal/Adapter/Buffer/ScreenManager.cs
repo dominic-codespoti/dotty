@@ -1,4 +1,5 @@
 using System;
+using Dotty.Abstractions.Config;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -11,14 +12,13 @@ internal sealed class ScreenManager : IDisposable
     private Screen? _alt;
     private Screen? _savedMain;
     private bool _usingAlt;
-    private readonly int _scrollbackCapacity;
+    private readonly ScrollbackPolicy _policy;
     private readonly List<Screen> _spareScreens = new();
     private readonly Screen.ReflowWorkspace _reflowWorkspace = new();
     private readonly Screen.SourceLayout _mainLayout = new();
     private readonly Screen.SourceLayout _alternateLayout = new();
     private readonly ReflowMapping _mainMapping = new();
     private readonly ReflowMapping _alternateMapping = new();
-    private readonly ReflowMapping _scratchMapping = new();
 
     internal Screen.SourceLayout BuildMainLayout(Screen screen, int scrollbackRows) =>
         screen.BuildSourceLayout(scrollbackRows, _mainLayout);
@@ -27,11 +27,23 @@ internal sealed class ScreenManager : IDisposable
         screen.BuildSourceLayout(scrollbackRows, _alternateLayout);
 
 
-    public ScreenManager(int rows, int columns, int scrollbackCapacity = global::Dotty.Abstractions.Config.DottyDefaults.ScrollbackLines)
+    public ScreenManager(int rows, int columns)
+        : this(rows, columns, ScrollbackPolicy.Default)
     {
-        _scrollbackCapacity = scrollbackCapacity;
-        _main = new Screen(rows, columns, scrollbackCapacity);
     }
+
+    /// <summary>
+    /// The ring capacity is <c>policy.CapacityFor(rows, columns)</c> at construction and again after every resize: under
+    /// a byte cap, wider screens hold fewer history lines.
+    /// </summary>
+    public ScreenManager(int rows, int columns, ScrollbackPolicy policy)
+    {
+        _policy = policy;
+        _main = new Screen(rows, columns, policy.CapacityFor(rows, columns));
+    }
+
+    /// <summary>The policy that sizes every ring this manager creates (see <see cref="ScrollbackPolicy.CapacityFor"/>).</summary>
+    internal ScrollbackPolicy Policy => _policy;
 
     public Screen Active => _usingAlt ? _alt! : _main;
 
@@ -59,7 +71,7 @@ internal sealed class ScreenManager : IDisposable
             _usingAlt = true;
             if (_alt is null)
             {
-                _alt = new Screen(_savedMain.Rows, _savedMain.Columns, _scrollbackCapacity);
+                _alt = new Screen(_savedMain.Rows, _savedMain.Columns, _savedMain.ScrollbackCapacity);
             }
             _alt.Clear();
         }
@@ -80,20 +92,27 @@ internal sealed class ScreenManager : IDisposable
     }
 
 
+    /// <summary>Where the anchors registered before <see cref="Reflow"/> land on the reflowed main screen.</summary>
+    internal ReflowMapping MainMapping => _mainMapping;
+
+    /// <summary>Where the anchors registered before <see cref="Reflow"/> land on the reflowed alternate screen.</summary>
+    internal ReflowMapping AlternateMapping => _alternateMapping;
+
+    /// <summary>
+    /// Reflows the main screen (with its history) and the alternate screen, if one exists, to the new size. Callers
+    /// register the anchors they need on <see cref="MainMapping"/> / <see cref="AlternateMapping"/> first and read
+    /// them back by slot afterwards.
+    /// </summary>
     internal void Reflow(
         int rows,
         int columns,
-        ReflowCursorAnchor mainAnchor,
         Screen.SourceLayout mainLayout,
         int mainScrollbackRows,
-        ReflowCursorAnchor alternateAnchor,
         Screen.SourceLayout? alternateLayout,
-        int alternateScrollbackRows,
-        out ReflowMapping? mainMapping,
-        out ReflowMapping? alternateMapping)
+        int alternateScrollbackRows)
     {
-        mainMapping = _mainMapping;
-        alternateMapping = null;
+        // Every ring of the new size shares one capacity (the alternate screen keeps the main screen's).
+        int capacity = _policy.CapacityFor(rows, columns);
         bool mainIsSaved = _savedMain != null && ReferenceEquals(_main, _savedMain);
 
         var oldMain = _main;
@@ -101,39 +120,25 @@ internal sealed class ScreenManager : IDisposable
             oldMain,
             rows,
             columns,
-            mainAnchor,
+            capacity,
             mainLayout,
             mainScrollbackRows,
             includeScrollback: true,
             _mainMapping);
 
+        // _savedMain is only ever set together with _main (entering the alternate screen) and cleared when leaving
+        // it, so a saved main screen is always the main screen itself.
         if (mainIsSaved)
-        {
             _savedMain = _main;
-        }
-        else if (_savedMain != null)
-        {
-            var oldSaved = _savedMain;
-            _savedMain = ReflowScreen(
-                oldSaved,
-                rows,
-                columns,
-                mainAnchor,
-                mainLayout,
-                mainScrollbackRows,
-                includeScrollback: true,
-                _scratchMapping);
-        }
 
         if (_alt != null)
         {
             var oldAlt = _alt;
-            alternateMapping = _alternateMapping;
             _alt = ReflowScreen(
                 oldAlt,
                 rows,
                 columns,
-                alternateAnchor,
+                capacity,
                 alternateLayout!,
                 alternateScrollbackRows,
                 includeScrollback: false,
@@ -145,31 +150,34 @@ internal sealed class ScreenManager : IDisposable
         Screen source,
         int rows,
         int columns,
-        ReflowCursorAnchor anchor,
+        int capacity,
         Screen.SourceLayout layout,
         int scrollbackRows,
         bool includeScrollback,
         ReflowMapping mapping)
     {
-        Screen destination = TakeSpareScreen(rows, columns);
+        Screen destination = TakeSpareScreen(rows, columns, capacity);
         Screen resized = source.ReflowWithOptions(
             rows,
             columns,
-            anchor,
             layout,
             _reflowWorkspace,
             mapping,
             scrollbackRows,
             includeScrollback,
+            capacity,
             destination);
-        // The spare keeps its virtual reservation (so the next resize allocates nothing) but holds no pages.
-        source.ResetForReuse(rows, columns);
+        // The spare keeps its virtual reservation (so the next resize allocates nothing) but holds no pages. It is
+        // parked with the size and capacity just served, whose reservation the next resize back and forth fits.
+        source.ResetForReuse(rows, columns, capacity);
         _spareScreens.Add(source);
         return resized;
     }
 
 
-    private Screen TakeSpareScreen(int rows, int columns)
+    // Any parked spare will do: ReflowWithOptions resets it to the requested size and capacity (a spare's own
+    // capacity is whatever it last served with), so a wrong-capacity ring is never used as is.
+    private Screen TakeSpareScreen(int rows, int columns, int capacity)
     {
         if (_spareScreens.Count > 0)
         {
@@ -179,8 +187,7 @@ internal sealed class ScreenManager : IDisposable
             return screen;
         }
 
-        var created = new Screen(rows, columns, _scrollbackCapacity);
-        return created;
+        return new Screen(rows, columns, capacity);
     }
 
     public void Dispose()

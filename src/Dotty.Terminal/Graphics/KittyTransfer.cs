@@ -188,8 +188,12 @@ internal sealed unsafe class KittyTransfer : IDisposable
         {
             if (compressed)
             {
-                // The inflated size of a compressed PNG is not derivable from the keys; S carries it. For a medium S
-                // is the read length instead, so the two cannot be told apart: that combination is refused.
+                // The inflated size of a compressed PNG is not derivable from the keys, so a direct payload carries it
+                // in S. With a medium the protocol gives S a second meaning, the number of bytes to read from the file
+                // or shared-memory object (the compressed length here), and one key cannot say both; the inflate bound
+                // would have to be guessed. The combination is refused with EINVAL instead: nothing sends it (a client
+                // that has a PNG on disk names the PNG file itself, f=100 without o=z), and refusing keeps the single
+                // "size of what was read" rule for every medium.
                 if (first.DataSize == 0 || pathMode)
                 {
                     status = KittyStatus.InvalidKeyValue;
@@ -358,6 +362,16 @@ internal sealed unsafe class KittyTransfer : IDisposable
     }
 
     /// <summary>
+    /// The most bytes a medium read may return. An uncompressed raw image can use exactly <c>s*v*bpp</c> bytes, so
+    /// the reader probes one byte beyond that and stops (the surplus is reported as "payload too large" either way)
+    /// instead of pulling up to <see cref="KittyGraphicsOptions.MaxPayloadBytes"/> from the file for a small image.
+    /// </summary>
+    private long ReadCap() =>
+        !_isPng && !_compressed
+            ? Math.Max(1, Math.Min(_expectedBytes, _options.MaxPayloadBytes))
+            : _options.MaxPayloadBytes;
+
+    /// <summary>
     /// Medium transfers: flushes the base64 tail of the path, reads the medium with the buffer lock released (file
     /// I/O may block) and installs the content as if it had arrived as a direct payload: raw uncompressed formats
     /// get their destination (the content must be exactly <c>s*v*bpp</c> bytes), everything else is left in the
@@ -384,7 +398,7 @@ internal sealed unsafe class KittyTransfer : IDisposable
         try
         {
             released = host.ReleaseSyncRootForBlockingWork();
-            result = _reader!.Read(_first.Medium, path, _first.DataOffset, _first.DataSize, _options.MaxPayloadBytes, _options.Media);
+            result = _reader!.Read(_first.Medium, path, _first.DataOffset, _first.DataSize, ReadCap(), _options.Media);
         }
         catch (Exception)
         {

@@ -309,9 +309,37 @@ public sealed class KittyTransferMediumTests
         Assert.Equal('f', call.Medium);
         Assert.Equal(4294967295L, call.Offset);
         Assert.Equal(4294967295L, call.Size);
-        Assert.Equal(1000, call.MaxBytes);
+        Assert.Equal(3, call.MaxBytes);                  // s*v*bpp: an uncompressed raw image can use no more
         Assert.Equal(KittyMediaRig.AllMedia, call.Allowed);
         Assert.Equal(new[] { Err("i=1", BadFileMessage) }, rig.Replies);
+    }
+
+    [Fact]
+    public void TheReadCapIsTheImageSizeForRawAndThePayloadCapForEverythingElse()
+    {
+        var reader = new FakeMediumReader();
+        using var rig = new KittyMediaRig(reader, new KittyGraphicsOptions { Enabled = true, Media = KittyMediaRig.AllMedia, MaxPayloadBytes = 1000 });
+        rig.Apc("i=1,s=10,v=10,f=24,t=f", PathB64("/x"));      // 300 bytes
+        rig.Apc("i=2,s=5,v=5,f=32,t=f", PathB64("/x"));        // 100 bytes
+        rig.Apc("i=3,s=10,v=10,f=24,o=z,t=f", PathB64("/x"));  // compressed: the file size is unrelated to 300
+        rig.Apc("i=4,f=100,t=f", PathB64("/x"));               // PNG: unknown until decoded
+
+        Assert.Equal(new long[] { 300, 100, 1000, 1000 }, reader.Calls.Select(c => c.MaxBytes).ToArray());
+    }
+
+    [Fact]
+    public void ARawImageNeverPullsMoreThanItsSizeFromAHugeFile()
+    {
+        using var dir = new KittyMediaTempDir();
+        using var rig = new KittyMediaRig();
+        string path = dir.Write("huge.bin", Pattern(1 << 20));
+        var baseline = new GraphicsBaseline();
+        rig.Apc("i=1,s=2,v=1,f=24,t=f", PathB64(path));                 // 6 bytes declared, 1 MiB file
+        rig.Apc("i=2,s=2,v=1,f=24,t=f,S=100000", PathB64(path));        // S far beyond the image: still too large
+
+        Assert.Equal(new[] { Err("i=1", "EFBIG:Payload too large"), Err("i=2", "EFBIG:Payload too large") }, rig.Replies);
+        Assert.Equal(0, rig.Store.Count);
+        Assert.Equal(0, baseline.PendingDelta);
     }
 
     [Fact]

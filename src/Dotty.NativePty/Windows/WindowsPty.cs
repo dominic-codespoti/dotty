@@ -69,8 +69,9 @@ public sealed class WindowsPty : IPty
     public bool GraphicsPassthroughRequested { get; }
 
     /// <summary>
-    /// True when the pseudo console was actually created with <c>PSEUDOCONSOLE_PASSTHROUGH_MODE</c>; false when
-    /// not requested, not yet started, or the flagged attempt failed and the plain fallback was used.
+    /// True when <c>CreatePseudoConsole</c> accepted <c>PSEUDOCONSOLE_PASSTHROUGH_MODE</c>; false when not requested,
+    /// not yet started, or the flagged attempt failed and the plain fallback was used. A Windows build that silently
+    /// ignores unknown flags would still report true: whether APC really arrives is only observable at runtime.
     /// </summary>
     public bool GraphicsPassthroughActive { get; private set; }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using Dotty.Terminal.Adapter;
@@ -138,6 +139,46 @@ internal static class KittyFileMedium
             return null;
         }
         return attempt.Handle;
+    }
+
+    /// <summary>
+    /// Defence in depth against a swap between the path check and the open: on Linux the kernel names the object
+    /// behind the opened handle (<c>/proc/self/fd/N</c>) and that name must again be an absolute path outside the
+    /// denied pseudo-filesystem locations; a FIFO, socket or anonymous inode reports a <c>pipe:[n]</c>-style name
+    /// and is refused. Elsewhere, and where <c>/proc</c> is not mounted, nothing is checked here: the range read
+    /// (seekable and non-empty) remains the backstop.
+    /// </summary>
+    /// <param name="handle">An open, not yet read handle.</param>
+    /// <param name="allowDevShm">True for <c>t=t</c> and <c>t=s</c>, which may live in <c>/dev/shm</c>.</param>
+    public static bool OpenedHandleAllowed(SafeFileHandle handle, bool allowDevShm)
+    {
+        if (!OperatingSystem.IsLinux())
+            return true;
+
+        string? target;
+        try
+        {
+            long descriptor = (long)handle.DangerousGetHandle();
+            target = new FileInfo("/proc/self/fd/" + descriptor.ToString(CultureInfo.InvariantCulture)).LinkTarget;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or ObjectDisposedException)
+        {
+            return true;
+        }
+
+        if (target is null)
+            return true;
+        if (target.Length == 0 || target[0] != '/')
+        {
+            DebugLog.Log("[kitty-media] opened object is not a file (pipe, socket or anonymous inode)");
+            return false;
+        }
+        if (KittyPathPolicy.IsDeniedPrefix(target, allowDevShm))
+        {
+            DebugLog.Log($"[kitty-media] opened object '{target}' is in a denied location");
+            return false;
+        }
+        return true;
     }
 
     private sealed class OpenAttempt(IKittyFileOpener opener, string path)

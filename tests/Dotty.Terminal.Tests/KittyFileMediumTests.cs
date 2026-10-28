@@ -792,6 +792,90 @@ public sealed class KittyFileMediumTests
         Assert.True(SpinWait.SpinUntil(() => blocker.Handles.Count == 1 && blocker.Handles.All(h => h.IsClosed), TimeSpan.FromSeconds(10)));
     }
 
+    // ---- Post-open verification (Linux) -------------------------------------------------------------------
+
+    /// <summary>Opens a different object than the authorised path names: what a swap between check and open achieves.</summary>
+    private sealed class SwappingOpener(string substitute) : IKittyFileOpener
+    {
+        public SafeFileHandle? Opened;
+
+        public SafeFileHandle Open(string path) =>
+            Opened = File.OpenHandle(substitute, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+    }
+
+    [Fact]
+    public void OpenedHandleAllowed_AcceptsRegularFilesAndRefusesDeniedLocations()
+    {
+        if (!OperatingSystem.IsLinux()) Assert.Skip("the kernel-reported name of a handle is checked on Linux");
+        using var dir = new KittyMediaTempDir();
+        string path = dir.Write("a.bin");
+        const FileShare share = FileShare.ReadWrite | FileShare.Delete;
+
+        using (var regular = File.OpenHandle(path, FileMode.Open, FileAccess.Read, share))
+        {
+            Assert.True(KittyFileMedium.OpenedHandleAllowed(regular, allowDevShm: false));
+            Assert.True(KittyFileMedium.OpenedHandleAllowed(regular, allowDevShm: true));
+        }
+        foreach (string denied in new[] { "/dev/zero", "/dev/null", "/proc/self/status" })
+        {
+            using var handle = File.OpenHandle(denied, FileMode.Open, FileAccess.Read, share);
+            Assert.False(KittyFileMedium.OpenedHandleAllowed(handle, allowDevShm: false), denied);
+            Assert.False(KittyFileMedium.OpenedHandleAllowed(handle, allowDevShm: true), denied);
+        }
+    }
+
+    [Fact]
+    public void OpenedHandleAllowed_DevShmObjectsNeedTheTempOrShmMedium()
+    {
+        if (!PosixShmAvailable) Assert.Skip("requires Linux /dev/shm");
+        string path = CreateShmObject(Pattern(8), out _);
+        try
+        {
+            using var handle = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            Assert.False(KittyFileMedium.OpenedHandleAllowed(handle, allowDevShm: false));
+            Assert.True(KittyFileMedium.OpenedHandleAllowed(handle, allowDevShm: true));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void OpenedHandleAllowed_RefusesPipes()
+    {
+        if (!OperatingSystem.IsLinux()) Assert.Skip("the kernel-reported name of a handle is checked on Linux");
+        using var pipe = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.In);
+        using var handle = new SafeFileHandle(pipe.SafePipeHandle.DangerousGetHandle(), ownsHandle: false);
+        Assert.False(KittyFileMedium.OpenedHandleAllowed(handle, allowDevShm: true));
+    }
+
+    [Fact]
+    public void OpenedHandleAllowed_IsPermissiveOffLinux()
+    {
+        if (OperatingSystem.IsLinux()) Assert.Skip("Linux is checked for real");
+        using var dir = new KittyMediaTempDir();
+        using var handle = File.OpenHandle(dir.Write("a.bin"), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        Assert.True(KittyFileMedium.OpenedHandleAllowed(handle, allowDevShm: false));
+    }
+
+    [Fact]
+    public void Reader_RefusesAnObjectSwappedInAfterTheCheck_AndClosesIt()
+    {
+        if (!OperatingSystem.IsLinux()) Assert.Skip("the kernel-reported name of a handle is checked on Linux");
+        using var dir = new KittyMediaTempDir();
+        string path = dir.Write("img.bin", Pattern(64));
+        var opener = new SwappingOpener("/dev/zero");
+        var reader = new KittyMediumReader(opener, TimeSpan.FromSeconds(30), 2, null);
+
+        AssertBadFile(ReadFile(reader, 'f', path, size: 16));
+
+        Assert.NotNull(opener.Opened);
+        Assert.True(opener.Opened!.IsClosed, "the refused handle must be closed");
+        Assert.Equal(0, reader.AbandonedOpens);
+        Assert.True(File.Exists(path));
+    }
+
     // ---- t=s through the reader ---------------------------------------------------------------------------
 
     private static bool PosixShmAvailable => OperatingSystem.IsLinux() && Directory.Exists("/dev/shm");

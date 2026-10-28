@@ -172,16 +172,21 @@ internal sealed class KittyMediumReader : IKittyMediumReader
             return KittyMediumReadResult.BadFile;
         }
 
-        KittyMediumReadResult result = ReadResolved(resolved, offset, size, maxBytes);
+        KittyMediumReadResult result = ReadResolved(resolved, offset, size, maxBytes, allowDevShm: medium != 'f');
         if (result.IsOk && (medium == 't' || medium == 's')) TryDelete(resolved);
         return result;
     }
 
-    private KittyMediumReadResult ReadResolved(string resolved, long offset, long size, long maxBytes)
+    private KittyMediumReadResult ReadResolved(string resolved, long offset, long size, long maxBytes, bool allowDevShm)
     {
         var handle = KittyFileMedium.TryOpenBounded(_opener, resolved, _openTimeout, out bool abandoned);
         if (abandoned) Interlocked.Increment(ref _abandonedOpens);
         if (handle is null) return KittyMediumReadResult.BadFile;
+        if (!KittyFileMedium.OpenedHandleAllowed(handle, allowDevShm))
+        {
+            handle.Dispose();
+            return KittyMediumReadResult.BadFile;
+        }
 
         FileStream? stream = null;
         try

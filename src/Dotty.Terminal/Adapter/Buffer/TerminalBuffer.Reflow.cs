@@ -86,6 +86,7 @@ public partial class TerminalBuffer
         // Kitty graphics: the anchored placements of each screen join the reflow like the prompt marks do.
         var mainImages = WithPlacements(_screens.MainImages);
         var alternateImages = alternateLayout is null ? null : WithPlacements(_screens.AlternateImages);
+        _graphicsReflowOpen = mainImages is not null || alternateImages is not null;
         mainImages?.CaptureAnchors(
             oldMainScrollback,
             oldRows,
@@ -94,6 +95,7 @@ public partial class TerminalBuffer
             0,
             oldRows,
             RegisterGraphicsAnchors(alternateScreen!, alternateLayout!, alternateMapping, 0));
+        ReflowFaultInjectorForTests?.Invoke();
 
         _screens.Reflow(
             rows,
@@ -155,6 +157,7 @@ public partial class TerminalBuffer
         _graphicsAnchorMapping = null;
         _graphicsAnchorScreen = null;
         _graphicsAnchorLayout = null;
+        _graphicsReflowOpen = false;
 
         if (fullScreenScroll)
         {
@@ -196,6 +199,29 @@ public partial class TerminalBuffer
     private int _graphicsAnchorScrollback;
     private AnchorRegistrar? _registerGraphicsAnchorDelegate;
     private AnchorResolver? _resolveGraphicsAnchorDelegate;
+    private bool _graphicsReflowOpen;
+
+    /// <summary>Test seam: runs between the placement capture and the screen reflow, where a failure strands the captured anchors.</summary>
+    internal Action? ReflowFaultInjectorForTests;
+
+    /// <summary>
+    /// A resize failed (the exception is rethrown by the caller). When it failed between capturing and rebasing the
+    /// placement anchors, the placements' rows are in an unknown state: every placement of both screens is deleted
+    /// and the captured anchors are dropped, so no placement is ever shown at a stale row.
+    /// </summary>
+    private void AbandonGraphicsReflow()
+    {
+        _graphicsAnchorMapping = null;
+        _graphicsAnchorScreen = null;
+        _graphicsAnchorLayout = null;
+        if (!_graphicsReflowOpen)
+            return;
+        _graphicsReflowOpen = false;
+        int deleted = _screens.MainImages?.AbandonAnchors() ?? 0;
+        deleted += _screens.AlternateImages?.AbandonAnchors() ?? 0;
+        if (deleted > 0)
+            BumpGraphicsGeneration();
+    }
 
     private static KittyImageStore? WithPlacements(KittyImageStore? store) =>
         store is { HasPlacements: true } ? store : null;

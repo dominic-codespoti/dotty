@@ -630,16 +630,45 @@ public sealed class KittyBufferHooksTests
         Assert.Equal("R4", t.Row(2));
     }
 
-    [Fact]
-    public void EnteringTheAlternateScreenAbortsAnOpenChunkedTransfer()
+    [Theory]
+    [InlineData("?1049")]
+    [InlineData("?47")]
+    [InlineData("?1047")]
+    public void EnteringTheAlternateScreenAbortsAnOpenChunkedTransfer(string mode)
     {
         using var t = new Rig();
         t.Apc("a=T,i=77,s=1,v=2,f=24,m=1,c=1,r=1", "AAAA");   // first of two chunks
-        t.Feed(Esc + "[?1049h");
+        t.Feed(Esc + "[" + mode + "h");
         t.Apc("m=0", "AAAA");                                   // the rest arrives on the other screen
         Assert.Equal(0, t.Buffer.MainImageStore?.Count ?? 0);
         Assert.Equal(0, t.Buffer.AlternateImageStore?.Count ?? 0);
         Assert.Equal(0, t.Store.PlacementCount);
+    }
+
+    [Theory]
+    [InlineData("?1049")]
+    [InlineData("?47")]
+    [InlineData("?1047")]
+    public void LeavingTheAlternateScreenAbortsAnOpenChunkedTransfer(string mode)
+    {
+        using var t = new Rig();
+        t.Feed(Esc + "[" + mode + "h");
+        t.Apc("a=T,i=77,s=1,v=2,f=24,m=1,c=1,r=1", "AAAA");
+        t.Feed(Esc + "[" + mode + "l");
+        t.Apc("m=0", "AAAA");
+        Assert.Equal(0, t.Buffer.MainImageStore?.Count ?? 0);
+        Assert.Equal(0, t.Buffer.AlternateImageStore?.Count ?? 0);
+    }
+
+    [Fact]
+    public void ASwitchThatChangesNothingKeepsAnOpenChunkedTransferAlive()
+    {
+        using var t = new Rig();
+        t.Apc("a=T,i=77,s=1,v=2,f=24,m=1,c=1,r=1", "AAAA");
+        t.Feed(Esc + "[?1049l" + Esc + "[?47l");               // already on the main screen: no switch
+        t.Apc("m=0", "AAAA");
+        Assert.NotNull(t.Store.FindByClientId(77));
+        Assert.Equal(1, t.Store.PlacementCount);
     }
 
     // ----------------------------------------------------------------------------------------------- reflow
@@ -794,6 +823,51 @@ public sealed class KittyBufferHooksTests
         t.Buffer.Resize(6, 10);
         Assert.Null(t.Buffer.MainImageStore);
         Assert.Null(t.Buffer.AlternateImageStore);
+    }
+
+    [Fact]
+    public void AFailedReflowDeletesEveryPlacementInsteadOfLeavingStrandedAnchors()
+    {
+        using var t = new Rig(4, 10);
+        WriteTwentyLetters(t);
+        uint main = t.Put(1, 3);
+        var mainStore = t.Buffer.MainImageStore!;
+        t.Feed(Esc + "[?1049h" + Esc + "[H");
+        t.Put(2, 0);
+        var altStore = t.Buffer.AlternateImageStore!;
+        Assert.Equal((1, 1), (mainStore.PlacementCount, altStore.PlacementCount));
+
+        // The failure strikes after both stores captured their anchors and before the screens were reflowed.
+        t.Buffer.ReflowFaultInjectorForTests = () => throw new InvalidOperationException("injected");
+        ulong generation = t.Buffer.Generation;
+        Assert.Throws<InvalidOperationException>(() => t.Buffer.Resize(4, 5));
+        t.Buffer.ReflowFaultInjectorForTests = null;
+
+        Assert.Equal((0, 0), (mainStore.PlacementCount, altStore.PlacementCount));
+        Assert.NotEqual(generation, t.Buffer.Generation);   // the display is told the placements went
+        Assert.Equal((4, 10), (t.Buffer.Rows, t.Buffer.Columns));
+        mainStore.ValidateInvariants();
+        altStore.ValidateInvariants();
+
+        // Nothing is stranded: leaving the alternate screen and resizing for real re-bases a fresh placement.
+        t.Feed(Esc + "[?1049l");
+        uint again = t.Put(1, 3);
+        t.Buffer.Resize(4, 20);
+        Assert.Equal((0L, 13), t.CellOf(again));
+        Assert.Null(t.Find(main));
+        mainStore.ValidateInvariants();
+    }
+
+    [Fact]
+    public void AFailedReflowThroughTheAdapterIsSwallowedAndAlsoClearsThePlacements()
+    {
+        using var t = new Rig(4, 10);
+        uint a = t.Put(1, 3);
+        t.Buffer.ReflowFaultInjectorForTests = () => throw new InvalidOperationException("injected");
+        t.Adapter.ResizeBuffer(4, 5);                    // ResizeBuffer swallows the exception
+        t.Buffer.ReflowFaultInjectorForTests = null;
+        Assert.Null(t.Find(a));
+        Assert.Equal(0, t.Store.PlacementCount);
     }
 
     // ------------------------------------------------------------------------------------------ cell size
@@ -1068,6 +1142,83 @@ public sealed class KittyBufferHooksAllocationTests
             warmupIterations: 0,
             measuredIterationsPerWindow: 64,
             windows: 5);
+        buffer.Dispose();
+    }
+
+    [Fact]
+    public void ScrollPathsAllocateNothingWhilePlacementsExist()
+    {
+        var buffer = new TerminalBuffer(rows: 8, columns: 80, scrollbackCapacity: 5000);
+        var store = buffer.ActiveImageStore;
+        var image = store.AddImage(10, 20, clientId: 1);
+        for (int n = 1; n <= 40; n++)
+            store.Place(image, $"p={n},c=1,r=1", store.ViewTop + (n % 8), n, 10, 20);
+
+        void Cycle()
+        {
+            buffer.SetCursor(7, 0);
+            buffer.LineFeed();                          // ring rotation: ViewTop and the end-row bound move
+            buffer.ScrollUpLines(2);
+            buffer.ScrollDownLines(1);                  // ring rotated back: the below-the-screen scan
+            buffer.SetScrollRegion(2, 6);
+            buffer.ScrollUpLines(1);                    // margin scroll: move / crop / delete
+            buffer.ScrollDownLines(1);
+            buffer.SetScrollRegion(1, 8);
+            buffer.SetCursor(0, 0);
+            buffer.ReverseIndex();
+        }
+
+        for (int i = 0; i < 16; i++)
+            Cycle();
+
+        AllocationAssert.NoAllocations(Cycle, warmupIterations: 0, measuredIterationsPerWindow: 64, windows: 5);
+        Assert.True(store.HasPlacements);               // the history placements are still held: the paths were exercised
+        store.ValidateInvariants();
+        buffer.Dispose();
+    }
+
+    [Fact]
+    public void ResizeWithPlacementsOnBothScreensAllocatesNothingAfterWarmup()
+    {
+        var buffer = new TerminalBuffer(rows: 24, columns: 80, scrollbackCapacity: 256);
+        string wrapped = new string('x', 120);
+        for (int i = 0; i < 160; i++)
+        {
+            buffer.WriteText(wrapped.AsSpan(), CellAttributes.Default);
+            buffer.CarriageReturn();
+            buffer.LineFeed();
+        }
+        var main = buffer.ActiveImageStore;
+        var mainImage = main.AddImage(10, 20, clientId: 1);
+        for (int n = 1; n <= 12; n++)
+            main.Place(mainImage, $"p={n},c=1,r=1", main.ViewTop + n, n, 10, 20);
+
+        buffer.SetAlternateScreen(true);
+        buffer.WriteText(wrapped.AsSpan(), CellAttributes.Default);
+        var alt = buffer.ActiveImageStore;
+        var altImage = alt.AddImage(10, 20, clientId: 1);
+        alt.Place(altImage, "p=1,c=1,r=1", alt.ViewTop, 5, 10, 20);
+        alt.Place(altImage, "p=2,c=1,r=1", alt.ViewTop + 1, 3, 10, 20);
+
+        for (int i = 0; i < 8; i++)
+        {
+            buffer.Resize(30, 100);
+            buffer.Resize(24, 80);
+        }
+        Assert.True(main.HasPlacements && alt.HasPlacements);
+
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                buffer.Resize(30, 100);
+                buffer.Resize(24, 80);
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 64,
+            windows: 5);
+        Assert.True(main.HasPlacements && alt.HasPlacements);
+        main.ValidateInvariants();
+        alt.ValidateInvariants();
         buffer.Dispose();
     }
 }

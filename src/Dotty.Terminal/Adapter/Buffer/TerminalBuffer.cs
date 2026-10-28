@@ -132,7 +132,16 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         {
             if (rows == Rows && cols == Columns)
                 return;
-            ResizeWithReflow(rows, cols);
+            try
+            {
+                ResizeWithReflow(rows, cols);
+            }
+            catch
+            {
+                // A failure between capturing and rebasing the placement anchors must not leave them at stale rows.
+                AbandonGraphicsReflow();
+                throw;
+            }
         }
     }
 

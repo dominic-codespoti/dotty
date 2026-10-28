@@ -228,6 +228,18 @@ internal sealed partial class KittyImageStore
     }
 
     /// <summary>
+    /// Gives up a reflow rebase that cannot complete (an exception between <see cref="CaptureAnchors"/> and
+    /// <see cref="RebaseAnchors"/>): the captured anchors are dropped and every placement is deleted, because the
+    /// rows they refer to are in an unknown state. The images stay.
+    /// </summary>
+    /// <returns>Placements deleted.</returns>
+    public int AbandonAnchors()
+    {
+        _anchors.Clear();
+        return ClearAll();
+    }
+
+    /// <summary>
     /// Second half of a reflow rebase: <see cref="ViewTop"/> becomes <paramref name="newScrollbackRows"/> and each
     /// captured placement moves to the position <paramref name="resolve"/> reports (row = chronological index, so
     /// the visible row 0 is index <c>newScrollbackRows</c>). Placements that were not captured, whose line was

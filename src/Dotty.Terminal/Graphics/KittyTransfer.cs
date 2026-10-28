@@ -101,6 +101,9 @@ internal sealed unsafe class KittyTransfer : IDisposable
     /// <summary>True for <c>a=q</c>: the result is validated and decoded but never stored.</summary>
     public bool IsQuery => _first.Action == KittyAction.Query;
 
+    /// <summary>True for <c>a=f</c>: the result becomes (part of) an animation frame of an existing image instead of a new image.</summary>
+    public bool IsFrame => _first.Action == KittyAction.Frame;
+
     /// <summary>The first error of the transfer, or <see cref="KittyStatus.Ok"/>.</summary>
     public KittyStatus Status => _status;
 

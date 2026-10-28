@@ -221,6 +221,7 @@ internal sealed partial class KittyImageStore : IDisposable
         Require(_usedBytes <= _storageLimitBytes, "store is over its storage limit");
         Require(_byInternalId.Count <= _maxImages, "store is over its image count limit");
         ValidatePlacements();
+        ValidateAnimation();
     }
 
     private static void Require(bool condition, string message)

@@ -40,6 +40,7 @@ internal enum KittyStatus : byte
     Cycle,
     NoParent,
     BadPng,
+    FrameOverlap,
 }
 
 /// <summary>
@@ -81,6 +82,7 @@ internal static class KittyResponse
         KittyStatus.Cycle => "ECYCLE:Relative placement cycle",
         KittyStatus.NoParent => "ENOPARENT:Parent placement not found",
         KittyStatus.BadPng => "EBADPNG:Invalid PNG data",
+        KittyStatus.FrameOverlap => "EINVAL:Source and destination rectangles overlap",
         _ => throw new ArgumentOutOfRangeException(nameof(status)),
     };
 

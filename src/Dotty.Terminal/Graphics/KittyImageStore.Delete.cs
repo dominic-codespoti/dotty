@@ -21,7 +21,9 @@ internal sealed partial class KittyImageStore
     public int ApplyDelete(in KittyGraphicsCommand cmd, int cursorRow, int cursorCol, int rows)
     {
         var spec = KittyDelete.Parse(cmd.DeleteWhat);
-        if (spec.Kind is KittyDeleteKind.Unknown or KittyDeleteKind.Frames)
+        if (spec.Kind == KittyDeleteKind.Frames)
+            return DeleteFrames(in cmd);
+        if (spec.Kind == KittyDeleteKind.Unknown)
             return 0;
 
         _scratch.Clear();

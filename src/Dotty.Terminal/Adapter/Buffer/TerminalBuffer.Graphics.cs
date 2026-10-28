@@ -71,7 +71,13 @@ public partial class TerminalBuffer
         var store = _screens.ActiveImages;
         if (store is not { HasPlacements: true })
             return;
-        store.CaptureVisible(snapshot.BeginGraphics(), Rows, scrollOffset);
+        // Playing animations of the visible placements step first, so the capture sees the frame that is due now;
+        // the earliest next change travels with the snapshot as the host's wake-up deadline (same clock as
+        // IKittyGraphicsHost.NowTicks: TimeProvider.System timestamps).
+        long deadline = store.AdvanceAnimations(System.TimeProvider.System.GetTimestamp(), Rows, scrollOffset);
+        var graphics = snapshot.BeginGraphics();
+        store.CaptureVisible(graphics, Rows, scrollOffset);
+        graphics.NextAnimationDeadlineTicks = deadline;
     }
 
     /// <summary>

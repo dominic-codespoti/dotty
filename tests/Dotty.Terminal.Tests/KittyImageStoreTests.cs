@@ -369,9 +369,10 @@ public sealed class KittyImageStoreTests
         store.ValidateInvariants();
 
         var extraFrame = Px(40); // bypasses the store: its bytes are not in UsedBytes
-        image.Frames.Add(extraFrame);
+        var extra = new KittyFrame(extraFrame, 40);
+        image.Frames.Add(extra);
         Assert.Throws<InvalidOperationException>(store.ValidateInvariants);
-        image.Frames.Remove(extraFrame);
+        image.Frames.Remove(extra);
         extraFrame.Dispose();
         store.ValidateInvariants();
     }
@@ -382,7 +383,7 @@ public sealed class KittyImageStoreTests
         using var store = new KittyImageStore(10_000);
         var image = Add(store, 400, clientId: 1);
         Assert.Equal(1, image.Frames.Count);
-        Assert.Same(image.Frames[0], image.Root);
+        Assert.Same(image.Frames[0].Canvas, image.Root);
         Assert.Equal(400, image.ByteLength);
     }
 

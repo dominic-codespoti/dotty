@@ -33,17 +33,21 @@ public sealed class KittyControllerTests
     }
 
     [Theory]
-    [InlineData("a=f,i=1,s=1,v=1")]
-    [InlineData("a=a,i=1,s=3")]
-    [InlineData("a=c,i=1,r=1,c=2")]
-    public void AnimationActionsAreParsedAndIgnoredForNow(string control)
+    [InlineData("a=f,i=1,s=1,v=1,f=24", "AAAA", "OK")]               // frame load with 3 zero bytes
+    [InlineData("a=a,i=1,s=3", "", "OK")]
+    [InlineData("a=c,i=1,r=1,c=2", "", "ENOENT:Frame not found")]    // there is no frame 2
+    public void AnimationActionsAreExecutedAndAnswered(string control, string payload, string message)
     {
         using var rig = new KittyRig();
         rig.Apc("i=1,s=1,v=1,f=24", OnePixel);
         rig.Replies.Clear();
 
-        rig.Apc(control, "AAAAAAAA"); // frame loads carry a payload: it is dropped
-        Assert.Empty(rig.Replies);
+        if (payload.Length == 0)
+            rig.Apc(control);
+        else
+            rig.Apc(control, payload);
+
+        Assert.Equal(new[] { Err("i=1", message) }, rig.Replies);
         Assert.NotNull(rig.Store.FindByClientId(1));
         Assert.Equal(1, rig.Store.Count);
     }

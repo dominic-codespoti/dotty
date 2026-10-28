@@ -14,8 +14,8 @@ namespace Dotty.Terminal.Graphics;
 /// Any other command first aborts an open transfer, then runs: <c>a=t</c>/<c>a=T</c> start a transfer,
 /// <c>a=q</c> starts a query transfer (needs <c>i</c>, else it is ignored), <c>a=p</c> places a stored image,
 /// <c>a=d</c> deletes (both run when the APC is terminated: a cancelled one does nothing and leaves an open load
-/// alone, a completed one ends it first); the animation actions (<c>f a c</c>) are parsed and ignored for now
-/// (<see cref="HandleOtherAction"/> is their seam).</para>
+/// alone, a completed one ends it first); the animation actions <c>a=f</c> (frame load, chunked like a transmit),
+/// <c>a=a</c> and <c>a=c</c> live in <c>KittyGraphicsController.Animation.cs</c>.</para>
 /// <para>Replies are produced when the APC terminator arrives (never for a cancelled APC), in parse order, so a
 /// reply is queued before anything the application sends after the APC. An OK is sent only when image data was
 /// actually loaded, never for an <c>m=1</c> chunk; errors carry the ids of the first chunk.</para>
@@ -25,7 +25,7 @@ namespace Dotty.Terminal.Graphics;
 /// load runs with the lock released; <see cref="Configure"/>, <see cref="ClearImages"/> and <see cref="Dispose"/>
 /// run under the lock on any thread and are safe against that window (<see cref="KittyTransfer.Busy"/>).</para>
 /// </remarks>
-internal sealed class KittyGraphicsController : IDisposable
+internal sealed partial class KittyGraphicsController : IDisposable
 {
     private static readonly ulong ChunkKeysMask =
         (1UL << KittyGraphicsCommand.BitIndex('m')) | (1UL << KittyGraphicsCommand.BitIndex('q'));
@@ -192,10 +192,7 @@ internal sealed class KittyGraphicsController : IDisposable
             {
                 // Only a completed put/delete ends an open chunked load; a cancelled one leaves it alone.
                 AbortTransfer();
-                if (_deferred.Action == KittyAction.Put)
-                    HandlePut(in _deferred);
-                else
-                    HandleDelete(in _deferred);
+                HandleDeferred(in _deferred);
             }
             else if (kind == CommandKind.Chunk)
                 FinishChunk();
@@ -213,7 +210,7 @@ internal sealed class KittyGraphicsController : IDisposable
     {
         var parse = KittyControlParser.TryParse(control, out var cmd);
         RememberIds(cmd.ImageId, cmd.ImageNumber, cmd.PlacementId, cmd.Quiet);
-        bool chunkOnly = (cmd.Present & ~ChunkKeysMask) == 0;
+        bool chunkOnly = (cmd.Present & ~ChunkKeysMask) == 0 || IsFrameContinuation(in cmd);
 
         if (parse == KittyParseResult.Ok && chunkOnly)
         {
@@ -229,7 +226,7 @@ internal sealed class KittyGraphicsController : IDisposable
             return;
         }
 
-        if (parse == KittyParseResult.Ok && cmd.Action is KittyAction.Put or KittyAction.Delete)
+        if (parse == KittyParseResult.Ok && cmd.Action is KittyAction.Put or KittyAction.Delete or KittyAction.Animate or KittyAction.Compose)
         {
             // Runs when the APC is terminated (OnEnd): a command cut off by CAN/SUB/ESC after its ';' does nothing,
             // and leaves an open chunked load alone like any other cancelled APC.
@@ -253,9 +250,7 @@ internal sealed class KittyGraphicsController : IDisposable
                 StartTransfer(cmd);
                 break;
             case KittyAction.Frame:
-            case KittyAction.Animate:
-            case KittyAction.Compose:
-                HandleOtherAction(cmd);
+                StartFrameLoad(in cmd);
                 break;
             default:
                 SetPending(KittyStatus.UnknownAction, cmd.ImageId, cmd.ImageNumber, cmd.PlacementId, cmd.Quiet);
@@ -263,10 +258,6 @@ internal sealed class KittyGraphicsController : IDisposable
         }
     }
 
-    /// <summary>Seam for the animation stage (<c>a=f/a/c</c>); these actions are parsed and ignored for now.</summary>
-    private void HandleOtherAction(in KittyGraphicsCommand cmd)
-    {
-    }
 
     /// <summary>
     /// <c>a=p</c>: puts a stored image (by <c>i</c>, or the newest with number <c>I</c>) at the cursor. The reply
@@ -393,6 +384,11 @@ internal sealed class KittyGraphicsController : IDisposable
         {
             pixels!.Dispose();
             SetPending(KittyStatus.Ok, first.ImageId, first.ImageNumber, first.PlacementId, quiet);
+            return;
+        }
+        if (first.Action == KittyAction.Frame)
+        {
+            CommitFrame(first, pixels!, quiet);
             return;
         }
         Commit(first, pixels!, quiet);

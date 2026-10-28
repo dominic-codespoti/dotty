@@ -140,6 +140,9 @@ public partial class TerminalSession : IDisposable
 
     public event Action<byte[]>? RawInputReceived;
     public event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
+
+    /// <summary>Raised on the PTY consumer thread for an OSC 52 clipboard query (<c>ESC ] 52 ; c ; ? ST</c>); handlers must not block.</summary>
+    public event Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest>? ClipboardReadRequested;
     public event Action<string>? TitleChanged;
     public event Action? RenderScheduled;
     public event Action? PaletteChanged;
@@ -197,6 +200,7 @@ public partial class TerminalSession : IDisposable
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;
         Adapter.ClipboardWriteRequested += request => ClipboardWriteRequested?.Invoke(request);
+        Adapter.ClipboardReadRequested += request => ClipboardReadRequested?.Invoke(request);
         Adapter.TitleChanged += title => TitleChanged?.Invoke(title);
         Adapter.PaletteChanged += () => PaletteChanged?.Invoke();
     }

@@ -185,13 +185,15 @@ public static class HostPrompt
         if (s.Length > 0 && char.IsHighSurrogate(s[^1]))
             return s.Substring(0, s.Length - 1);
         int bs = s.LastIndexOf('\\');
-        if (bs >= 0)
+        if (bs >= 0 && bs + 1 < s.Length)
         {
-            string tail = s.Substring(bs);
-            bool completeX = tail.Length == 4 && tail[1] == 'x';
-            bool completeU = tail.Length >= 3 && tail[1] == 'u' && tail[^1] == '}';
-            bool literalBackslash = tail.Length == 1 || (tail[1] != 'x' && tail[1] != 'u');
-            if (!completeX && !completeU && !literalBackslash)
+            // Only the escape that starts at the last backslash can be cut: "\xNN" is exactly four chars and
+            // "\u{XXXX}" ends at '}'. Anything after a complete escape is ordinary text and must be kept.
+            int tailLength = s.Length - bs;
+            char kind = s[bs + 1];
+            bool partialX = kind == 'x' && tailLength < 4;
+            bool partialU = kind == 'u' && (tailLength == 2 || s[bs + 2] == '{') && s.IndexOf('}', bs) < 0;
+            if (partialX || partialU)
                 return s.Substring(0, bs);
         }
         return s;

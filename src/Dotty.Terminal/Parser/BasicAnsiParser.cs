@@ -139,6 +139,12 @@ namespace Dotty.Terminal.Parser
                 {
                     if (_utf8LeftoverLen > 0)
                         FlushUtf8Leftover();
+                    int consumed = ConsumeStringRun(bytes.Slice(i));
+                    if (consumed > 0)
+                    {
+                        i += consumed;
+                        continue;
+                    }
                     ProcessSequenceByte(bytes[i++]);
                     continue;
                 }
@@ -408,6 +414,59 @@ namespace Dotty.Terminal.Parser
             }
         }
 
+        // Bulk OSC handling.  Every C0 control (0x00-0x1F) is a stop byte in both
+        // Osc and DiscardOsc, so payload bytes in between are consumed in one
+        // scan.  The stop byte itself is left for ProcessSequenceByte, which keeps
+        // BEL/ST/CAN/SUB/ESC/abort semantics in one place.  Returns bytes consumed
+        // (0 when the next byte is a stop byte or the state is not OSC-related).
+        private int ConsumeStringRun(ReadOnlySpan<byte> bytes)
+        {
+            if (_sequenceState == SequenceState.DiscardOsc)
+            {
+                int skip = bytes.IndexOfAnyInRange((byte)0x00, (byte)0x1F);
+                return skip < 0 ? bytes.Length : skip;
+            }
+
+            if (_sequenceState != SequenceState.Osc)
+                return 0;
+
+            int run = bytes.IndexOfAnyInRange((byte)0x00, (byte)0x1F);
+            if (run < 0)
+                run = bytes.Length;
+            if (run == 0)
+                return 0;
+
+            // Whole OSC inside this chunk: dispatch straight from the input
+            // without copying it into the sequence buffer.
+            if (_leftoverLen == 0 && run <= MaxOscPayloadBytes && run < bytes.Length)
+            {
+                int terminatorLength = 0;
+                if (bytes[run] == 0x07)
+                    terminatorLength = 1;
+                else if (bytes[run] == ESC && run + 1 < bytes.Length && bytes[run + 1] == (byte)'\\')
+                    terminatorLength = 2;
+
+                if (terminatorLength != 0)
+                {
+                    HandleOscPayload(bytes.Slice(0, run));
+                    ResetSequence();
+                    return run + terminatorLength;
+                }
+            }
+
+            if (run > MaxOscPayloadBytes - _leftoverLen)
+            {
+                // Same outcome as the per-byte path: the payload crossed the cap.
+                BeginDiscard(SequenceState.DiscardOsc);
+                return run;
+            }
+
+            EnsureSequenceCapacity(_leftoverLen + run, MaxOscPayloadBytes);
+            bytes.Slice(0, run).CopyTo(_leftover.AsSpan(_leftoverLen));
+            _leftoverLen += run;
+            return run;
+        }
+
         private void ProcessOscByte(byte b)
         {
             if (b == 0x07)
@@ -636,6 +695,12 @@ namespace Dotty.Terminal.Parser
 
             if (!TryParseAsciiInt(codeBytes, out int oscCode))
             {
+                return;
+            }
+
+            if (oscCode == 52 && !dataBytes.IsEmpty && Handler is Terminal.Adapter.TerminalAdapter clipboardAdapter)
+            {
+                clipboardAdapter.OnOperatingSystemCommandUtf8(oscCode, dataBytes);
                 return;
             }
 

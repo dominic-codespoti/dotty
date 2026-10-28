@@ -113,7 +113,7 @@ public sealed class PaneTree : IDisposable
         if (!ContainsLeaf(target))
             throw new InvalidOperationException("Target pane does not belong to this pane tree.");
 
-        string? effectiveWorkingDirectory = workingDirectory ?? target.Session.CurrentWorkingDirectory;
+        string? effectiveWorkingDirectory = workingDirectory ?? target.Session.InheritableWorkingDirectory;
         string? effectiveShell = shell ?? target.Session.LaunchShell;
         bool effectiveShellIsExecutable = shell is null && target.Session.LaunchShellIsExecutable;
         var session = CreateSession(Math.Max(1, target.Rows), Math.Max(1, target.Columns));

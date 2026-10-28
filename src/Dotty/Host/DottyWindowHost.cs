@@ -1043,7 +1043,7 @@ internal static class DottyWindowHost
     {
         var activeSession = _tabManager.ActiveTab?.Session;
         var tab = _tabManager.CreateTab(cols: _cols, rows: _rows,
-            workingDirectory: workingDirectory ?? activeSession?.CurrentWorkingDirectory,
+            workingDirectory: workingDirectory ?? activeSession?.InheritableWorkingDirectory,
             shell: shell ?? activeSession?.LaunchShell ?? _launchOptions.Shell,
             shellIsExecutable: shell is null && (activeSession?.LaunchShellIsExecutable ?? (_launchOptions.Shell is not null)));
         SilkConfig.ApplyThemeToAdapter(tab.Session.Adapter);
@@ -1052,7 +1052,7 @@ internal static class DottyWindowHost
 
     private static LeafPane SplitLuaPane(TerminalTab tab, LeafPane target, SplitDirection direction, string? workingDirectory, string? shell)
     {
-        var pane = tab.PaneTree.Split(target, direction, workingDirectory ?? target.Session.CurrentWorkingDirectory, shell);
+        var pane = tab.PaneTree.Split(target, direction, workingDirectory ?? target.Session.InheritableWorkingDirectory, shell);
         SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter);
         return pane;
     }
@@ -2302,7 +2302,7 @@ internal static class DottyWindowHost
             var newTab = _tabManager.CreateTab(
                 cols: _cols,
                 rows: _rows,
-                workingDirectory: activeTab.Session.CurrentWorkingDirectory ?? activeTab.WorkingDirectory,
+                workingDirectory: activeTab.Session.InheritableWorkingDirectory,
                 shell: activeTab.Session.LaunchShell,
                 shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
             SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
@@ -2326,7 +2326,7 @@ internal static class DottyWindowHost
             var newTab = _tabManager.CreateTab(
                 cols: _cols,
                 rows: _rows,
-                workingDirectory: activeTab.Session.CurrentWorkingDirectory ?? activeTab.WorkingDirectory,
+                workingDirectory: activeTab.Session.InheritableWorkingDirectory,
                 shell: activeTab.Session.LaunchShell,
                 shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
             SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);

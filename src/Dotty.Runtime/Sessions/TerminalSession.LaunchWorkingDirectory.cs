@@ -12,7 +12,7 @@ public partial class TerminalSession
     public string? LaunchShell { get; private set; }
     public bool LaunchShellIsExecutable { get; private set; }
 
-    private static string GetDefaultLaunchWorkingDirectory()
+    internal static string GetDefaultLaunchWorkingDirectory()
     {
         if (OperatingSystem.IsWindows())
             return Environment.CurrentDirectory;

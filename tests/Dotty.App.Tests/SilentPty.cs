@@ -38,6 +38,9 @@ internal sealed class SilentPty : IPty
         remove { }
     }
 
+    /// <summary>Working directory passed to the most recent <see cref="Start"/> call.</summary>
+    public string? StartedWorkingDirectory { get; private set; }
+
     public byte[] WrittenBytes() => _input.ToArray();
 
     public void Start(
@@ -47,7 +50,11 @@ internal sealed class SilentPty : IPty
         string? workingDirectory = null,
         IDictionary<string, string>? environmentVariables = null,
         IReadOnlyList<string>? command = null,
-        bool shellIsExecutable = false) => IsRunning = true;
+        bool shellIsExecutable = false)
+    {
+        StartedWorkingDirectory = workingDirectory;
+        IsRunning = true;
+    }
 
     public void Resize(int columns, int rows)
     {

@@ -552,16 +552,14 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
 
     public void OnFullReset()
     {
-        // RIS - ESC c - full terminal reset
+        // RIS - ESC c - full terminal reset: the DECSTR core plus everything below (title is kept, like xterm).
         _buffer.FullReset();
-        _currentAttributes = CellAttributes.Default;
-        _savedAttributes = CellAttributes.Default;
-        _hasSavedAttributes = false;
-        _windowTitle = null;
-        CursorShape = 0;
-        KeypadApplicationMode = false;
-        ApplicationCursorKeysEnabled = false;
-        ModifyOtherKeysLevel = 0;
+        ResetTerminalModesCore();
+        _lastPrintedChar = '\0';
+        CurrentMouseMode = MouseMode.None;
+        CurrentMouseEncoding = MouseEncoding.Default;
+        _focusReportingEnabled = false;
+        OnSetSynchronizedUpdate(false);
         ResetPaletteForRis();
         ResetKittyKeyboardState();
         RequestRender();

@@ -59,10 +59,12 @@ jobs:
 
       - name: Capture expectations
         shell: bash
+        env:
+          QUARANTINE_NOT_RUN: ${{ inputs.quarantine_not_run }}
         run: |
           set -euo pipefail
           extra=()
-          if [ "${{ inputs.quarantine_not_run }}" = "true" ]; then extra+=(--quarantine-not-run); fi
+          if [ "$QUARANTINE_NOT_RUN" = "true" ]; then extra+=(--quarantine-not-run); fi
           python3 scripts/esctest/run_esctest.py --update-expectations --jobs 2 --out artifacts/esctest ${extra[@]+"${extra[@]}"}
 
       - name: Upload expectations
@@ -86,6 +88,8 @@ jobs:
       - name: Commit expectations back
         if: inputs.commit == 'true' && inputs.os == 'ubuntu-latest'
         shell: bash
+        env:
+          TARGET_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -96,4 +100,4 @@ jobs:
             exit 0
           fi
           git commit -m "Capture esctest expectations on ubuntu-latest runner"
-          git push origin "HEAD:${{ github.ref_name }}"
+          git push origin "HEAD:refs/heads/$TARGET_REF"

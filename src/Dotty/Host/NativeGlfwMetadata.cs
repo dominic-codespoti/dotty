@@ -13,6 +13,7 @@ internal static unsafe class NativeGlfwMetadata
     private static delegate* unmanaged[Cdecl]<nint, int*, int*, void> _getWindowPos;
     private static delegate* unmanaged[Cdecl]<nint> _getPrimaryMonitor;
     private static delegate* unmanaged[Cdecl]<nint, int*> _getVideoMode;
+    private const int PlatformWayland = 0x00060003;
     private static bool _initialized;
 
     /// <summary>Resolve core GLFW exports from the already-loaded Silk GLFW instance.</summary>
@@ -50,6 +51,10 @@ internal static unsafe class NativeGlfwMetadata
         x = 0;
         y = 0;
         if (window == 0 || _getWindowPos == null)
+            return false;
+
+        // A Wayland client cannot know its position: GLFW raises GLFW_FEATURE_UNAVAILABLE on every call, so skip it.
+        if (TryGetPlatform(out int platform) && platform == PlatformWayland)
             return false;
 
         int px = 0, py = 0;

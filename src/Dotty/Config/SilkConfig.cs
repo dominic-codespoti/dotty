@@ -128,7 +128,7 @@ public static class SilkConfig
         adapter.SetDefaultColors($"#{theme.Foreground & 0xFFFFFF:X6}", $"#{theme.Background & 0xFFFFFF:X6}");
     }
 
-    /// <summary>Applies per-adapter user config (theme and OSC 8 ingest) at session creation and on config reload.</summary>
+    /// <summary>Applies per-adapter user config (theme, OSC 8 ingest, vt switches) at session creation and on config reload.</summary>
     public static void ApplyConfigToAdapter(TerminalAdapter adapter, IColorScheme? theme = null)
     {
         if (adapter == null) return;

@@ -372,7 +372,46 @@ public sealed class TerminalKeyboardDispatcherTests
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
         dispatcher.HandleKeyEvent(SilkKey.Escape, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        Assert.Null(host.ActiveContextMenu);
+        Assert.Empty(host.InputBytes);
+    }
 
+    [Fact]
+    public void HandleKeyEvent_Escape_FiresDismissedOnce()
+    {
+        using var host = CreateHost();
+        int dismissed = 0;
+        host.ActiveContextMenu = new ContextMenuModel(0, 0, new[] { ContextMenuItem.Item("item", "Item", () => { }) })
+        {
+            Dismissed = () => dismissed++
+        };
+        var dispatcher = new TerminalKeyboardDispatcher(host);
+
+        dispatcher.HandleKeyEvent(SilkKey.Escape, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal(1, dismissed);
+        Assert.Null(host.ActiveContextMenu);
+    }
+
+    [Fact]
+    public void HandleKeyEvent_Enter_ActionThatOpensNewMenu_KeepsNewMenuActive()
+    {
+        using var host = CreateHost();
+        var next = new ContextMenuModel(0, 0, new[] { ContextMenuItem.Item("next", "Next", () => { }) });
+        var first = new ContextMenuModel(0, 0, new[]
+        {
+            ContextMenuItem.Item("open", "Open", () => host.ActiveContextMenu = next)
+        })
+        {
+            HoveredIndex = 0
+        };
+        host.ActiveContextMenu = first;
+        var dispatcher = new TerminalKeyboardDispatcher(host);
+
+        dispatcher.HandleKeyEvent(SilkKey.Enter, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Same(next, host.ActiveContextMenu);
+        Assert.True(next.IsVisible);
     }
 
     [Fact]

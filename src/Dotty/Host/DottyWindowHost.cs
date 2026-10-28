@@ -2246,11 +2246,12 @@ internal static class DottyWindowHost
                 if (ReferenceEquals(_activeContextMenu, value))
                     return;
                 var previousMenu = _activeContextMenu;
-                if (previousMenu is { IsVisible: true })
-                    previousMenu.Close();
                 _nativeTextInput?.Cancel();
                 _activeContextMenu = value;
                 _nativeTextInput?.SetFocus((_lastWindowFocus ?? _initialWindowInputFocus) && value?.IsVisible != true);
+                // Close last: a Dismissed callback may install another menu (e.g. a follow-up prompt) and must not be overwritten.
+                if (previousMenu is { IsVisible: true })
+                    previousMenu.Close();
             }
         }
 
@@ -2401,22 +2402,28 @@ internal static class DottyWindowHost
                     OpenApprovedHyperlink(activation.Target!);
                     break;
                 case HyperlinkActivationKind.NeedsConfirmation:
-                    ConfirmHyperlink(activation);
+                    ConfirmHyperlink(activation, displayText);
                     break;
                 case HyperlinkActivationKind.Blocked:
                     DebugLog.Log($"[hyperlink] blocked: {activation.Message}");
+                    ShowPrompt(HyperlinkPromptBuilder.BuildNotice("Link blocked", activation.Message ?? "The link is not allowed."));
                     break;
             }
         }
 
         /// <summary>
-        /// Asks the user to confirm a risky link. No prompt UI is wired yet, so this fails safe and
-        /// blocks; the prompt wiring (open on approval via <see cref="OpenApprovedHyperlink"/>)
-        /// replaces only this method.
+        /// Asks the user to confirm a risky link. The prompt holds the already-evaluated canonical target, so
+        /// what the user confirmed is exactly what opens. Cancel is focused; Escape and click-outside cancel.
         /// </summary>
-        private void ConfirmHyperlink(HyperlinkActivation activation)
+        private void ConfirmHyperlink(HyperlinkActivation activation, string? displayText)
         {
-            DebugLog.Log($"[hyperlink] blocked pending confirmation ({activation.Risks}): {activation.Target?.Canonical}");
+            HyperlinkTarget target = activation.Target!;
+            ShowPrompt(HyperlinkPromptBuilder.BuildConfirm(
+                target,
+                activation.Risks,
+                displayText,
+                open: () => OpenApprovedHyperlink(target),
+                copyAddress: () => _clipboard?.SetText(target.Canonical)));
         }
 
         private void OpenApprovedHyperlink(HyperlinkTarget target) => _ = OpenApprovedHyperlinkAsync(target);
@@ -2424,10 +2431,26 @@ internal static class DottyWindowHost
         private async Task OpenApprovedHyperlinkAsync(HyperlinkTarget target)
         {
             HyperlinkOpenResult result = await Hyperlinks.OpenApprovedAsync(target).ConfigureAwait(false);
-            if (!result.Success)
-            {
-                DebugLog.Log($"[hyperlink] open failed: {result.Error}");
-            }
+            if (result.Success)
+                return;
+
+            DebugLog.Log($"[hyperlink] open failed: {result.Error}");
+            string message = result.Error ?? "The link could not be opened.";
+            // The opener finishes on a thread-pool thread; menus belong to the UI thread.
+            _lifecycle.TryEnqueue(() => ShowPrompt(HyperlinkPromptBuilder.BuildNotice("Could not open link", message)));
+        }
+
+        /// <summary>Shows a host prompt at the pointer (the layout clamps it into the viewport).</summary>
+        private void ShowPrompt(ContextMenuModel prompt)
+        {
+            if (_closed)
+                return;
+
+            var pointer = _mouse?.Position ?? default;
+            prompt.X = pointer.X * _scale;
+            prompt.Y = pointer.Y * _scale;
+            ActiveContextMenu = prompt;
+            WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
         }
 
         public void SetPointerCursor(StandardCursor cursor)

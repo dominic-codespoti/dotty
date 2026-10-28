@@ -148,6 +148,13 @@ public class Program
             {
                 Console.WriteLine("Running Experiment Benchmarks (ungated)...");
                 BenchmarkRunner.Run<ParserScanExperiments>(benchmarkConfig);
+                // Kitty graphics (plan 06, 5.3): experiment-only, no baselines; kept out of BenchmarkTypes on purpose.
+                BenchmarkRunner.Run<KittyApcDecodeBenchmarks>(benchmarkConfig);
+                BenchmarkRunner.Run<KittyRgbaTransmitBenchmarks>(benchmarkConfig);
+                BenchmarkRunner.Run<KittyInflateBenchmarks>(benchmarkConfig);
+                BenchmarkRunner.Run<KittyPlacementScrollBenchmarks>(benchmarkConfig);
+                BenchmarkRunner.Run<KittySnapshotBenchmarks>(benchmarkConfig);
+                BenchmarkRunner.Run<KittyLockHoldProbe>(benchmarkConfig);
             }
 
             // Generate reports

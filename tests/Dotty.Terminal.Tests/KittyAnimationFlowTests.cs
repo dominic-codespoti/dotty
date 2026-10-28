@@ -148,7 +148,7 @@ public sealed class KittyAnimationFlowTests
 
         rig.Apc("a=f,I=7,r=9,s=1,v=1,f=32", B64(AnimKit.Red));       // frame 9 does not exist: refused up front
         rig.Apc("a=f,I=7,s=1,v=1,f=7", B64(AnimKit.Red));            // unknown format: refused by the transfer
-        rig.Apc("a=f,I=7,s=2,v=1,f=32,m=1", B64(1, 2, 3));           // a chunked load whose last chunk is not base64
+        rig.Apc("a=f,I=7,s=1,v=1,f=32,m=1", B64(1, 2, 3));           // a chunked load whose last chunk is not base64
         rig.Apc("m=0", "!!!!");
 
         Assert.Equal(new[]

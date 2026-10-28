@@ -64,7 +64,8 @@ internal sealed partial class KittyGraphicsController
     /// <summary>
     /// <c>a=f</c>: resolves the target image and the frame numbers (and the quota for the canvas) from the keys, then
     /// opens a transfer for the payload; the frame is built when the final chunk completes. Every payload rule of a
-    /// transmit applies (format, medium, compression, sizes), and the image itself is never replaced.
+    /// transmit applies (format, medium, compression, sizes, checked first), a raw frame whose declared rectangle
+    /// cannot fit the image is refused by this first chunk, and the image itself is never replaced.
     /// </summary>
     private void StartFrameLoad(in KittyGraphicsCommand cmd)
     {
@@ -80,6 +81,13 @@ internal sealed partial class KittyGraphicsController
         var transfer = KittyTransfer.TryStart(cmd, _options, _decoder, _reader, out status);
         if (transfer == null)
         {
+            SetPending(status, image.ClientId, cmd.ImageNumber, 0, cmd.Quiet);
+            return;
+        }
+        status = Store.CheckFrameRect(image, in cmd);
+        if (status != KittyStatus.Ok)
+        {
+            transfer.Dispose();
             SetPending(status, image.ClientId, cmd.ImageNumber, 0, cmd.Quiet);
             return;
         }

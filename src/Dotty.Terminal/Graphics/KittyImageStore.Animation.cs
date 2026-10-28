@@ -143,10 +143,8 @@ internal sealed partial class KittyImageStore
 
     /// <summary>
     /// Key-only checks for a frame load that can run before any payload exists: the frame numbers
-    /// (<c>r</c>: 0 = new frame, else an existing one; <c>c</c>: 0 = none, else an existing one), for raw formats
-    /// (<c>s</c> and <c>v</c> declare the data size) that the data rectangle at <c>(x, y)</c> lies inside the image, the
-    /// per-image frame cap and the quota for the canvas the command would store. A PNG's size is only known once its
-    /// header has arrived, so <see cref="LoadFrame"/> checks the rectangle again at commit.
+    /// (<c>r</c>: 0 = new frame, else an existing one; <c>c</c>: 0 = none, else an existing one), the per-image frame
+    /// cap and the quota for the canvas the command would store.
     /// </summary>
     public KittyStatus CheckFrameTarget(KittyImage image, in KittyGraphicsCommand cmd)
     {
@@ -155,16 +153,26 @@ internal sealed partial class KittyImageStore
         bool isNew = r == 0;
         if (r > count || c > count)
             return KittyStatus.FrameNotFound;
-        if (cmd.Format != 100 && cmd.Width != 0 && cmd.Height != 0)
-        {
-            var root = image.Frames[0].Canvas;
-            if ((long)cmd.SrcX + cmd.Width > root.Width || (long)cmd.SrcY + cmd.Height > root.Height)
-                return KittyStatus.RectOutOfBounds;
-        }
         if (isNew && count >= KittyAnimation.MaxFramesPerImage)
             return KittyStatus.StorageQuota;
         long delta = CanvasDelta(image, isNew ? -1 : (int)r - 1);
         return image.ByteLength + delta > _storageLimitBytes ? KittyStatus.StorageQuota : KittyStatus.Ok;
+    }
+
+    /// <summary>
+    /// For a raw format (<c>s</c> and <c>v</c> declare the data size, whatever the medium) checks that the data
+    /// rectangle at <c>(x, y)</c> lies inside the image, so a frame that cannot fit is refused by its first chunk
+    /// instead of after its whole payload was buffered. A PNG's size is only known once its header has arrived, so
+    /// <see cref="LoadFrame"/> checks the rectangle again at commit.
+    /// </summary>
+    public KittyStatus CheckFrameRect(KittyImage image, in KittyGraphicsCommand cmd)
+    {
+        if (cmd.Format == 100 || cmd.Width == 0 || cmd.Height == 0)
+            return KittyStatus.Ok;
+        var root = image.Frames[0].Canvas;
+        return (long)cmd.SrcX + cmd.Width > root.Width || (long)cmd.SrcY + cmd.Height > root.Height
+            ? KittyStatus.RectOutOfBounds
+            : KittyStatus.Ok;
     }
 
     /// <summary>

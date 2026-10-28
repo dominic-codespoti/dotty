@@ -139,7 +139,7 @@ public partial class TerminalSession : IDisposable
     public long PtyBytesParsed => Interlocked.Read(ref _ptyBytesParsed);
 
     public event Action<byte[]>? RawInputReceived;
-    public event Action<string>? ClipboardWriteRequested;
+    public event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
     public event Action? RenderScheduled;
     public event Action? PaletteChanged;
@@ -196,7 +196,7 @@ public partial class TerminalSession : IDisposable
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;
-        Adapter.ClipboardWriteRequested += text => ClipboardWriteRequested?.Invoke(text);
+        Adapter.ClipboardWriteRequested += request => ClipboardWriteRequested?.Invoke(request);
         Adapter.TitleChanged += title => TitleChanged?.Invoke(title);
         Adapter.PaletteChanged += () => PaletteChanged?.Invoke();
     }

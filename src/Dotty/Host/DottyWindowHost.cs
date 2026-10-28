@@ -73,7 +73,10 @@ internal static class DottyWindowHost
     private static readonly Queue<string> _pendingTitles = new(8);
     private static readonly object _pendingTitlesLock = new();
     private static int _pendingTitleCount;
-    private readonly record struct ClipboardWrite(TerminalSession Session, string Text);
+    private readonly record struct ClipboardWrite(TerminalSession Session, Dotty.Abstractions.Clipboard.ClipboardSelection Selection, string Text, int Bytes);
+    private const int MaxOsc52WriteBytes = 786_432;
+    private const int MaxPendingClipboardBytes = 4 * 1024 * 1024;
+    private static int _pendingClipboardBytes;
     private static readonly Queue<ClipboardWrite> _pendingClipboards = new(8);
     private static int _pendingClipboardCount;
     private static readonly object _pendingClipboardsLock = new();
@@ -90,7 +93,7 @@ internal static class DottyWindowHost
     private static DesktopControlServer? _controlServer;
     private static readonly Dictionary<TerminalSession, Action> _renderSubscriptions = new();
     private static readonly Dictionary<TerminalSession, Action> _renderCallbackCache = new();
-    private static readonly Dictionary<TerminalSession, Action<string>> _clipboardSubscriptions = new();
+    private static readonly Dictionary<TerminalSession, Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>> _clipboardSubscriptions = new();
     private static readonly Dictionary<TerminalSession, Action> _paletteSubscriptions = new();
     private static readonly Dictionary<TerminalTab, (Action TopologyChanged, Action<LeafPane, LeafPane> ActivePaneChanged)> _paneSubscriptions = new();
     private sealed class TabTitleCache
@@ -604,7 +607,7 @@ internal static class DottyWindowHost
             if (_clipboardSubscriptions.ContainsKey(session))
                 continue;
 
-            Action<string> callback = CreateClipboardHandler(session);
+            Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> callback = CreateClipboardHandler(session);
             session.ClipboardWriteRequested += callback;
             _clipboardSubscriptions.Add(session, callback);
         }
@@ -624,18 +627,50 @@ internal static class DottyWindowHost
         }
     }
 
-    private static Action<string> CreateClipboardHandler(TerminalSession session) =>
-        text => EnqueueClipboardWrite(session, text);
+    private static Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> CreateClipboardHandler(TerminalSession session) =>
+        request => EnqueueClipboardWrite(session, request);
 
-    private static void EnqueueClipboardWrite(TerminalSession session, string text)
+    private static void EnqueueClipboardWrite(TerminalSession session, Dotty.Abstractions.Clipboard.ClipboardWriteRequest request)
     {
-        if (!UserConfigService.Current.Clipboard.AllowOsc52Write || text.Length > 65536)
+        // Primary-only writes are dropped until an X11 selection helper exists; they must not clobber the clipboard.
+        if (!request.Selection.HasFlag(Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard))
+            return;
+        if (!UserConfigService.Current.Clipboard.AllowOsc52Write)
+            return;
+        string text = request.Text;
+        if (text.Length > MaxOsc52WriteBytes)
+            return;
+        int bytes = System.Text.Encoding.UTF8.GetByteCount(text);
+        if (bytes > MaxOsc52WriteBytes)
             return;
         lock (_pendingClipboardsLock)
         {
-            if (_closed || _pendingClipboards.Count >= 32)
+            if (_closed)
                 return;
-            _pendingClipboards.Enqueue(new ClipboardWrite(session, text));
+            // Coalesce: latest write of a session replaces its pending one.
+            if (_pendingClipboards.Count > 0)
+            {
+                bool replaced = false;
+                int n = _pendingClipboards.Count;
+                for (int i = 0; i < n; i++)
+                {
+                    var item = _pendingClipboards.Dequeue();
+                    if (!replaced && ReferenceEquals(item.Session, session))
+                    {
+                        _pendingClipboardBytes -= item.Bytes;
+                        replaced = true;
+                        continue;
+                    }
+                    _pendingClipboards.Enqueue(item);
+                }
+            }
+            if (_pendingClipboards.Count >= 32 || _pendingClipboardBytes + bytes > MaxPendingClipboardBytes)
+            {
+                Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
+                return;
+            }
+            _pendingClipboards.Enqueue(new ClipboardWrite(session, Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard, text, bytes));
+            _pendingClipboardBytes += bytes;
             Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
         }
         HostWake.Request();
@@ -1509,6 +1544,7 @@ internal static class DottyWindowHost
             }
 
             request = _pendingClipboards.Dequeue();
+            _pendingClipboardBytes -= request.Bytes;
             Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
             return true;
         }
@@ -2154,6 +2190,7 @@ internal static class DottyWindowHost
         lock (_pendingClipboardsLock)
         {
             _pendingClipboards.Clear();
+            _pendingClipboardBytes = 0;
             Volatile.Write(ref _pendingClipboardCount, 0);
         }
         lock (_pendingTabTitleChangesLock)

@@ -34,7 +34,7 @@ public class ParserEdgeCaseTests
 
         object? ITerminalHandler.Buffer => null;
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
-        event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
         event Action? ITerminalHandler.PaletteChanged { add { } remove { } }
         void ITerminalHandler.OnHyperlink(string uri) { }

@@ -196,12 +196,14 @@ public static class SilkKeyMapper
         Span<byte> destination,
         bool super = false,
         bool applicationCursorKeys = false,
-        int modifyOtherKeysLevel = 0)
+        int modifyOtherKeysLevel = 0,
+        bool backarrowSendsBackspace = false)
     {
         var (terminalKey, modifiers) = Map(key, ctrl, shift, alt, super);
         if (terminalKey == TerminalKey.Unknown)
             return 0;
-        return s_encoder.Encode(terminalKey, modifiers, destination, keypadAppMode, applicationCursorKeys, modifyOtherKeysLevel);
+        return s_encoder.Encode(terminalKey, modifiers, destination, keypadAppMode, applicationCursorKeys, modifyOtherKeysLevel,
+            backarrowSendsBackspace);
     }
 
 }

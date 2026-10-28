@@ -155,7 +155,8 @@ public sealed partial class TerminalKeyboardDispatcher
         var adapter = tab.Session.Adapter;
         int length = _inputEncoder.EncodeKeyEvent(terminalKey, eventModifiers, primaryCodepoint, eventType,
             associatedText, _keyEventScratch, kittyFlags, adapter.KeypadApplicationMode,
-            adapter.ApplicationCursorKeysEnabled, shiftedCodepoint, baseCodepoint);
+            adapter.ApplicationCursorKeysEnabled, shiftedCodepoint, baseCodepoint,
+            adapter.BackarrowSendsBackspace);
         if (length == 0)
             return false;
         _host.WriteInput(tab, _keyEventScratch.AsSpan(0, length));
@@ -218,7 +219,8 @@ public sealed partial class TerminalKeyboardDispatcher
         int length = SilkKeyMapper.Encode(key, _host.Ctrl, _host.Shift, _host.Alt,
             tab.Session.Adapter.KeypadApplicationMode, bytes, super: _host.Super,
             applicationCursorKeys: tab.Session.Adapter.ApplicationCursorKeysEnabled,
-            modifyOtherKeysLevel: tab.Session.Adapter.ModifyOtherKeysLevel);
+            modifyOtherKeysLevel: tab.Session.Adapter.ModifyOtherKeysLevel,
+            backarrowSendsBackspace: tab.Session.Adapter.BackarrowSendsBackspace);
         if (length != 0)
             _host.WriteInput(tab, bytes[..length]);
     }

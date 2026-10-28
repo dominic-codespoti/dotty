@@ -346,7 +346,8 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         }
 
         int length = _inputEncoder.EncodeKeyEvent(TerminalKey.Unknown, TerminalKeyModifiers.None, 0,
-            TerminalKeyEventType.Press, text, _keyEventScratch, kittyFlags);
+            TerminalKeyEventType.Press, text, _keyEventScratch, kittyFlags,
+            backarrowSendsBackspace: adapter.BackarrowSendsBackspace);
         if (length == 0)
             return;
         var activePane = activeTab.ActivePane;

@@ -237,4 +237,16 @@ public sealed class SoftResetTests
         Assert.Equal(TerminalAdapter.MouseMode.None, adapter.CurrentMouseMode);
         Assert.False(adapter.FocusReportingEnabled);
     }
+
+    [Fact]
+    public void SoftReset_KeepsBackarrowKeyModeAndVisibilityReports()
+    {
+        var (adapter, parser, _) = Create();
+        Feed(parser, Esc + "[?67h" + Esc + "[?2033h");
+
+        Feed(parser, Esc + "[!p");
+
+        Assert.True(adapter.BackarrowSendsBackspace);
+        Assert.True(adapter.VisibilityReportsEnabled);
+    }
 }

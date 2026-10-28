@@ -26,6 +26,25 @@ public sealed class VisibilityReportTests
     private static void Feed(BasicAnsiParser parser, string text) => parser.Feed(Encoding.UTF8.GetBytes(text));
 
     [Fact]
+    public void PrivateDsr998_EndToEnd_RepliesWithVisibilityRegardlessOfMode()
+    {
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, "\u001b[?998n");
+        adapter.SetVisibility(false);
+        Feed(parser, "\u001b[?998n");
+        Assert.Equal(new[] { Visible, Hidden }, replies);
+        Assert.False(adapter.VisibilityReportsEnabled);
+    }
+
+    [Fact]
+    public void PrivateDsr_OtherCodesAreSilent()
+    {
+        var (_, parser, replies) = Setup();
+        Feed(parser, "\u001b[?15n\u001b[?997n\u001b[?999n");
+        Assert.Empty(replies);
+    }
+
+    [Fact]
     public void Defaults_AreVisibleAndDisabled()
     {
         var (adapter, _, replies) = Setup();

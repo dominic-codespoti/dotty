@@ -117,7 +117,7 @@ public sealed class P0TerminalCompatibilityTests
         parser.Feed("\x1b[?6$p"u8); // DECOM reset
         parser.Feed("\x1b[?2004$p"u8); // bracketed paste reset
         parser.Feed("\x1b[?9999$p"u8); // unrecognized
-        parser.Feed("\x1b[7$p"u8); // ANSI mode 7 is not recognized
+        parser.Feed("\x1b[7$p"u8); // ANSI mode 7 (VEM) is permanently reset
 
         Assert.Equal(new[]
         {
@@ -125,7 +125,7 @@ public sealed class P0TerminalCompatibilityTests
             "\x1b[?6;2$y",
             "\x1b[?2004;2$y",
             "\x1b[?9999;0$y",
-            "\x1b[7;0$y",
+            "\x1b[7;4$y",
         }, replies);
     }
 

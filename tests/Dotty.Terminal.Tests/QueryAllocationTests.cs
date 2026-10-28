@@ -68,4 +68,14 @@ public sealed class QueryAllocationTests
             Encoding.UTF8.GetBytes("\u001b[8;24;80t"),
             Encoding.UTF8.GetBytes("\u001b[7;1;1;1;1;2*y"),
             Encoding.UTF8.GetBytes("\u001b[?2027h"));
+
+    [Fact]
+    public void RepeatedDecrqmTableQueriesDoNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b[?2027$p"),
+            Encoding.UTF8.GetBytes("\u001b[?2033$p"),
+            Encoding.UTF8.GetBytes("\u001b[?1049$p"),
+            Encoding.UTF8.GetBytes("\u001b[?4294967303$p"),
+            Encoding.UTF8.GetBytes("\u001b[12$p"));
 }

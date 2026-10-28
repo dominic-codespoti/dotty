@@ -22,12 +22,12 @@ public sealed class QueryTests
     private static void Feed(BasicAnsiParser parser, string text) => parser.Feed(Encoding.UTF8.GetBytes(text));
 
     [Fact]
-    public void Decrqm_ReportsPrivateDecawmAndAnsiSevenAsUnrecognized()
+    public void Decrqm_ReportsPrivateDecawmAndAnsiSevenAsPermanentlyReset()
     {
         var (_, parser, replies) = Setup();
         Feed(parser, "\u001b[?7$p"); Feed(parser, "\u001b[?7l");
         Feed(parser, "\u001b[?7$p"); Feed(parser, "\u001b[7$p");
-        Assert.Equal(new[] { "\u001b[?7;1$y", "\u001b[?7;2$y", "\u001b[7;0$y" }, replies);
+        Assert.Equal(new[] { "\u001b[?7;1$y", "\u001b[?7;2$y", "\u001b[7;4$y" }, replies);
     }
 
     [Fact]

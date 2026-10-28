@@ -1054,7 +1054,17 @@ namespace Dotty.Terminal.Parser
             switch (code)
             {
                 case 1049:
+                case 1047:
+                case 47:
+                    // 47/1047 reuse the 1049 path (Dotty's alternate screen always
+                    // saves/restores the cursor: documented deviation from xterm).
                     Handler?.OnSetAlternateScreen(enabled);
+                    break;
+                case 1048:
+                    if (enabled)
+                        Handler?.OnSaveCursor();
+                    else
+                        Handler?.OnRestoreCursor();
                     break;
                 case 25:
                     Handler?.OnSetCursorVisibility(enabled);

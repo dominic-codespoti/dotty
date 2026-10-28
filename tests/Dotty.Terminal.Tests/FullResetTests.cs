@@ -161,4 +161,26 @@ public sealed class FullResetTests
         Assert.True(adapter.Buffer.CursorVisible);
         Assert.Equal(TerminalAdapter.MouseMode.None, adapter.CurrentMouseMode);
     }
+
+    [Fact]
+    public void FullReset_ResetsBackarrowKeyModeAndVisibilityReports()
+    {
+        var (adapter, parser, replies) = Create();
+        Feed(parser, Esc + "[?67h" + Esc + "[?2033h");
+        Assert.True(adapter.BackarrowSendsBackspace);
+        Assert.True(adapter.VisibilityReportsEnabled);
+
+        adapter.SetVisibility(false);
+        Feed(parser, Esc + "c");
+
+        Assert.False(adapter.BackarrowSendsBackspace);
+        Assert.False(adapter.VisibilityReportsEnabled);
+        Assert.False(adapter.IsVisible); // host fact, not terminal state
+
+        replies.Clear();
+        adapter.SetVisibility(true);
+        Assert.Empty(replies);
+        Feed(parser, Esc + "[?67$p" + Esc + "[?2033$p");
+        Assert.Equal(new[] { Esc + "[?67;2$y", Esc + "[?2033;2$y" }, replies);
+    }
 }

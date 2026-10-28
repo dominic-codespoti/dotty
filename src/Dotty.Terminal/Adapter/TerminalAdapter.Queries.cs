@@ -10,24 +10,8 @@ public partial class TerminalAdapter
     public void OnRequestMode(int mode, bool isPrivate)
     {
         // DECRQM: 1=set, 2=reset, 3=permanently set, 4=permanently reset, 0=not recognized.
-        // Only modes Dotty actually tracks report set/reset; everything else is 0.
-        int state = (mode, isPrivate) switch
-        {
-            (1, true) => ApplicationCursorKeysEnabled ? 1 : 2, // DECCKM
-            (67, true) => BackarrowSendsBackspace ? 1 : 2, // DECBKM
-            (6, true) => _buffer.OriginMode ? 1 : 2, // DECOM
-            (7, true) => _buffer.AutoWrap ? 1 : 2, // DECAWM
-            (25, true) => _buffer.CursorVisible ? 1 : 2, // DECTCEM
-            (1000, true) => CurrentMouseMode == MouseMode.Normal ? 1 : 2,
-            (1002, true) => CurrentMouseMode == MouseMode.ButtonEvent ? 1 : 2,
-            (1003, true) => CurrentMouseMode == MouseMode.AnyEvent ? 1 : 2,
-            (1004, true) => FocusReportingEnabled ? 1 : 2,
-            (1006, true) => CurrentMouseEncoding == MouseEncoding.SGR ? 1 : 2,
-            (1049, true) => _buffer.IsAlternateScreenActive ? 1 : 2,
-            (2004, true) => _buffer.BracketedPasteMode ? 1 : 2,
-            (2026, true) => SynchronizedUpdateActive ? 1 : 2,
-            _ => 0,
-        };
+        // The status table lives in TerminalAdapter.ModeReports.cs.
+        int state = GetModeStatus(mode, isPrivate);
         var handler = ReplyRequested;
         if (handler is null)
             return;

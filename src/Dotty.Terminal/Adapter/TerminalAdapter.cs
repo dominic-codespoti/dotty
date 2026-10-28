@@ -524,6 +524,8 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         OnSetSynchronizedUpdate(false);
         ResetPaletteForRis();
         ResetKittyKeyboardState();
+        ResetBackarrowKeyMode();
+        ResetVisibilityReports();
         RequestRender();
     }
 

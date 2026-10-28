@@ -40,10 +40,12 @@ public partial class TerminalAdapter
     }
 
     /// <summary>
-    /// Private DSR (<c>CSI ? Ps n</c>, Ps != 6). No code is answered here: xterm stays silent for
-    /// unsupported queries and Dotty reports none of the DECDSR printer/UDK/keyboard/locator states.
+    /// Private DSR (<c>CSI ? Ps n</c>, Ps != 6). Only 998 (visibility query, answered with
+    /// <c>CSI ? 999 ; Ps n</c>) is handled; every other code is silent, as in xterm.
     /// </summary>
     public void OnPrivateDeviceStatusReport(int code)
     {
+        if (code == 998)
+            HandleVisibilityQuery();
     }
 }

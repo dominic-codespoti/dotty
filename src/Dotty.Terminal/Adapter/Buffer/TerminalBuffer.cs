@@ -385,13 +385,17 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
     public void FullReset()
     {
-        // RIS - Reset to Initial State
+        // RIS - Reset to Initial State: leave the alternate screen, clear everything, then the DECSTR core.
+        if (_isAlternate)
+            SetAlternateScreen(false);
         _screens.ClearAll();
         _cursor.Reset();
         _bracketedPaste = false;
-        _hasSavedCursor = false;
         InitializeTabStops();
         _totalScrolled = 0;
+        _savedTotalScrolled = 0;
+        ResetFullOnlyState();
+        ApplySoftResetCore();
         MarkAllRowsDirty();
     }
 

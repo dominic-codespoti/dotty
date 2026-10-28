@@ -296,12 +296,12 @@ internal sealed partial class KittyGraphicsController : IDisposable
     /// Registers a placement of <paramref name="image"/> at the cursor cell (<c>AnchorRow = ViewTop + cursor row</c>)
     /// and, unless it is virtual (<c>U=1</c>) or <c>C=1</c>, moves the cursor past it. The placement exists before
     /// the cursor move scrolls anything, so it scrolls with the text. Relative placements (<c>P</c>/<c>Q</c> given)
-    /// are not supported yet: they answer <see cref="KittyStatus.InvalidKeyValue"/> and create nothing.
+    /// go to <see cref="PlaceRelative"/>: they never move the cursor.
     /// </summary>
     private KittyStatus PlaceImage(in KittyGraphicsCommand cmd, KittyImage image)
     {
         if (cmd.ParentImage != 0 || cmd.ParentPlacement != 0)
-            return KittyStatus.InvalidKeyValue;
+            return PlaceRelative(in cmd, image);
 
         var store = Store;
         long anchorRow = store.ViewTop + _host.CursorRow;

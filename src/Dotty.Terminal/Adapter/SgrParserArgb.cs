@@ -189,6 +189,12 @@ public static class SgrParserArgb
     {
         color = default;
         paletteIndex = -1;
+        if (enumerator.HasSubText)
+        {
+            // Colon form (38:5:n, 38:2:r:g:b, 38:2:cs:r:g:b): the whole colour sits in this one parameter.
+            ParseColonColor(enumerator.SubText, palette, out color, out paletteIndex);
+            return enumerator.MoveNext();
+        }
         if (!enumerator.MoveNext()) return false;
 
         int mode = enumerator.Current;
@@ -226,11 +232,68 @@ public static class SgrParserArgb
         return enumerator.MoveNext();
     }
 
+    /// <summary>
+    /// Parses the text after the first colon of an extended colour parameter: <c>5:n</c>, <c>2:r:g:b</c> or
+    /// <c>2:cs:r:g:b</c> (the colour-space slot may be empty: <c>2::r:g:b</c>). Malformed input (unknown mode,
+    /// missing or non-numeric components, a value above 255) yields no colour.
+    /// </summary>
+    private static void ParseColonColor(ReadOnlySpan<char> text, TerminalPalette palette, out SgrColorArgb color, out int paletteIndex)
+    {
+        color = default;
+        paletteIndex = -1;
+        Span<int> parts = stackalloc int[8];
+        int count = 0;
+        while (true)
+        {
+            int colon = text.IndexOf(':');
+            ReadOnlySpan<char> part = colon < 0 ? text : text.Slice(0, colon);
+            if (count == parts.Length) return;
+            if (!TryParseComponent(part, out parts[count++])) return;
+            if (colon < 0) break;
+            text = text.Slice(colon + 1);
+        }
+
+        if (parts[0] == 5 && count == 2)
+        {
+            int idx = parts[1];
+            if (idx < 0 || idx > 255) return;
+            color = SgrColorArgb.From256(idx, palette);
+            if (!color.IsEmpty) paletteIndex = idx;
+        }
+        else if (parts[0] == 2 && (count == 4 || count == 5))
+        {
+            int first = count - 3;
+            int r = parts[first], g = parts[first + 1], b = parts[first + 2];
+            if (r < 0 || g < 0 || b < 0 || r > 255 || g > 255 || b > 255) return;
+            color = SgrColorArgb.FromRgb((byte)r, (byte)g, (byte)b);
+        }
+    }
+
+    // An empty component is 0 (as in "2::r:g:b"); anything else must be decimal digits.
+    private static bool TryParseComponent(ReadOnlySpan<char> part, out int value)
+    {
+        value = 0;
+        for (int i = 0; i < part.Length; i++)
+        {
+            char c = part[i];
+            if (c < '0' || c > '9') return false;
+            value = value * 10 + (c - '0');
+            if (value > 100000) value = 100000;
+        }
+        return true;
+    }
+
     private ref struct ParametersEnumerator
     {
         private ReadOnlySpan<char> _span;
         public int Current { get; private set; }
         public int SubParameter { get; private set; }
+
+        /// <summary>True when the current parameter contained a colon.</summary>
+        public bool HasSubText { get; private set; }
+
+        /// <summary>Text after the first colon of the current parameter (valid when <see cref="HasSubText"/>).</summary>
+        public ReadOnlySpan<char> SubText { get; private set; }
 
         public ParametersEnumerator(ReadOnlySpan<char> span)
         {
@@ -262,6 +325,8 @@ public static class SgrParserArgb
         private void ParseCurrent(ReadOnlySpan<char> slice)
         {
             SubParameter = -1;
+            HasSubText = false;
+            SubText = default;
             if (slice.IsEmpty)
             {
                 Current = 0;
@@ -272,6 +337,8 @@ public static class SgrParserArgb
             int colon = slice.IndexOf(':');
             ReadOnlySpan<char> main = colon >= 0 ? slice.Slice(0, colon) : slice;
             ReadOnlySpan<char> sub = colon >= 0 ? slice.Slice(colon + 1) : default;
+            HasSubText = colon >= 0;
+            SubText = sub;
 
             int val = 0;
             for (int i = 0; i < main.Length; i++)

@@ -624,23 +624,15 @@ public sealed class KittyPlacementTests
     }
 
     [Fact]
-    public void RelativePlacementKeysAreRejectedWithEinvalAndCreateNothing()
+    public void HAndVAloneMeanNothingWithoutAParent()
     {
+        // Relative keys with a parent are covered by KittyRelativePlacementTests.
         using var rig = new KittyRig();
         rig.Apc("i=1,s=1,v=1,f=24", "AAAA");
         rig.Replies.Clear();
-        rig.Apc("a=p,i=1,P=1");
-        rig.Apc("a=p,i=1,Q=3");
-        rig.Apc("a=p,i=1,P=1,Q=2,H=1,V=1");
-        Assert.Equal(3, rig.Replies.Count);
-        Assert.All(rig.Replies, r => Assert.Equal(Err("i=1", "EINVAL:Invalid key value"), r));
-        Assert.Equal(0, rig.Store.PlacementCount);
-        Assert.Empty(rig.Host.CursorMoves);
-
-        // H and V alone mean nothing without a parent.
-        rig.Replies.Clear();
         rig.Apc("a=p,i=1,H=1,V=1");
         Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+        Assert.Equal(PlacementKind.Normal, Assert.Single(rig.Store.Placements).Kind);
     }
 
     [Fact]

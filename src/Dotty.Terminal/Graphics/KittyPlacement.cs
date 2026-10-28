@@ -11,7 +11,7 @@ internal enum PlacementKind : byte
     /// <summary>Unicode-placeholder placement (<c>U=1</c>): a <c>c</c>×<c>r</c> grid without a screen anchor.</summary>
     Virtual,
 
-    /// <summary>Positioned relative to a parent placement (<c>P/Q/H/V</c>).</summary>
+    /// <summary>Positioned relative to a parent placement (<c>P/Q/H/V</c>); the anchor fields are unused.</summary>
     Relative,
 }
 
@@ -83,9 +83,18 @@ internal sealed class KittyPlacement
     /// <summary>Scratch mark of <see cref="KittyImageStore.RebaseAnchors"/>: the placement was mapped to a new position.</summary>
     internal bool Rebased { get; set; }
 
-    // Relative placements (a later stage): reserved, never set today.
+    /// <summary>
+    /// Relative placements (<c>P/Q/H/V</c>): the placement this one is positioned against, or null. A relative
+    /// placement (<see cref="PlacementKind.Relative"/>) stores no absolute anchor: its position is derived from the
+    /// parent chain at capture time (<see cref="KittyImageStore.MaxRelativeDepth"/> links at most), so it follows
+    /// the parent through scrolls, reflow and replacement without any notification touching it.
+    /// </summary>
     internal KittyPlacement? Parent { get; set; }
+
+    /// <summary>Offset from the parent's top-left cell: columns (<c>H</c>) and rows (<c>V</c>), either sign.</summary>
     internal int ParentDx { get; set; }
     internal int ParentDy { get; set; }
+
+    /// <summary>The live placements whose <see cref="Parent"/> is this one (null when none); deleted with it.</summary>
     internal List<KittyPlacement>? Children { get; set; }
 }

@@ -14,6 +14,7 @@ using RuntimeSearchMatch = Dotty.Runtime.Search.SearchMatch;
 using Dotty.Silk;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Adapter.Buffer;
+using Dotty.Terminal.Graphics;
 using SkiaSharp;
 
 namespace Dotty.Silk.Rendering;
@@ -178,6 +179,9 @@ public sealed class TerminalSceneComposer : IDisposable
     public long CachedRowMisses => _cachedRowMisses;
 
     private readonly ImageDrawList _imageDraws = new();
+
+    /// <summary>Scratch output of <see cref="PlaceholderResolver"/>: filled and drained within one leaf, never holds pixels across frames.</summary>
+    private readonly List<KittyRenderPlacement> _placeholderQuads = new();
 
     /// <summary>
     /// Test seam: invoked for every captured leaf snapshot (no buffer lock held) before its rows and images are
@@ -344,7 +348,8 @@ public sealed class TerminalSceneComposer : IDisposable
                         && (_imageDraws.NextDeadlineTicks == 0 || animationDeadline < _imageDraws.NextDeadlineTicks))
                         _imageDraws.NextDeadlineTicks = animationDeadline;
 
-                    if (graphics.Placements.Length > 0)
+                    bool hasPlaceholders = graphics.Virtuals.Length > 0;
+                    if (graphics.Placements.Length > 0 || hasPlaceholders)
                     {
                         // startRowOffset already contains the tab-bar rows, so padTop is NOT combined with
                         // topOffset here (the cell pass uses the same origin: padTop + row * cellH).
@@ -358,7 +363,18 @@ public sealed class TerminalSceneComposer : IDisposable
                             ClipTop: Math.Max(0f, gridTop),
                             ClipRight: Math.Min((float)framebufferWidth, gridLeft + paneColumns * imageCellWidth),
                             ClipBottom: Math.Min((float)framebufferHeight, gridTop + paneRows * imageCellHeight));
-                        ImageQuadBuilder.Append(_imageDraws, graphics.Placements, in imageGeometry);
+                        if (graphics.Placements.Length > 0)
+                            ImageQuadBuilder.Append(_imageDraws, graphics.Placements, in imageGeometry);
+                        if (hasPlaceholders)
+                        {
+                            // Outside the buffer lock, on the snapshot copy; the quads borrow pixels the snapshot's
+                            // leases keep alive and the builder retains its own.
+                            _placeholderQuads.Clear();
+                            PlaceholderResolver.Resolve(leafSnapshot, graphics, imageCellWidth, imageCellHeight, _placeholderQuads);
+                            if (_placeholderQuads.Count > 0)
+                                ImageQuadBuilder.Append(_imageDraws, CollectionsMarshal.AsSpan(_placeholderQuads), in imageGeometry);
+                            _placeholderQuads.Clear();
+                        }
                     }
                 }
 

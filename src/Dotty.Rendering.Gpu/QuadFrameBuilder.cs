@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Dotty.Terminal.Adapter;
+using Dotty.Terminal.Graphics;
 using SkiaSharp;
 
 namespace Dotty.Rendering.Gpu;
@@ -189,7 +190,10 @@ public static class QuadFrameBuilder
             }
 
             short graphemeIndex = column < coldSpan.Length ? coldSpan[column].GraphemeIndex : (short)-1;
-            string? grapheme = GraphemeHelper.Resolve(hot.Rune, graphemeIndex);
+            // U+10EEEE (Unicode-placeholder) cells never draw a glyph, whatever the image store holds: the resolver
+            // paints the image there. A blank grapheme keeps the style's background (visible through transparent
+            // image pixels) and leaves the row's identity untouched.
+            string? grapheme = hot.Rune == PlaceholderTable.PlaceholderRune ? " " : GraphemeHelper.Resolve(hot.Rune, graphemeIndex);
             if (string.IsNullOrEmpty(grapheme))
             {
                 column++;

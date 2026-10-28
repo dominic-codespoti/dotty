@@ -53,7 +53,7 @@ internal sealed partial class KittyImageStore
         long min = long.MaxValue;
         foreach (var p in _placements.Values)
         {
-            if (p.Kind == PlacementKind.Virtual)
+            if (p.Kind != PlacementKind.Normal)
                 continue;
             if (p.AnchorRow >= limit)
                 _scratch.Add(p);
@@ -93,7 +93,7 @@ internal sealed partial class KittyImageStore
         _scratch.Clear();
         foreach (var p in _placements.Values)
         {
-            if (p.Kind == PlacementKind.Virtual)
+            if (p.Kind != PlacementKind.Normal)
                 continue;
             if (p.AnchorRow < regionTop || p.EndRow > regionEnd)
                 continue;
@@ -198,7 +198,7 @@ internal sealed partial class KittyImageStore
             if (resolved.IsEmpty)
                 continue;
             p.Geometry = resolved;
-            if (p.Kind != PlacementKind.Virtual)
+            if (p.Kind == PlacementKind.Normal)
                 NoteEndRow(p.EndRow);
             changed++;
         }
@@ -217,7 +217,7 @@ internal sealed partial class KittyImageStore
         _anchors.Clear();
         foreach (var p in _placements.Values)
         {
-            if (p.Kind == PlacementKind.Virtual)
+            if (p.Kind != PlacementKind.Normal)
                 continue;
             long logical = p.AnchorRow - _viewTop;
             if (logical < -(long)scrollbackRows || logical >= rows)
@@ -271,7 +271,7 @@ internal sealed partial class KittyImageStore
         long min = long.MaxValue;
         foreach (var p in _placements.Values)
         {
-            if (p.Kind == PlacementKind.Virtual)
+            if (p.Kind != PlacementKind.Normal)
                 continue;
             if (!p.Rebased)
                 _scratch.Add(p);
@@ -304,7 +304,7 @@ internal sealed partial class KittyImageStore
         long min = long.MaxValue;
         foreach (var p in _placements.Values)
         {
-            if (p.Kind == PlacementKind.Virtual)
+            if (p.Kind != PlacementKind.Normal)
                 continue;
             if (p.EndRow <= floor)
                 _scratch.Add(p);

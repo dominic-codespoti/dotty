@@ -3,6 +3,7 @@ using System.Threading;
 using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Themes;
 using Dotty.Runtime.Config;
+using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Themes;
 using Dotty.Terminal.Adapter;
 
@@ -125,6 +126,14 @@ public static class SilkConfig
         theme ??= LoadActiveTheme();
         adapter.SetPaletteBaseline(ResolveAnsiPalette(theme));
         adapter.SetDefaultColors($"#{theme.Foreground & 0xFFFFFF:X6}", $"#{theme.Background & 0xFFFFFF:X6}");
+    }
+
+    /// <summary>Applies per-adapter user config (theme and OSC 8 ingest) at session creation and on config reload.</summary>
+    public static void ApplyConfigToAdapter(TerminalAdapter adapter, IColorScheme? theme = null)
+    {
+        if (adapter == null) return;
+        ApplyThemeToAdapter(adapter, theme);
+        HyperlinkIngestConfig.Apply(adapter, UserConfigService.Current.Hyperlinks);
     }
 
     public static (SgrColorArgb Foreground, SgrColorArgb Background) InitializeTheme(

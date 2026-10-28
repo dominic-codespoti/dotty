@@ -248,7 +248,7 @@ public sealed class TerminalSceneComposer
             if (leaf.Columns > 0 && leaf.Rows > 0 &&
                 (leaf.Session.Adapter.Buffer.Columns != leaf.Columns || leaf.Session.Adapter.Buffer.Rows != leaf.Rows))
             {
-                leaf.Session.Resize(leaf.Columns, leaf.Rows);
+                leaf.Session.Resize(leaf.Columns, leaf.Rows, leaf.PixelWidth, leaf.PixelHeight);
             }
 
             // A resize can shrink the history (reflow, or a smaller byte-capped capacity): a stale offset past the

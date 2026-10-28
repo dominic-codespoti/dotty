@@ -84,7 +84,7 @@ public static class ConformanceHost
         using var session = new TerminalSession(options.Rows, options.Columns);
         TerminalAdapter adapter = session.Adapter;
 
-        ApplyCoreSwitches(adapter, options, (rows, columns) => session.Resize(columns, rows));
+        ApplyCoreSwitches(adapter, options, (rows, columns) => session.Resize(columns, rows, 0, 0));
 
         if (transcript is not null)
         {

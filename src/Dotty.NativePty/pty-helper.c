@@ -81,19 +81,33 @@ static void *proxy_stdin_to_master(void *arg) {
     return NULL;
 }
 
+// Clamp a pixel dimension to the unsigned short range of struct winsize; negative or absent means 0 (unknown).
+static unsigned short clamp_pixels(int value) {
+    if (value < 0) return 0;
+    if (value > 65535) return 65535;
+    return (unsigned short)value;
+}
+
 static void apply_control_line(const char *line) {
-    // Look for resize JSON: {"type":"resize","cols":NN,"rows":MM}
+    // Look for resize JSON: {"type":"resize","cols":NN,"rows":MM,"xpixel":W,"ypixel":H}
+    // xpixel/ypixel are optional (older clients omit them) and default to 0.
     if (strstr(line, "resize") != NULL) {
         int cols = 80, rows = 24;
+        int xpixel = 0, ypixel = 0;
         const char *c = strstr(line, "\"cols\"");
         if (c) sscanf(c, "\"cols\"%*[^0-9]%d", &cols);
         const char *r = strstr(line, "\"rows\"");
         if (r) sscanf(r, "\"rows\"%*[^0-9]%d", &rows);
+        const char *xp = strstr(line, "\"xpixel\"");
+        if (xp) sscanf(xp, "\"xpixel\"%*[^0-9]%d", &xpixel);
+        const char *yp = strstr(line, "\"ypixel\"");
+        if (yp) sscanf(yp, "\"ypixel\"%*[^0-9]%d", &ypixel);
         struct winsize ws;
+        memset(&ws, 0, sizeof(ws));
         ws.ws_col = cols;
         ws.ws_row = rows;
-        ws.ws_xpixel = 0;
-        ws.ws_ypixel = 0;
+        ws.ws_xpixel = clamp_pixels(xpixel);
+        ws.ws_ypixel = clamp_pixels(ypixel);
         ioctl(master_fd, TIOCSWINSZ, &ws);
     }
 }
@@ -202,6 +216,14 @@ int main(int argc, char **argv) {
     int initial_rows = 24;
     const char *initial_cols_env = getenv("DOTTY_INITIAL_COLS");
     const char *initial_rows_env = getenv("DOTTY_INITIAL_ROWS");
+    unsigned short initial_xpixel = 0;
+    unsigned short initial_ypixel = 0;
+    const char *initial_xpixel_env = getenv("DOTTY_INITIAL_XPIXEL");
+    const char *initial_ypixel_env = getenv("DOTTY_INITIAL_YPIXEL");
+    if (initial_xpixel_env && *initial_xpixel_env)
+        initial_xpixel = clamp_pixels(atoi(initial_xpixel_env));
+    if (initial_ypixel_env && *initial_ypixel_env)
+        initial_ypixel = clamp_pixels(atoi(initial_ypixel_env));
     if (initial_cols_env && *initial_cols_env) {
         int parsed = atoi(initial_cols_env);
         if (parsed > 0) initial_cols = parsed;
@@ -252,10 +274,11 @@ int main(int argc, char **argv) {
             _exit(127);
         }
         struct winsize ws;
+        memset(&ws, 0, sizeof(ws));
         ws.ws_col = (unsigned short)initial_cols;
         ws.ws_row = (unsigned short)initial_rows;
-        ws.ws_xpixel = 0;
-        ws.ws_ypixel = 0;
+        ws.ws_xpixel = initial_xpixel;
+        ws.ws_ypixel = initial_ypixel;
         ioctl(slave_fd, TIOCSWINSZ, &ws);
 #ifdef TIOCSCTTY
         ioctl(slave_fd, TIOCSCTTY, 0);
@@ -277,6 +300,8 @@ int main(int argc, char **argv) {
         unsetenv("DOTTY_CONTROL_SOCKET");
         unsetenv("DOTTY_INITIAL_COLS");
         unsetenv("DOTTY_INITIAL_ROWS");
+        unsetenv("DOTTY_INITIAL_XPIXEL");
+        unsetenv("DOTTY_INITIAL_YPIXEL");
 
         // Exec shell or provided command
         if (argc > 1) {

@@ -252,9 +252,11 @@ public sealed class SessionAllocationTests
             string? workingDirectory = null,
             IDictionary<string, string>? environmentVariables = null,
             IReadOnlyList<string>? command = null,
-            bool shellIsExecutable = false) => IsRunning = true;
+            bool shellIsExecutable = false,
+            int initialPixelWidth = 0,
+            int initialPixelHeight = 0) => IsRunning = true;
 
-        public void Resize(int columns, int rows) { }
+        public void Resize(int columns, int rows, int pixelWidth, int pixelHeight) { }
         public void Kill(bool force = false) => IsRunning = false;
         public Task<int> WaitForExitAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
 

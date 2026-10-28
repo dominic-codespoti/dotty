@@ -244,7 +244,7 @@ public class TerminalTabManagerTests
         var tab0 = manager.CreateTab(cols: 80, rows: 24);
         var tab1 = manager.CreateTab(cols: 80, rows: 24);
 
-        manager.ResizeAll(120, 40);
+        manager.ResizeAll(120, 40, 0, 0);
 
         Assert.Equal(120, tab0.Session.Adapter.Buffer.Columns);
         Assert.Equal(40, tab0.Session.Adapter.Buffer.Rows);

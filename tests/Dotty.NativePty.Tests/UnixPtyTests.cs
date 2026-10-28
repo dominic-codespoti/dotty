@@ -409,7 +409,7 @@ public class UnixPtyTests : IDisposable
         Thread.Sleep(500);
 
         // Act & Assert - should not throw
-        var exception = Record.Exception(() => _pty.Resize(120, 30));
+        var exception = Record.Exception(() => _pty.Resize(120, 30, 0, 0));
         // Note: On Unix, resize might silently fail if control socket not ready
         // The implementation handles this gracefully
         exception.Should().BeNull("Resize should not throw");
@@ -493,7 +493,7 @@ public class UnixPtyTests : IDisposable
 
         foreach (var (cols, rows) in dimensions)
         {
-            var exception = Record.Exception(() => _pty.Resize(cols, rows));
+            var exception = Record.Exception(() => _pty.Resize(cols, rows, 0, 0));
             exception.Should().BeNull($"Resize to {cols}x{rows} should not throw");
         }
     }
@@ -509,7 +509,7 @@ public class UnixPtyTests : IDisposable
         pty.Dispose();
 
         // Act & Assert
-        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24));
+        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24, 0, 0));
     }
 
     #endregion
@@ -842,7 +842,7 @@ public class UnixPtyTests : IDisposable
         Thread.Sleep(500); // Give time for socket setup
 
         // Assert - resize should not throw (may silently fail if not ready)
-        var exception = Record.Exception(() => _pty.Resize(100, 40));
+        var exception = Record.Exception(() => _pty.Resize(100, 40, 0, 0));
         exception.Should().BeNull();
     }
 

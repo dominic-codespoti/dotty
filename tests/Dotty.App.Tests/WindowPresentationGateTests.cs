@@ -107,6 +107,53 @@ public sealed class WindowPresentationGateTests
     }
 
     [Fact]
+    public void EveryFrameReasonIsADistinctSingleBit()
+    {
+        int seen = 0;
+        foreach (WindowFrameReason reason in Enum.GetValues<WindowFrameReason>())
+        {
+            if (reason == WindowFrameReason.None)
+                continue;
+
+            int bit = (int)reason;
+            Assert.Equal(1, System.Numerics.BitOperations.PopCount((uint)bit));
+            Assert.Equal(0, seen & bit);
+            seen |= bit;
+        }
+
+        // The image reasons extend the existing 10 bits (0..9) without renumbering any of them.
+        Assert.Equal(1 << 10, (int)WindowFrameReason.ImageAnimation);
+        Assert.Equal(1 << 11, (int)WindowFrameReason.ImageUpload);
+        Assert.Equal(1 << 9, (int)WindowFrameReason.TabOrPane);
+    }
+
+    [Fact]
+    public void ImageReasonsCoalesceWithOthersAndSurviveRequeue()
+    {
+        WindowFrameReason previous = WindowPresentationGate.Consume();
+        try
+        {
+            WindowPresentationGate.Invalidate(WindowFrameReason.ImageAnimation);
+            WindowPresentationGate.Invalidate(WindowFrameReason.ImageUpload | WindowFrameReason.Content);
+
+            WindowFrameReason expected =
+                WindowFrameReason.ImageAnimation | WindowFrameReason.ImageUpload | WindowFrameReason.Content;
+            Assert.Equal(expected, WindowPresentationGate.PendingReasons);
+            Assert.Equal(expected, WindowPresentationGate.Consume());
+            Assert.Equal(WindowFrameReason.None, WindowPresentationGate.PendingReasons);
+
+            // A frame that deferred texture uploads asks for another one with exactly that reason.
+            WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload);
+            Assert.Equal(WindowFrameReason.ImageUpload, WindowPresentationGate.Consume());
+        }
+        finally
+        {
+            WindowPresentationGate.Consume();
+            WindowPresentationGate.Requeue(previous);
+        }
+    }
+
+    [Fact]
     public async Task BackgroundInvalidatePostsWakeButNoneDoesNot()
     {
         WindowFrameReason previous = WindowPresentationGate.Consume();

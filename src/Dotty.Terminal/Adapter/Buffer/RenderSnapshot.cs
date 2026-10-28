@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using Dotty.Terminal.Graphics;
 using Dotty.Abstractions.Config;
 namespace Dotty.Terminal.Adapter;
 
@@ -51,6 +52,49 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
     /// arrays. Empty until the snapshot is captured.
     /// </summary>
     public int[] RowOffsets = Array.Empty<int>();
+
+    private KittyRenderSnapshot? _graphicsPool;
+
+    /// <summary>
+    /// Image placements visible in this snapshot (each holding a lease on its pixels), or null when the capture
+    /// found none. Released, and set back to null, by <see cref="Dispose"/>.
+    /// </summary>
+    public KittyRenderSnapshot? Graphics { get; private set; }
+
+    /// <summary>
+    /// Capture seam: returns this snapshot's pooled, empty <see cref="KittyRenderSnapshot"/> and exposes it as
+    /// <see cref="Graphics"/>. The pooled instance survives <see cref="Dispose"/> (its leases are released, the
+    /// storage is kept), so a steady-state capture allocates nothing.
+    /// </summary>
+    internal KittyRenderSnapshot BeginGraphics()
+    {
+        ReleaseGraphics();
+        KittyRenderSnapshot graphics = _graphicsPool ??= new KittyRenderSnapshot();
+        Graphics = graphics;
+        return graphics;
+    }
+
+    /// <summary>
+    /// Attaches a caller-built <see cref="KittyRenderSnapshot"/>; this snapshot takes ownership and releases its
+    /// leases on <see cref="Dispose"/> (or when another graphics snapshot replaces it).
+    /// </summary>
+    internal void AttachGraphics(KittyRenderSnapshot graphics)
+    {
+        ArgumentNullException.ThrowIfNull(graphics);
+        if (ReferenceEquals(graphics, Graphics))
+            return;
+        ReleaseGraphics();
+        Graphics = graphics;
+    }
+
+    private void ReleaseGraphics()
+    {
+        KittyRenderSnapshot? graphics = Graphics;
+        if (graphics is null)
+            return;
+        Graphics = null;
+        graphics.Reset();
+    }
 
     /// <summary>
     /// Compact per-frame capture: copies only the visible rows' cell slices
@@ -171,6 +215,8 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         _styles = Array.Empty<CellAttributes>();
         _hyperlinkTable = Array.Empty<string>();
         _hyperlinkCount = 0;
+        ReleaseGraphics();
+        _graphicsPool = null;
     }
 
     public void Dispose()
@@ -192,6 +238,7 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         _styles = Array.Empty<CellAttributes>();
         _hyperlinkTable = Array.Empty<string>();
         _hyperlinkCount = 0;
+        ReleaseGraphics();
         NextPooled = null;
         owner?.ReturnRenderSnapshot(this);
     }

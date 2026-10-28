@@ -5,7 +5,7 @@ using Dotty.Terminal.Adapter;
 
 namespace Dotty.Silk;
 
-public sealed unsafe class SilkTerminalRenderer : IDisposable
+public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
 {
     private const int FloatsPerInstance = 19;
 
@@ -109,6 +109,18 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     public long Rgba8TexturePayloadBytes => TextureManager.Rgba8TexturePayloadBytes;
     /// <summary>Process-wide retained native pixel storage for color-glyph probes.</summary>
     public static long IntrinsicColorProbeScratchBytes => GlyphAtlas.IntrinsicColorProbeScratchBytes;
+
+    private SilkImageTextureCache? _imageTextures;
+    private SilkImageRenderer? _images;
+
+    /// <summary>
+    /// True when the last frame skipped an image texture upload because of the per-frame budget; the host should
+    /// render again (<see cref="WindowFrameReason.ImageUpload"/>).
+    /// </summary>
+    public bool ImageUploadsDeferred => _images?.UploadsDeferred ?? false;
+
+    /// <summary>Estimated GPU bytes of resident image textures; not driver RSS.</summary>
+    public long EstimatedImageTextureBytes => _imageTextures?.EstimatedTextureBytes ?? 0;
 
     public SilkTerminalRenderer(GL gl, GlyphAtlas atlas)
     {
@@ -308,9 +320,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         int barRows = 0,
         int scrollbarChromeStart = -1,
         int menuInstanceStart = -1,
-        int menuChromeStart = -1)
+        int menuChromeStart = -1,
+        ImageDrawList? images = null)
     {
         EnsureNotDisposed();
+        SilkImageRenderer? imageRenderer = BeginImageFrame(images);
 
         if (frameCaptured)
             CaptureInstances(instances, cellW, cellH, paddingLeft, paddingTop, barRows, menuInstanceStart);
@@ -361,7 +375,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             chromeQuads,
             scrollbarChromeStart,
             menuInstanceStart,
-            menuChromeStart);
+            menuChromeStart,
+            images);
+        imageRenderer?.EndFrame();
     }
     private void CaptureInstances(
         ReadOnlySpan<CellInstance> instances,
@@ -517,7 +533,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         ReadOnlySpan<ChromeQuadInstance> chromeQuads,
         int scrollbarChromeStart,
         int menuInstanceStart,
-        int menuChromeStart)
+        int menuChromeStart,
+        ImageDrawList? images)
     {
         int cellCount = _lastInstanceCount;
         if (cellCount > 0 && _instanceBufferDirty)
@@ -675,7 +692,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
 
         // Base backgrounds/chrome/glyphs are drawn first. Scrollbar chrome is
         // a separate overlay so rightmost glyphs can never cover the thumb.
+        DrawImageLayer(ImageLayer.BelowBackground, images);
         DrawCellRange(0, baseInstanceCount, pass: 0, menuVao: false);
+        DrawImageLayer(ImageLayer.BelowText, images);
         int baseChromeCount = scrollbarChromeFirst;
         if (baseChromeCount > 0)
         {
@@ -683,6 +702,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         }
 
         DrawCellRange(0, baseInstanceCount, pass: 1, menuVao: false);
+        DrawImageLayer(ImageLayer.AboveText, images);
         int scrollbarCount = menuChromeFirst - scrollbarChromeFirst;
         if (scrollbarCount > 0)
         {
@@ -927,6 +947,33 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         capacityBytes = capacity;
     }
 
+    void IGlBindingCache.UseProgram(uint program) => UseProgram(program);
+    void IGlBindingCache.BindVertexArray(uint vao) => BindVertexArray(vao);
+    void IGlBindingCache.BindTexture2D(uint texture) => BindAtlasTexture(texture);
+
+    private SilkImageRenderer? BeginImageFrame(ImageDrawList? images)
+    {
+        SilkImageRenderer? renderer = _images;
+        if (renderer is null)
+        {
+            // Created on first use so a session that never shows an image pays nothing.
+            if (images is not { DrawCount: > 0 })
+                return null;
+            _imageTextures = new SilkImageTextureCache(_gl, this);
+            renderer = _images = new SilkImageRenderer(_gl, _imageTextures, this);
+        }
+
+        renderer.BeginFrame();
+        return renderer;
+    }
+
+    private void DrawImageLayer(ImageLayer layer, ImageDrawList? images)
+    {
+        if (_images is null || images is null)
+            return;
+        _images.DrawLayer(layer, images, (int)_lastFramebufferWidth, (int)_lastFramebufferHeight);
+    }
+
     private void UseProgram(uint program)
     {
         if (_boundProgram != program)
@@ -1085,6 +1132,18 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
+    /// <summary>
+    /// The GL context was replaced: every object name this renderer cached is invalid. Drops the cached GL state and
+    /// recreates the image pass (its textures re-upload on demand). Atlas textures are the caller's concern
+    /// (<see cref="SilkGlTextureManager"/>), as before.
+    /// </summary>
+    public void ResetImagesAfterContextLoss()
+    {
+        EnsureNotDisposed();
+        InvalidateGlStateCache();
+        _images?.ResetAfterContextLoss();
+    }
+
     private void InvalidateGlStateCache()
     {
         _boundProgram = uint.MaxValue;
@@ -1107,6 +1166,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     {
         if (!_disposed)
         {
+            _images?.Dispose();
+            _images = null;
+            _imageTextures?.Dispose();
+            _imageTextures = null;
+
             TextureManager.Dispose();
 
             if (_program != 0)

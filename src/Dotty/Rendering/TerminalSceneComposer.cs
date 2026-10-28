@@ -58,8 +58,10 @@ public sealed class TerminalSceneFrame
         int scrollbarChromeStart = -1,
         bool isIncomplete = false,
         SKRect imeCaretBounds = default,
-        bool imeCaretBoundsValid = false)
+        bool imeCaretBoundsValid = false,
+        ImageDrawList? imageDraws = null)
     {
+        ImageDraws = imageDraws ?? new ImageDrawList();
         Update(instances, instanceCount, dirtyAtlasRows, chromeQuads, chromeQuadCount,
             menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete,
             imeCaretBounds, imeCaretBoundsValid);
@@ -94,13 +96,28 @@ public sealed class TerminalSceneFrame
 
     public ReadOnlySpan<CellInstance> AsSpan() => new(Instances, 0, InstanceCount);
     public ReadOnlySpan<ChromeQuadInstance> AsChromeSpan() => new(ChromeQuads, 0, ChromeQuadCount);
+
+    /// <summary>
+    /// Image quads of the composed frame, grouped by layer. The draw list is reused frame to frame and every draw
+    /// holds a pixel lease: call <see cref="ReleaseImageLeases"/> once the frame was rendered (or abandoned).
+    /// </summary>
+    public ImageDrawList ImageDraws { get; }
+
+    /// <summary>
+    /// Earliest animation deadline over the composed leaves, in <see cref="TimeProvider.GetTimestamp"/> ticks of
+    /// <see cref="TimeProvider.System"/>; 0 = no animated image is visible.
+    /// </summary>
+    public long NextImageDeadlineTicks => ImageDraws.NextDeadlineTicks;
+
+    /// <summary>Releases the pixel leases of this frame's image draws (idempotent).</summary>
+    public void ReleaseImageLeases() => ImageDraws.ReleaseLeases();
 }
 
 /// <summary>
 /// Composes the terminal scene into host-neutral GPU cell instances.
 /// Window lifecycle, input, and OpenGL submission remain outside this class.
 /// </summary>
-public sealed class TerminalSceneComposer
+public sealed class TerminalSceneComposer : IDisposable
 {
     private SKTypeface _typeface;
     private GlyphAtlas _atlas;
@@ -159,6 +176,17 @@ public sealed class TerminalSceneComposer
     public long SkippedLeafFrames => _skippedLeafFrames;
     public long CachedRowHits => _cachedRowHits;
     public long CachedRowMisses => _cachedRowMisses;
+
+    private readonly ImageDrawList _imageDraws = new();
+
+    /// <summary>
+    /// Test seam: invoked for every captured leaf snapshot (no buffer lock held) before its rows and images are
+    /// composed, so tests can attach synthetic graphics (<c>BeginGraphics</c>/<c>AttachGraphics</c>).
+    /// </summary>
+    internal Action<LeafPane, RenderSnapshot>? LeafSnapshotCaptured { get; set; }
+
+    /// <summary>Releases the pixel leases held by the last composed frame's image draw list.</summary>
+    public void Dispose() => _imageDraws.Clear();
 
     public TerminalSceneComposer(
         GlyphAtlas atlas,
@@ -233,6 +261,8 @@ public sealed class TerminalSceneComposer
         SKRect imeCaretBounds = default;
         bool imeCaretBoundsValid = false;
         _dirtyAtlasRows.Clear();
+        // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
+        _imageDraws.Clear();
         int atlasVersionAtStart = _atlas.ContentVersion;
         ConfigureRowCaches(theme, themeForeground, new SgrColorArgb(theme.Background), selectionColor,
             framebufferWidth, framebufferHeight, rows, columns, cellWidth, cellHeight, scale, padding, leaves.Count, atlasVersionAtStart);
@@ -284,6 +314,7 @@ public sealed class TerminalSceneComposer
             }
             using (leafSnapshot)
             {
+                LeafSnapshotCaptured?.Invoke(leaf, leafSnapshot);
                 int startInstanceIndex = instanceCount;
                 int paneRows = leafSnapshot.Rows;
                 int paneColumns = leafSnapshot.Columns;
@@ -305,6 +336,31 @@ public sealed class TerminalSceneComposer
                     instance.Row += (ushort)startRowOffset;
                 }
                 instanceCount += written;
+
+                if (leafSnapshot.Graphics is { } graphics)
+                {
+                    long animationDeadline = graphics.NextAnimationDeadlineTicks;
+                    if (animationDeadline != 0
+                        && (_imageDraws.NextDeadlineTicks == 0 || animationDeadline < _imageDraws.NextDeadlineTicks))
+                        _imageDraws.NextDeadlineTicks = animationDeadline;
+
+                    if (graphics.Placements.Length > 0)
+                    {
+                        // startRowOffset already contains the tab-bar rows, so padTop is NOT combined with
+                        // topOffset here (the cell pass uses the same origin: padTop + row * cellH).
+                        float imageCellWidth = cellWidth * scale;
+                        float imageCellHeight = cellHeight * scale;
+                        float gridLeft = padLeft + startColumnOffset * imageCellWidth;
+                        float gridTop = padTop + startRowOffset * imageCellHeight;
+                        var imageGeometry = new ImageSceneGeometry(
+                            padLeft, padTop, startColumnOffset, startRowOffset, imageCellWidth, imageCellHeight,
+                            ClipLeft: Math.Max(0f, gridLeft),
+                            ClipTop: Math.Max(0f, gridTop),
+                            ClipRight: Math.Min((float)framebufferWidth, gridLeft + paneColumns * imageCellWidth),
+                            ClipBottom: Math.Min((float)framebufferHeight, gridTop + paneRows * imageCellHeight));
+                        ImageQuadBuilder.Append(_imageDraws, graphics.Placements, in imageGeometry);
+                    }
+                }
 
                 if (leaf.Selection.HasSelection)
                 {
@@ -665,7 +721,7 @@ public sealed class TerminalSceneComposer
             _cachedFrame = new TerminalSceneFrame(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, _imageDraws);
         }
         else
         {

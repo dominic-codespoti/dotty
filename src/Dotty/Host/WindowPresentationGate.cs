@@ -18,6 +18,10 @@ public enum WindowFrameReason
     Selection = 1 << 7,
     Atlas = 1 << 8,
     TabOrPane = 1 << 9,
+    /// <summary>An animated image's next frame is due (Kitty graphics).</summary>
+    ImageAnimation = 1 << 10,
+    /// <summary>Image textures were left un-uploaded by the per-frame upload budget; render again.</summary>
+    ImageUpload = 1 << 11,
 }
 
 public static class WindowPresentationGate

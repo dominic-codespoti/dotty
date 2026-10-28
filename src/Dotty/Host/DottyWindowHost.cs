@@ -159,6 +159,9 @@ internal static class DottyWindowHost
     // identify whether a reported freeze is a long producer hold (nvim-side
     // slowness) or withheld presents after the hold released (renderer-side).
     private static bool _syncHeld;
+    // Next animated-image frame deadline of the last composed frame, in TimeProvider.System timestamp ticks (the
+    // clock IKittyGraphicsHost.NowTicks reads); 0 = no animated image is visible.
+    private static long _nextImageDeadlineTicks;
     private static long _syncHoldStartTimestampMs;
     private static long _syncHoldMaxDurationMs;
     private static long _syncHoldCount;
@@ -1293,11 +1296,23 @@ internal static class DottyWindowHost
         }
         if (string.Equals(command, "MEMORY", StringComparison.OrdinalIgnoreCase))
         {
-            // Ownership capacities are not resident-memory or live-object measurements.
-            var buffers = BufferMemoryMetrics.GetSnapshot();
-            long heapEstimate = GC.GetTotalMemory(forceFullCollection: false);
+            // Ownership capacities and counters are not resident-memory or live-object measurements; the image
+            // texture figure is an estimate of uploaded texture bytes, not driver RSS.
             var lastGc = GC.GetGCMemoryInfo();
-            return $"{{\"managedHeapEstimateBytes\":{heapEstimate},\"lastGcHeapSizeBytes\":{lastGc.HeapSizeBytes},\"lastGcCommittedBytes\":{lastGc.TotalCommittedBytes},\"lastGcIndex\":{lastGc.Index},\"terminalArenaCapacityBytes\":{buffers.LiveArenaCapacityBytes},\"terminalArenaCommittedBoundBytes\":{buffers.LiveArenaCommittedBoundBytes},\"terminalArenaBackend\":\"{BufferMemoryMetrics.ArenaBackend}\",\"ownedSnapshotArrayCapacityBytes\":{buffers.OwnedSnapshotArrayCapacityBytes},\"arenaCapacityAllocatedBytes\":{buffers.ArenaCapacityAllocatedBytes},\"snapshotCapacityAllocatedBytes\":{buffers.SnapshotCapacityAllocatedBytes},\"atlasBitmapBytes\":{GlyphAtlasService.TotalBytes},\"atlasCount\":{GlyphAtlasService.AtlasCount},\"r8TexturePayloadBytesEstimate\":{_renderer?.R8TexturePayloadBytes ?? 0},\"rgba8TexturePayloadBytesEstimate\":{_renderer?.Rgba8TexturePayloadBytes ?? 0},\"intrinsicColorProbeScratchBytes\":{SilkTerminalRenderer.IntrinsicColorProbeScratchBytes}}}";
+            return MemoryReport.ToJson(new MemoryReportInputs(
+                ManagedHeapEstimateBytes: GC.GetTotalMemory(forceFullCollection: false),
+                LastGcHeapSizeBytes: lastGc.HeapSizeBytes,
+                LastGcCommittedBytes: lastGc.TotalCommittedBytes,
+                LastGcIndex: lastGc.Index,
+                Buffers: BufferMemoryMetrics.GetSnapshot(),
+                ArenaBackend: BufferMemoryMetrics.ArenaBackend,
+                AtlasBitmapBytes: GlyphAtlasService.TotalBytes,
+                AtlasCount: GlyphAtlasService.AtlasCount,
+                R8TexturePayloadBytesEstimate: _renderer?.R8TexturePayloadBytes ?? 0,
+                Rgba8TexturePayloadBytesEstimate: _renderer?.Rgba8TexturePayloadBytes ?? 0,
+                IntrinsicColorProbeScratchBytes: SilkTerminalRenderer.IntrinsicColorProbeScratchBytes,
+                Graphics: Dotty.Terminal.Graphics.GraphicsMemoryMetrics.GetSnapshot(),
+                ImageTextureBytesEstimate: _renderer?.EstimatedImageTextureBytes ?? 0));
         }
         if (string.Equals(command, "IME", StringComparison.OrdinalIgnoreCase))
         {
@@ -1658,7 +1673,8 @@ internal static class DottyWindowHost
         bool includeBlink,
         bool retryShortly = false,
         long coalesceRemainingMs = 0,
-        long syncHoldRemainingMs = 0)
+        long syncHoldRemainingMs = 0,
+        bool includeImageAnimation = false)
     {
         if (_frameDepth > 1 || (!retryShortly && HostWake.IsPending))
             return;
@@ -1674,7 +1690,11 @@ internal static class DottyWindowHost
             LuaStatusRefreshIntervalMs: LuaStatusRefreshIntervalMs,
             CoalesceRemainingMs: coalesceRemainingMs,
             SyncHoldRemainingMs: syncHoldRemainingMs,
-            SelectionAutoscrollActive: _mouseController?.SelectionAutoscrollActive == true));
+            SelectionAutoscrollActive: _mouseController?.SelectionAutoscrollActive == true,
+            ImageAnimationRemainingMs: includeImageAnimation
+                ? IdleWait.ImageAnimationRemainingMs(
+                    _nextImageDeadlineTicks, TimeProvider.System.GetTimestamp(), TimeProvider.System.TimestampFrequency)
+                : 0));
         if (timeoutMs > 0)
             _glfwApi!.WaitEventsTimeout(timeoutMs / 1000.0);
     }
@@ -1728,6 +1748,11 @@ internal static class DottyWindowHost
             WaitForWork(includeBlink: false);
             return;
         }
+        // An animated image's next frame is due. Checked after the synchronized-update gate (a held present would
+        // otherwise spin on the wake this invalidation posts) and in the same clock as IKittyGraphicsHost.NowTicks.
+        // The deadline is re-read from every composed frame, so a stale one costs at most one extra frame.
+        if (_nextImageDeadlineTicks != 0 && TimeProvider.System.GetTimestamp() >= _nextImageDeadlineTicks)
+            WindowPresentationGate.Invalidate(WindowFrameReason.ImageAnimation);
         UpdateCursorBlink(now, activeTab != null);
 
         WindowFrameReason pendingReasons = WindowPresentationGate.PendingReasons;
@@ -1777,7 +1802,7 @@ internal static class DottyWindowHost
             // at startup) — a periodic fullscreen flash to old content every
             // time the keepalive would have fired. Holding the front buffer is
             // always correct when nothing changed.
-            WaitForWork(includeBlink: true);
+            WaitForWork(includeBlink: true, includeImageAnimation: true);
             return;
         }
         // Preserve bulk-output coalescing, but let content catch up immediately
@@ -1804,7 +1829,7 @@ internal static class DottyWindowHost
                 anyBacklogged);
             if (holdMs > 0)
             {
-                WaitForWork(includeBlink: true, coalesceRemainingMs: holdMs);
+                WaitForWork(includeBlink: true, coalesceRemainingMs: holdMs, includeImageAnimation: true);
                 return;
             }
         }
@@ -1813,6 +1838,7 @@ internal static class DottyWindowHost
         {
             if (activeTab == null)
             {
+                _nextImageDeadlineTicks = 0;
                 _renderer.Render(
                     ReadOnlySpan<CellInstance>.Empty,
                     ReadOnlySpan<ChromeQuadInstance>.Empty,
@@ -1887,6 +1913,7 @@ internal static class DottyWindowHost
                 isMaximized: _window.WindowState == WindowState.Maximized,
                 preeditState: _nativeTextInput?.Preedit);
 
+            _nextImageDeadlineTicks = frame.NextImageDeadlineTicks;
             if (frame.IsIncomplete)
             {
                 // A leaf lost the buffer-lock race mid-burst; its quads are missing.
@@ -1895,6 +1922,7 @@ internal static class DottyWindowHost
                 // consumed reasons so the retry still has work to do. Yield: the
                 // lock is held by the PTY consumer, so an immediate retry just
                 // burns a core re-composing a frame that will likely lose again.
+                frame.ReleaseImageLeases();
                 WindowPresentationGate.Requeue(consumedReasons);
                 WaitForWork(includeBlink: false, retryShortly: true);
                 return;
@@ -1927,7 +1955,11 @@ internal static class DottyWindowHost
                 barRows,
                 frame.ScrollbarChromeStart,
                 frame.MenuInstanceStart,
-                frame.MenuChromeStart);
+                frame.MenuChromeStart,
+                frame.ImageDraws);
+            frame.ReleaseImageLeases();
+            if (_renderer.ImageUploadsDeferred)
+                WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload);
             _window.SwapBuffers();
             _lastPresentTimestampMs = GetClockMilliseconds();
             _presentCount++;
@@ -2307,6 +2339,7 @@ internal static class DottyWindowHost
         _input?.Dispose();
         _clipboard = null;
         _pasteRouter = null;
+        _sceneComposer?.Dispose();
         _renderer?.Dispose();
         if (_atlas != null)
         {

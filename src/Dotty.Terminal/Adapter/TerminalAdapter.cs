@@ -65,6 +65,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     {
         _buffer = new TerminalBuffer(rows, columns, scrollbackPolicy);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _buffer.GraphicsClock = _timeProvider;
     }
 
     public event Action<string>? RenderRequested;

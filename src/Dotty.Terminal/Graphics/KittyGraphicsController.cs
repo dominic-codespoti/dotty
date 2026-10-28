@@ -352,7 +352,7 @@ internal sealed partial class KittyGraphicsController : IDisposable
         {
             _transfer = null;
             var failedFirst = t.First;
-            SetPending(t.Status, failedFirst.ImageId, failedFirst.ImageNumber, failedFirst.PlacementId, t.Quiet);
+            SetPending(t.Status, ReplyImageId(in failedFirst), failedFirst.ImageNumber, failedFirst.PlacementId, t.Quiet);
             t.Dispose();
             return;
         }
@@ -377,7 +377,7 @@ internal sealed partial class KittyGraphicsController : IDisposable
 
         if (st != KittyStatus.Ok)
         {
-            SetPending(st, first.ImageId, first.ImageNumber, first.PlacementId, quiet);
+            SetPending(st, ReplyImageId(in first), first.ImageNumber, first.PlacementId, quiet);
             return;
         }
         if (isQuery)

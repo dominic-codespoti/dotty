@@ -876,6 +876,22 @@ public sealed class KittyTransferTests
         Assert.Equal(new[] { Err("i=1", "EINVAL:Unknown image format"), Ok("i=2") }, rig.Replies);
     }
 
+    [Theory]
+    [InlineData("a=t,i=1,s=1,v=1,f=24", false, false)]
+    [InlineData("a=T,i=1,s=1,v=1,f=24", false, false)]
+    [InlineData("a=q,i=1,s=1,v=1,f=24", true, false)]
+    [InlineData("a=f,i=1,s=1,v=1,f=24", false, true)]
+    public void TheTransferKnowsWhetherItIsAQueryOrAFrameLoad(string control, bool isQuery, bool isFrame)
+    {
+        var options = new KittyGraphicsOptions { Enabled = true }.Normalize();
+        using var transfer = KittyTransfer.TryStart(KittyCommands.Parse(control), options, null, null, out var status);
+
+        Assert.Equal(KittyStatus.Ok, status);
+        Assert.NotNull(transfer);
+        Assert.Equal(isQuery, transfer!.IsQuery);
+        Assert.Equal(isFrame, transfer.IsFrame);
+    }
+
     // -------------------------------------------------------------------------------------- limits boundaries
 
     [Fact]

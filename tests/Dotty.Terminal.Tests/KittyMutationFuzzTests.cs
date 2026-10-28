@@ -35,8 +35,8 @@ public sealed class KittyMutationFuzzTests
         public Term()
         {
             // Shared memory and temp-file media stay disabled so no mutated stream can open a real shm object or
-            // delete a file (t=t is the only deleting transmission); both corpus entries below exercise the refusal.
-            // File reading never modifies anything.
+            // delete anything (t=t deletes the temporary file, t=s unlinks the shm object after a successful read);
+            // both refusal corpus entries below exercise that. File reading never modifies anything.
             var media = KittyMediaFlags.Direct | KittyMediaFlags.File;
             Adapter.ConfigureGraphics(new KittyGraphicsOptions { Enabled = true, Media = media, MaxPlacementsPerScreen = 64 }, new FakeImageDecoder());
             Adapter.ReplyRequested += reply => Replies.Add(reply.ToString());
@@ -61,6 +61,7 @@ public sealed class KittyMutationFuzzTests
         byte[] png = TestPng.Build(2, 1, new byte[] { 10, 20, 30, 255, 40, 50, 60, 128 });
         byte[] zlib = TestPng.Zlib(new byte[] { 1, 2, 3 });
         string sixB64 = B64(six);
+        string threeB64 = B64(new byte[] { 1, 2, 3 });
         string transmit = "a=T,i=1,s=2,v=1,f=24,c=2,r=1";
         var corpus = new List<(string, byte[], bool)>
         {
@@ -74,11 +75,22 @@ public sealed class KittyMutationFuzzTests
             ("put", Cat(Apc("a=t,i=6,s=1,v=1,f=24", B64(new byte[] { 1, 2, 3 })), Apc("a=p,i=6,p=1,c=2,r=1"), Apc("a=p,i=6,p=2,x=0,y=0,w=1,h=1,z=-1,C=1")), true),
             ("query", Apc("a=q,i=7,s=1,v=1,f=24", B64(new byte[] { 1, 2, 3 })), true),
             ("virtual", Cat(Apc("a=T,i=8,s=1,v=1,f=24,U=1,c=2,r=2", B64(new byte[] { 1, 2, 3 }))), true),
+            ("frames", Cat(
+                Apc(transmit, sixB64),                                       // a 2x1 image, shown
+                Apc("a=f,i=1,s=2,v=1,f=24,z=40", sixB64),                    // frame 2
+                Apc("a=f,i=1,r=2,s=1,v=1,x=1,f=24,X=1", threeB64),           // edit frame 2: one pixel, overwritten
+                Apc("a=f,i=1,c=2,s=1,v=1,f=24", threeB64),                   // frame 3 on top of frame 2
+                Apc("a=c,i=1,r=1,c=3,x=1,w=1,h=1"),                          // compose frame 1 onto frame 3
+                Apc("a=a,i=1,s=3,v=1"),                                      // run
+                Apc("a=a,i=1,r=2,z=100,c=1"),                                // gap of frame 2, show frame 1
+                Apc("a=a,i=1,s=1"),                                          // stop
+                Apc("a=d,d=f,i=1,r=2"),                                      // delete frame 2 ...
+                Apc("a=d,d=F,i=1,r=1")), true),                              // ... and the root: frame 3 becomes the image
             ("file", Apc("a=t,i=9,s=1,v=1,f=24,t=f", B64(Encoding.UTF8.GetBytes("/nonexistent/dotty-fuzz.bin"))), false),
             ("shm-refused", Apc("a=t,i=10,s=1,v=1,f=24,t=s", B64(Encoding.UTF8.GetBytes("dotty-fuzz-shm"))), false),
             ("tempfile-refused", Apc("a=t,i=11,s=1,v=1,f=24,t=t", B64(Encoding.UTF8.GetBytes("/nonexistent/tty-graphics-protocol-dotty-fuzz.bin"))), false),
         };
-        foreach (char d in "aAcCiIpPqQxXyYzZnN")
+        foreach (char d in "aAcCiIpPqQxXyYzZnNrRfF")
         {
             corpus.Add(("delete-" + d, Cat(
                 Apc(transmit, sixB64),

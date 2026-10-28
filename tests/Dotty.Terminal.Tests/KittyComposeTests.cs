@@ -81,6 +81,21 @@ public sealed class KittyComposeTests
     }
 
     [Fact]
+    public void BlendKeepsTheShareOfATranslucentDestinationThatTheSourceDoesNotCover()
+    {
+        using var rig = new KittyRig();
+        AnimKit.Transmit(rig, 1, 1, 1, new byte[] { 255, 128, 64, 200 });  // stored premultiplied: (200, 100, 50, 200)
+        AnimKit.LoadFrame(rig, 1, 1, 1, new byte[] { 0, 255, 255, 128 });  // frame 2, premultiplied: (0, 128, 128, 128)
+        rig.Replies.Clear();
+
+        rig.Apc("a=c,i=1,r=2,c=1");
+
+        // out = src + round(dst * (255 - 128) / 255): R 0 + 100, G 128 + 50, B 128 + 25, A 128 + 100
+        Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+        Assert.Equal(new byte[] { 100, 178, 153, 228 }, AnimKit.CanvasOf(AnimKit.Img(rig, 1), 0));
+    }
+
+    [Fact]
     public void CompositionNeverChangesFrameCountGapsCurrentFrameOrBytes()
     {
         using var rig = Setup();
@@ -93,7 +108,7 @@ public sealed class KittyComposeTests
 
         Assert.Equal(2, image.Frames.Count);
         Assert.Equal(33, image.Frames[1].GapMs);
-        Assert.Equal(40, image.Frames[0].GapMs);
+        Assert.Equal(0, image.Frames[0].GapMs); // the root frame has no gap until a=a,r=1,z= gives it one
         Assert.Equal(0, image.CurrentFrameIndex);
         Assert.Equal(used, rig.Store.UsedBytes);
     }
@@ -267,6 +282,27 @@ public sealed class KittyComposeTests
         Assert.Equal(Blue, rig.Store.FindByNumber(5)!.Root.AsSpan().ToArray());
     }
 
+    [Fact]
+    public void UnknownImageNumberAnswersEnoentWithTheNumberOnly()
+    {
+        using var rig = Setup();
+        rig.Apc("a=c,I=9,r=2,c=1");
+
+        Assert.Equal(new[] { Err("I=9", "ENOENT:Image not found") }, rig.Replies);
+    }
+
+    [Fact]
+    public void ImageNumberErrorReplyCarriesIdAndNumber()
+    {
+        using var rig = new KittyRig();
+        rig.Apc("I=5,s=1,v=1,f=32", B64(AnimKit.Red));
+        rig.Replies.Clear();
+
+        rig.Apc("a=c,I=5,r=2,c=1"); // the image exists, frame 2 does not
+
+        Assert.Equal(new[] { Err("i=2147483648,I=5", "ENOENT:Frame not found") }, rig.Replies);
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
@@ -304,6 +340,20 @@ public sealed class KittyComposeTests
         Assert.False(AnimKit.Img(rig, 1).Transient);
     }
 
+    [Fact]
+    public void SuccessfulComposeNotifiesTheHostAndFailuresDoNot()
+    {
+        using var rig = Setup();
+        int before = rig.Host.GraphicsChangedCalls;
+        rig.Apc("a=c,i=1,r=7,c=1");
+        rig.Apc("a=c,i=1,r=2,c=1,w=3");
+        Assert.Equal(before, rig.Host.GraphicsChangedCalls);
+
+        rig.Apc("a=c,i=1,r=2,c=1");
+
+        Assert.Equal(before + 1, rig.Host.GraphicsChangedCalls);
+    }
+
     // ---------------------------------------------------------------------------------------------------- quota
 
     [Theory]
@@ -336,6 +386,35 @@ public sealed class KittyComposeTests
 
         Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
         Assert.Equal(32, rig.Store.UsedBytes);
+    }
+
+    [Fact]
+    public void ComposesKeepLivePixelBytesEqualToTheQuotaAccountingAndAnswerInOrder()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = Setup())
+        {
+            rig.Apc("a=c,i=1,r=2,c=1");              // blend
+            rig.Apc("a=c,i=1,r=1,c=2,C=1,w=1");      // overwrite one column of frame 2
+            rig.Apc("a=c,i=1,r=2,c=1,w=3");          // out of bounds
+            rig.Apc("a=c,i=1,r=2,c=2");              // same frame, identical rectangles
+            rig.Apc("a=c,i=1,r=7,c=1");              // no such frame
+
+            Assert.Equal(new[]
+            {
+                Ok("i=1"),
+                Ok("i=1"),
+                Err("i=1", "EINVAL:Rectangle out of bounds"),
+                Err("i=1", "EINVAL:Source and destination rectangles overlap"),
+                Err("i=1", "ENOENT:Frame not found"),
+            }, rig.Replies);
+            Assert.Equal(32, rig.Store.UsedBytes);
+            Assert.Equal(rig.Store.UsedBytes, baseline.LiveBytesDelta);
+            Assert.Equal(2, baseline.LiveCountDelta);
+            Assert.Equal(0, baseline.PendingDelta);
+            rig.Store.ValidateInvariants();
+        }
+        baseline.AssertRestored();
     }
 
     // ------------------------------------------------------------------------------------------- cancellation

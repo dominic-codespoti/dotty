@@ -14,6 +14,11 @@ public sealed class TerminalTabManager : IDisposable
     private int _activeIndex = -1;
     private bool _isDisposed;
     private readonly Func<IPty>? _ptyFactory;
+    // Physical pixels of one cell from the latest ResizeAll (0 until the first layout). A new tab starts its PTY with
+    // the matching text-area size, so the child's first TIOCGWINSZ already has pixel dimensions (graphics clients size
+    // images from it); before the first layout they are unknown (0) and the layout's resize supplies them.
+    private int _cellPixelWidth;
+    private int _cellPixelHeight;
 
     public TerminalTabManager()
     {
@@ -75,7 +80,8 @@ public sealed class TerminalTabManager : IDisposable
 
         SelectTab(tab);
         tab.Session.StartWithOptions(shell: shell, workingDirectory: workingDirectory,
-            command: command, shellIsExecutable: shellIsExecutable);
+            command: command, shellIsExecutable: shellIsExecutable,
+            initialPixelWidth: cols * _cellPixelWidth, initialPixelHeight: rows * _cellPixelHeight);
         return tab;
     }
 
@@ -254,6 +260,11 @@ public sealed class TerminalTabManager : IDisposable
     public void ResizeAll(int cols, int rows, int pixelWidth, int pixelHeight)
     {
         ThrowIfDisposed();
+        if (cols > 0 && rows > 0 && pixelWidth > 0 && pixelHeight > 0)
+        {
+            _cellPixelWidth = pixelWidth / cols;
+            _cellPixelHeight = pixelHeight / rows;
+        }
         foreach (var tab in _tabs)
         {
             tab.Session.Resize(cols, rows, pixelWidth, pixelHeight);

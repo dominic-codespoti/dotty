@@ -15,7 +15,9 @@ internal sealed class KittyImage
         Number = number;
         Transient = transient;
         LastAccessTicks = nowTicks;
-        Frames = new List<KittyFrame>(1) { new KittyFrame(root, KittyAnimation.DefaultGapMs) };
+        // The root frame has no gap (the protocol's default for it is zero: playback skips it) until
+        // a=a,r=1,z=<ms> sets one; every other frame defaults to KittyAnimation.DefaultGapMs.
+        Frames = new List<KittyFrame>(1) { new KittyFrame(root, 0) };
     }
 
     /// <summary>Process-unique id assigned by the store; monotonic and never reused.</summary>

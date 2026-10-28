@@ -396,6 +396,57 @@ public sealed class KittyLimitsTests
         }, rig.Replies);
     }
 
+    [Fact]
+    public void FrameLoadsObeyThePayloadCapAndTheDimensionCap()
+    {
+        using var rig = Rig(o => o with { MaxPayloadBytes = 12, MaxImageDimension = 4 });
+        rig.Apc("i=1,s=2,v=2,f=24", Px(12));                 // the root frame: exactly at the payload cap
+        rig.Replies.Clear();
+
+        rig.Apc("a=f,i=1,s=2,v=2,f=24", Px(12));             // a frame at the cap is loaded
+        rig.Apc("a=f,i=1,s=2,v=2,f=32", Px(16));             // 16 bytes are beyond it
+        rig.Apc("a=f,i=1,s=5,v=1,f=24", Px(15));             // wider than MaxImageDimension
+        rig.Apc("a=f,i=1,s=1,v=5,f=24", Px(15));             // taller
+
+        Assert.Equal(new[]
+        {
+            Ok("i=1"),
+            Err("i=1", "EFBIG:Payload too large"),
+            Err("i=1", "EFBIG:Image too large"),
+            Err("i=1", "EFBIG:Image too large"),
+        }, rig.Replies);
+        Assert.Equal(2, rig.Store.FindByClientId(1)!.Frames.Count);
+        Assert.Equal(12 + 16, rig.Store.UsedBytes);          // the root plus one 2x2 RGBA canvas
+        rig.Store.ValidateInvariants();
+    }
+
+    [Fact]
+    public void HugeFrameDimensionsAreRejectedBeforeAnyMemoryExists()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = Rig(o => o with { MaxImageDimension = KittyGraphicsOptions.HardMaxImageDimension, StorageLimitBytes = KittyGraphicsOptions.HardMaxStorageLimitBytes }))
+        {
+            rig.Apc("i=1,s=1,v=1,f=24", Px(3));
+            rig.Replies.Clear();
+
+            rig.Apc("a=f,i=1,s=4294967295,v=4294967295,f=32");       // beyond MaxImageDimension
+            rig.Apc("a=f,i=1,s=100000,v=100000,f=32");               // 4e10 bytes: over the 4 GiB quota
+            rig.Apc("a=f,i=1,s=30000,v=30000,f=32");                 // 3.6e9: inside the quota, beyond int.MaxValue
+            rig.Apc("a=f,i=1,s=100001,v=1,f=24");
+
+            Assert.Equal(new[]
+            {
+                Err("i=1", "EFBIG:Image too large"),
+                Err("i=1", "ENOSPC:Storage quota exceeded"),
+                Err("i=1", "EFBIG:Image too large"),
+                Err("i=1", "EFBIG:Image too large"),
+            }, rig.Replies);
+            Assert.Equal(1, rig.Store.FindByClientId(1)!.Frames.Count);
+            Assert.Equal(0, baseline.PendingDelta);
+        }
+        baseline.AssertRestored();
+    }
+
     // ------------------------------------------------------------------------------- extreme placement keys
 
     [Fact]

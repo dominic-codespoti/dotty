@@ -239,12 +239,23 @@ public partial class TerminalSession : IDisposable
         }
     }
 
+    /// <summary>Starts the session's PTY with a shell or command; later calls do nothing.</summary>
+    /// <param name="shell">Shell executable or legacy shell command; null selects the platform default.</param>
+    /// <param name="workingDirectory">Initial child working directory, or null for the default.</param>
+    /// <param name="environmentVariables">Optional additional child environment variables.</param>
+    /// <param name="command">Optional exact argv to execute directly, including argv[0].</param>
+    /// <param name="shellIsExecutable">True when <paramref name="shell"/> is a literal executable path.</param>
+    /// <param name="initialPixelWidth">Text-area width in physical pixels the PTY starts with (so the child's first
+    /// <c>TIOCGWINSZ</c> already reports it), or 0 when unknown.</param>
+    /// <param name="initialPixelHeight">Text-area height in physical pixels, or 0 when unknown.</param>
     public void StartWithOptions(
         string? shell = null,
         string? workingDirectory = null,
         IDictionary<string, string>? environmentVariables = null,
         IReadOnlyList<string>? command = null,
-        bool shellIsExecutable = false)
+        bool shellIsExecutable = false,
+        int initialPixelWidth = 0,
+        int initialPixelHeight = 0)
     {
         if (!BeginStart()) return;
         try
@@ -261,14 +272,15 @@ public partial class TerminalSession : IDisposable
             LaunchWorkingDirectory = Path.GetFullPath(workingDirectory ?? GetDefaultLaunchWorkingDirectory());
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
-            _initialPixelWidth = 0;
-            _initialPixelHeight = 0;
+            _initialPixelWidth = Math.Max(0, initialPixelWidth);
+            _initialPixelHeight = Math.Max(0, initialPixelHeight);
             _hasReceivedInitialResize = false;
             ShellLaunch integration = PrepareShellIntegration(shell, shellIsExecutable, command);
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows,
                        workingDirectory: LaunchWorkingDirectory,
                        environmentVariables: BuildLaunchEnvironment(environmentVariables, integration.Environment),
-                       command: integration.Command ?? command, shellIsExecutable: shellIsExecutable);
+                       command: integration.Command ?? command, shellIsExecutable: shellIsExecutable,
+                       initialPixelWidth: _initialPixelWidth, initialPixelHeight: _initialPixelHeight);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }

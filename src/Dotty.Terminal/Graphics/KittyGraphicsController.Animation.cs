@@ -74,18 +74,28 @@ internal sealed partial class KittyGraphicsController
         var status = Store.CheckFrameTarget(image, in cmd);
         if (status != KittyStatus.Ok)
         {
-            SetPending(status, cmd.ImageId, cmd.ImageNumber, 0, cmd.Quiet);
+            SetPending(status, image.ClientId, cmd.ImageNumber, 0, cmd.Quiet);
             return;
         }
         var transfer = KittyTransfer.TryStart(cmd, _options, _decoder, _reader, out status);
         if (transfer == null)
         {
-            SetPending(status, cmd.ImageId, cmd.ImageNumber, 0, cmd.Quiet);
+            SetPending(status, image.ClientId, cmd.ImageNumber, 0, cmd.Quiet);
             return;
         }
         _transfer = transfer;
         _kind = CommandKind.Chunk;
     }
+
+    /// <summary>
+    /// Image id echoed in a reply to <paramref name="cmd"/>: the <c>i</c> given; for a frame load addressed by number
+    /// (<c>I</c>), the client id of the image that number resolves to now (0 when none), so every reply to a frame
+    /// command names the image the same way (<c>i</c> plus <c>I</c> as given).
+    /// </summary>
+    private uint ReplyImageId(in KittyGraphicsCommand cmd) =>
+        cmd.ImageId != 0 || cmd.Action != KittyAction.Frame || cmd.ImageNumber == 0
+            ? cmd.ImageId
+            : Store.FindByNumber(cmd.ImageNumber)?.ClientId ?? 0;
 
     /// <summary>
     /// Final step of a frame load. The image is looked up again (the lock may have been released while the payload

@@ -225,6 +225,69 @@ public sealed class IndexAndNextLineTests
     }
 
     [Fact]
+    public void IndexBelowTheBottomMarginMovesDownToTheLastRowAndNeverScrolls()
+    {
+        using var t = new Rig(rows: 5);
+        t.Feed(Esc + "[2;3r");   // region rows 1..2; rows 3 and 4 lie below it
+        t.Goto(1, 0); t.Feed("B");
+        t.Goto(2, 0); t.Feed("C");
+        t.Goto(3, 2);
+
+        t.Feed(Esc + "D");
+        Assert.Equal((4, 2), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+
+        t.Feed(Esc + "D");       // already on the last row: nothing moves and nothing scrolls
+        Assert.Equal((4, 2), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+        Assert.Equal("B", t.Row(1));
+        Assert.Equal("C", t.Row(2));
+        Assert.Equal(0, t.Buffer.ScrollbackCount);
+    }
+
+    [Fact]
+    public void NextLineBelowTheBottomMarginMovesDownAndReturnsToColumnOneWithoutScrolling()
+    {
+        using var t = new Rig(rows: 5);
+        t.Feed(Esc + "[2;3r");
+        t.Goto(3, 4);
+
+        t.Feed(Esc + "E");
+        Assert.Equal((4, 0), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+
+        t.Goto(4, 3);
+        t.Feed(Esc + "E");       // last row: the carriage return still happens, nothing scrolls
+        Assert.Equal((4, 0), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+        Assert.Equal(0, t.Buffer.ScrollbackCount);
+    }
+
+    [Fact]
+    public void IndexBelowTheBottomMarginCancelsAPendingWrap()
+    {
+        using var t = new Rig(rows: 5);
+        t.Feed(Esc + "[2;3r");
+        t.Goto(3, 0);
+        t.Feed("0123456789");    // wrap pending on the last column
+
+        t.Feed(Esc + "D" + "X");
+
+        Assert.Equal("0123456789", t.Row(3));
+        Assert.Equal(new string(' ', 9) + "X", t.Row(4));
+    }
+
+    [Fact]
+    public void IndexOnTheLastRowBelowTheMarginStillCancelsAPendingWrap()
+    {
+        using var t = new Rig(rows: 5);
+        t.Feed(Esc + "[2;3r");
+        t.Goto(4, 0);
+        t.Feed("0123456789");    // wrap pending on the last column of the last row
+
+        t.Feed(Esc + "D" + "X");
+
+        Assert.Equal("012345678X", t.Row(4));
+        Assert.Equal(0, t.Buffer.ScrollbackCount);
+    }
+
+    [Fact]
     public void NextLineAtTheBottomMarginScrollsTheRegionAndReturnsToColumnOne()
     {
         using var t = new Rig(rows: 5);
@@ -313,6 +376,118 @@ public sealed class IndexAndNextLineTests
         Assert.Equal((2, 2), (t.Buffer.CursorRow, t.Buffer.CursorCol));
     }
 
+    [Fact]
+    public void IndexAboveTheTopMarginMovesDownAndNeverScrolls()
+    {
+        using var t = new Rig(rows: 6);
+        t.Feed(Esc + "[3;5r");   // region rows 2..4 (0-based)
+        t.Goto(0, 0); t.Feed("A");
+        t.Goto(1, 0); t.Feed("B");
+        t.Goto(0, 1);
+
+        t.Feed(Esc + "D");
+        Assert.Equal((1, 1), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+        t.Feed(Esc + "D");
+        Assert.Equal((2, 1), (t.Buffer.CursorRow, t.Buffer.CursorCol));   // entered the region at its top margin: moved, not scrolled
+
+        Assert.Equal("A", t.Row(0));
+        Assert.Equal("B", t.Row(1));
+        Assert.Equal(0, t.Buffer.ScrollbackCount);
+    }
+
+    [Fact]
+    public void IndexAtTheBottomMarginCancelsAPendingWrapToo()
+    {
+        using var t = new Rig(rows: 5);
+        t.Feed(Esc + "[2;3r");   // region rows 1..2 (0-based)
+        t.Goto(2, 0);
+        t.Feed("0123456789");    // parked on the last column of the bottom margin row with a wrap pending
+
+        t.Feed(Esc + "D" + "X");
+
+        Assert.Equal("0123456789", t.Row(1));
+        Assert.Equal(new string(' ', 9) + "X", t.Row(2));
+        Assert.Equal(0, t.Buffer.ScrollbackCount);
+    }
+
+    [Fact]
+    public void IndexAndNextLineLeaveTheTabStopsAlone()
+    {
+        using var t = new Rig(columns: 20);
+        t.Feed("abc" + Esc + "D" + "\t" + "X");   // column 3 is kept, so the next default stop is column 8
+        t.Feed(Esc + "E" + "\t" + "Y");           // column 0, the same next stop
+
+        Assert.Equal(new string(' ', 8) + "X", t.Row(1));
+        Assert.Equal(new string(' ', 8) + "Y", t.Row(2));
+    }
+
+    [Fact]
+    public void CharsetDesignationsEndingInDOrEAreNotIndexOrNextLine()
+    {
+        using var t = new Rig();
+        t.Feed("ab" + Esc + "(D" + "c" + Esc + ")E" + "d");
+
+        Assert.Equal("abcd", t.Row(0));
+        Assert.Equal("", t.Row(1));
+        Assert.Equal((0, 4), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+    }
+
+    [Fact]
+    public void ControlCharactersInsideTheEscapeSequenceExecuteBeforeTheFinal()
+    {
+        using var t = new Rig();
+        t.Feed("ab" + Esc + "\r" + "D" + "X");   // the CR executes and the sequence keeps waiting for its final byte
+
+        Assert.Equal("ab", t.Row(0));
+        Assert.Equal("X", t.Row(1));
+        Assert.Equal((1, 1), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+    }
+
+    [Theory]
+    [InlineData("", 'D')]                                  // ESC ESC D: the second ESC supersedes the first
+    [InlineData("", 'E')]
+    [InlineData("(", 'D')]                                 // an unfinished charset designation
+    [InlineData(")", 'E')]
+    [InlineData("]0;title", 'D')]                          // OSC: abandoned without dispatch
+    [InlineData("]0;title", 'E')]
+    [InlineData("P+q", 'D')]                               // DCS
+    [InlineData("P+q", 'E')]
+    [InlineData("^pm", 'D')]                               // PM, SOS and a foreign APC are discarded strings
+    [InlineData("Xsos", 'E')]
+    [InlineData("_Zapc", 'D')]
+    [InlineData("_Ga=t,i=1,s=1,v=1,f=24", 'D')]           // Kitty graphics APC with control data only
+    [InlineData("_Ga=t,i=1,s=1,v=1,f=24;AAAA", 'D')]      // ... and with an open payload
+    [InlineData("_Ga=t,i=1,s=1,v=1,f=24;AAAA", 'E')]
+    public void AnEscapeThatAbandonsAnOpenSequenceStillDispatchesIndexOrNextLine(string opener, char finalChar)
+    {
+        using var t = new Rig();
+        var replies = new List<string>();
+        string? title = null;
+        t.Adapter.ReplyRequested += reply => replies.Add(reply.ToString());
+        t.Adapter.TitleChanged += value => title = value;
+
+        t.Feed("ab" + Esc + opener + Esc + finalChar + "X");
+
+        bool index = finalChar == 'D';
+        Assert.Equal("ab", t.Row(0));
+        Assert.Equal(index ? "  X" : "X", t.Row(1));
+        Assert.Equal((1, index ? 3 : 1), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+        Assert.Empty(replies);
+        Assert.Null(title);
+        Assert.False(t.Adapter.KittyGraphics!.HasOpenTransfer);
+        Assert.Equal(0, t.Buffer.ActiveImageStore.Count);
+    }
+
+    [Fact]
+    public void AnOverlongCsiThatIsEndedByAnEscapeStillDispatchesIndex()
+    {
+        using var t = new Rig();
+        t.Feed("ab" + Esc + "[" + new string('1', 300) + Esc + "D" + "X");   // past the parameter cap the CSI is only being discarded
+
+        Assert.Equal("ab", t.Row(0));
+        Assert.Equal("  X", t.Row(1));
+    }
+
     // ------------------------------------------------------------------------------------------- kitty graphics
 
     private static void PutImage(Rig t, int row, int col)
@@ -378,5 +553,21 @@ public sealed class IndexAndNextLineTests
         t.Feed(Esc + "D");
 
         Assert.Equal(5L, PlacementRow(t));
+    }
+
+    [Fact]
+    public void IndexAtTheBottomMarginScrollsAnImageInsideTheRegionAndDropsItAtTheTopMargin()
+    {
+        using var t = new Rig(rows: 6);
+        PutImage(t, 2, 0);
+        t.Feed(Esc + "[2;4r");   // region rows 1..3 (0-based): the image sits inside it
+        t.Goto(3, 0);
+
+        t.Feed(Esc + "D");
+        Assert.Equal(1L, PlacementRow(t));
+
+        t.Feed(Esc + "D");       // the one-row image would leave the region through its top margin
+        Assert.Null(PlacementRow(t));
+        Assert.Equal(0, t.Buffer.ActiveImageStore.PlacementCount);
     }
 }

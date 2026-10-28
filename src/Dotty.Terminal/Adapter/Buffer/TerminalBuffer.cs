@@ -802,10 +802,23 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
-    /// <summary>IND (ESC D): LF semantics without CR, and a pending wrap is always cancelled (even when the scroll happens).</summary>
+    /// <summary>
+    /// IND (ESC D): LF semantics without CR, and a pending wrap is always cancelled (even when the scroll happens).
+    /// Below the bottom margin (outside the scrolling region) the cursor just moves down until the last row and never
+    /// scrolls, as in xterm; <see cref="LineFeed"/> deliberately ignores a line feed there, so it is not used for that case.
+    /// </summary>
     public void Index()
     {
         _cursor.SetWrapPending(false);
+        if (_cursor.Row > _scrollBottom)
+        {
+            if (_cursor.Row < Rows - 1)
+            {
+                _cursor.MoveBy(1, 0, Rows, Columns);
+                ActiveBuffer.ClearRowContinuation(_cursor.Row);
+            }
+            return;
+        }
         LineFeed();
     }
 

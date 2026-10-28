@@ -25,7 +25,8 @@ public sealed class KittyAnimationTests
 
     /// <summary>
     /// Adds image <paramref name="id"/> (1x1, one frame per entry of <paramref name="gaps"/>) and places it once.
-    /// A gap of 0 omits <c>z</c> (the 40 ms default), a negative one is gapless; entry 0 is the root frame's gap.
+    /// A gap of 0 omits <c>z</c>: a frame then has the protocol's default (40 ms) and the root frame none (gapless);
+    /// a negative gap is gapless; entry 0 is the root frame's gap, set with <c>a=a,r=1,z=</c> unless it is 0.
     /// </summary>
     private static KittyImage AddAnim(KittyRig rig, uint id, long anchorRow, params int[] gaps)
     {
@@ -82,6 +83,8 @@ public sealed class KittyAnimationTests
     [InlineData(1500, 1000, 1500)]
     [InlineData(1, 100, 1)]       // 0.1 tick rounds up to one: a deadline is always in the future
     [InlineData(1, 1, 1)]
+    [InlineData(3, 1500, 4)]      // 4.5 ticks round down
+    [InlineData(25, 100, 2)]      // 2.5 ticks round down
     public void MillisecondsConvertToTicks(int ms, int frequency, int ticks) =>
         Assert.Equal((long)ticks, KittyAnimation.MsToTicks(ms, frequency));
 
@@ -114,7 +117,7 @@ public sealed class KittyAnimationTests
     [Fact]
     public void RunningAnimationStepsOnItsDeadlinesAndWraps()
     {
-        using var a = NewAnim(0, 100, 20); // gaps 40, 100, 20
+        using var a = NewAnim(40, 100, 20); // gaps 40, 100, 20
         a.Cmd("a=a,i=1,s=3");
 
         Assert.Equal(1040, a.At(1000));  // first pass arms the root frame's gap
@@ -137,7 +140,7 @@ public sealed class KittyAnimationTests
     [Fact]
     public void ALateClockPassStepsOnceAndMeasuresFromNow()
     {
-        using var a = NewAnim(0, 100, 20);
+        using var a = NewAnim(40, 100, 20);
         a.Cmd("a=a,i=1,s=3");
         a.At(1000);
         a.At(1040);              // frame 1, deadline 1140
@@ -289,12 +292,69 @@ public sealed class KittyAnimationTests
         Assert.Equal(1u, a.Image.LoopsDone);
     }
 
+    [Fact]
+    public void StoppingResetsTheLoopCounter()
+    {
+        using var a = NewAnim(10, 10);
+        a.Cmd("a=a,i=1,s=3,v=3");             // two passes
+        for (long now = 100; now <= 120; now += 10)
+            a.At(now);
+        Assert.Equal(1u, a.Image.LoopsDone);
+
+        a.Cmd("a=a,i=1,s=1");
+        Assert.Equal(0u, a.Image.LoopsDone);
+        Assert.Equal(2u, a.Image.MaxLoops);    // the limit itself stays
+
+        a.Cmd("a=a,i=1,s=3");
+        Assert.Equal(0u, a.Image.LoopsDone);
+        Assert.Equal(1010, a.At(1000));
+        Assert.Equal(1020, a.At(1010));
+        Assert.Equal(1030, a.At(1020));        // first wrap: one pass done, two allowed
+        Assert.Equal(1u, a.Image.LoopsDone);
+        Assert.Equal(KittyAnimationState.Running, a.Image.AnimationState);
+        Assert.Equal(1040, a.At(1030));
+        Assert.Equal(0, a.At(1040));           // second wrap: the limit
+        Assert.Equal(KittyAnimationState.Stopped, a.Image.AnimationState);
+    }
+
+    [Fact]
+    public void SwitchingBetweenLoadingAndRunningKeepsTheLoopCounter()
+    {
+        using var a = NewAnim(10, 10);
+        a.Cmd("a=a,i=1,s=3,v=4");             // three passes
+        for (long now = 100; now <= 140; now += 10)
+            a.At(now);
+        Assert.Equal(2u, a.Image.LoopsDone);   // wraps at 120 and 140
+
+        a.Cmd("a=a,i=1,s=2");
+        Assert.Equal(2u, a.Image.LoopsDone);
+        a.Cmd("a=a,i=1,s=3");
+        Assert.Equal(2u, a.Image.LoopsDone);
+        Assert.Equal(KittyAnimationState.Running, a.Image.AnimationState);
+
+        Assert.Equal(1010, a.At(1000));
+        Assert.Equal(1020, a.At(1010));
+        Assert.Equal(0, a.At(1020));           // the third wrap reaches the limit
+        Assert.Equal(KittyAnimationState.Stopped, a.Image.AnimationState);
+        Assert.Equal(3u, a.Image.LoopsDone);
+    }
+
     // ---------------------------------------------------------------------------------------------- gapless
+
+    [Fact]
+    public void TheRootFrameIsGaplessUntilItsGapIsSetAndOtherFramesDefaultTo40()
+    {
+        using var a = NewAnim(0, 0, -1);
+
+        Assert.Equal(0, a.Image.Frames[0].GapMs);                          // the protocol's default for the root frame
+        Assert.Equal(KittyAnimation.DefaultGapMs, a.Image.Frames[1].GapMs);
+        Assert.Equal(0, a.Image.Frames[2].GapMs);                          // z=-1
+    }
 
     [Fact]
     public void GaplessFramesInTheMiddleAreSkipped()
     {
-        using var a = NewAnim(0, -1, 0); // 40, gapless, 40
+        using var a = NewAnim(40, -1, 0); // 40, gapless, 40
         a.Cmd("a=a,i=1,s=3");
         Assert.Equal(0, a.Image.Frames[1].GapMs);
 
@@ -310,7 +370,7 @@ public sealed class KittyAnimationTests
     [Fact]
     public void ATrailingGaplessFrameWrapsRightAfterTheLastDisplayableOne()
     {
-        using var a = NewAnim(0, 0, -1);
+        using var a = NewAnim(40, 0, -1);
         a.Cmd("a=a,i=1,s=3");
 
         a.At(100);
@@ -322,27 +382,98 @@ public sealed class KittyAnimationTests
     }
 
     [Fact]
-    public void AGaplessRootIsSkippedAfterTheFirstWrap()
+    public void AGaplessRootIsSkippedFromTheFirstPassOnAndNeverShownAgain()
     {
-        using var a = NewAnim(-1, 0, 0);
+        using var a = NewAnim(0, 20, 30);   // the root keeps its default: no gap
         a.Cmd("a=a,i=1,s=3");
+
+        Assert.Equal(120, a.At(100));       // stepped past the root at once; frame 2 armed for its own gap
+        Assert.Equal(1, a.Current);
+        Assert.Equal(120, a.At(119));
+        Assert.Equal(150, a.At(120));
+        Assert.Equal(2, a.Current);
+        Assert.Equal(170, a.At(150));       // wrap: the root is skipped again
+        Assert.Equal(1, a.Current);
+        Assert.Equal(1u, a.Image.LoopsDone);
+        Assert.Equal(200, a.At(170));
+        Assert.Equal(2, a.Current);
+        Assert.Equal(220, a.At(200));
+        Assert.Equal(1, a.Current);
+        Assert.Equal(2u, a.Image.LoopsDone);
+    }
+
+    [Fact]
+    public void GivingTheRootAGapMakesItPartOfTheLoop()
+    {
+        using var a = NewAnim(0, 20, 30);
+        a.Cmd("a=a,i=1,r=1,z=15");
+        a.Cmd("a=a,i=1,s=3");
+
+        Assert.Equal(115, a.At(100));       // the root is held for its own gap
+        Assert.Equal(0, a.Current);
+        Assert.Equal(135, a.At(115));
+        Assert.Equal(1, a.Current);
+        Assert.Equal(165, a.At(135));
+        Assert.Equal(2, a.Current);
+        Assert.Equal(180, a.At(165));       // the wrap lands on the root again
+        Assert.Equal(0, a.Current);
+        Assert.Equal(1u, a.Image.LoopsDone);
+    }
+
+    [Fact]
+    public void MakingTheRootGaplessAgainSkipsItAtTheNextWrap()
+    {
+        using var a = NewAnim(15, 20, 30);
+        a.Cmd("a=a,i=1,s=3");
+        Assert.Equal(115, a.At(100));
+        Assert.Equal(135, a.At(115));       // frame 2
+
+        a.Cmd("a=a,i=1,r=1,z=-1");
         Assert.Equal(0, a.Image.Frames[0].GapMs);
 
-        Assert.Equal(140, a.At(100));     // the gapless root being displayed is held for the default gap
-        a.At(140);
-        Assert.Equal(1, a.Current);
-        a.At(180);
+        Assert.Equal(165, a.At(135));       // frame 3: the armed deadline was kept
         Assert.Equal(2, a.Current);
-        a.At(220);
-        Assert.Equal(1, a.Current);       // wrap lands on frame 2, not on the gapless root
-        a.At(260);
+        Assert.Equal(185, a.At(165));       // the wrap skips the root now
+        Assert.Equal(1, a.Current);
+        Assert.Equal(1u, a.Image.LoopsDone);
+    }
+
+    [Fact]
+    public void SelectingAGaplessFrameWhileRunningSkipsItOnTheNextPass()
+    {
+        using var a = NewAnim(40, -1, 30);
+        a.Cmd("a=a,i=1,s=3");
+        Assert.Equal(140, a.At(100));
+
+        a.Cmd("a=a,i=1,c=2");
+        Assert.Equal(1, a.Current);         // shown until the clock runs again
+
+        Assert.Equal(230, a.At(200));       // stepped past at once: frame 3 for its own gap
+        Assert.Equal(2, a.Current);
+    }
+
+    [Fact]
+    public void SelectingAGaplessFrameWhileStoppedShowsItWithoutAdvancing()
+    {
+        using var a = NewAnim(40, -1, 30);
+
+        a.Cmd("a=a,i=1,c=2");
+
+        Assert.Equal(1, a.Current);
+        Assert.Same(a.Image.Frames[1].Canvas, a.Image.Root);
+        Assert.Equal(0, a.At(100));
+        Assert.Equal(0, a.At(100_000));
+        Assert.Equal(1, a.Current);
+
+        a.Cmd("a=a,i=1,s=3");               // playing it moves on at once
+        Assert.Equal(200_030, a.At(200_000));
         Assert.Equal(2, a.Current);
     }
 
     [Fact]
     public void AllOtherFramesGaplessKeepsTheOnlyDisplayableFrame()
     {
-        using var a = NewAnim(0, -1, -1);
+        using var a = NewAnim(40, -1, -1);
         a.Cmd("a=a,i=1,s=3,v=3");
         a.At(100);
 
@@ -359,15 +490,16 @@ public sealed class KittyAnimationTests
     {
         using var a = NewAnim(-1, -1, -1);
         a.Cmd("a=a,i=1,s=3");
-        Assert.Equal(140, a.At(100));
-        Assert.Equal(0, a.At(140));        // nothing displayable: waits, no deadline
+        Assert.Equal(0, a.At(100));        // nothing displayable: waits, no deadline
+        Assert.True(a.Image.AnimationWaiting);
         Assert.Equal(0, a.At(100_000));
         Assert.Equal(0, a.Current);
 
         a.Cmd("a=a,i=1,r=2,z=25");         // a frame becomes displayable: playback resumes
-        Assert.Equal(200_040, a.At(200_000));  // the gapless root on screen is held for the default gap
-        Assert.Equal(0, a.Current);
-        Assert.Equal(200_065, a.At(200_040));  // then the displayable frame, for its own 25 ms
+        Assert.False(a.Image.AnimationWaiting);
+        Assert.Equal(200_025, a.At(200_000));  // the gapless frame on screen is stepped past at once
+        Assert.Equal(1, a.Current);
+        Assert.Equal(200_050, a.At(200_025));  // frame 2 is the only displayable one: it stays, a loop is counted
         Assert.Equal(1, a.Current);
     }
 
@@ -376,7 +508,7 @@ public sealed class KittyAnimationTests
     [Fact]
     public void LoadingAnimationWaitsOnTheLastFrameAndResumesWhenFramesArrive()
     {
-        using var a = NewAnim(0, 10);
+        using var a = NewAnim(40, 10);
         a.Cmd("a=a,i=1,s=2");
         Assert.Equal(KittyAnimationState.Loading, a.Image.AnimationState);
 
@@ -416,6 +548,26 @@ public sealed class KittyAnimationTests
         Assert.Equal(2, a.Current);
     }
 
+    [Fact]
+    public void SelectingTheCurrentFrameEndsALoadingWait()
+    {
+        using var a = NewAnim(10, 10);
+        a.Cmd("a=a,i=1,s=2");
+        a.At(100);
+        a.At(110);
+        Assert.Equal(0, a.At(120));          // waiting on the last frame
+        Assert.Equal(1, a.Current);
+
+        a.Cmd("a=a,i=1,c=1");                // still loading, but a frame that can advance is selected
+
+        Assert.Equal(KittyAnimationState.Loading, a.Image.AnimationState);
+        Assert.Equal(1010, a.At(1000));
+        Assert.Equal(0, a.Current);
+        Assert.Equal(1020, a.At(1010));
+        Assert.Equal(1, a.Current);
+        Assert.Equal(0, a.At(1020));         // the end again: wait
+    }
+
     // ------------------------------------------------------------------------------------------- a=a control
 
     [Fact]
@@ -436,6 +588,19 @@ public sealed class KittyAnimationTests
         a.Cmd("a=a,i=1,c=1");       // moving the current frame restarts the timer
         Assert.Equal(115, a.At(105));
         Assert.Equal(0, a.Current);
+    }
+
+    [Fact]
+    public void RunningAndSelectingTheCurrentFrameInOneCommandStartsFromThatFrame()
+    {
+        using var a = NewAnim(10, 20, 30);
+
+        a.Cmd("a=a,i=1,s=3,c=2");
+
+        Assert.Equal(1, a.Current);
+        Assert.Equal(120, a.At(100));        // the gap of frame 2
+        Assert.Equal(150, a.At(120));
+        Assert.Equal(2, a.Current);
     }
 
     [Fact]
@@ -494,12 +659,40 @@ public sealed class KittyAnimationTests
     }
 
     [Fact]
+    public void AGapWithoutAFrameNumberChangesNothing()
+    {
+        using var a = NewAnim(0, 0);
+
+        a.Cmd("a=a,i=1,z=500");
+
+        Assert.Equal(0, a.Image.Frames[0].GapMs);   // the root has none by default
+        Assert.Equal(40, a.Image.Frames[1].GapMs);
+        Assert.Equal(new[] { Ok("i=1") }, a.Rig.Replies);
+    }
+
+    [Fact]
     public void ANewGapAppliesToTheNextStep()
     {
-        using var a = NewAnim(0, 10);
+        using var a = NewAnim(40, 10);
         a.Cmd("a=a,i=1,s=3,r=2,z=500");
         a.At(100);
         Assert.Equal(140 + 500, a.At(140));   // frame 2 now stays 500 ms
+    }
+
+    [Fact]
+    public void ChangingTheGapOfTheDisplayedFrameKeepsTheArmedDeadline()
+    {
+        using var a = NewAnim(40, 10); // gaps 40, 10
+        a.Cmd("a=a,i=1,s=3");
+        Assert.Equal(140, a.At(100));
+
+        a.Cmd("a=a,i=1,r=1,z=500");          // the frame on screen keeps its armed deadline
+
+        Assert.Equal(140, a.At(139));
+        Assert.Equal(150, a.At(140));
+        Assert.Equal(1, a.Current);
+        Assert.Equal(650, a.At(150));        // wrapped to the root: its new gap is used from now on
+        Assert.Equal(0, a.Current);
     }
 
     [Fact]
@@ -533,6 +726,68 @@ public sealed class KittyAnimationTests
 
         Assert.Equal(KittyAnimationState.Stopped, a.Image.AnimationState);
         Assert.Empty(a.Rig.Replies);
+    }
+
+    [Fact]
+    public void ACancelledControlCommandLeavesAnOpenFrameLoadAlone()
+    {
+        using var a = NewAnim(10, 10);
+        a.Rig.Apc("a=f,i=1,s=1,v=1,f=32,m=1", "AAAA");
+        Assert.True(a.Rig.Controller.HasOpenTransfer);
+
+        a.Rig.CancelledApc("a=a,i=1,s=3", "junk");
+
+        Assert.True(a.Rig.Controller.HasOpenTransfer);
+        Assert.Equal(KittyAnimationState.Stopped, a.Image.AnimationState);
+        Assert.Empty(a.Rig.Replies);
+    }
+
+    [Fact]
+    public void ACompletedControlCommandEndsAnOpenFrameLoad()
+    {
+        using var a = NewAnim(10, 10);
+        a.Rig.Apc("a=f,i=1,s=1,v=1,f=32,m=1", "AAAA");
+
+        a.Cmd("a=a,i=1,s=3");
+
+        Assert.False(a.Rig.Controller.HasOpenTransfer);
+        Assert.Equal(new[] { Ok("i=1") }, a.Rig.Replies);
+        a.Rig.Replies.Clear();
+        a.Rig.Apc("a=f,m=0", "AAAA");        // the rest of the abandoned load: silent
+        Assert.Empty(a.Rig.Replies);
+        Assert.Equal(2, a.Image.Frames.Count);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void QuietLevelsApplyToControlReplies(int quiet)
+    {
+        using var a = NewAnim(10, 10);
+
+        a.Cmd($"a=a,i=1,s=3,q={quiet}");
+        a.Cmd($"a=a,i=1,c=9,q={quiet}");
+
+        var expected = new List<string>();
+        if (quiet == 1)
+            expected.Add(Err("i=1", "ENOENT:Frame not found"));
+        Assert.Equal(expected, a.Rig.Replies);
+        Assert.Equal(KittyAnimationState.Running, a.Image.AnimationState);
+    }
+
+    [Fact]
+    public void ControlCommandsNotifyTheHostOnlyWhenTheySucceed()
+    {
+        using var a = NewAnim(10, 10);
+        int changes = a.Rig.Host.GraphicsChangedCalls;
+
+        a.Cmd("a=a,i=1,c=9");                // unknown frame
+        a.Cmd("a=a,i=77,s=3");               // unknown image
+        a.Cmd("a=a,i=1,s=9");                // invalid state
+        Assert.Equal(changes, a.Rig.Host.GraphicsChangedCalls);
+
+        a.Cmd("a=a,i=1,s=3");
+        Assert.Equal(changes + 1, a.Rig.Host.GraphicsChangedCalls);
     }
 
     // ------------------------------------------------------------------------------ edits during playback
@@ -619,6 +874,18 @@ public sealed class KittyAnimationTests
     }
 
     [Fact]
+    public void AHiddenPlacementDoesNotHideTheImageWhenAnotherOneIsVisible()
+    {
+        using var a = new Anim(500, new[] { 10, 10 }); // the first placement is far below the viewport
+        a.Store.Place(a.Image, "p=2", anchorRow: 0);
+        a.Cmd("a=a,i=1,s=3");
+
+        Assert.Equal(110, a.At(100));
+        Assert.Equal(120, a.At(110));
+        Assert.Equal(1, a.Current);
+    }
+
+    [Fact]
     public void AnImageWithoutAPlacementIsNeverAdvanced()
     {
         using var a = NewAnim(10, 10);
@@ -679,7 +946,7 @@ public sealed class KittyAnimationTests
     [Fact]
     public void RealisticTickFrequencyGivesAbsoluteDeadlines()
     {
-        using var a = NewAnim(0, 0);
+        using var a = NewAnim(40, 0);
         a.Store.TicksPerSecond = 1_000_000_000;
         a.Cmd("a=a,i=1,s=3");
 
@@ -693,7 +960,7 @@ public sealed class KittyAnimationTests
     [Fact]
     public void ReturnedDeadlinesAreAlwaysInTheFuture()
     {
-        using var a = NewAnim(0, 1, 3, 7);
+        using var a = NewAnim(40, 1, 3, 7);
         a.Cmd("a=a,i=1,s=3");
         long now = 100;
         for (int i = 0; i < 200; i++)
@@ -742,17 +1009,20 @@ public sealed class KittyAnimationTests
         a.Store.ValidateInvariants();
     }
 
-    [Fact]
-    public void DeletingAMiddleFrameShiftsTheLaterOnesAndKeepsTheirGaps()
+    [Theory]
+    [InlineData('f')]
+    [InlineData('F')]
+    public void DeletingAMiddleFrameShiftsTheLaterOnesAndKeepsTheirGaps(char d)
     {
-        using var a = NewAnim(0, 10, 20, 30);
+        using var a = NewAnim(40, 10, 20, 30);
         int changes = a.Rig.Host.GraphicsChangedCalls;
 
-        a.Cmd("a=d,d=f,i=1,r=2");
+        a.Cmd($"a=d,d={d},i=1,r=2");
 
         AssertFrames(a, 0, 2, 3);
         Assert.Equal(new[] { 40, 20, 30 }, a.Image.Frames.Select(f => f.GapMs));
         Assert.Equal(0, a.Current);
+        Assert.Equal(1, a.Store.PlacementCount); // the image is still shown
         Assert.Equal(changes + 1, a.Rig.Host.GraphicsChangedCalls);
         Assert.Empty(a.Rig.Replies); // deletes never answer
     }
@@ -840,6 +1110,8 @@ public sealed class KittyAnimationTests
 
         Assert.Equal(expectedIndex, a.Current);
         Assert.Same(a.Image.Frames[a.Current].Canvas, a.Image.Root);
+        int[] remaining = Enumerable.Range(0, 4).Where(i => i != deleteNumber - 1).ToArray();
+        Assert.Equal(Col(remaining[expectedIndex]), a.Image.Root.AsSpan().ToArray()); // and it is the right original frame
         if (deleteNumber != currentFrameNumber)
             Assert.Equal(shownBefore, a.Image.Root.AsSpan().ToArray()); // a surviving displayed frame is unchanged
     }
@@ -882,6 +1154,22 @@ public sealed class KittyAnimationTests
         a.Cmd("a=d,d=f,i=1,r=1");
         Assert.Equal(0, a.At(300));              // one frame left: nothing to wait for
         AssertFrames(a, 2);
+    }
+
+    [Fact]
+    public void PlaybackResumesWhenAFrameIsAddedAfterDeletingDownToOne()
+    {
+        using var a = NewAnim(10, 10);
+        a.Cmd("a=a,i=1,s=3");
+        a.Cmd("a=d,d=f,i=1,r=2");
+        Assert.Equal(0, a.At(100));              // a single frame: nothing to wait for
+        Assert.Equal(KittyAnimationState.Running, a.Image.AnimationState);
+
+        AnimKit.LoadFrame(a.Rig, 1, 1, 1, Col(5), ",z=20");
+
+        Assert.Equal(110, a.At(100));            // the root frame's gap
+        Assert.Equal(130, a.At(110));            // then the new frame's
+        Assert.Equal(1, a.Current);
     }
 
     [Fact]
@@ -996,18 +1284,33 @@ public sealed class KittyAnimationTests
         baseline.AssertRestored();
     }
 
-    // -------------------------------------------------------------------- terminal buffer (real clock)
+    // -------------------------------------------------------------------- terminal buffer (manual clock)
+
+    /// <summary>A clock that only moves when told to: 1000 ticks per second, so one tick is one millisecond.</summary>
+    private sealed class ManualClock : TimeProvider
+    {
+        private long _now = 1_000;
+
+        public override long TimestampFrequency => 1_000;
+
+        public override long GetTimestamp() => Volatile.Read(ref _now);
+
+        public long Now => Volatile.Read(ref _now);
+
+        public void Advance(long ticks) => _now += ticks;
+    }
 
     private sealed class BufferRig : IDisposable
     {
         private const int CellW = 10, CellH = 20;
 
+        public ManualClock Clock { get; } = new();
         public TerminalAdapter Adapter { get; }
         public BasicAnsiParser Parser { get; }
 
         public BufferRig()
         {
-            Adapter = new TerminalAdapter(6, 10, 100);
+            Adapter = new TerminalAdapter(6, 10, 100, Clock);
             Adapter.SetCellPixelSize(CellW, CellH);
             Adapter.ConfigureGraphics(new KittyGraphicsOptions { Enabled = true }, new FakeImageDecoder());
             Parser = new BasicAnsiParser { Handler = Adapter };
@@ -1023,6 +1326,15 @@ public sealed class KittyAnimationTests
 
         public static string Pixels(int fill) => Convert.ToBase64String(Enumerable.Repeat((byte)fill, CellW * CellH * 4).ToArray());
 
+        /// <summary>Two frames of 2 ms each (the root frame's gap is set explicitly), playing, placed at the cursor with C=1.</summary>
+        public KittyImage PlayTwoFrameAnimation()
+        {
+            Apc("a=T,i=1,s=10,v=20,f=32,c=1,r=1,C=1", Pixels(10));
+            Apc("a=f,i=1,s=10,v=20,f=32,z=2", Pixels(20));
+            Apc("a=a,i=1,s=3,r=1,z=2");
+            return Store.FindByClientId(1)!;
+        }
+
         public void Dispose() => Adapter.Dispose();
     }
 
@@ -1030,50 +1342,78 @@ public sealed class KittyAnimationTests
     public void BufferCaptureAdvancesVisibleAnimationsAndReportsTheWakeDeadline()
     {
         using var t = new BufferRig();
-        t.Apc("a=T,i=1,s=10,v=20,f=32,c=1,r=1,C=1", BufferRig.Pixels(10));
-        t.Apc("a=f,i=1,s=10,v=20,f=32,z=2", BufferRig.Pixels(20));
-        t.Apc("a=a,i=1,s=3,r=1,z=2");
-        var image = t.Store.FindByClientId(1)!;
-        long freq = TimeProvider.System.TimestampFrequency;
+        var image = t.PlayTwoFrameAnimation();
+        long start = t.Clock.Now;
 
-        long before = TimeProvider.System.GetTimestamp();
         long firstSerial;
         using (var snap = t.Capture())
         {
-            long after = TimeProvider.System.GetTimestamp();
             var graphics = snap.Graphics!;
             var placement = Assert.Single(graphics.Placements.ToArray());
             firstSerial = placement.ImageSerial;
-            Assert.True(graphics.NextAnimationDeadlineTicks > before, "deadline is in the future of the capture start");
-            Assert.True(graphics.NextAnimationDeadlineTicks <= after + KittyAnimation.MsToTicks(2, freq));
+            // The first capture arms the timer: 2 ms at 1000 ticks per second is two ticks from now. (The store runs
+            // on the adapter's clock, not on the system one.)
+            Assert.Equal(start + 2, graphics.NextAnimationDeadlineTicks);
+        }
+        Assert.Equal(0, image.CurrentFrameIndex);
+
+        t.Clock.Advance(1); // one tick before the deadline: nothing changes
+        using (var snap = t.Capture())
+        {
+            var placement = Assert.Single(snap.Graphics!.Placements.ToArray());
+            Assert.Equal(firstSerial, placement.ImageSerial);
+            Assert.Equal(start + 2, snap.Graphics.NextAnimationDeadlineTicks);
         }
 
-        bool changed = false;
-        for (int i = 0; i < 600 && !changed; i++)
+        t.Clock.Advance(1); // exactly at the deadline: frame 2 is current and the next change is 2 ms away
+        long secondSerial;
+        using (var snap = t.Capture())
         {
-            Thread.Sleep(5);
-            using var snap = t.Capture();
             var placement = Assert.Single(snap.Graphics!.Placements.ToArray());
-            changed = placement.ImageSerial != firstSerial;
+            secondSerial = placement.ImageSerial;
+            Assert.NotEqual(firstSerial, secondSerial);
+            Assert.Equal(start + 4, snap.Graphics.NextAnimationDeadlineTicks);
         }
-        Assert.True(changed, "the animation never advanced through snapshot capture");
+        Assert.Equal(1, image.CurrentFrameIndex);
+
+        t.Clock.Advance(2); // wraps to the root frame, which keeps its texture key
+        using (var snap = t.Capture())
+        {
+            var placement = Assert.Single(snap.Graphics!.Placements.ToArray());
+            Assert.Equal(firstSerial, placement.ImageSerial);
+            Assert.Equal(start + 6, snap.Graphics.NextAnimationDeadlineTicks);
+        }
+        Assert.Equal(0, image.CurrentFrameIndex);
         t.Store.ValidateInvariants();
         Assert.Equal(2, image.Frames.Count);
+    }
+
+    [Fact]
+    public void BufferCaptureAfterALongStallStepsOneFrameAndRearmsFromNow()
+    {
+        using var t = new BufferRig();
+        var image = t.PlayTwoFrameAnimation();
+
+        using (t.Capture()) { } // arms the timer
+        t.Clock.Advance(1_000_000);
+        long stalled = t.Clock.Now;
+
+        using var snap = t.Capture();
+
+        Assert.Equal(1, image.CurrentFrameIndex); // one step, not a burst of half a million
+        Assert.Equal(stalled + 2, snap.Graphics!.NextAnimationDeadlineTicks);
     }
 
     [Fact]
     public void BufferCaptureOfAScrolledOffAnimationDoesNotAdvanceItAndHasNoDeadline()
     {
         using var t = new BufferRig();
-        t.Apc("a=T,i=1,s=10,v=20,f=32,c=1,r=1,C=1", BufferRig.Pixels(10));
-        t.Apc("a=f,i=1,s=10,v=20,f=32,z=2", BufferRig.Pixels(20));
-        t.Apc("a=a,i=1,s=3,r=1,z=2");
-        var image = t.Store.FindByClientId(1)!;
+        var image = t.PlayTwoFrameAnimation();
         t.Feed("\u001b[6;1H" + new string('\n', 8)); // eight rows of scrolling put the placement into the history
 
         for (int i = 0; i < 20; i++)
         {
-            Thread.Sleep(5);
+            t.Clock.Advance(5);
             using var snap = t.Capture();
             Assert.Empty(snap.Graphics!.Placements.ToArray());
             Assert.Equal(0, snap.Graphics.NextAnimationDeadlineTicks);
@@ -1081,9 +1421,31 @@ public sealed class KittyAnimationTests
         Assert.Equal(0, image.CurrentFrameIndex);
         Assert.Equal(0, image.FrameDeadlineTicks);
 
-        using var scrolled = t.Capture(scrollOffset: 8); // viewed in the scrollback: visible, so it runs
-        Assert.Single(scrolled.Graphics!.Placements.ToArray());
-        Assert.NotEqual(0, scrolled.Graphics.NextAnimationDeadlineTicks);
+        // Viewed in the scrollback the placement is visible, so it runs: first capture arms, the next one after the gap steps.
+        long viewedAt = t.Clock.Now;
+        long firstSerial;
+        using (var scrolled = t.Capture(scrollOffset: 8))
+        {
+            var placement = Assert.Single(scrolled.Graphics!.Placements.ToArray());
+            firstSerial = placement.ImageSerial;
+            Assert.Equal(viewedAt + 2, scrolled.Graphics.NextAnimationDeadlineTicks);
+        }
+        t.Clock.Advance(2);
+        using (var scrolled = t.Capture(scrollOffset: 8))
+        {
+            var placement = Assert.Single(scrolled.Graphics!.Placements.ToArray());
+            Assert.NotEqual(firstSerial, placement.ImageSerial);
+        }
+        Assert.Equal(1, image.CurrentFrameIndex);
+
+        // Back on the live screen, however much time passes, the hidden animation stays where it is.
+        t.Clock.Advance(10_000);
+        using (var live = t.Capture())
+        {
+            Assert.Empty(live.Graphics!.Placements.ToArray());
+            Assert.Equal(0, live.Graphics.NextAnimationDeadlineTicks);
+        }
+        Assert.Equal(1, image.CurrentFrameIndex);
     }
 
     [Fact]

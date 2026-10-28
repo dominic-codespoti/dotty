@@ -30,7 +30,7 @@ internal enum KittyAnimationState : byte
 /// </remarks>
 internal static class KittyAnimation
 {
-    /// <summary>Gap of a frame whose <c>z</c> is absent or 0, in milliseconds.</summary>
+    /// <summary>Gap of a new frame whose <c>z</c> is absent or 0, in milliseconds. The root frame has none until it is set.</summary>
     public const int DefaultGapMs = 40;
 
     /// <summary>
@@ -123,7 +123,9 @@ internal static class KittyAnimation
     /// <summary>
     /// Advances <paramref name="image"/> one step when its deadline passed and re-arms it. Returns true when the
     /// image has an armed deadline afterwards (<see cref="KittyImage.FrameDeadlineTicks"/>), false when it is
-    /// stopped, waiting, or has fewer than two frames.
+    /// stopped, waiting, or has fewer than two frames. A displayed frame that has no gap (the root frame until
+    /// <c>a=a,r=1,z=</c> gives it one, or a gapless frame selected with <c>c=</c>) is not held: the protocol skips
+    /// gapless frames instantly, so the first pass after the timer was (re)started steps past it at once.
     /// </summary>
     public static bool Advance(KittyImage image, long nowTicks, long ticksPerSecond)
     {
@@ -134,9 +136,18 @@ internal static class KittyAnimation
             return false;
 
         if (image.FrameDeadlineTicks == 0)
-            image.FrameDeadlineTicks = nowTicks + DisplayTicks(image, ticksPerSecond);
-        if (nowTicks < image.FrameDeadlineTicks)
+        {
+            int gap = image.Frames[image.CurrentFrameIndex].GapMs;
+            if (gap > 0)
+            {
+                image.FrameDeadlineTicks = nowTicks + MsToTicks(gap, ticksPerSecond);
+                return true;
+            }
+        }
+        else if (nowTicks < image.FrameDeadlineTicks)
+        {
             return true;
+        }
 
         Step(image, count);
         if (image.AnimationState == KittyAnimationState.Stopped || image.AnimationWaiting)
@@ -144,16 +155,9 @@ internal static class KittyAnimation
             image.FrameDeadlineTicks = 0;
             return false;
         }
-        image.FrameDeadlineTicks = nowTicks + DisplayTicks(image, ticksPerSecond);
+        // Step only lands on frames that have a gap.
+        image.FrameDeadlineTicks = nowTicks + MsToTicks(image.Frames[image.CurrentFrameIndex].GapMs, ticksPerSecond);
         return true;
-    }
-
-    // A frame on screen for playback has a positive gap; one that was selected explicitly while gapless (c=) is held
-    // for the default gap.
-    private static long DisplayTicks(KittyImage image, long ticksPerSecond)
-    {
-        int gap = image.Frames[image.CurrentFrameIndex].GapMs;
-        return MsToTicks(gap > 0 ? gap : DefaultGapMs, ticksPerSecond);
     }
 
     /// <summary>

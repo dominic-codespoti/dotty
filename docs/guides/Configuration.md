@@ -117,6 +117,29 @@ reached first applies. The byte limit is checked again on every resize, so a
 wider terminal keeps fewer lines. Changes apply to tabs and panes created after
 the change. See the [reference](../Configuration.md#scrollback) for details.
 
+## Graphics
+
+The [Kitty graphics protocol](../KittyGraphics.md) (inline images from tools
+such as `kitten icat`) is **off by default**. Turn it on with:
+
+```json
+{
+  "graphics": { "kittyProtocol": true }
+}
+```
+
+Other keys: `imageStorageLimitMiB` (default 320, per screen of each tab or pane,
+at most 4096), `maxPayloadMiB` (default 65, at most 1024), `allowFileTransfer`,
+`allowTempFileTransfer` and `allowSharedMemory` (default `true`; they let a
+program make Dotty read a file or shared-memory object by name, so switch them
+off for untrusted workloads), and `windowsPassthrough` (Windows only,
+experimental, default `false`). Image memory is not part of
+`scrollback.limitBytes`. The first six settings are re-applied to running panes
+on reload; `windowsPassthrough` affects new tabs and panes only. These reload
+semantics are read from the code and `need runtime verification`. See the
+[reference](../Configuration.md#graphics) and the
+[manual smoke checklist](../KittyGraphics.md#manual-smoke-checklist).
+
 ## Safe edits and troubleshooting
 
 Write a complete replacement to a temporary file and atomically rename it over

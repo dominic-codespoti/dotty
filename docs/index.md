@@ -13,6 +13,7 @@ Start here: [README and quick start](../Readme.md) for the application, [Contrib
 | [State Coordination Hardening](architecture/StateCoordinationPlan.md) | Executed: library-owned buffer invariants, single-owner scroll state, dormant incremental machinery removed, alt-screen invalidation locked in |
 | [Lock-Free Snapshot Design](architecture/LockFreeSnapshotDesign.md) | Snapshot ownership and lock-free rendering considerations |
 | [Parsing Engine](Parsing.md) | ANSI/VT parser state machine, string/control rules, escape sequences, handler dispatch, OSC 7/8/52 behavior and limits, DECSTR/RIS, status and window reports, DECRQCRA, grapheme limits, and the DECRQM table |
+| [Kitty Graphics Protocol](KittyGraphics.md) | Inline images: supported/unsupported matrix, media and path policy, limits, memory and threading model, tmux and Windows notes, divergences from kitty, default-off flag, and the manual smoke checklist (written without a compiler; unverified at runtime) |
 | [Keyboard Protocol](KeyboardProtocol.md) | Kitty negotiation, native key phases, alternate identities, committed Unicode, and DECBKM |
 
 ## Configuration
@@ -62,4 +63,4 @@ Start here: [README and quick start](../Readme.md) for the application, [Contrib
 
 ---
 
-*Last updated: 2026-10-03*
+*Last updated: 2026-10-28*

@@ -20,8 +20,8 @@ tests.
 
 ### Scrollback, storage, reflow, and text-extraction tests (wave 3)
 
-`Dotty.App.Tests` (Terminal-internal members are reached through the app test
-project; `Dotty.Terminal.Tests` has no `InternalsVisibleTo`):
+`Dotty.App.Tests` (Terminal-internal members are visible to both `Dotty.App.Tests`
+and `Dotty.Terminal.Tests` through `Dotty.Terminal`'s `InternalsVisibleTo`):
 
 | Class | Covers |
 |---|---|
@@ -41,6 +41,64 @@ for the memory harness live in
 `scripts/perf/tests/test_scrollback_memory.py`. None of these has been run on a
 machine with the .NET SDK by the authors of this change set; GUI, Wayland,
 macOS, and Windows behavior is verified manually.
+
+### Kitty graphics tests
+
+Written without a compiler or runtime and **never executed**; every class below
+is `needs runtime verification`. `Dotty.Terminal.Tests` and `Dotty.App.Tests` both
+see `Dotty.Terminal` internals (`InternalsVisibleTo`). The graphics classes share
+`KittyTestSupport.cs` (`TestPng`, `FakeImageDecoder`, `FakeKittyHost`, `KittyRig`, command builders) and the
+`GraphicsMemoryMetricsCollection` xUnit collection, because the
+`GraphicsMemoryMetrics` counters are process-wide and tests assert that they
+return to their baseline.
+
+`tests/Dotty.Terminal.Tests`:
+
+| Class | Covers |
+|---|---|
+| `KittyApcParserTests`, `KittyControlParserTests` | APC framing and abort rules, the 512-byte control cap, key parsing (`BoundedSequenceTests` gained a recording handler for the Kitty callbacks) |
+| `KittyBase64DecoderTests`, `BoundedInflateTests`, `PngHeaderTests`, `PixelOpsTests`, `ImagePixelsTests` | streaming base64, bounded zlib, PNG header sanity, premultiply/downscale, reference counting |
+| `KittyTransferTests`, `KittyTransferMediumTests`, `KittyFileMediumTests`, `KittyPathPolicyTests`, `KittySharedMemoryTests` | chunking, validation order, media, path deny-list and temp rules |
+| `KittyControllerTests`, `KittyQueryTests`, `KittyResponseTests`, `KittyResponsesTests`, `KittyLimitsTests` | command routing, `a=q`, reply formatting and quiet modes, quota and caps |
+| `KittyImageStoreTests`, `KittyPlacementTests`, `KittyRelativePlacementTests`, `KittyDeleteTests`, `PlacementGeometryTests` | ids, eviction, placement geometry and cropping, relative chains, the delete matrix |
+| `KittyAnimationTests`, `KittyAnimationFlowTests`, `KittyFrameLoadTests` | frame load/edit/compose, gap and loop rules, playback clock |
+| `KittyBufferHooksTests`, `KittyScreenSemanticsTests`, `KittySnapshotTests`, `IndexAndNextLineTests` | scroll/reflow/ED/RIS hooks, alternate screen, snapshot capture and leases, `ESC D`/`ESC E` |
+| `KittyPlaceholderResolverTests`, `PlaceholderTableTests`, `PlaceholderWriterTests`, `DiacriticsTests`, `ImageQuadBuilderTests`, `ImageUploadPlannerTests`, `ImageRetirementQueueTests` | placeholder decoding and cells, quad building and clipping, upload/eviction planning |
+| `ColorKindTests`, `SgrColonColorTests` | colon-form SGR colours that placeholders use (foreground/underline ids) |
+| `KittyAllocationTests` | warmed-path allocation limits (a deliberately loose bound for a query with a payload) |
+| `KittyMutationFuzzTests` | seeded mutation fuzzing of the whole path |
+
+The fuzz test is **deterministic**: fixed seeds, 500 iterations each, no
+wall-clock input. It asserts that nothing throws, stores stay consistent, replies
+stay well-formed, counters return to baseline, and the parser recovers.
+
+`tests/Dotty.App.Tests`: `KittyGraphicsConfigTests` (the `graphics` section,
+normalization, catalog and Lua keys), `BlockingWorkScopeTests` (releasing and
+re-acquiring `SyncRoot`), `MemoryReportTests`, `RenderSnapshotGraphicsTests`,
+`TerminalSceneComposerImageTests`, `TerminalSceneComposerPlaceholderTests`,
+`WindowPresentationGateTests` and `IdleWaitTests` (animation and upload wake
+reasons), `TabInitialPixelSizeTests` and `TerminalSessionPixelResizeTests` (pixel
+sizes through sessions), and `RenderingAllocationTests`.
+
+`tests/Dotty.App.SkiaTests`: `SkiaImageDecoderTests`, `SilkImageTextureCacheTests`,
+`SilkImageRendererTests`, `SilkTerminalRendererImageLayerTests` (layer order and
+pixel assertions), and image cases in `QuadFrameBuilderTests`. The OpenGL cases
+open a hidden OpenGL 3.3 window and call `Assert.Skip` when no context is
+available, so on a headless runner they are reported skipped, not passed; they
+are the only automated check of the real GL path. Run them on a machine with a
+display.
+
+`tests/Dotty.NativePty.Tests`: `UnixPtyPixelTests` (resize message with
+`xpixel`/`ypixel`, the initial pixel size and pixel-only resizes being visible to
+the child, `DOTTY_INITIAL_XPIXEL/YPIXEL`), the pixel
+arguments in `IPtyContractTests`, and the passthrough flag cases in
+`WindowsPtyTests` (flag mapping and fallback; the real ConPTY call only runs on
+Windows).
+
+There is no recorded-corpus replay and no golden-image regeneration step yet:
+pixel assertions are computed in the tests. Manual client checks are the
+[smoke checklist](KittyGraphics.md#manual-smoke-checklist).
+
 
 `global.json` selects the Microsoft Testing Platform runner required by xUnit
 4. Use `--solution` or `--project` explicitly; VSTest `--logger` is not

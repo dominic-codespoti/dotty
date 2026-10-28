@@ -7,13 +7,18 @@ snapshots so rendering can run without changing parser or PTY code.
 ## Pipeline
 
 1. `TerminalBuffer.CaptureRenderSnapshotVisible` copies visible cells and
-   metadata while holding the buffer sync root for a bounded section.
+   metadata while holding the buffer sync root for a bounded section. When the
+   active screen has Kitty image placements, the same hold advances playing
+   animations and copies the visible placements, each with a lease on its
+   pixels (see [Image layers](#kitty-image-layers)).
 2. `TerminalSceneComposer` classifies cells and builds background, underline,
    scrollbar, tab, pane, selection, cursor, and glyph instances.
 3. `GlyphAtlasService` resolves the configured font stack, shapes glyphs, and
    stores grayscale coverage and intrinsic-color pixels in shared atlas pages.
 4. `SilkTerminalRenderer` uploads atlas changes and submits instanced quads to
    the OpenGL 3.3 core context.
+   When images exist, the renderer draws three image layers around the cell
+   passes: image quads below backgrounds, below text and above text.
 5. `WindowPresentationGate` coalesces invalidation reasons and allows an
    explicit swap only for a dirty frame. Synchronized terminal updates hold
    presentation until they end.
@@ -59,6 +64,59 @@ Content-only frames are held to at least 8 ms apart while output streams, and
 to 30 ms while the PTY consumer is backlogged, so rendering does not take the
 buffer lock on every flush and interrupt parsing. Frames within 250 ms of
 interactive input, and the first frame after idle, are never held back.
+
+Animated Kitty images add one more deadline: the earliest next frame change of
+the visible animated placements (`RenderSnapshot.Graphics.NextAnimationDeadlineTicks`,
+reduced by `TerminalSceneComposer` over the composed leaves and handed to the host
+as `NextImageDeadlineTicks`). `IdleWait.Compute` takes it as
+`ImageAnimationRemainingMs` (rounded up, at least 1 ms, `0` = none), so an
+animation wakes the loop only at its frame deadlines; when the deadline has
+passed the host invalidates the frame with `WindowFrameReason.ImageAnimation`.
+Animation is pull-driven (no timer or thread): it advances when a frame is
+captured. An image that is not captured, such as one in a hidden tab, neither
+advances nor asks for a wake-up. Image textures left un-uploaded by the
+per-frame upload budget requeue another frame with `WindowFrameReason.ImageUpload`.
+Whether idle wakeups really stay at frame deadlines is `needs runtime verification`.
+
+### Kitty image layers
+
+Details of the protocol are in [Kitty graphics](KittyGraphics.md). The rendering
+side works like this (written from the source, never run or measured):
+
+- **Capture.** `RenderSnapshot.Graphics` (a pooled `KittyRenderSnapshot`) holds the
+  visible placements, the virtual placements (for placeholders) and relative
+  placements rooted at a virtual one. Capture costs a null check and a count test
+  when the screen has no placements. Leases keep a deleted image's pixels alive
+  until the frame has been drawn; `TerminalSceneComposer` releases the previous
+  frame's leases before taking new ones.
+- **Quads.** `ImageQuadBuilder` (outside the buffer lock) turns placements into
+  instanced quads: sorted by layer, `z`, image id, placement id, then input order;
+  batched by texture; **clipped on the CPU** to the pane rectangle intersected
+  with the framebuffer, with the texture coordinates adjusted to the clipped part.
+  All **four edges** are snapped to device pixels from the same absolute
+  coordinates with `floor(v + 0.5)`, exactly like the cell background pass, so
+  neighbours (a placeholder grid draws one quad per cell row) share edges at
+  fractional cell sizes (DPI, zoom); a sub-pixel quad keeps one pixel.
+- **Draw order.** `z < -2^30` below cell backgrounds; `-2^30 <= z < 0` after
+  backgrounds and before glyphs; `z >= 0` after glyphs. Scrollbar and menu chrome
+  draw after the above-text layer. Textures hold premultiplied RGBA (or opaque
+  RGB) and blend with `One, OneMinusSrcAlpha`.
+- **Placeholders.** `PlaceholderResolver` runs on the snapshot copy and emits
+  quads at `z = 0`. `U+10EEEE` cells never draw a glyph: `QuadFrameBuilder` swaps
+  the rune for a space whatever the image store holds.
+- **Texture cache.** `SilkImageTextureCache` (GL thread, created on the first
+  frame that has image draws, keyed by the pixel buffer's serial) uploads at most
+  16 MiB per frame, always admitting the first candidate so an image larger than
+  the budget still uploads; caps resident textures at an estimated 256 MiB (mip
+  chains counted as `4/3`; mipmaps when both sides are 256 px or more); evicts
+  textures idle for more than 300 frames, then least recently used (larger first
+  on ties) while over budget, never one used by the current frame; clamps uploads
+  to `GL_MAX_TEXTURE_SIZE` with a box downscale; and deletes the textures of freed
+  pixels through `ImageRetirementQueue`. A context loss resets it
+  (`ResetImagesAfterContextLoss`). Hidden tabs are not captured, so their textures
+  go idle and age out like any other.
+
+These numbers are constants in the source, not measurements.
 
 ## Pane views, selection, and scrollback
 
@@ -142,6 +200,14 @@ payload is not driver RSS or total GPU allocation. Retained color-probe bitmap
 payload is accounted separately from atlas pages. These figures describe
 application-side ownership and estimated resource payload, not a complete GPU
 memory total.
+
+Image memory is reported separately: `MEMORY` adds `imagePixelBytes` and
+`imageCount` (live reference-counted pixel buffers, which include buffers a
+snapshot lease still holds), `placementCount`, `pendingTransferBytes` (staging of
+the transfer in flight), and `imageTextureBytesEstimate` (estimated uploaded
+image-texture bytes, mip chains included). They are ownership counters and
+estimates, never RSS, and image storage is outside `scrollback.limitBytes`.
+
 
 ### Lazily committed cell arenas
 

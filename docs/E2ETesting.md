@@ -58,6 +58,7 @@ focus reports, paste wrappers, and reflow remain in deterministic tests.
 The `MEMORY` command returns the host's memory counters as JSON, including
 `terminalArenaCapacityBytes` (reserved virtual), `terminalArenaCommittedBoundBytes`
 (upper bound of committed pages, not resident size) and `terminalArenaBackend`.
+It also reports the Kitty graphics ownership counters `imagePixelBytes`, `imageCount`, `placementCount`, `pendingTransferBytes`, and the estimate `imageTextureBytesEstimate` (see [Kitty graphics](KittyGraphics.md#memory-model)).
 `scripts/perf/scrollback_memory.py` is the harness built on it: it launches the
 host under `xvfb-run`, opens tabs (`ACTION:NewTab`), fills history and issues
 `RESIZE:`, ED 2 and CSI 3 J through `TYPE:`/`KEY:`, and samples process PSS from

@@ -754,6 +754,37 @@ that spread as noise. No result from either tool is recorded in this repository.
 | `ReflowBenchmarks` | `Memory`, `Reflow` | resize away and back over a populated 10,000-line scrollback (per reflow) |
 | `TextFormatBenchmarks` | `Memory`, `Text` | search over visible rows, selection text, `GetScrollbackLine`, and one scrollback search that times `CaptureRenderSnapshotForSearch` plus search |
 | `ParserScanExperiments` | `Experiment`, `Scan` | scanner variants; runs only with `--filter experiment`, never feeds baselines or regression checks |
+| `KittyApcDecodeBenchmarks` | `Graphics`, `Transmit` | a 64 MiB `f=24` transfer in 4 KiB chunks with graphics disabled (scan and discard), in 4 KiB chunks with decode and store, and as a single APC |
+| `KittyRgbaTransmitBenchmarks` | `Graphics`, `Transmit` | `f=32` 4096x4096 transmit including premultiply |
+| `KittyInflateBenchmarks` | `Graphics`, `Transmit` | `o=z` `f=32` 4096x4096 transmit (inflate plus premultiply) |
+| `KittyPlacementScrollBenchmarks` | `Graphics`, `Placements` | full-screen scrolling with 10,000 placements and region scrolling with 1,000 placements, each next to a control that omits the placements or the scroll |
+| `KittySnapshotBenchmarks` | `Graphics`, `Snapshot` | render-snapshot capture with 1,000 visible placements, next to a no-placement control |
+| `KittyLockHoldProbe` | `Graphics`, `Experiment`, `LockProbe` | samples how long `SyncRoot` is held while a 64 MiB PNG payload is processed, next to a plain-text control |
+
+The six Kitty graphics classes are **experiments only**: they are absent from
+`Program.BenchmarkTypes`, so they have no entries in `baselines.json`, are never
+gated and run only for `--filter experiment`. They use only public API (the
+performance project has no `InternalsVisibleTo`): `TerminalAdapter.ConfigureGraphics`,
+the parser, the adapter's buffer and the public `GraphicsMemoryMetrics` counters. Each
+`GlobalSetup` checks the effect of its stream through those counters and throws
+when a payload was rejected (a rejected payload would otherwise look like a very
+fast benchmark), and each fixture disposes its adapters and reports any drift of
+the process-wide counters on stderr. The PNG cases use a fake decoder that fills
+pixels, so they measure Dotty's buffering, inflate and store, not SkiaSharp.
+
+Hypotheses to test, none measured: (1) with graphics disabled the APC path costs
+about what the existing bulk parser benchmarks cost; (2) decode-and-store cost is
+dominated by base64 decoding and premultiply, not by store bookkeeping;
+(3) full-screen scrolling with many placements stays O(1) per scroll thanks to the
+ring-head rotation and the cached end-row bound, while region scrolling visits the
+placements; (4) snapshot capture with no placements adds nothing visible next to
+the existing capture benchmarks; (5) `KittyLockHoldProbe` shows the lock is
+released during the heavy phase, so the longest sampled hold stays near the
+control's. Allocation guards for the same paths are `KittyAllocationTests`
+(Terminal.Tests) and `Compose_WithVisibleImagesAllocatesNothingAfterWarmup` in
+`RenderingAllocationTests` (App.Tests); like all tests in this change set they have
+not been run. The existing parser benchmarks are the regression guard for the
+non-graphics path and were not modified.
 
 Rules: the baseline key is the benchmark `Description`, so gated benchmarks must
 not use `[Params]` (one method per variant). The `experiment` filter is a valid
@@ -955,6 +986,7 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 | 2026-09-24 | Added the steady-state zero-allocation policy and measurement harness |
 | 2026-10-28 | Wave 3: lazily committed cell arenas and committed-bound/backend `MEMORY` fields (earlier arena figures marked pre-lazy-commit); scrollback config (default 5000 lines, 64 MiB cap, capacity follows columns on resize); new scan/OSC/reflow/text benchmark classes and `experiment` filter; `--mode scrollback-memory` and `scripts/perf/scrollback_memory.py`; anchor-only reflow mapping; single `RowText` and working scrollback search; OSC bulk scan and bytes-native OSC 52. Gains are hypotheses until measured |
 | 2026-10-28 | Fixes: selection maps scrollback row -1 to the newest history line; reverse index (RI) with limited or zero scrollback capacity |
+| 2026-10-28 | Kitty graphics: six experiment-only benchmark classes (`KittyApcDecodeBenchmarks`, `KittyRgbaTransmitBenchmarks`, `KittyInflateBenchmarks`, `KittyPlacementScrollBenchmarks`, `KittySnapshotBenchmarks`, `KittyLockHoldProbe`), no baselines, no measured numbers; every expectation is a hypothesis |
 
 ---
 

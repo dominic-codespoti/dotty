@@ -118,7 +118,9 @@ Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather t
 | Sequence | Handler | Behaviour in `TerminalAdapter` |
 |---|---|---|
 | `CSI ! p` (DECSTR; numeric parameters before `!` are ignored) | `OnSoftReset()` | Implemented: see [DECSTR and RIS](#decstr-and-ris-reset-sets). The parser also resets its own G0/G1 charset to ASCII. |
-| `ESC c` (RIS) | `OnFullReset()` | Implemented: see [DECSTR and RIS](#decstr-and-ris-reset-sets). The parser also resets its charset to ASCII. |
+| `ESC c` (RIS) | `OnFullReset()` | Implemented: see [DECSTR and RIS](#decstr-and-ris-reset-sets). The parser also resets its charset to ASCII. It also deletes every Kitty image of both screens and aborts an open graphics transfer (the configured limits stay). |
+| `ESC D` (IND) | `OnIndex()` | Line feed without carriage return: scrolls the region at the bottom margin, moves the cursor down otherwise (a cursor below the margin moves down until the last row); clears wrap-pending. |
+| `ESC E` (NEL) | `OnNextLine()` | Carriage return, then IND. |
 | `CSI Ps n` | `OnDeviceStatusReport(Ps)` | 5 and 6 answered; every other code is silent. |
 | `CSI ? 6 n` | `OnCursorPositionReport()` | DECXCPR, implemented. |
 | `CSI ? Ps n`, `Ps != 6` | `OnPrivateDeviceStatusReport(Ps)` | Only 998 is answered; others are silent. |
@@ -331,6 +333,53 @@ inputSpan = concat;  // Now contains "ESC[31m"
                             CSI Handler  OSC Handler
 ```
 
+### APC states (Kitty graphics)
+
+`ESC _` enters `SequenceState.ApcFirst`, which looks at one byte:
+
+```
+ESC _ ──▶ ApcFirst ── 'G' and handler.KittyGraphicsEnabled ──▶ ApcControl
+              │                                                     │  ';'        ──▶ Begin(control) ──▶ ApcPayload
+              │                                                     │  0x9C       ──▶ Begin(control), End(true)
+              │                                                     │  ESC        ──▶ ApcEscape
+              │                                                     │  CAN / SUB  ──▶ reset (handler never called)
+              │                                                     │  other C0   ──▶ abort, execute the control
+              │                                                     │  > 512 B    ──▶ DiscardString (handler never called)
+              └── anything else ──▶ DiscardString (PM/SOS path)     ▼
+                                                        ApcPayload ── run of non-C0 bytes ──▶ OnKittyGraphicsPayload(run)
+                                                          │  0x9C ──▶ End(true)
+                                                          │  ESC  ──▶ ApcEscape
+                                                          │  CAN / SUB ──▶ End(false)
+                                                          │  other C0  ──▶ End(false), execute the control
+                                                          ▼
+                                                         ApcEscape ── '\' ──▶ End(true) (or Begin + End(true) when no ';' was seen)
+                                                                   └── other ──▶ End(false) if begun, the byte starts a new ESC sequence
+```
+
+Contract with the handler (`ITerminalHandler`): `KittyGraphicsEnabled` is
+asked once, at the byte after `ESC _`; `OnKittyGraphicsBegin(control)` receives the
+bytes up to the first `;` (or up to the terminator when there is none);
+`OnKittyGraphicsPayload(base64)` receives the payload in runs of any size (the
+bulk path hands over everything up to the next C0 control or `0x9C` in one call);
+`OnKittyGraphicsEnd(completed)` closes the command, with `false` for a cancelled
+one. End is called only after Begin, so a command that was discarded before its
+control block finished never reaches the handler. Replies and image state are in
+[Kitty graphics](KittyGraphics.md).
+
+Limits and rules specific to APC `G`:
+
+- `MaxApcControlBytes` = **512** bytes of control data. A longer block is
+  discarded to its terminator without any callback and without a reply.
+- The payload is not buffered by the parser; the graphics controller accumulates
+  it, bounded by its own caps.
+- Unlike OSC and DCS, `0x9C` is accepted as ST inside an enabled graphics
+  APC (control and payload are ASCII, so no UTF-8 continuation byte can occur
+  there). `DEL` and bytes above `0x7F` are passed to the payload as far as the
+  parser is concerned; the base64 decoder rejects them.
+- A disabled protocol (`graphics.kittyProtocol` = `false`), any APC whose first
+  byte is not `G`, and PM/SOS strings are consumed to ST and dropped without
+  buffering.
+
 ### String states and controls inside sequences
 
 | Situation | Behaviour |
@@ -341,10 +390,11 @@ inputSpan = concat;  // Now contains "ESC[31m"
 | Any other C0 control inside OSC/DCS/APC/PM/SOS | Aborts the string without dispatch, then executes as a control. |
 | C0 control inside CSI or after a bare `ESC` | Executes (BEL, BS, TAB, LF/VT/FF, CR) and the sequence continues; the control never becomes part of the parameter string. DEL inside CSI is ignored the same way. Other controls are ignored. |
 | C1 `0x9C` | Not an ST. Bytes `0x80-0x9F` are UTF-8 continuation bytes in the stream and are never interpreted as C1 controls; only `ESC \` ends a string. |
-| APC (`ESC _`), PM (`ESC ^`), SOS (`ESC X`) | Consumed up to ST and discarded; nothing is buffered or dispatched. |
+| APC (`ESC _`) not followed by `G`, or `ESC _ G` while the protocol is disabled; PM (`ESC ^`); SOS (`ESC X`) | Consumed up to ST and discarded; nothing is buffered or dispatched. Enabled `ESC _ G` strings are handed to the Kitty graphics handler (see [APC states](#apc-states-kitty-graphics)). |
 | DCS longer than 4 KiB | Consumed until ST without dispatch (only short XTGETTCAP queries are captured). |
 | CSI longer than 256 parameter bytes, OSC longer than 1 MiB | Consumed until the terminating byte or ST without dispatch. |
 | `ESC c` (RIS) | Also resets the parser's charset to ASCII. |
+| `ESC _ G` control data longer than 512 bytes | Consumed until ST without any handler call. |
 
 The sequence buffer (`_leftover`) grows on demand up to the string's cap. When a sequence ends or is abandoned and the buffer exceeds 4096 bytes it is reallocated back to 32 bytes, so one large OSC 52 does not pin a megabyte for the life of the session.
 
@@ -538,7 +588,15 @@ private void HandleOscPayload(ReadOnlySpan<byte> payloadBytes)
 
 Format: `ESC P <intermediates> <params> <final byte> <data> ESC \`
 
-DCS strings are recognized, and short ones (up to 4 KiB) are captured for XTGETTCAP (`DCS + q`); everything else is consumed to ST and ignored. APC, PM, and SOS strings are discarded unconditionally (see [String states](#string-states-and-controls-inside-sequences)); `BeginDiscardedString` is the single place a future APC capture, such as the Kitty graphics protocol, would hook in.
+DCS strings are recognized, and short ones (up to 4 KiB) are captured for XTGETTCAP (`DCS + q`); everything else is consumed to ST and ignored. In particular `DCS tmux ;` passthrough wrappers are **not** interpreted: tmux unwraps them itself and forwards the raw APC. PM and SOS strings, and APC strings that are not an enabled Kitty graphics command, are discarded (see [String states](#string-states-and-controls-inside-sequences)).
+
+### APC (Kitty graphics)
+
+Format: `ESC _ G <control> [; <base64 payload>] ST`. The parser frames the string
+(see [APC states](#apc-states-kitty-graphics)) and the adapter forwards it to
+`KittyGraphicsController`; the protocol itself (actions, keys, replies, limits) is
+documented in [Kitty graphics](KittyGraphics.md). Graphics are off by default, in
+which case the whole string is discarded.
 
 ### CSI (Control Sequence Introducer)
 
@@ -700,6 +758,8 @@ Typical performance on modern hardware:
 | `tests/Dotty.App.Tests/MouseModeTests.cs` | Tests for mouse protocol parsing |
 | `tests/Dotty.Terminal.Tests/Osc8ParserTests.cs` | Tests for OSC 8 hyperlink parsing |
 | `tests/Dotty.Terminal.Tests/ParserStringStateTests.cs` | ESC/CAN/SUB/C0 handling in OSC, DCS, APC/PM/SOS, and CSI |
+| `tests/Dotty.Terminal.Tests/KittyApcParserTests.cs`, `KittyControlParserTests.cs` | APC framing, abort rules, the 512-byte control cap, control key parsing |
+| `tests/Dotty.Terminal.Tests/IndexAndNextLineTests.cs` | `ESC D` / `ESC E` |
 | `tests/Dotty.Terminal.Tests/ParserRoutingTests.cs` | DECSTR, `CSI ? Ps n`, `CSI Ps t`, DECRQCRA, and modes 66/67/2027/2033 routing |
 | `tests/Dotty.Terminal.Tests/SoftResetTests.cs`, `FullResetTests.cs`, `tests/Dotty.App.Tests/BufferResetTests.cs` | DECSTR and RIS reset sets |
 | `tests/Dotty.Terminal.Tests/DeviceStatusTests.cs` | DSR 5/6, DECXCPR, origin-relative CPR, silent unknown DSR |
@@ -729,6 +789,7 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-28 | Kitty graphics: APC `G` states (`ApcFirst`, `ApcControl`, `ApcPayload`, `ApcEscape`), 512-byte control cap, abort/termination rules, `0x9C` accepted as ST inside an enabled graphics APC, `ESC D` (IND) and `ESC E` (NEL), RIS deletes images. Written from the source; `needs runtime verification`. |
 | 2026-10-28 | Wave 3: bulk OSC scan, whole-OSC in-chunk dispatch and bytes-native OSC 52; zero-capacity scrollback note; reverse index limited to retained history; ED 2 / CSI 3 J / RIS discard history pages (see [Rendering](Rendering.md#lazily-committed-cell-arenas)). |
 | 2026-10-28 | Wave 2: DECSTR/RIS share one reset core; DSR/CPR/DECXCPR with silent unknown codes; DECBKM; window operations 13-19 and gated `CSI 8 t`; mode 2033 and `CSI ? 998 n`; gated DECRQCRA; 64-mark combining cap and a bounded, de-duplicating grapheme store; complete DECRQM table; DECSET 47/1047/1048. |
 | 2026-10-28 | Hardening pass: ESC/C0-correct string states (no 0x9C ST), APC/PM/SOS discard, saturating integers, routed DECSTR/`CSI ? Ps n`/`CSI Ps t`/DECRQCRA/modes 66,67,2027,2033 (default no-op handlers unless noted), `OnWindowOperation`, 1 MiB OSC cap with shrink-on-reset, window title cap, REP bound, ICH/DCH/ECH clamp, OSC 52 write/read policy, OSC 8 ingest validation and bounded URI table, strict OSC 7. |

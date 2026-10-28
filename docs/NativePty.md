@@ -20,9 +20,10 @@ targets. See [Platform Support](PlatformSupport.md) and the
 IPty exposes process state and streams, a ProcessExited event, and operations to
 start, resize, terminate, and await the child process. Start accepts an optional
 shell or command argv, initial dimensions, working directory, environment
-variables, and a shellIsExecutable flag. See the complete current declaration
-in [IPty.cs](../src/Dotty.Abstractions/Pty/IPty.cs); the excerpt below summarizes
-its method shapes:
+variables, a shellIsExecutable flag, and the initial text-area size in physical
+pixels. Resize takes the grid size and the pixel size. See the complete current
+declaration in [IPty.cs](../src/Dotty.Abstractions/Pty/IPty.cs); the excerpt below
+summarizes its method shapes:
 
 ```csharp
 void Start(
@@ -32,8 +33,10 @@ void Start(
     string? workingDirectory = null,
     IDictionary<string, string>? environmentVariables = null,
     IReadOnlyList<string>? command = null,
-    bool shellIsExecutable = false);
-void Resize(int columns, int rows);
+    bool shellIsExecutable = false,
+    int initialPixelWidth = 0,
+    int initialPixelHeight = 0);
+void Resize(int columns, int rows, int pixelWidth, int pixelHeight);
 void Kill(bool force = false);
 Task<int> WaitForExitAsync(CancellationToken cancellationToken = default);
 ```
@@ -66,7 +69,32 @@ dotnet build Dotty.slnx -c Release
 
 `TerminalSession` builds the environment passed to `IPty.Start` on every backend: `TERM_PROGRAM=dotty`, `TERM_PROGRAM_VERSION` (release version, SemVer build metadata stripped), and `DOTTY_SURFACE_ID` (a per-session identifier that is also the owning pane's `Id`) first, then the caller's variables, which win on a name clash. The caller's dictionary is not modified; names compare case-insensitively on Windows and case-sensitively elsewhere. See [Configuration](Configuration.md#session-launch-context).
 
-On Unix the host passes the helper its own protocol variables, `DOTTY_CONTROL_SOCKET`, `DOTTY_INITIAL_COLS`, and `DOTTY_INITIAL_ROWS`. The helper consumes them and calls `unsetenv` on all three after closing its descriptors and immediately before `exec`, so the user's shell or command never sees them. `UnixPty_DoesNotLeakHelperProtocolVariablesIntoCommand` covers this on Unix runners; the Windows ConPTY backend has no helper and never sets them.
+On Unix the host passes the helper its own protocol variables, `DOTTY_CONTROL_SOCKET`, `DOTTY_INITIAL_COLS`, `DOTTY_INITIAL_ROWS`, `DOTTY_INITIAL_XPIXEL`, and `DOTTY_INITIAL_YPIXEL`. The helper consumes them and calls `unsetenv` on all five after closing its descriptors and immediately before `exec`, so the user's shell or command never sees them. `UnixPty_DoesNotLeakHelperProtocolVariablesIntoCommand` covers this on Unix runners; the Windows ConPTY backend has no helper and never sets them.
+
+### Pixel sizes
+
+Graphics clients size images from the pixel size of the terminal, so the PTY
+carries it next to the grid size:
+
+- `IPty.Start(..., initialPixelWidth, initialPixelHeight)` and
+  `IPty.Resize(columns, rows, pixelWidth, pixelHeight)`; `0` means unknown.
+  `TerminalTabManager` computes the size of a new tab from the latest layout's cell
+  size times the grid (unknown, so `0`, before the first layout) and
+  `TerminalSession.Resize` forwards a pixel-only change (zoom, DPI) even when the
+  grid is unchanged.
+- On Unix the helper receives `DOTTY_INITIAL_XPIXEL`/`DOTTY_INITIAL_YPIXEL`
+  (clamped to `0..65535`, the `unsigned short` of `struct winsize`) and fills
+  `ws_xpixel`/`ws_ypixel`, so the child's first `TIOCGWINSZ` already reports them.
+  Later resizes use the control-socket line
+  `{"type":"resize","cols":N,"rows":M,"xpixel":W,"ypixel":H}`; `xpixel` and
+  `ypixel` are optional for older senders and default to `0`.
+- ConPTY has no pixel channel: `WindowsPty` ignores the pixel arguments. See
+  [Windows ConPTY](WindowsConPty.md#kitty-graphics-passthrough).
+- `PtyFactory.Create(windowsGraphicsPassthrough)` carries the experimental
+  `graphics.windowsPassthrough` flag to `WindowsPty`; it is ignored on Unix.
+
+Whether child programs see the right values on every platform `needs runtime
+verification` (`UnixPtyPixelTests` covers it on Unix runners).
 
 ## Windows backend
 

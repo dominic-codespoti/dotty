@@ -235,6 +235,25 @@ Notes:
 - **Windows ConPTY:** that window-report, DECXCPR, DECRQCRA, and visibility queries (and their replies) pass through ConPTY unchanged to the application is **unverified**. The conformance run uses the Unix PTY path only (see [Conformance](Conformance.md)).
 - Shell-integration auto-injection on Windows supports PowerShell and bash only; zsh and fish are not injected there (see [Shell Integration](ShellIntegration.md#automatic-injection)).
 
+## Kitty graphics and pixel sizes by platform
+
+The [Kitty graphics protocol](KittyGraphics.md) is off by default
+(`graphics.kittyProtocol`). Nothing below has been run on any platform; it is what
+the code does, and every cell `needs runtime verification`.
+
+| Behavior | Linux | macOS | Windows |
+|---|---|---|---|
+| Direct transmission (`t=d`) | yes | yes | yes, if the APC reaches Dotty (see below) |
+| File and temp-file media (`t=f`, `t=t`) | yes, with the path policy | yes, with the path policy | yes, with the path policy (UNC and device paths denied) |
+| Shared memory (`t=s`) | `/dev/shm/<name>` | **unsupported**: the reply is `EINVAL:Unsupported transmission type` and clients fall back to direct | named file mapping |
+| APC delivery | direct | direct | ConPTY drops APC unless `graphics.windowsPassthrough` is enabled and honoured by the OS build [INFERENCE]; experimental |
+| Pixel size in `TIOCGWINSZ` | resize protocol carries `xpixel`/`ypixel`; the child's first `TIOCGWINSZ` uses `DOTTY_INITIAL_XPIXEL/YPIXEL` | same as Linux | no `TIOCGWINSZ` and ConPTY has no pixel channel; the pixel arguments are ignored by the backend |
+| `CSI 14 t` / `16 t` / `18 t` | answered from host-supplied sizes | same | same |
+
+The pixel size is the text area in physical pixels (cell size times grid), sent
+with every resize, including a pixel-only change such as a zoom or DPI change.
+See [Native PTY](NativePty.md#pixel-sizes) and [Windows ConPTY](WindowsConPty.md#kitty-graphics-passthrough).
+
 ## Promotion gates
 
 Support promotion is staged:

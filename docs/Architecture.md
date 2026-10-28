@@ -22,10 +22,10 @@ Silk.NET window / GLFW / OpenGL 3.3
 | Project | Responsibility |
 |---|---|
 | `Dotty.Abstractions` | Platform-neutral configuration, theme, input, and PTY contracts. |
-| `Dotty.Terminal` | ANSI parsing, terminal buffer, cursor state, scrollback, reflow, and render snapshots. |
+| `Dotty.Terminal` | ANSI parsing, terminal buffer, cursor state, scrollback, reflow, render snapshots, and the Kitty graphics protocol core (controller, per-screen image stores, placeholder resolver; no SkiaSharp reference). |
 | `Dotty.NativePty` | `IPty` implementations: POSIX `pty-helper` and Windows ConPTY. |
 | `Dotty.Runtime` | Sessions, tabs, panes, selection, clipboard, themes, Lua hooks, configuration, and input actions. |
-| `Dotty.Rendering.Gpu` | Font fallback, glyph atlas, shaping, quad generation, and render caches. |
+| `Dotty.Rendering.Gpu` | Font fallback, glyph atlas, shaping, quad generation, render caches, and image quad building plus the SkiaSharp PNG decoder (`SkiaImageDecoder`, behind `IImageDecoder`). |
 | `Dotty` | Silk.NET/GLFW window lifecycle, OpenGL renderer, keyboard/mouse integration, and desktop smoke control server. |
 
 ## Terminal data flow
@@ -39,7 +39,8 @@ Silk.NET window / GLFW / OpenGL 3.3
    glyph/background/tab/pane quads, and submits them to OpenGL.
 5. Keyboard text and key events are encoded by `TerminalKeyboardDispatcher`
    using the adapter's application and Kitty modes.
-6. Resize events update all sessions and the PTY backend before the next frame.
+6. Resize events update all sessions and the PTY backend (columns, rows, and the
+   text-area size in physical pixels) before the next frame.
 
 The buffer itself is not thread-safe. PTY consumers write under its sync root;
 rendering and user operations use bounded snapshot/copy sections so sustained
@@ -53,6 +54,38 @@ per-frame capture: `TerminalBuffer.CaptureRenderSnapshotForSearch` takes a
 separate compact copy of the scrollback rows, once per search keystroke. See
 [Rendering](Rendering.md#lazily-committed-cell-arenas) and
 [Configuration](Configuration.md#scrollback).
+
+## Kitty graphics state
+
+Details are in [Kitty graphics](KittyGraphics.md); the ownership rules are:
+
+- **Per-screen image stores.** `ScreenManager` owns one `KittyImageStore` for the
+  main screen and one for the alternate screen, created on first use and
+  independent of the `Screen` ring objects a reflow swaps. Ids, image numbers,
+  placements and the storage quota are per screen; the alternate store is cleared
+  when that screen is entered and left. `TerminalAdapter` owns the
+  `KittyGraphicsController` (created by the first `ConfigureGraphics` call that
+  enables the protocol) and routes the parser's APC callbacks to it.
+- **Pixels.** `ImagePixels` is a reference-counted native buffer written once and
+  immutable afterwards. Stores, snapshots, and the GL texture cache each hold
+  their own reference, so freeing an image never frees pixels a frame still uses.
+- **Snapshot capture.** `TerminalBuffer.CaptureGraphics` runs inside the snapshot
+  capture's lock hold: it advances playing animations, then copies the visible
+  placements into a pooled `KittyRenderSnapshot`, taking a lease per placement.
+  It is free when the screen has no placements. The render thread resolves
+  placeholders and builds quads from the copy outside the lock.
+- **Lock-release rule.** Heavy work (inflate, PNG decode, premultiply of 256 KiB
+  or more, and every file or shared-memory read) runs on the PTY consumer thread
+  with `SyncRoot` released through `TerminalBuffer.ReleaseSyncRootForBlockingWork`.
+  Only the consumer thread uses it, only when it holds exactly one recursion level
+  (otherwise nothing is released), and after re-acquiring the lock nothing read
+  before is trusted: disposal, cancellation, a changed configuration and the live
+  quota are re-checked, and the result is committed to the store of the screen
+  that is active at that moment. `ConfigureGraphics`, `ClearImages`, and
+  `Dispose` may run in that window; `KittyTransfer.Busy` stops them from freeing
+  buffers the consumer is using.
+- **Layering.** `Dotty.Terminal` cannot decode PNG itself; the host injects an
+  `IImageDecoder` (`SkiaImageDecoder`) through `ConfigureGraphics`.
 
 ## Native PTY selection
 

@@ -39,10 +39,13 @@ wins):
 | `DOTTY_SURFACE_ID` | A stable per-session identifier (a GUID in `N` format) that is also the owning pane's `Id`. |
 
 The Unix `pty-helper` protocol variables `DOTTY_CONTROL_SOCKET`,
-`DOTTY_INITIAL_COLS`, and `DOTTY_INITIAL_ROWS` are consumed by the helper and
-removed from the environment before the shell or command is executed, so they
-never reach user shells. Shell-integration scripts skip silently in
-non-interactive shells; see [Shell Integration](ShellIntegration.md).
+`DOTTY_INITIAL_COLS`, `DOTTY_INITIAL_ROWS`, `DOTTY_INITIAL_XPIXEL`, and
+`DOTTY_INITIAL_YPIXEL` are consumed by the helper and removed from the
+environment before the shell or command is executed, so they never reach user
+shells. (The pixel pair carries the text-area size in physical pixels for the
+child's first `TIOCGWINSZ`; see [Native PTY](NativePty.md#pixel-sizes).)
+Shell-integration scripts skip silently in non-interactive shells; see
+[Shell Integration](ShellIntegration.md).
 
 When a tab or pane is created from an existing one, the starting directory is
 resolved at that moment: the shell's OSC 7 directory if it still exists,
@@ -101,6 +104,15 @@ become unreadable therefore no longer prevents a new tab from opening.
   "vt": {
     "windowResizeAllowed": false,
     "checksumReportEnabled": false
+  },
+  "graphics": {
+    "kittyProtocol": false,
+    "imageStorageLimitMiB": 320,
+    "maxPayloadMiB": 65,
+    "allowFileTransfer": true,
+    "allowTempFileTransfer": true,
+    "allowSharedMemory": true,
+    "windowsPassthrough": false
   },
   "shellIntegration": "none",
   "keybindings": {
@@ -389,6 +401,57 @@ Both properties apply to sessions created after the change; existing tabs keep
 their capacity policy. In Lua they are `scrollback.limit_lines` and
 `scrollback.limit_bytes` (see the [Lua guide](guides/Lua.md)).
 
+### `graphics`
+
+Settings for the [Kitty graphics protocol](KittyGraphics.md) (inline images).
+The protocol is **off by default**: it stays off until a build has been checked
+on real displays (see the manual smoke checklist in that page). While it is off,
+`ESC _ G ...` sequences are discarded without a reply.
+
+```json
+{
+  "graphics": {
+    "kittyProtocol": true,
+    "imageStorageLimitMiB": 320,
+    "maxPayloadMiB": 65
+  }
+}
+```
+
+| Property | Lua key | Type | Default | Notes |
+|---|---|---|---|---|
+| `kittyProtocol` | `graphics.kitty_protocol` | boolean | `false` | Accept APC `G` commands. Turning it off deletes every image and aborts a transfer in flight. |
+| `imageStorageLimitMiB` | `graphics.image_storage_limit_mib` | integer | `320` | Budget for stored image pixels, **per screen** (main and alternate each have a store) of each tab or pane. Non-positive values fall back to the default; values above `4096` are clamped to `4096`. |
+| `maxPayloadMiB` | `graphics.max_payload_mib` | integer | `65` | Largest single transmission. Non-positive values fall back to the default; values above `1024` are clamped to `1024`. |
+| `allowFileTransfer` | `graphics.allow_file_transfer` | boolean | `true` | Allow `t=f` (regular file named by the client). |
+| `allowTempFileTransfer` | `graphics.allow_temp_file_transfer` | boolean | `true` | Allow `t=t` (temporary file, deleted after a successful read). |
+| `allowSharedMemory` | `graphics.allow_shared_memory` | boolean | `true` | Allow `t=s` (Linux `/dev/shm`, Windows named mappings; unsupported on macOS whatever this says). |
+| `windowsPassthrough` | `graphics.windows_passthrough` | boolean | `false` | Windows only, experimental: create the ConPTY with `PSEUDOCONSOLE_PASSTHROUGH_MODE` so APC is not dropped. Ignored elsewhere. |
+
+Direct transmission (`t=d`) cannot be disabled. The maximum image dimension
+(`10000`) and the placement cap (`8192` per screen) are built-in limits, not
+configuration keys; the full list of limits is in
+[Kitty graphics](KittyGraphics.md#limits-and-defaults). Image memory is outside
+`scrollback.limitBytes`.
+
+Reload behavior (read from the code, `needs runtime verification`): on a config
+reload the host re-applies the first six properties to every existing tab and
+pane and to sessions created later. Disabling the protocol deletes all images; a
+smaller `imageStorageLimitMiB` evicts immediately; a transfer already in flight
+keeps the limits it started with but its result is checked against the live
+quota; media switches apply to the next transfer. `windowsPassthrough` is read
+when a PTY is created, so it affects new tabs and panes only. Note that the
+`Scope` line printed by `dotty +explain-config graphics.*` currently says
+"Applies to sessions created after the change", which is more conservative than
+the code.
+
+Why the file and shared-memory media exist but are policy-checked: a client
+that names a path makes the terminal read it, so absolute-path-only, deny-list,
+symbolic-link resolution, a temp-root and marker rule for `t=t`, and a single
+uniform error apply (see [Kitty graphics](KittyGraphics.md#transmission-media)).
+Turn the three `allow*` switches off if you do not trust what prints to the
+terminal.
+
 ### `shellIntegration`
 
 | Property | Type | Default | Notes |
@@ -526,6 +589,8 @@ options (the `Scope` line of `dotty +explain-config OPTION` states the same):
 | `vt.windowResizeAllowed` | at the next resize request |
 | `vt.checksumReportEnabled` | applied to every session on reload and to sessions created later |
 | `shellIntegration` | new tabs and panes only; running shells are never touched |
+| `graphics.kittyProtocol` and the other `graphics.*` keys except `windowsPassthrough` | applied to every pane on reload and to sessions created later (see the [`graphics`](#graphics) note on the `+explain-config` scope text) |
+| `graphics.windowsPassthrough` | new tabs and panes only (read when the PTY is created) |
 
 ## Discovering options: `+explain-config`
 

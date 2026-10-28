@@ -325,6 +325,21 @@ dotnet run -c Release -- --mode detailed --filter experiment
 
 It is not in the CI quick run, never produces baselines, and its summaries are excluded from regression checks and baseline updates.
 
+### Kitty graphics experiments (not gated)
+
+Six classes in `Benchmarks/KittyGraphicsBenchmarks.cs`, all run **only** with `--filter experiment`, none in `Program.BenchmarkTypes`, so no baselines and no regression checks:
+
+| Class | What it times |
+|---|---|
+| `KittyApcDecodeBenchmarks` | 64 MiB `f=24` transfer: 4 KiB chunks with graphics disabled (scan and discard), 4 KiB chunks with decode and store, one single APC |
+| `KittyRgbaTransmitBenchmarks` | `f=32` 4096x4096 transmit including premultiply |
+| `KittyInflateBenchmarks` | `o=z` `f=32` 4096x4096 transmit (inflate and premultiply) |
+| `KittyPlacementScrollBenchmarks` | 10,000 placements under 20,000 full-screen scrolls; 1,000 placements under region scrolls; controls without placements or scrolls |
+| `KittySnapshotBenchmarks` | render-snapshot capture with 1,000 visible placements and a no-placement control |
+| `KittyLockHoldProbe` | `SyncRoot` hold time sampled while a 64 MiB PNG payload (fake decoder) is processed, and a plain-text control |
+
+They use only public API (`TerminalAdapter.ConfigureGraphics`, the parser, the buffer, `GraphicsMemoryMetrics`; the project has no `InternalsVisibleTo`). Every `GlobalSetup` checks through the public counters that the stream was accepted and throws otherwise, and every fixture disposes its adapters and reports counter drift on stderr. The expectations are hypotheses (see [Performance](../../docs/Performance.md#new-benchmark-classes-and-gating-rules)); nothing here was measured. The existing parser benchmarks are the regression guard for non-graphics parsing and are unchanged.
+
 ## Output and Reports
 
 Benchmarks generate reports in:

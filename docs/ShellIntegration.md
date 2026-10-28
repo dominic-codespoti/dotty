@@ -65,7 +65,7 @@ Dotty does not check that the directory exists when the report arrives; that hap
 
 ## Environment seen by the shell
 
-Dotty starts every shell with `TERM_PROGRAM=dotty`, `TERM_PROGRAM_VERSION`, and `DOTTY_SURFACE_ID`; scripts and prompts can use them to detect Dotty. The Unix helper's own variables (`DOTTY_CONTROL_SOCKET`, `DOTTY_INITIAL_COLS`, `DOTTY_INITIAL_ROWS`) are removed before the shell starts and do not appear in the environment. See [Configuration](Configuration.md#session-launch-context).
+Dotty starts every shell with `TERM_PROGRAM=dotty`, `TERM_PROGRAM_VERSION`, and `DOTTY_SURFACE_ID`; scripts and prompts can use them to detect Dotty. The Unix helper's own variables (`DOTTY_CONTROL_SOCKET`, `DOTTY_INITIAL_COLS`, `DOTTY_INITIAL_ROWS`, `DOTTY_INITIAL_XPIXEL`, `DOTTY_INITIAL_YPIXEL`) are removed before the shell starts and do not appear in the environment. See [Configuration](Configuration.md#session-launch-context).
 
 ## Verification scope
 

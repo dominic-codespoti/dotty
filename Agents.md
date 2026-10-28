@@ -40,6 +40,8 @@ Read the relevant document before changing a subsystem:
 - [Testing](./docs/Testing.md) and [E2E Testing](./docs/E2ETesting.md) — test
   layout, smoke contracts, control interface.
 - [Configuration](./docs/Configuration.md) — JSON schema and hot reload.
+- [Kitty graphics](./docs/KittyGraphics.md) — image protocol, limits, memory and
+  threading model, default-off flag, manual smoke checklist.
 - [Conformance](./docs/Conformance.md) — esctest2 harness, expected failures,
   baseline capture, and gating.
 

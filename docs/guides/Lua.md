@@ -50,7 +50,15 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `shell_integration` | string (`"none"`, `"detect"`) | `"none"` |
 | `scrollback.limit_lines` | integer | `5000` (`0` = no history, at most `1000000`) |
 | `scrollback.limit_bytes` | integer | `67108864` (`0` = no byte cap; raw ring bytes `(lines + rows) * columns * 12`) |
+| `graphics.kitty_protocol` | boolean | `false` |
+| `graphics.image_storage_limit_mib` | integer | `320` (non-positive = default, at most `4096`) |
+| `graphics.max_payload_mib` | integer | `65` (non-positive = default, at most `1024`) |
+| `graphics.allow_file_transfer` | boolean | `true` |
+| `graphics.allow_temp_file_transfer` | boolean | `true` |
+| `graphics.allow_shared_memory` | boolean | `true` |
+| `graphics.windows_passthrough` | boolean | `false` (Windows only, experimental) |
 
+The `graphics.*` keys behave exactly like the JSON [`graphics`](../Configuration.md#graphics) options and control the [Kitty graphics protocol](../KittyGraphics.md), which is off by default. For example `dotty.config.graphics.kitty_protocol = true` turns it on. The settings are re-applied to running panes on reload except `graphics.windows_passthrough`, which is read when a PTY is created (`needs runtime verification`).
 The clipboard and hyperlink keys behave exactly like the JSON `clipboard` and `hyperlinks` options in the [configuration reference](../Configuration.md#clipboard). In particular `clipboard.osc52_read = "allow"` lets any program that can write to the terminal read the clipboard without a prompt; prefer `"ask"`.
 The `mouse`, `vt`, and `shell_integration` keys behave exactly like the JSON [`mouse`](../Configuration.md#mouse), [`vt`](../Configuration.md#vt), and [`shellIntegration`](../Configuration.md#shellintegration) options. `mouse.copy_on_select` takes a string, so the Ghostty-style `"true"`/`"false"` spellings are strings here too. The two `vt` switches are off by default because they let a program resize the window or read the screen back; see the configuration reference for the security rationale. Reload behavior: `mouse.*` and `vt.window_resize_allowed` are read live, `vt.checksum_report_enabled` is applied to sessions on reload, and `shell_integration` applies to tabs and panes created after the reload. Run `dotty +explain-config OPTION` (JSON path or Lua key) for the type, default, and scope of any key.
 `font.symbol_map` entries use `U+START-END: Preferred Font, Fallback Font`; the first installed family that contains the glyph wins. OpenType features and ligatures are not supported: rendering is one grapheme per terminal cell.

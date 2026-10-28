@@ -34,6 +34,7 @@ Dotty is a modern terminal emulator composed of:
 - Confirmation prompts for risky pastes and risky or blocked links (OSC 8 and detected URLs), with a hard scheme blocklist and `hyperlinks` policy
 - Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy, optionally injected automatically (`shellIntegration: "detect"`)
 - Mouse options (`mouse.copyOnSelect`, `mouse.middleClickAction`) with the X11 PRIMARY selection on X11 and an in-process fallback elsewhere, and opt-in VT switches (`vt.windowResizeAllowed`, `vt.checksumReportEnabled`); see [configuration](docs/Configuration.md#mouse)
+- [Kitty graphics protocol](docs/KittyGraphics.md) (inline images, Unicode placeholders, animation): implemented but **off by default** (`graphics.kittyProtocol`) and never run, because it was written without a compiler; it stays off until it passes the manual smoke checklist on real displays
 - [esctest2 conformance run](docs/Conformance.md) on Linux CI (reporting only until a baseline is captured)
 - [Performance regression snapshots](docs/Performance.md) and [native desktop verification lanes](docs/NativeDesktopAndIme.md)
 
@@ -257,6 +258,7 @@ Start with the [documentation index](docs/index.md) for the current catalog. Com
 - [Platform support and setup](docs/PlatformSupport.md)
 - [Configuration Guide](docs/Configuration.md)
 - [Command-line usage](docs/CommandLine.md)
+- [Kitty graphics protocol](docs/KittyGraphics.md)
 - [Architecture Overview](docs/Architecture.md)
 - [Testing](docs/Testing.md) and [performance evidence](docs/Performance.md)
 - [Native desktop and IME verification](docs/NativeDesktopAndIme.md)

@@ -54,7 +54,7 @@ contract; the helper must not depend on repository-relative paths.
 *   **Multiplexing (tmux-like behavior):** Wezterm has a built-in client/server architecture allowing users to detach and reattach to terminal sessions locally or over SSH. Dotty provides local terminal sessions, tabs, and panes but no client/server multiplexer.
 *   **Scriptability:** Dotty exposes Lua configuration, keybinding callbacks, tab/pane operations, timers, actions, and event/value hooks; Wezterm's Lua engine exposes a broader client/server and event-hook surface.
 *   **Split Panes and Native Tabs:** Dotty provides tabs and split panes in its runtime. Ghostty and Wezterm also provide built-in window management.
-*   **Image Protocol Support:** Wezterm supports the Kitty image protocol and iTerm2 image protocols to display inline graphics; Dotty does not currently document those protocols as supported.
+*   **Image Protocol Support:** Wezterm supports the Kitty image protocol and iTerm2 image protocols to display inline graphics. Dotty implements the Kitty graphics protocol (see [Kitty graphics](KittyGraphics.md)), **disabled by default** (`graphics.kittyProtocol`) until it has been run and smoke-tested on real displays; it was written without a compiler and nothing is verified at runtime. Dotty does not implement the iTerm2 image protocol or Sixel, and it does not interpret `DCS tmux ;` passthrough.
 
 ## 5. Strategic Recommendations for Dotty
 
@@ -63,6 +63,7 @@ If Dotty aims to compete or find a specific niche against these giants, it shoul
 
 | Date | Change |
 |------|--------|
+| 2026-10-28 | Image protocol row: Kitty graphics protocol implemented, default off, unverified at runtime |
 | 2026-06-17 | Updated underline styles and rounded-corner comparison |
 | 2026-06-15 | Updated roadmap wording |
 

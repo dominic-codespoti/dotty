@@ -60,14 +60,6 @@ public sealed class ConfigCatalogTests
 
     private static string Squash(string key) => key.Replace("_", "", StringComparison.Ordinal).ToLowerInvariant();
 
-    private static HashSet<string> PendingPaths()
-    {
-        var set = new HashSet<string>(StringComparer.Ordinal);
-        foreach (ConfigOption option in ConfigOptionCatalog.PendingMergeOptions)
-            set.Add(option.JsonPath);
-        return set;
-    }
-
     [Fact]
     public void EveryConfigPropertyHasACatalogEntry()
     {
@@ -81,13 +73,12 @@ public sealed class ConfigCatalogTests
     }
 
     [Fact]
-    public void EveryCatalogEntryNamesARealConfigPropertyUnlessPendingMerge()
+    public void EveryCatalogEntryNamesARealConfigProperty()
     {
         var real = new HashSet<string>(ReflectLeaves().Select(l => l.Path), StringComparer.Ordinal);
-        HashSet<string> pending = PendingPaths();
         string[] stale = ConfigOptionCatalog.All
             .Select(o => o.JsonPath)
-            .Where(p => !real.Contains(p) && !pending.Contains(p))
+            .Where(p => !real.Contains(p))
             .ToArray();
 
         Assert.True(
@@ -97,33 +88,11 @@ public sealed class ConfigCatalogTests
     }
 
     [Fact]
-    public void PendingMergeEntriesMatchTheRealDefaultOnceThePropertyExists()
-    {
-        Dictionary<string, Leaf> real = ReflectLeaves().ToDictionary(l => l.Path, StringComparer.Ordinal);
-        foreach (ConfigOption option in ConfigOptionCatalog.PendingMergeOptions)
-        {
-            if (!real.TryGetValue(option.JsonPath, out Leaf? leaf))
-                continue; // property not merged into this tree yet: nothing to compare.
-
-            Assert.True(
-                ConfigOptionCatalog.FormatDefault(leaf.Value) == option.Default(),
-                $"'{option.JsonPath}' now exists in DottyUserConfig with default {ConfigOptionCatalog.FormatDefault(leaf.Value)} " +
-                $"but its pending-merge catalog literal says {option.Default()}. Convert it to Opt(...) in CreateLive() " +
-                $"and remove it from PendingMergeOptions in {CatalogFile}.");
-        }
-    }
-
-    [Fact]
     public void CatalogDefaultsEqualTheLiveDefaultConfig()
     {
         Dictionary<string, Leaf> real = ReflectLeaves().ToDictionary(l => l.Path, StringComparer.Ordinal);
-        HashSet<string> pending = PendingPaths();
         foreach (ConfigOption option in ConfigOptionCatalog.All)
-        {
-            if (pending.Contains(option.JsonPath))
-                continue;
             Assert.Equal(ConfigOptionCatalog.FormatDefault(real[option.JsonPath].Value), option.Default());
-        }
     }
 
     [Fact]
@@ -139,12 +108,11 @@ public sealed class ConfigCatalogTests
     }
 
     [Fact]
-    public void EveryCatalogLuaKeyIsARealLuaFieldUnlessPendingMerge()
+    public void EveryCatalogLuaKeyIsARealLuaField()
     {
         var fields = new HashSet<string>(LuaScriptHost.ConfigFieldKeys, StringComparer.Ordinal);
-        HashSet<string> pending = PendingPaths();
         string[] stale = ConfigOptionCatalog.All
-            .Where(o => !pending.Contains(o.JsonPath) && !fields.Contains(o.LuaKey))
+            .Where(o => !fields.Contains(o.LuaKey))
             .Select(o => $"{o.JsonPath} -> {o.LuaKey}")
             .ToArray();
 
@@ -183,14 +151,15 @@ public sealed class ConfigCatalogTests
     }
 
     [Fact]
-    public void PendingMergeOptionsCarryTheDocumentedDefaults()
+    public void VtShellIntegrationAndMouseOptionsCarryTheirLiveDefaults()
     {
-        Dictionary<string, string> defaults = ConfigOptionCatalog.PendingMergeOptions.ToDictionary(o => o.JsonPath, o => o.Default());
-        Assert.Equal("false", defaults["vt.windowResizeAllowed"]);
-        Assert.Equal("false", defaults["vt.checksumReportEnabled"]);
-        Assert.Equal("\"none\"", defaults["shellIntegration"]);
-        Assert.Equal("\"none\"", defaults["mouse.copyOnSelect"]);
-        Assert.Equal("\"clipboard-paste\"", defaults["mouse.middleClickAction"]);
+        Assert.Equal("false", ConfigOptionCatalog.Find("vt.windowResizeAllowed")!.Default());
+        Assert.Equal("false", ConfigOptionCatalog.Find("vt.checksumReportEnabled")!.Default());
+        Assert.Equal("\"none\"", ConfigOptionCatalog.Find("shellIntegration")!.Default());
+        Assert.Equal("\"none\"", ConfigOptionCatalog.Find("mouse.copyOnSelect")!.Default());
+        Assert.Equal("\"clipboard-paste\"", ConfigOptionCatalog.Find("mouse.middleClickAction")!.Default());
+        Assert.Equal("vt.window_resize_allowed", ConfigOptionCatalog.Find("vt.windowResizeAllowed")!.LuaKey);
+        Assert.Equal("shell_integration", ConfigOptionCatalog.Find("shellIntegration")!.LuaKey);
     }
 
     [Theory]

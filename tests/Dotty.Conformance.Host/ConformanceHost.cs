@@ -23,17 +23,47 @@ public static class ConformanceHost
     /// <summary>The host was interrupted (Ctrl-C).</summary>
     public const int ExitInterrupted = 130;
 
+    /// <summary>Character cell width, in pixels, reported by <c>CSI 16 t</c> and used to derive <c>CSI 14 t</c>.</summary>
+    public const int CellPixelWidth = 8;
+
+    /// <summary>Character cell height, in pixels, reported by <c>CSI 16 t</c> and used to derive <c>CSI 14 t</c>.</summary>
+    public const int CellPixelHeight = 16;
+
     /// <summary>
-    /// Applies the opt-in core switches the conformance run needs (checksum reports, window resize,
-    /// cell/pixel metrics) to the adapter before the child starts.
-    /// Deliberately empty until plan item W5 populates it after the VT-sequence tracks land the
-    /// adapter members it binds to; the requested switches are carried in <paramref name="options"/>
-    /// (<see cref="HostOptions.EnableChecksumReports"/>, <see cref="HostOptions.EnableWindowResize"/>).
+    /// Applies the core switches the conformance run needs to the adapter before the child starts.
+    /// <list type="bullet">
+    /// <item><description><see cref="HostOptions.EnableChecksumReports"/> sets
+    /// <see cref="TerminalAdapter.ChecksumReportEnabled"/> (DECRQCRA replies are off in the product).</description></item>
+    /// <item><description><see cref="HostOptions.EnableWindowResize"/> honors <c>CSI 8 ; rows ; cols t</c> /
+    /// <c>CSI Ps t</c> (Ps &gt;= 24) by calling <paramref name="resizeGrid"/> synchronously on the parser
+    /// thread, so a following <c>CSI 18 t</c> in the same byte stream already sees the new grid; a requested 0
+    /// keeps that dimension. Without the flag requests are ignored, like a product window that disallows them.</description></item>
+    /// <item><description>The cell size is pinned to <see cref="CellPixelWidth"/> x <see cref="CellPixelHeight"/>
+    /// (the adapter default, set explicitly so the conformance contract does not drift). No text-area pixel
+    /// override is installed: without one the adapter derives <c>CSI 14 t</c> from the live grid, so it stays
+    /// consistent with <c>CSI 18 t</c> after any resize, including ones this host did not make.</description></item>
+    /// </list>
     /// </summary>
-    public static void ApplyCoreSwitches(TerminalAdapter adapter, HostOptions options)
+    /// <param name="resizeGrid">
+    /// Applies a resize as (rows, columns); <c>null</c> resizes only the adapter's buffer. <see cref="Run"/>
+    /// passes the session's resize so the PTY window size follows.
+    /// </param>
+    public static void ApplyCoreSwitches(TerminalAdapter adapter, HostOptions options, Action<int, int>? resizeGrid = null)
     {
         ArgumentNullException.ThrowIfNull(adapter);
         ArgumentNullException.ThrowIfNull(options);
+
+        adapter.SetCellPixelSize(CellPixelWidth, CellPixelHeight);
+        adapter.ChecksumReportEnabled = options.EnableChecksumReports;
+
+        if (!options.EnableWindowResize)
+            return;
+
+        Action<int, int> resize = resizeGrid ?? new Action<int, int>(adapter.ResizeBuffer);
+        adapter.WindowResizeRequested += (rows, columns) =>
+            resize(
+                rows == 0 ? adapter.Buffer.Rows : rows,
+                columns == 0 ? adapter.Buffer.Columns : columns);
     }
 
     /// <summary>Runs <see cref="HostOptions.Command"/> and returns the child's exit code.</summary>
@@ -54,7 +84,7 @@ public static class ConformanceHost
         using var session = new TerminalSession(options.Rows, options.Columns);
         TerminalAdapter adapter = session.Adapter;
 
-        ApplyCoreSwitches(adapter, options);
+        ApplyCoreSwitches(adapter, options, (rows, columns) => session.Resize(columns, rows));
 
         if (transcript is not null)
         {

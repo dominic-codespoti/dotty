@@ -441,7 +441,9 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     /// <summary>DECSET/DECRST 1049: alternate screen with cursor save/restore.</summary>
     public void OnSetAlternateScreen(bool enabled)
     {
+        bool wasAlternate = _buffer.IsAlternateScreenActive;
         _buffer.SetAlternateScreen(enabled);
+        AbortKittyGraphicsTransferIfScreenChanged(wasAlternate);
         SetKittyAlternateScreen(enabled);
         Trace?.Invoke($"AltScreen({enabled})", _buffer);
         RequestRender();
@@ -450,7 +452,9 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     /// <summary>DECSET/DECRST 47 and 1047: alternate screen switch only; the cursor is neither saved nor restored.</summary>
     public void OnSwitchAlternateScreen(bool enabled)
     {
+        bool wasAlternate = _buffer.IsAlternateScreenActive;
         _buffer.SwitchAlternateScreen(enabled);
+        AbortKittyGraphicsTransferIfScreenChanged(wasAlternate);
         SetKittyAlternateScreen(enabled);
         Trace?.Invoke($"AltScreen47({enabled})", _buffer);
         RequestRender();
@@ -536,6 +540,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     {
         // RIS - ESC c - full terminal reset: the DECSTR core plus everything below (title is kept, like xterm).
         _buffer.FullReset();
+        ResetKittyGraphics();
         ResetTerminalModesCore();
         _lastPrintedChar = '\0';
         CurrentMouseMode = MouseMode.None;
@@ -782,5 +787,9 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         RequestRender();
         FlushRender();
     }
-    public void Dispose() => _buffer.Dispose();
+    public void Dispose()
+    {
+        DisposeKittyGraphics();
+        _buffer.Dispose();
+    }
 }

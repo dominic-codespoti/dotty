@@ -12,6 +12,9 @@ namespace Dotty.Silk.Config;
 /// <summary>Configuration and theme helper for the Dotty.Silk host.</summary>
 public static class SilkConfig
 {
+    // Stateless and thread-safe: one decoder serves every adapter.
+    private static readonly Dotty.Rendering.Gpu.SkiaImageDecoder ImageDecoder = new();
+
     private static IColorScheme? _cachedTheme;
     private static string? _cachedThemeName;
     private static int _systemPrefersDark = -1;
@@ -135,6 +138,7 @@ public static class SilkConfig
         ApplyThemeToAdapter(adapter, theme);
         HyperlinkIngestConfig.Apply(adapter, UserConfigService.Current.Hyperlinks);
         VtAdapterConfig.Apply(adapter, UserConfigService.Current.Vt);
+        adapter.ConfigureGraphics(UserConfigService.Current.ToKittyGraphicsOptions(), ImageDecoder);
     }
 
     public static (SgrColorArgb Foreground, SgrColorArgb Background) InitializeTheme(

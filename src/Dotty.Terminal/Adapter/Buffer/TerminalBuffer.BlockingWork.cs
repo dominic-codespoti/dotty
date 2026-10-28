@@ -23,6 +23,24 @@ public partial class TerminalBuffer
     /// </remarks>
     internal BlockingWorkScope EnterBlockingWork() => new(SyncRoot);
 
+    /// <summary>
+    /// Non-<c>ref struct</c> form of <see cref="EnterBlockingWork"/> for callers that cannot hold a scope in a field
+    /// (the graphics transfer is reached through an interface). Releases exactly one level of <see cref="SyncRoot"/>
+    /// when the current thread holds it and returns true; the caller must then call <see cref="ReacquireSyncRoot"/>
+    /// once, in a <c>finally</c>. Returns false (nothing released) when the lock is not held. Same invariants as
+    /// <see cref="EnterBlockingWork"/>.
+    /// </summary>
+    internal bool ReleaseSyncRootForBlockingWork()
+    {
+        if (!Monitor.IsEntered(SyncRoot))
+            return false;
+        Monitor.Exit(SyncRoot);
+        return true;
+    }
+
+    /// <summary>Re-acquires the lock released by <see cref="ReleaseSyncRootForBlockingWork"/>.</summary>
+    internal void ReacquireSyncRoot() => Monitor.Enter(SyncRoot);
+
     /// <summary>True once <see cref="Dispose"/> has run; checked at commit time after a <see cref="BlockingWorkScope"/>.</summary>
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 

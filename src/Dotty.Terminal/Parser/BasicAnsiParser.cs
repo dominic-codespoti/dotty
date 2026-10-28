@@ -396,6 +396,14 @@ namespace Dotty.Terminal.Parser
                     Handler?.OnReverseIndex();
                     ResetSequence();
                     break;
+                case (byte)'D':
+                    Handler?.OnIndex();
+                    ResetSequence();
+                    break;
+                case (byte)'E':
+                    Handler?.OnNextLine();
+                    ResetSequence();
+                    break;
                 case (byte)'H':
                     Handler?.OnSetTabStop();
                     ResetSequence();

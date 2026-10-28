@@ -801,6 +801,20 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         _cursor.MoveBy(1, 0, Rows, Columns);
         ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
+
+    /// <summary>IND (ESC D): LF semantics without CR, and a pending wrap is always cancelled (even when the scroll happens).</summary>
+    public void Index()
+    {
+        _cursor.SetWrapPending(false);
+        LineFeed();
+    }
+
+    /// <summary>NEL (ESC E): carriage return followed by <see cref="Index"/>.</summary>
+    public void NextLine()
+    {
+        CarriageReturn();
+        Index();
+    }
     public void ReverseIndex()
     {
         if (_cursor.Row == _scrollTop)

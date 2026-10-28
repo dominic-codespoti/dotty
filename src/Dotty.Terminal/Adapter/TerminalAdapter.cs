@@ -438,6 +438,20 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         RequestRender();
     }
 
+    public void OnIndex()
+    {
+        _buffer.Index();
+        Trace?.Invoke($"IND cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
+        RequestRender();
+    }
+
+    public void OnNextLine()
+    {
+        _buffer.NextLine();
+        Trace?.Invoke($"NEL cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
+        RequestRender();
+    }
+
     /// <summary>DECSET/DECRST 1049: alternate screen with cursor save/restore.</summary>
     public void OnSetAlternateScreen(bool enabled)
     {

@@ -34,7 +34,10 @@ public sealed class KittyMutationFuzzTests
 
         public Term()
         {
-            var media = KittyMediaFlags.Direct | KittyMediaFlags.File | KittyMediaFlags.SharedMemory;
+            // Shared memory and temp-file media stay disabled so no mutated stream can open a real shm object or
+            // delete a file (t=t is the only deleting transmission); both corpus entries below exercise the refusal.
+            // File reading never modifies anything.
+            var media = KittyMediaFlags.Direct | KittyMediaFlags.File;
             Adapter.ConfigureGraphics(new KittyGraphicsOptions { Enabled = true, Media = media, MaxPlacementsPerScreen = 64 }, new FakeImageDecoder());
             Adapter.ReplyRequested += reply => Replies.Add(reply.ToString());
             Parser = new BasicAnsiParser { Handler = Adapter };
@@ -72,7 +75,8 @@ public sealed class KittyMutationFuzzTests
             ("query", Apc("a=q,i=7,s=1,v=1,f=24", B64(new byte[] { 1, 2, 3 })), true),
             ("virtual", Cat(Apc("a=T,i=8,s=1,v=1,f=24,U=1,c=2,r=2", B64(new byte[] { 1, 2, 3 }))), true),
             ("file", Apc("a=t,i=9,s=1,v=1,f=24,t=f", B64(Encoding.UTF8.GetBytes("/nonexistent/dotty-fuzz.bin"))), false),
-            ("shm", Apc("a=t,i=10,s=1,v=1,f=24,t=s", B64(Encoding.UTF8.GetBytes("dotty-fuzz-shm"))), false),
+            ("shm-refused", Apc("a=t,i=10,s=1,v=1,f=24,t=s", B64(Encoding.UTF8.GetBytes("dotty-fuzz-shm"))), false),
+            ("tempfile-refused", Apc("a=t,i=11,s=1,v=1,f=24,t=t", B64(Encoding.UTF8.GetBytes("/nonexistent/tty-graphics-protocol-dotty-fuzz.bin"))), false),
         };
         foreach (char d in "aAcCiIpPqQxXyYzZnN")
         {

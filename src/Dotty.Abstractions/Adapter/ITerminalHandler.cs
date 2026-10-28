@@ -34,6 +34,8 @@ namespace Dotty.Abstractions.Adapter
         void OnEraseLine(int mode);
         void OnCarriageReturn();
         void OnLineFeed();
+        void OnIndex() { }                        // IND - ESC D: line feed without carriage return
+        void OnNextLine() { }                     // NEL - ESC E: carriage return + index
         void OnSetScrollRegion(int top1Based, int bottom1Based);
         void OnSetOriginMode(bool enabled);
         void OnSetAlternateScreen(bool enabled); // DECSET/DECRST 1049: save/restore the cursor around the switch

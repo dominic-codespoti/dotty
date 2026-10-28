@@ -40,9 +40,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     private int _defaultBackgroundOverrideArgb;
     private string _defaultBgHex = "#1E1E1E";
     private string _da2Response = "\u001b[>1;0;0c";
-    private int _windowPixelHeight = 600;
     private bool _hasSavedAttributes;
-    private int _windowPixelWidth = 800;
     private string? _windowTitle;
     private char _lastPrintedChar;
 
@@ -175,16 +173,6 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public void SetTerminalIdentity(string da2Response)
     {
         if (!string.IsNullOrWhiteSpace(da2Response)) _da2Response = da2Response;
-    }
-
-    /// <summary>
-    /// Sets the window pixel dimensions for CSI 14 t queries.
-    /// Called by the app layer when the window is resized.
-    /// </summary>
-    public void SetWindowPixelSize(int width, int height)
-    {
-        _windowPixelWidth = Math.Max(1, width);
-        _windowPixelHeight = Math.Max(1, height);
     }
 
     public void ResizeBuffer(int rows, int columns)

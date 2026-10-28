@@ -60,7 +60,8 @@ public sealed partial class LuaScriptHost
         ["clipboard.bracketed_paste_is_safe"] = new(ConfigValueKind.Boolean, c => c.Clipboard.BracketedPasteIsSafe, (c, v) => c.Clipboard.BracketedPasteIsSafe = (bool)v!),
         ["hyperlinks.osc8"] = new(ConfigValueKind.Boolean, c => c.Hyperlinks.Osc8, (c, v) => c.Hyperlinks.Osc8 = (bool)v!),
         ["hyperlinks.confirm"] = new(ConfigValueKind.String, c => c.Hyperlinks.Confirm, (c, v) => c.Hyperlinks.Confirm = (string)v!),
-        ["hyperlinks.allowed_schemes"] = new(ConfigValueKind.StringList, c => c.Hyperlinks.AllowedSchemes, (c, v) => c.Hyperlinks.AllowedSchemes = (System.Collections.Generic.List<string>)v!)
+        ["hyperlinks.allowed_schemes"] = new(ConfigValueKind.StringList, c => c.Hyperlinks.AllowedSchemes, (c, v) => c.Hyperlinks.AllowedSchemes = (System.Collections.Generic.List<string>)v!),
+        ["vt.window_resize_allowed"] = new(ConfigValueKind.Boolean, c => c.Vt.WindowResizeAllowed, (c, v) => c.Vt.WindowResizeAllowed = (bool)v!)
     };
 
     private unsafe partial void RegisterConfig(Lua lua, int dottyIndex)

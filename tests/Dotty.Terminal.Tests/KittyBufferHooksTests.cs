@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Graphics;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Graphics;
 using Dotty.Terminal.Parser;

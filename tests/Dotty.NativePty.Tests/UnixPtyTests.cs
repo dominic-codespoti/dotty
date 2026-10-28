@@ -99,7 +99,8 @@ public class UnixPtyTests : IDisposable
         _pty = new Unix.UnixPty();
         _pty.Start(
             workingDirectory: Path.GetTempPath(),
-            command: ["/bin/sh", "-c", "printf 'X%s%s%sY' \"${DOTTY_CONTROL_SOCKET-}\" \"${DOTTY_INITIAL_COLS-}\" \"${DOTTY_INITIAL_ROWS-}\""]);
+            command: ["/bin/sh", "-c", "printf 'X%s%s%s%s%sY' \"${DOTTY_CONTROL_SOCKET-}\" \"${DOTTY_INITIAL_COLS-}\" \"${DOTTY_INITIAL_ROWS-}\" \"${DOTTY_INITIAL_XPIXEL-}\" \"${DOTTY_INITIAL_YPIXEL-}\""],
+            initialPixelWidth: 640, initialPixelHeight: 384);
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var reader = new StreamReader(_pty.OutputStream!);

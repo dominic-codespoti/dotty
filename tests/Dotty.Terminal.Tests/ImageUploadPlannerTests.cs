@@ -109,14 +109,13 @@ public sealed class ImageUploadPlannerTests
             Assert.True(frames <= 3);
             var admit = new bool[pending.Count];
             ImageUploadPlanner.PlanUploads(pending.ToArray(), 100, admit);
-            for (int i = pending.Count - 1; i >= 0; i--)
+            var deferred = new List<UploadCandidate>();
+            for (int i = 0; i < pending.Count; i++)
             {
-                if (admit[i])
-                {
-                    uploadedOrder.Insert(0, pending[i].Serial);
-                    pending.RemoveAt(i);
-                }
+                if (admit[i]) uploadedOrder.Add(pending[i].Serial);
+                else deferred.Add(pending[i]);
             }
+            pending = deferred;
         }
 
         Assert.Equal(3, frames);

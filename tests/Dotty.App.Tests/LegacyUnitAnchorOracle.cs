@@ -129,7 +129,7 @@ internal sealed class LegacyUnitAnchorOracle
             CellHot hot = screen.GetCellRef(logicalRow, column);
             ColdCell cold = screen.GetColdCellRef(logicalRow, column);
             if (hot.Rune != 0 || hot.PackedFlags != 0 || hot.StyleId != 0
-                || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                || cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
             {
                 return column;
             }

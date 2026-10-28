@@ -259,12 +259,20 @@ public sealed class PlaceholderTableTests
     [InlineData("\U0010EEEE\u0305", true)]
     [InlineData("\U0010EEEF", false)]
     [InlineData("\U0010EEED", false)]
-    [InlineData("\uDBFB", false)]
+    [InlineData("\U0010EEEE\U0010EEEE", true)]
     [InlineData("a\U0010EEEE", false)]
     [InlineData("", false)]
     public void IsPlaceholderClusterDetectsLeadingU10EEEE(string cluster, bool expected)
     {
         Assert.Equal(expected, PlaceholderTable.IsPlaceholderCluster(cluster));
+    }
+
+    [Fact]
+    public void IsPlaceholderClusterRejectsALoneHighSurrogate()
+    {
+        // Plain code (not an attribute argument, where a lone surrogate would be replaced by U+FFFD).
+        Assert.False(PlaceholderTable.IsPlaceholderCluster("\uDBFB"));
+        Assert.False(PlaceholderTable.IsPlaceholderCluster("\uDBFBa"));
     }
 
     [Fact]

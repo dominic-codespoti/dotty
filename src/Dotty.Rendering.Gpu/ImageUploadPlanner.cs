@@ -158,6 +158,8 @@ public static class ImageUploadPlanner
     /// Box-filter downscale of tightly or loosely packed 8-bit-per-channel pixels. Each destination
     /// pixel is the rounded mean of the source pixels covering it (source ranges are
     /// <c>[floor(d*s/D), max(floor+1, ceil((d+1)*s/D)))</c>), so premultiplied data stays premultiplied.
+    /// Same partition and rounding as <c>PixelOps.BoxDownscale</c> (which allocates an <c>ImagePixels</c>); this span
+    /// overload exists so the GL thread can downscale straight into a pooled buffer without an extra allocation.
     /// </summary>
     public static void BoxDownscale(
         ReadOnlySpan<byte> src, int srcWidth, int srcHeight, int srcStrideBytes, int channels,

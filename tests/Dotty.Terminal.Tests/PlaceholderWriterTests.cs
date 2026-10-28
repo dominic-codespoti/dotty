@@ -435,4 +435,34 @@ public sealed class PlaceholderWriterTests
         Assert.True(buffer.GetCell(0, 0).HasHyperlink);
         Assert.Equal(new PlaceholderIndices(1, 2, Absent), Triple(buffer, 0, 0));
     }
+
+    [Fact]
+    public void MarksArrivingAfterAPlaceholderAtTheLastColumnAttachToIt()
+    {
+        var buffer = NewBuffer(rows: 2, cols: 3);
+        Write(buffer, "a" + P + D0 + D0 + P);
+        Assert.Equal(2, buffer.CursorCol); // wrap pending on the cell just written
+
+        Write(buffer, D1);
+
+        Assert.Equal(new PlaceholderIndices(0, 0, Absent), Triple(buffer, 0, 1));
+        Assert.Equal(new PlaceholderIndices(1, Absent, Absent), Triple(buffer, 0, 2));
+        Assert.Equal(0, buffer.CursorRow);
+        Assert.Equal(2, buffer.CursorCol);
+
+        Write(buffer, "b");
+        Assert.Equal((uint)'b', buffer.GetCell(1, 0).Rune);
+    }
+
+    [Fact]
+    public void LateCombiningMarkAfterACharacterAtTheLastColumnAttachesToIt()
+    {
+        var buffer = NewBuffer(rows: 2, cols: 3);
+        Write(buffer, "abc");
+        Write(buffer, "\u0301");
+
+        Assert.Equal("c\u0301", GraphemeHelper.Resolve(buffer.GetCell(0, 2).Rune, buffer.GetColdCell(0, 2).GraphemeIndex));
+        Assert.Equal("b", GraphemeHelper.Resolve(buffer.GetCell(0, 1).Rune, buffer.GetColdCell(0, 1).GraphemeIndex));
+        Assert.Equal(2, buffer.CursorCol);
+    }
 }

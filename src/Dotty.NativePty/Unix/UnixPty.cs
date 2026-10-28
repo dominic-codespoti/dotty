@@ -398,22 +398,28 @@ public sealed class UnixPty : IPty
 
             var stream = new NetworkStream(socket, ownsSocket: true);
             (int Columns, int Rows, int PixelWidth, int PixelHeight)? pending;
-            lock (_stateLock)
+
+            // Hold the write lock from publishing the stream until the replay is sent: a Resize that sees the
+            // published stream must not reach the helper before the startup/pending sizes, or they would overwrite it.
+            lock (_controlWriteLock)
             {
-                if (_isDisposed)
+                lock (_stateLock)
                 {
-                    stream.Dispose();
-                    return;
+                    if (_isDisposed)
+                    {
+                        stream.Dispose();
+                        return;
+                    }
+
+                    _controlSocketStream = stream;
+                    pending = _pendingResize;
+                    _pendingResize = null;
                 }
 
-                _controlSocketStream = stream;
-                pending = _pendingResize;
-                _pendingResize = null;
+                SendResizeMessage(_startupColumns, _startupRows, _startupPixelWidth, _startupPixelHeight, stream);
+                if (pending.HasValue)
+                    SendResizeMessage(pending.Value.Columns, pending.Value.Rows, pending.Value.PixelWidth, pending.Value.PixelHeight, stream);
             }
-
-            SendResizeMessage(_startupColumns, _startupRows, _startupPixelWidth, _startupPixelHeight, stream);
-            if (pending.HasValue)
-                SendResizeMessage(pending.Value.Columns, pending.Value.Rows, pending.Value.PixelWidth, pending.Value.PixelHeight, stream);
         }
         catch (Exception ex)
         {

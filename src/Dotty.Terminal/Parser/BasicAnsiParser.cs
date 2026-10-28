@@ -335,9 +335,8 @@ namespace Dotty.Terminal.Parser
             }
         }
 
-        // APC (ESC _), PM (ESC ^) and SOS (ESC X) strings are consumed and
-        // dropped.  This is the single entry point a future APC capture state
-        // (Kitty graphics) replaces; nothing is buffered here.
+        // PM (ESC ^), SOS (ESC X) and APC strings that are not an enabled Kitty
+        // graphics command are consumed and dropped; nothing is buffered here.
         private void BeginDiscardedString()
         {
             _leftoverLen = 0;
@@ -457,7 +456,7 @@ namespace Dotty.Terminal.Parser
         // (0 when the next byte is a stop byte or the state is not OSC-related).
         private int ConsumeStringRun(ReadOnlySpan<byte> bytes)
         {
-            if (_sequenceState == SequenceState.DiscardOsc)
+            if (_sequenceState == SequenceState.DiscardOsc || _sequenceState == SequenceState.DiscardString)
             {
                 int skip = bytes.IndexOfAnyInRange((byte)0x00, (byte)0x1F);
                 return skip < 0 ? bytes.Length : skip;

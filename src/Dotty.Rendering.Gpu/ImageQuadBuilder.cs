@@ -17,9 +17,9 @@ public readonly record struct ImageSceneGeometry(
 
 /// <summary>
 /// Turns <see cref="KittyRenderPlacement"/>s into clipped, sorted, texture-batched quads. Allocation-free once the
-/// list's buffers have grown. Sorting uses <see cref="Array.Sort{T}(T[], int, int, IComparer{T})"/> with a shared
-/// comparer whose final key is the input index, so equal (Layer, Z, ImageId, PlacementId) keep input order
-/// (introsort is not stable by itself; N is small but may reach thousands, so insertion sort was rejected).
+/// list's buffers have grown. Sorting is an in-place heapsort (no delegate/comparer allocation, unlike
+/// <c>Array.Sort</c> with an <see cref="IComparer{T}"/>) over a total order whose final key is the input index, so
+/// equal (Layer, Z, ImageId, PlacementId) keep input order despite the sort being unstable.
 /// </summary>
 public static class ImageQuadBuilder
 {
@@ -37,17 +37,36 @@ public static class ImageQuadBuilder
         public ImageQuadInstance Quad;
     }
 
-    private sealed class EntryComparer : IComparer<SortEntry>
+    private static int Compare(in SortEntry a, in SortEntry b)
     {
-        public static readonly EntryComparer Instance = new();
+        if (a.Layer != b.Layer) return a.Layer < b.Layer ? -1 : 1;
+        if (a.Z != b.Z) return a.Z < b.Z ? -1 : 1;
+        if (a.ImageId != b.ImageId) return a.ImageId < b.ImageId ? -1 : 1;
+        if (a.PlacementId != b.PlacementId) return a.PlacementId < b.PlacementId ? -1 : 1;
+        return a.Index.CompareTo(b.Index);
+    }
 
-        public int Compare(SortEntry a, SortEntry b)
+    private static void SortEntries(SortEntry[] a, int n)
+    {
+        for (int i = n / 2 - 1; i >= 0; i--)
+            SiftDown(a, i, n);
+        for (int end = n - 1; end > 0; end--)
         {
-            if (a.Layer != b.Layer) return a.Layer < b.Layer ? -1 : 1;
-            if (a.Z != b.Z) return a.Z < b.Z ? -1 : 1;
-            if (a.ImageId != b.ImageId) return a.ImageId < b.ImageId ? -1 : 1;
-            if (a.PlacementId != b.PlacementId) return a.PlacementId < b.PlacementId ? -1 : 1;
-            return a.Index.CompareTo(b.Index);
+            (a[0], a[end]) = (a[end], a[0]);
+            SiftDown(a, 0, end);
+        }
+    }
+
+    private static void SiftDown(SortEntry[] a, int root, int n)
+    {
+        while (true)
+        {
+            int child = 2 * root + 1;
+            if (child >= n) return;
+            if (child + 1 < n && Compare(in a[child], in a[child + 1]) < 0) child++;
+            if (Compare(in a[root], in a[child]) >= 0) return;
+            (a[root], a[child]) = (a[child], a[root]);
+            root = child;
         }
     }
 
@@ -84,7 +103,7 @@ public static class ImageQuadBuilder
         if (n == 0) return;
 
         if (n > 1)
-            Array.Sort(scratch, 0, n, EntryComparer.Instance);
+            SortEntries(scratch, n);
 
         if (dst.Quads.Length < dst.QuadCount + n)
             Array.Resize(ref dst.Quads, Math.Max(dst.QuadCount + n, dst.Quads.Length * 2));

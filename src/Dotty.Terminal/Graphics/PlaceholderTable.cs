@@ -84,9 +84,9 @@ internal sealed class PlaceholderCodeTable
             }
 
             entries[slot] = key;
+            Volatile.Write(ref _count, slot + 1); // before the code is visible through _codes, so TryGet never rejects an issued code
             short code = (short)(-2 - slot);
             _codes[key] = code;
-            Volatile.Write(ref _count, slot + 1);
             return code;
         }
     }

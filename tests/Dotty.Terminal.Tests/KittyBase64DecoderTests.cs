@@ -282,6 +282,7 @@ public sealed class KittyBase64DecoderTests
         for (int p = 0; p < text.Length;)
         {
             int n = Math.Min(text.Length - p, rng.Next(1, 9000));
+            if (text.Length - p - n is > 0 and < 4) n = text.Length - p; // keep '=' padding inside the final chunk
             p += n;
             pieces.Add((text.Substring(p - n, n), p == text.Length));
         }

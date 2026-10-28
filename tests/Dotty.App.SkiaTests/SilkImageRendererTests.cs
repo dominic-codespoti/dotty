@@ -346,7 +346,7 @@ public sealed class SilkImageRendererTests
         using var renderer = new SilkImageRenderer(host.Gl, cache, bindings);
         using ImagePixels px = ImageTestData.Rgba(2, 1, (255, 0, 0, 255), (0, 0, 255, 255));
         ImageDrawList list = ImageTestData.List((px, 4, 4, 2, 2, ImageLayer.AboveText));
-        list.Quads[0].U0 = 0.5f;   // right texel only
+        list.Quads[0].U0 = 0.75f;  // right texel only; from its centre onwards (linear filter + clamp => pure)
         list.Quads[0].U1 = 1f;
 
         host.Clear(0, 0, 0, 1);

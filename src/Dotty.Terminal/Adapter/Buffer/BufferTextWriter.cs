@@ -717,9 +717,14 @@ internal sealed class BufferTextWriter
     {
         int row = _cursor.Row;
         int col = _cursor.Col;
-        if (row == 0 && col == 0) return (-1, -1);
-        if (col == 0) { row--; col = _ctx.Columns - 1; }
-        else col--;
+        // With a wrap pending the cursor still rests on the cell that was just written (it only moves on the next
+        // print), so that cell is the base; otherwise the base is the cell before the cursor.
+        if (!_cursor.WrapPending)
+        {
+            if (row == 0 && col == 0) return (-1, -1);
+            if (col == 0) { row--; col = _ctx.Columns - 1; }
+            else col--;
+        }
 
         var buf = _ctx.ActiveBuffer;
         while (row >= 0)

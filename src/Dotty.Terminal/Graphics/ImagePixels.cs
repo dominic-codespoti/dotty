@@ -125,6 +125,7 @@ public sealed unsafe class ImagePixels : IDisposable
         _ptr = null;
         NativeMemory.Free(p);
         GraphicsMemoryMetrics.ChangeLiveImagePixels(-ByteLength, -1);
+        if (ImageRetirementQueue.Enabled) ImageRetirementQueue.Retire(Serial);
     }
 
     private void ThrowIfFreed()

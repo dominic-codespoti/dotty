@@ -33,6 +33,11 @@ public class Program
             RunGateSelfTest();
             return;
         }
+        if (mode == "scrollback-memory")
+        {
+            Environment.ExitCode = ScrollbackMemoryProbe.Run(args);
+            return;
+        }
 
         // Validate command line arguments
 

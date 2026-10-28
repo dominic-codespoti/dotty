@@ -205,6 +205,10 @@ matrix; typed allocation aggregation; and native/GPU memory accounting.
 | `memory` | Memory analysis | 15 iterations | Allocation focus |
 | `parser` | Parser optimization | 10 iterations | Throughput focus |
 | `rendering` | Rendering optimization | 15 iterations | Frame time focus |
+| `scrollback-memory` | Headless scrollback memory probe | n/a (not BenchmarkDotNet) | Table of `BufferMemorySnapshot` counters plus RSS/PSS, baseline-subtracted |
+| `gate-self-test` | Gate logic checks | n/a | Deterministic pass/fail |
+
+`--mode scrollback-memory` accepts `--probe-tabs 1,20 --probe-history 0,500,5000 --probe-cols 80,200` and walks the stages fresh, resize x2, alt enter/exit, ED 2, CSI 3 J. Counters are report-only; the end-to-end GUI counterpart is `python3 scripts/perf/scrollback_memory.py` (see `docs/Performance.md`, "Scrollback memory measurement"). Any gain from lazy commit is a hypothesis until both are run before and after the change.
 
 ## Benchmark Categories
 
@@ -306,8 +310,8 @@ Set `DOTTY_REFLOW_BENCH_MEMORY=1` to print `GC.GetTotalMemory(true)` before the 
 
 Row-to-text cost of the copy and search paths (category `Memory`/`Text`): literal / many-match / regex / CJK search over a 60x200
 visible snapshot, selecting all visible rows, selecting 10k scrollback lines (ASCII and CJK), and `GetScrollbackLine` for all 10k rows.
-It calls only `SearchEngine.FindMatches`, `TextSelectionService` and `TerminalBuffer.GetScrollbackLine`. There is deliberately no
-"search over scrollback" benchmark yet: production search does not materialize scrollback text into its snapshot.
+It calls only `SearchEngine.FindMatches`, `TextSelectionService`, `TerminalBuffer.GetScrollbackLine` and `TerminalBuffer.CaptureRenderSnapshotForSearch`.
+The visible-row search benchmarks run over scrollback-capacity-0 buffers, so they measure exactly the visible rows (a caveat for reading them as search-over-history cost); the one scrollback search benchmark times `CaptureRenderSnapshotForSearch` plus the search, the work the host does per search keystroke.
 
 ### ParserScanExperiments (not gated)
 

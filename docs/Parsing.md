@@ -348,6 +348,10 @@ inputSpan = concat;  // Now contains "ESC[31m"
 
 The sequence buffer (`_leftover`) grows on demand up to the string's cap. When a sequence ends or is abandoned and the buffer exceeds 4096 bytes it is reallocated back to 32 bytes, so one large OSC 52 does not pin a megabyte for the life of the session.
 
+**Bulk OSC scan.** While an OSC (or a discarded over-cap OSC) is open, the parser consumes payload bytes up to the next C0 control (0x00-0x1F) in one scan; the stop byte is left to the per-byte state machine, so BEL/ST/CAN/SUB/ESC/abort semantics are unchanged. When the whole OSC (payload plus BEL or `ESC \`) lies inside one input chunk and nothing is buffered, it is dispatched straight from the input without being copied into the sequence buffer. A payload that would cross the 1 MiB cap is discarded exactly as the per-byte path does.
+
+**OSC 52 from bytes.** OSC 52 payloads are handled by `OnOperatingSystemCommandUtf8`: the selection field is parsed from bytes and the base64 is decoded strictly straight from the UTF-8 bytes, without creating a `string`. Input the byte path cannot handle falls back to the char-based handler. Whether this reduces allocation or time is a hypothesis until `ParserOscBenchmarks` and the OSC allocation tests are run.
+
 ---
 
 ## Input Handling Flow
@@ -500,6 +504,8 @@ Reported directories are not checked against the filesystem here; existence is r
 #### REP bound
 
 `CSI n b` repeats the previous printable character. Printable ASCII is capped at the buffer's cell capacity (`rows + scrollback + 1` rows of columns) plus the remainder modulo the column count, which is output-equivalent to the unbounded repeat because every further full row of identical characters is a no-op on the visible grid and cursor column. Other characters (possibly wide or zero-width) are capped at that capacity; only the final cursor parity can differ from an unbounded repeat when the count exceeds it. `CSI 2147483647 b` therefore cannot stall the parser.
+
+With scrollback capacity 0 (`scrollback.limitLines = 0`, or a width at which `limitBytes` leaves no room for history) the cap is `rows + 1` rows of columns. Reverse index (`ESC M`) at the top of a full-screen region restores only rows the ring still holds, so with capacity 0 it never pulls rows back (previously the scrolled-line count could exceed what was retained).
 
 **Implementation details:**
 
@@ -723,6 +729,7 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-28 | Wave 3: bulk OSC scan, whole-OSC in-chunk dispatch and bytes-native OSC 52; zero-capacity scrollback note; reverse index limited to retained history; ED 2 / CSI 3 J / RIS discard history pages (see [Rendering](Rendering.md#lazily-committed-cell-arenas)). |
 | 2026-10-28 | Wave 2: DECSTR/RIS share one reset core; DSR/CPR/DECXCPR with silent unknown codes; DECBKM; window operations 13-19 and gated `CSI 8 t`; mode 2033 and `CSI ? 998 n`; gated DECRQCRA; 64-mark combining cap and a bounded, de-duplicating grapheme store; complete DECRQM table; DECSET 47/1047/1048. |
 | 2026-10-28 | Hardening pass: ESC/C0-correct string states (no 0x9C ST), APC/PM/SOS discard, saturating integers, routed DECSTR/`CSI ? Ps n`/`CSI Ps t`/DECRQCRA/modes 66,67,2027,2033 (default no-op handlers unless noted), `OnWindowOperation`, 1 MiB OSC cap with shrink-on-reset, window title cap, REP bound, ICH/DCH/ECH clamp, OSC 52 write/read policy, OSC 8 ingest validation and bounded URI table, strict OSC 7. |
 | 2026-10-07 | Palette behavior: adapter-local ANSI/xterm palette and dynamic-color overrides; OSC 4/10/11 set requests are silent, queries use rgb:RRRR/GGGG/BBBB and ST; OSC 104/110/111/112 resets and RIS restore overrides. |

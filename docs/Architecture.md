@@ -45,6 +45,15 @@ The buffer itself is not thread-safe. PTY consumers write under its sync root;
 rendering and user operations use bounded snapshot/copy sections so sustained
 output cannot hold the UI for a whole raster pass.
 
+Scrollback capacity is a per-session `ScrollbackPolicy` (line cap plus raw-byte
+cap, from the `scrollback` configuration) held by `ScreenManager`; every resize
+recomputes the ring capacity for the new size and reflows history into it.
+Cell arenas are lazily committed reserved memory. Search does not use the
+per-frame capture: `TerminalBuffer.CaptureRenderSnapshotForSearch` takes a
+separate compact copy of the scrollback rows, once per search keystroke. See
+[Rendering](Rendering.md#lazily-committed-cell-arenas) and
+[Configuration](Configuration.md#scrollback).
+
 ## Native PTY selection
 
 `PtyFactory.GetCapabilities()` reports the derived runtime identifier,

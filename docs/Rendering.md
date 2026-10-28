@@ -143,7 +143,55 @@ payload is accounted separately from atlas pages. These figures describe
 application-side ownership and estimated resource payload, not a complete GPU
 memory total.
 
-In the final measured lifecycle run, the live terminal arena was 9.20 MiB both
+### Lazily committed cell arenas
+
+Screen cell arenas are reserved address space that is committed lazily, through
+`VirtualArena` (zero-filled memory that is not resident until first written).
+The backend is chosen once per process by a self-test (reserve, dirty, discard,
+verify zero): Linux/Android `mmap` + `madvise(MADV_DONTNEED)`, macOS `mmap` with
+`MAP_FIXED` remap, Windows `VirtualAlloc` with decommit/recommit, and, when the
+shim is unavailable or fails the self-test, a non-lazy `calloc` + explicit
+zeroing fallback (`alloc-zeroed`). Discarded ranges below 64 KiB are zeroed in
+place and keep their pages.
+
+Two counters therefore describe a terminal's storage differently:
+
+- `LiveArenaCapacityBytes` (`terminalArenaCapacityBytes` in `MEMORY`) is the
+  reserved virtual size. It is not resident memory.
+- `LiveArenaCommittedBoundBytes` (`terminalArenaCommittedBoundBytes`) is the
+  matching upper bound of committed pages: dirty rows x columns x 12 B, summed
+  over live screens. Caveat: it is a bound, not a measured resident size, and
+  it ignores zeroed-in-place leftovers, so resident memory can exceed it by up to
+  64 KiB per cleared range smaller than the memset threshold. On small
+  ranges the bound is therefore a poor predictor; compare PSS only over larger
+  workloads.
+
+The `MEMORY` JSON also carries `terminalArenaBackend` (`mmap-madvise`,
+`mmap-remap`, `virtualalloc` or `alloc-zeroed`).
+
+History is discarded, and its pages handed back, by ED 2 and CSI 3 J on the main
+screen, RIS, and leaving the alternate screen (the alternate screen is cleared on
+exit; re-entry clears it again). A parked spare screen keeps its virtual
+reservation (so the next resize allocates nothing) but holds zero committed
+bytes. Every operation that discards or renumbers history other than by the ring
+wrapping (CSI 3 J and ED 2 on the main screen, RIS, `ClearScreen`, and every
+resize) raises `TerminalBuffer.HistoryInvalidated` once, under the buffer lock,
+with a reason (`Cleared`, `Reset`, `CapacityShrunk`, `Rebased`).
+`HistoryFloorAbsoluteRow` is the oldest absolute row the active screen still
+retains (`max(0, totalScrolled - capacity)`); it is polled, not an event, is not
+monotone (reverse scrolling lowers it, a reflow re-bases it), and equals the
+scrolled-line count when there is no scrollback capacity. Entering or leaving
+the alternate screen, and ED 2 / CSI 3 J while it is active, leave the main
+history alone and raise nothing. Both are internal API.
+
+The figures in the next two paragraphs were recorded **before lazy commit**
+(when `LiveArenaCapacityBytes` was the whole committed arena) and are
+historical: they are not what the current build reports, and no post-lazy-commit
+measurement is recorded here. Whether lazy commit lowers PSS is a hypothesis
+until `scripts/perf/scrollback_memory.py` is run (see
+[Performance](Performance.md#scrollback-memory-measurement)).
+
+In the final measured lifecycle run (pre-lazy-commit), the live terminal arena was 9.20 MiB both
 cold and after resizing a terminal that had held a large workload; the large
 workload's exact history contained 5,000 output lines (2,489 small and 2,453
 large lines). The final resized-small-window PSS observation was 163.80 MiB,
@@ -161,7 +209,7 @@ A separate frozen/final ownership comparison used a real 1,000,000-line file
 history. At Neovim EOF, the frozen process-tree PSS was 323.635 MiB and the final
 was 284.935 MiB; Dotty-root PSS was 211.064 MiB and 172.295 MiB respectively.
 After Neovim closed, process-tree PSS was 212.697 MiB frozen and 173.950 MiB
-final. In that final run, the live terminal arena was 14,469,120 bytes; the
+final. In that final run (pre-lazy-commit), the live terminal arena was 14,469,120 bytes; the
 render snapshot was 145,296 bytes; one CPU glyph-atlas page was 1,048,576 bytes
 with an estimated 1,048,576-byte R8 payload and zero RGBA payload; scratch was
 924 bytes. The separate managed-memory estimate was 41,356,360 bytes, while the

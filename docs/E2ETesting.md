@@ -55,6 +55,15 @@ by the developer smoke harness. Commands are newline-delimited:
 The protocol is transport-only. Assertions about parser modes, exact PTY bytes,
 focus reports, paste wrappers, and reflow remain in deterministic tests.
 
+The `MEMORY` command returns the host's memory counters as JSON, including
+`terminalArenaCapacityBytes` (reserved virtual), `terminalArenaCommittedBoundBytes`
+(upper bound of committed pages, not resident size) and `terminalArenaBackend`.
+`scripts/perf/scrollback_memory.py` is the harness built on it: it launches the
+host under `xvfb-run`, opens tabs (`ACTION:NewTab`), fills history and issues
+`RESIZE:`, ED 2 and CSI 3 J through `TYPE:`/`KEY:`, and samples process PSS from
+`/proc/<pid>/smaps_rollup` after each stage (Linux only). It has not been run in
+CI; see [Performance](Performance.md#scrollback-memory-measurement).
+
 ## Linux smoke
 
 Linux GUI smoke requires an X11 display server. Xvfb is the CI setup:

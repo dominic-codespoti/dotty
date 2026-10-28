@@ -102,6 +102,21 @@ To see every option with its default, run `dotty +explain-config`, or
 `dotty +explain-config mouse.copyOnSelect` for one. It reads no config file and
 opens no window.
 
+## Scrollback
+
+```json
+{
+  "scrollback": { "limitLines": 5000, "limitBytes": 67108864 }
+}
+```
+
+`limitLines` (default `5000`, `0` = no history, at most `1000000`) and
+`limitBytes` (default 64 MiB, `0` = no byte cap, counted as
+`(lines + rows) * columns * 12` raw ring bytes) are both limits; whichever is
+reached first applies. The byte limit is checked again on every resize, so a
+wider terminal keeps fewer lines. Changes apply to tabs and panes created after
+the change. See the [reference](../Configuration.md#scrollback) for details.
+
 ## Safe edits and troubleshooting
 
 Write a complete replacement to a temporary file and atomically rename it over

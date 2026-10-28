@@ -360,6 +360,35 @@ reports (`CSI 20/21 t`) are never answered. See
 [Parsing](Parsing.md#window-operations-csi-ps--ps--ps-t) and
 [DECRQCRA](Parsing.md#decrqcra-rectangular-checksum).
 
+### `scrollback`
+
+How much history each terminal session keeps.
+
+```json
+{
+  "scrollback": { "limitLines": 5000, "limitBytes": 67108864 }
+}
+```
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `limitLines` | integer | `5000` | Maximum history lines per session. `0` keeps no history. Values above `1000000` are clamped to `1000000`; negative values fall back to the default. |
+| `limitBytes` | integer | `67108864` (64 MiB) | Maximum raw history ring bytes per session, counted as `(lines + rows) * columns * 12`. `0` means no byte cap. Non-zero values below `1048576` (1 MiB) and negative values fall back to the default. |
+
+The first limit reached applies. The byte limit is re-evaluated on every resize,
+so a session that is made wider keeps fewer history lines (down to `0` when
+`(rows + 1) * columns * 12` already exceeds `limitBytes`) and a narrower one
+keeps up to `limitLines` again; rows beyond the new capacity are discarded
+oldest first. The byte figure counts the raw ring (12 bytes per cell: an 8-byte
+hot and a 4-byte cold half), not resident memory: cell storage is reserved
+address space that is committed lazily as rows are written (see
+[Rendering](Rendering.md#memory-diagnostics-and-lifecycle-measurements)). There
+is no history compression option.
+
+Both properties apply to sessions created after the change; existing tabs keep
+their capacity policy. In Lua they are `scrollback.limit_lines` and
+`scrollback.limit_bytes` (see the [Lua guide](guides/Lua.md)).
+
 ### `shellIntegration`
 
 | Property | Type | Default | Notes |

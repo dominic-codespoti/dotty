@@ -12,10 +12,35 @@ smoke tests. The desktop executable is `src/Dotty/Dotty.csproj`.
 | `tests/Dotty.NativePty.Tests` | `IPty` contracts, platform capabilities, Unix helper, and Windows ConPTY |
 | `tests/Dotty.App.SkiaTests` | Skia/OpenGL-adjacent rendering behavior |
 | `tests/Dotty.Conformance.Host` | not a test project: the headless `dotty-conformance-host` executable used by the esctest conformance run; referenced by `Dotty.App.Tests` and listed in `Dotty.slnx` (see [Conformance](Conformance.md)) |
+| `tests/Dotty.Performance.Tests` | BenchmarkDotNet benchmarks and the `--mode scrollback-memory` / `--mode gate-self-test` entry points; not part of the functional test run (see [Performance](Performance.md)) |
 
 Test projects intentionally do not set a fixed `RuntimeIdentifier`. Native
 assets and conditional PTY tests must resolve for the runner that executes the
 tests.
+
+### Scrollback, storage, reflow, and text-extraction tests (wave 3)
+
+`Dotty.App.Tests` (Terminal-internal members are reached through the app test
+project; `Dotty.Terminal.Tests` has no `InternalsVisibleTo`):
+
+| Class | Covers |
+|---|---|
+| `ScrollbackPolicyTests`, `ScrollbackSessionConfigTests` | line/byte limits, normalization, `CapacityFor`, config to session wiring, resize under a policy |
+| `ScrollbackCapacityReflowTests` | ring capacity following the column count under the byte cap on every reflow, spare retargeting |
+| `VirtualArenaTests`, `ScreenLazyCommitTests` | arena backends and zero-fill guarantee, dirty-extent lazy commit, discard on ED 2 / CSI 3 J / RIS / alternate exit, RI with limited or zero capacity |
+| `HistoryInvalidatedTests` | `HistoryInvalidated` reasons and `HistoryFloorAbsoluteRow` |
+| `ReflowAnchorMappingOracleTests`, `ReflowRandomizedEquivalenceTests` | anchor-only mapping against the frozen `LegacyDenseReflowMapping` oracle over seeded random resizes; the recorded-golden layer is skipped until `Goldens/reflow-canonical.txt` is recorded on the pre-change commit with `DOTTY_RECORD_REFLOW_GOLDENS=1` |
+| `RowTextTests`, `RowTextCharacterizationTests`, `SearchBufferContentTest` | single row-to-text implementation, search and scrollback search |
+| `AllocationAssert`-based classes (`*AllocationTests`) | warmed-path allocation limits |
+
+`Dotty.Terminal.Tests`: `ReflowResizeTests`, `BufferMemoryMetricsTests`,
+`ColdCellTests`, `OscFastPathTests` and `OscAllocationTests` (bulk OSC scan,
+bytes-native OSC 52), and `TerminalCoreAllocationTests` (resize with
+column-dependent capacity allocates nothing after warm-up). Python helper tests
+for the memory harness live in
+`scripts/perf/tests/test_scrollback_memory.py`. None of these has been run on a
+machine with the .NET SDK by the authors of this change set; GUI, Wayland,
+macOS, and Windows behavior is verified manually.
 
 `global.json` selects the Microsoft Testing Platform runner required by xUnit
 4. Use `--solution` or `--project` explicitly; VSTest `--logger` is not

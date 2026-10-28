@@ -259,12 +259,16 @@ public sealed class KittyPathPolicyTests
     public void Resolve_LongButFiniteChainsSucceedAndExcessiveOnesFail()
     {
         using var dir = new KittyMediaTempDir();
-        string target = dir.Write("end.bin");
-        string previous = target;
+        dir.Write("end.bin");
+        // Relative targets: an absolute one would re-walk the temp directory's own links (macOS /var, /tmp) on every
+        // hop and spend the 40-link budget twice per link there.
+        string previousName = "end.bin";
+        string previous = dir.Combine(previousName);
         for (int i = 0; i < 30; i++)
         {
             string link = dir.Combine("l" + i);
-            if (!KittyMediaTempDir.TryLink(link, previous)) Assert.Skip("Symbolic links cannot be created here");
+            if (!KittyMediaTempDir.TryLink(link, previousName)) Assert.Skip("Symbolic links cannot be created here");
+            previousName = "l" + i;
             previous = link;
         }
         Assert.Equal(Path.Combine(Real(dir.Root), "end.bin"), Real(previous));
@@ -272,7 +276,8 @@ public sealed class KittyPathPolicyTests
         for (int i = 30; i < 60; i++)
         {
             string link = dir.Combine("l" + i);
-            Assert.True(KittyMediaTempDir.TryLink(link, previous));
+            Assert.True(KittyMediaTempDir.TryLink(link, previousName));
+            previousName = "l" + i;
             previous = link;
         }
         Assert.False(KittyPathPolicy.TryResolve(previous, out _));

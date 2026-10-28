@@ -217,4 +217,110 @@ public sealed class BlockingWorkScopeTests
         Assert.True(disposedInside);
         Assert.True(disposedAfter);
     }
+
+    // ------------------------------------------------ ReleaseSyncRootForBlockingWork / ReacquireSyncRoot (graphics transfer)
+
+    [Fact]
+    public void ReleaseHelper_HeldOnce_ReleasesForOthersAndReacquireRestoresIt()
+    {
+        using var buffer = new TerminalBuffer(rows: 4, columns: 10);
+        lock (buffer.SyncRoot)
+        {
+            Assert.True(buffer.ReleaseSyncRootForBlockingWork());
+            Assert.False(Monitor.IsEntered(buffer.SyncRoot));
+            Assert.True(OtherThreadCanEnter(buffer.SyncRoot), "lock must be free while released");
+
+            buffer.ReacquireSyncRoot();
+            Assert.True(Monitor.IsEntered(buffer.SyncRoot));
+            Assert.False(OtherThreadCanEnter(buffer.SyncRoot, timeoutMs: 20), "lock must be held again");
+        }
+
+        Assert.False(Monitor.IsEntered(buffer.SyncRoot));
+        Assert.True(OtherThreadCanEnter(buffer.SyncRoot), "exactly one level: the owner's lock statement balanced it");
+    }
+
+    [Fact]
+    public void ReleaseHelper_NotHeld_DoesNothingAndReturnsFalse()
+    {
+        using var buffer = new TerminalBuffer(rows: 4, columns: 10);
+        Assert.False(buffer.ReleaseSyncRootForBlockingWork());
+        Assert.False(Monitor.IsEntered(buffer.SyncRoot));
+        Assert.True(OtherThreadCanEnter(buffer.SyncRoot));
+    }
+
+    [Fact]
+    public void ReleaseHelper_HeldByAnotherThread_DoesNotTouchIt()
+    {
+        using var buffer = new TerminalBuffer(rows: 4, columns: 10);
+        using var held = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        var owner = new Thread(() =>
+        {
+            lock (buffer.SyncRoot)
+            {
+                held.Set();
+                release.Wait(Generous);
+            }
+        });
+        owner.Start();
+        Assert.True(held.Wait(Generous));
+
+        Assert.False(buffer.ReleaseSyncRootForBlockingWork());
+        Assert.False(OtherThreadCanEnter(buffer.SyncRoot, timeoutMs: 20), "the other thread still owns the lock");
+
+        release.Set();
+        Assert.True(owner.Join(Generous));
+    }
+
+    [Fact]
+    public void ReleaseHelper_RecursiveHold_ReleasesNothingAndKeepsEveryLevel()
+    {
+        // Releasing one level of a recursive hold would not free the lock and would break the outer critical
+        // section's expectations: the helper reports "nothing released" and the caller must not Reacquire.
+        using var buffer = new TerminalBuffer(rows: 4, columns: 10);
+        Monitor.Enter(buffer.SyncRoot);
+        Monitor.Enter(buffer.SyncRoot);
+        try
+        {
+            Assert.False(buffer.ReleaseSyncRootForBlockingWork());
+            Assert.True(Monitor.IsEntered(buffer.SyncRoot));
+            Assert.False(OtherThreadCanEnter(buffer.SyncRoot, timeoutMs: 20));
+        }
+        finally
+        {
+            Monitor.Exit(buffer.SyncRoot);
+            Assert.True(Monitor.IsEntered(buffer.SyncRoot), "both levels must still have been held");
+            Monitor.Exit(buffer.SyncRoot);
+        }
+
+        Assert.False(Monitor.IsEntered(buffer.SyncRoot));
+        Assert.True(OtherThreadCanEnter(buffer.SyncRoot));
+    }
+
+    [Fact]
+    public void ReleaseHelper_ExceptionBetweenReleaseAndReacquire_FinallyRestoresTheLock()
+    {
+        using var buffer = new TerminalBuffer(rows: 4, columns: 10);
+        lock (buffer.SyncRoot)
+        {
+            bool released = false;
+            Assert.Throws<InvalidOperationException>(() =>
+            {
+                try
+                {
+                    released = buffer.ReleaseSyncRootForBlockingWork();
+                    throw new InvalidOperationException("decode failed");
+                }
+                finally
+                {
+                    if (released)
+                        buffer.ReacquireSyncRoot();
+                }
+            });
+            Assert.True(released);
+            Assert.True(Monitor.IsEntered(buffer.SyncRoot));
+        }
+
+        Assert.True(OtherThreadCanEnter(buffer.SyncRoot));
+    }
 }

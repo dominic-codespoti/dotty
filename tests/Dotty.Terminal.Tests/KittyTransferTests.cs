@@ -703,15 +703,168 @@ public sealed class KittyTransferTests
     }
 
     [Fact]
-    public void RawDestinationIsAllocatedOnceFromTheDeclaredSize()
+    public void RawStagingGrowsWithTheReceivedDataAndBecomesTheImageWithoutACopy()
     {
         var baseline = new GraphicsBaseline();
         using var rig = new KittyRig();
-        rig.Apc("i=1,s=40,v=30,f=32,m=1", B64(new byte[1000]));
-        rig.Apc("m=1", B64(new byte[1000]));
-        Assert.Equal(40 * 30 * 4, baseline.AllocatedDelta);
-        Assert.Equal(40 * 30 * 4, baseline.LiveBytesDelta);
-        Assert.Equal(0, baseline.PendingDelta); // raw loads need no accumulation buffer
+        // 300x300 f=32 declares 360 000 bytes. Chunk sizes are multiples of 3 so no padding appears before the end.
+        rig.Apc("i=1,s=300,v=300,f=32,m=1", B64(new byte[999]));
+        Assert.Equal(0, baseline.AllocatedDelta);          // nothing is an image yet
+        Assert.Equal(0, baseline.LiveBytesDelta);
+        Assert.Equal(64 * 1024, baseline.PendingDelta);    // first step: 64 KiB, not 360 000
+
+        rig.Apc("m=1", B64(new byte[69_999]));             // 70 998 received, bound 71 001 > 65 536: doubled
+        Assert.Equal(128 * 1024, baseline.PendingDelta);
+
+        rig.Apc("m=1", B64(new byte[200_001]));            // 270 999 received, bound 271 002 > 2 x 131 072
+        Assert.Equal(271_002, baseline.PendingDelta);
+        Assert.Equal(0, baseline.AllocatedDelta);
+
+        rig.Apc("m=0", B64(new byte[89_001]));             // 360 000 in total: the block is adopted as the image
+        Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+        Assert.Equal(300 * 300 * 4, baseline.AllocatedDelta);
+        Assert.Equal(300 * 300 * 4, baseline.LiveBytesDelta);
+        Assert.Equal(0, baseline.PendingDelta);
+        Assert.Equal(360_000, rig.Store.UsedBytes);
+    }
+
+    [Fact]
+    public void ARawLoadThatIsNeverFinishedReleasesItsStagingWhenTheControllerGoes()
+    {
+        var baseline = new GraphicsBaseline();
+        var rig = new KittyRig();
+        rig.Apc("i=1,s=300,v=300,f=32,m=1", B64(new byte[999]));
+        Assert.Equal(64 * 1024, baseline.PendingDelta);
+        rig.Dispose();
+        baseline.AssertRestored();
+    }
+
+    [Fact]
+    public void AHugeInQuotaRawHeaderWithATinyPayloadReservesAtMostTheFirstStagingStep()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = new KittyRig())
+        {
+            // 4000 x 4000 x 4 = 64 000 000 bytes: inside the quota (320 MiB) and the payload cap (65 MiB).
+            rig.Apc("i=1,s=4000,v=4000,f=32,m=1", B64(new byte[99]));
+            Assert.True(baseline.PendingDelta <= 64 * 1024, $"pending {baseline.PendingDelta}");
+            Assert.Equal(0, baseline.AllocatedDelta);
+            Assert.Equal(0, baseline.LiveBytesDelta);
+
+            rig.Apc("m=0", B64(new byte[30]));
+            Assert.Equal(new[] { Err("i=1", "ENODATA:Insufficient image data") }, rig.Replies);
+            Assert.Equal(0, baseline.PendingDelta);
+            Assert.Equal(0, baseline.AllocatedDelta);
+        }
+        baseline.AssertRestored();
+    }
+
+    [Fact]
+    public void ARawHeaderOverThePayloadCapIsRejectedFromTheKeysAlone()
+    {
+        var baseline = new GraphicsBaseline();
+        using var rig = new KittyRig();
+        rig.Apc("i=1,s=10000,v=10000,f=24", B64(new byte[30])); // 300 000 000 bytes: inside the quota, over 65 MiB
+        Assert.Equal(new[] { Err("i=1", "EFBIG:Payload too large") }, rig.Replies);
+        Assert.Equal(0, baseline.AllocatedDelta);
+        Assert.Equal(0, baseline.PendingDelta);
+    }
+
+    [Fact]
+    public void ACompressedHeaderPromisingMoreThanZlibCanExpandIsRejectedBeforeAllocating()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = new KittyRig())
+        {
+            // 300 MB declared, 20-odd compressed bytes: deflate cannot expand beyond about 1032:1.
+            rig.Apc("i=1,s=10000,v=10000,f=24,o=z", B64(TestPng.Zlib(new byte[1000])));
+            rig.Apc("i=2,s=1000,v=1000,f=32,o=z", B64(TestPng.Zlib(new byte[4000])));
+            string mismatch = "EINVAL:Image data size does not match declared size";
+            Assert.Equal(new[] { Err("i=1", mismatch), Err("i=2", mismatch) }, rig.Replies);
+            Assert.Equal(0, baseline.AllocatedDelta);
+        }
+        baseline.AssertRestored();
+    }
+
+    [Fact]
+    public void ACompressedPngDeclaringAHugeInflatedSizeForATinyStreamIsRejectedBeforeAllocating()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = new KittyRig())
+        {
+            byte[] png = TestPng.Build(1, 1, new byte[4]);
+            rig.Apc("i=1,f=100,o=z,S=60000000", B64(TestPng.Zlib(png)));
+            Assert.Equal(new[] { Err("i=1", "EINVAL:Image data size does not match declared size") }, rig.Replies);
+            Assert.Equal(0, rig.Decoder.Calls);
+            Assert.Equal(0, baseline.AllocatedDelta);
+        }
+        baseline.AssertRestored();
+    }
+
+    [Fact]
+    public void APngHeaderPromisingFarMorePixelsThanItsFileCouldHoldIsRejectedBeforeAllocating()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = new KittyRig())
+        {
+            // 8000 x 10000 x 4 = 320 000 000 bytes: inside the quota, but 53 bytes of file cannot describe 80 M pixels.
+            byte[] header = TestPng.HeaderOnly(8000, 10000);
+            rig.Apc("i=1,f=100", B64(header.Concat(new byte[20]).ToArray()));
+            Assert.Equal(new[] { Err("i=1", "EBADPNG:Invalid PNG data") }, rig.Replies);
+            Assert.Equal(0, rig.Decoder.Calls);
+            Assert.Equal(0, baseline.AllocatedDelta);
+        }
+        baseline.AssertRestored();
+    }
+
+    [Fact]
+    public void ExtremelyCompressibleButHonestImagesAreNotMistakenForBombs()
+    {
+        using var rig = new KittyRig();
+        byte[] zeros = new byte[1500 * 1000 * 3];
+        rig.Apc("i=1,s=1500,v=1000,f=24,o=z", B64(TestPng.Zlib(zeros, CompressionLevel.SmallestSize)));
+        byte[] png = TestPng.Build(1000, 1000, new byte[1000 * 1000 * 4]);
+        rig.Apc("i=2,f=100", B64(png));
+        rig.Apc($"i=3,f=100,o=z,S={png.Length}", B64(TestPng.Zlib(png, CompressionLevel.SmallestSize)));
+        Assert.Equal(new[] { Ok("i=1"), Ok("i=2"), Ok("i=3") }, rig.Replies);
+        Assert.Equal(new byte[3], rig.Store.FindByClientId(1)!.Root.AsSpan().Slice(0, 3).ToArray());
+    }
+
+    [Fact]
+    public void RawStagingIsExactWhenPaddingArrivesInSlicesOfItsOwn()
+    {
+        // 1x1 f=32 = 4 bytes: the staging block is exactly 4 bytes, and "BA" + "=" + "=" must still fit it.
+        using var rig = new KittyRig();
+        string b64 = B64(10, 20, 30, 255); // "ChQe/w=="
+        rig.Apc("i=1,s=1,v=1,f=32", b64[..4], b64[4..6], "=", "=");
+        Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+        Assert.Equal(new byte[] { 10, 20, 30, 255 }, StoredPixels(rig, 1));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PaddingSplitIntoSingleCharacterSlicesRoundTrips(bool compressed)
+    {
+        using var rig = new KittyRig();
+        int pixels = 1;
+        byte[] payload;
+        while (true)
+        {
+            byte[] raw = new byte[pixels * 4];
+            raw[3] = 255;
+            payload = compressed ? TestPng.Zlib(raw) : raw;
+            if (payload.Length % 3 != 0) break; // want a padded base64 tail
+            pixels++;
+        }
+        string b64 = B64(payload);
+        Assert.EndsWith("=", b64);
+        var slices = new List<string> { b64.TrimEnd('=') };
+        slices.AddRange(b64.Where(c => c == '=').Select(c => "="));
+
+        rig.Apc($"i=1,s={pixels},v=1,f=32" + (compressed ? ",o=z" : ""), slices.ToArray());
+        Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+        Assert.Equal(pixels * 4, rig.Store.FindByClientId(1)!.Root.ByteLength);
     }
 
     [Fact]
@@ -882,6 +1035,55 @@ public sealed class KittyTransferTests
         Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
         Assert.Equal(1, rig.Host.ReleaseAttempts);
         Assert.Equal(0, rig.Host.ReacquireCalls); // nothing was released, so nothing is re-acquired
+    }
+
+    [Theory]
+    [InlineData(true)]   // the decoder throws
+    [InlineData(false)]  // the decoder reports a bad PNG
+    public void AFailingDecodeWithTheLockReleasedStillReacquiresExactlyOneLevel(bool throws)
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = new KittyRig())
+        {
+            if (throws)
+                rig.Decoder.ThrowOnDecode = new InvalidOperationException("native decoder blew up");
+            else
+                rig.Decoder.Forced = ImageDecodeStatus.Invalid;
+
+            lock (rig.Host.SyncRoot)
+            {
+                rig.Apc("i=1,f=100", B64(TestPng.Build(256, 256, new byte[256 * 256 * 4])));
+                Assert.True(Monitor.IsEntered(rig.Host.SyncRoot));
+            }
+
+            Assert.False(Monitor.IsEntered(rig.Host.SyncRoot)); // the lock statement balanced the single level
+            Assert.Equal(1, rig.Host.ReleaseAttempts);
+            Assert.Equal(1, rig.Host.ReacquireCalls);
+            Assert.Equal(
+                new[] { Err("i=1", throws ? "EILSEQ:Failed to decode image data" : "EBADPNG:Invalid PNG data") },
+                rig.Replies);
+            Assert.Equal(0, rig.Store.Count);
+            Assert.False(rig.Controller.HasOpenTransfer);
+        }
+        baseline.AssertRestored();
+    }
+
+    [Fact]
+    public void AnInflateFailureInTheHeavyPhaseKeepsTheLockBalancedToo()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = new KittyRig())
+        {
+            // 300 x 300 x 3 = 270 000 bytes: heavy. The stream inflates to 269 999: a size mismatch after the unlock.
+            lock (rig.Host.SyncRoot)
+                rig.Apc("i=1,s=300,v=300,f=24,o=z", B64(TestPng.Zlib(new byte[269_999])));
+
+            Assert.False(Monitor.IsEntered(rig.Host.SyncRoot));
+            Assert.Equal(1, rig.Host.ReleaseAttempts);
+            Assert.Equal(1, rig.Host.ReacquireCalls);
+            Assert.Equal(new[] { Err("i=1", "EINVAL:Image data size does not match declared size") }, rig.Replies);
+        }
+        baseline.AssertRestored();
     }
 
     // ---------------------------------------------------------------------------------------------- helpers

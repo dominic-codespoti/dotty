@@ -54,20 +54,38 @@ public sealed unsafe class ImagePixels : IDisposable
     /// </summary>
     public static ImagePixels Allocate(int width, int height, ImagePixelFormat format)
     {
+        long total = Layout(width, height, format, out long stride);
+        var ptr = (byte*)NativeMemory.AllocZeroed((nuint)total);
+        GraphicsMemoryMetrics.ChangeLiveImagePixels(total, 1);
+        return new ImagePixels(width, height, format, (int)stride, total, ptr);
+    }
+
+    /// <summary>
+    /// Takes ownership of a <see cref="NativeMemory"/> block (allocated or reallocated through <c>NativeMemory</c>)
+    /// of exactly <c>width * height * bytesPerPixel</c> bytes whose content is complete. The block is freed by the
+    /// last release. Validates like <see cref="Allocate"/>; on a throw the caller still owns the block.
+    /// </summary>
+    internal static ImagePixels Adopt(byte* block, int width, int height, ImagePixelFormat format)
+    {
+        if (block == null) throw new ArgumentNullException(nameof(block));
+        long total = Layout(width, height, format, out long stride);
+        GraphicsMemoryMetrics.ChangeLiveImagePixels(total, 1);
+        return new ImagePixels(width, height, format, (int)stride, total, block);
+    }
+
+    private static long Layout(int width, int height, ImagePixelFormat format, out long stride)
+    {
         if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
         if (format != ImagePixelFormat.Rgb8 && format != ImagePixelFormat.Rgba8Premultiplied)
             throw new ArgumentOutOfRangeException(nameof(format));
 
-        long stride = checked((long)width * (int)format);
+        stride = checked((long)width * (int)format);
         if (stride > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(width), "Row does not fit an int stride.");
         long total = checked(stride * height);
         // Spans (AsWritableSpan/AsSpan) are int-indexed.
         if (total > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(height), "Image exceeds 2 GiB.");
-
-        var ptr = (byte*)NativeMemory.AllocZeroed((nuint)total);
-        GraphicsMemoryMetrics.ChangeLiveImagePixels(total, 1);
-        return new ImagePixels(width, height, format, (int)stride, total, ptr);
+        return total;
     }
 
     /// <summary>Writable view; only valid before the buffer is shared with another owner.</summary>

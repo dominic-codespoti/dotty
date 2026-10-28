@@ -138,6 +138,16 @@ public static class SilkConfig
         ApplyThemeToAdapter(adapter, theme);
         HyperlinkIngestConfig.Apply(adapter, UserConfigService.Current.Hyperlinks);
         VtAdapterConfig.Apply(adapter, UserConfigService.Current.Vt);
+        ApplyGraphicsToAdapter(adapter);
+    }
+
+    /// <summary>
+    /// Applies the Kitty graphics settings and the shared PNG decoder. Also used for split panes, which are created
+    /// outside <see cref="ApplyConfigToAdapter"/> and picked up by the host's session subscription pass.
+    /// </summary>
+    public static void ApplyGraphicsToAdapter(TerminalAdapter adapter)
+    {
+        if (adapter == null) return;
         adapter.ConfigureGraphics(UserConfigService.Current.ToKittyGraphicsOptions(), ImageDecoder);
     }
 

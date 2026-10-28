@@ -183,6 +183,25 @@ public sealed class KittyControllerTests
         }
     }
 
+    [Fact]
+    public void AnAnonymousPlainTransmitNeverEvictsImagesThatCanStillBeUsed()
+    {
+        var baseline = new GraphicsBaseline();
+        using (var rig = new KittyRig(new KittyGraphicsOptions { Enabled = true, StorageLimitBytes = 1500 }))
+        {
+            rig.Apc("i=1,s=250,v=1,f=32", ThousandBytes);
+            rig.Apc("s=250,v=1,f=32", ThousandBytes);      // nobody can address it again: it must not push i=1 out
+            rig.Apc("s=250,v=1,f=32,q=2", ThousandBytes);
+
+            Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
+            Assert.NotNull(rig.Store.FindByClientId(1));
+            Assert.Equal(1, rig.Store.Count);
+            Assert.Equal(1000, baseline.LiveBytesDelta);
+            rig.Store.ValidateInvariants();
+        }
+        baseline.AssertRestored();
+    }
+
     // ------------------------------------------------------------------------------------- retransmission
 
     [Fact]
@@ -771,6 +790,143 @@ public sealed class KittyControllerTests
 
             Assert.Equal(new[] { Err("i=1", "ENOSPC:Storage quota exceeded") }, t.Replies.ToArray());
             Assert.Equal(0, t.Adapter.KittyGraphics!.Store.Count);
+        }
+        baseline.AssertRestored();
+    }
+
+    [Fact]
+    public void ConfigureGraphicsCalledFromTheDecoderWhileTheLockIsReleasedTakesEffectAtCommit()
+    {
+        var baseline = new GraphicsBaseline();
+        var replies = new System.Collections.Generic.List<string>();
+        var decoder = new FakeImageDecoder();
+        using (var adapter = KittyTransferTests.NewAdapter(decoder: decoder, replies: replies))
+        {
+            var parser = new BasicAnsiParser { Handler = adapter };
+            bool lockHeldInsideDecoder = true;
+            decoder.BeforeDecode = (_, _) =>
+            {
+                // Runs on the consumer thread with SyncRoot released: re-entering the adapter must not deadlock.
+                lockHeldInsideDecoder = Monitor.IsEntered(adapter.Buffer.SyncRoot);
+                adapter.ConfigureGraphics(new KittyGraphicsOptions { Enabled = true, StorageLimitBytes = 4096 }, decoder);
+            };
+
+            lock (adapter.Buffer.SyncRoot) // what the PTY consumer does around every parsed chunk
+                parser.Feed(LargePngPayloadApc);
+
+            Assert.False(lockHeldInsideDecoder);
+            Assert.Equal(new[] { Err("i=1", "ENOSPC:Storage quota exceeded") }, replies);
+            Assert.Equal(0, adapter.KittyGraphics!.Store.Count);
+            Assert.False(Monitor.IsEntered(adapter.Buffer.SyncRoot));
+        }
+        baseline.AssertRestored();
+    }
+
+    // ---------------------------------------------------------------------------- random command sequences
+
+    private static void RandomTransmit(KittyRig rig, Random rng, bool leaveOpen)
+    {
+        int w = rng.Next(1, 25), h = rng.Next(1, 8);
+        byte[] raw = RandomBytes(w * h * 4, rng.Next());
+        bool compress = rng.Next(3) == 0;
+        string b64 = B64(compress ? TestPng.Zlib(raw) : raw);
+        string keys = rng.Next(4) switch
+        {
+            0 => "",                                  // anonymous
+            1 => $"I={rng.Next(1, 4)},",
+            _ => $"i={rng.Next(1, 7)},",
+        };
+        keys += $"s={w},v={h},f=32" + (compress ? ",o=z" : "") + (rng.Next(5) == 0 ? ",N=1" : "") + (rng.Next(6) == 0 ? ",a=T" : "");
+
+        // Split points stay before the optional padding so that "=" always lands in the final chunk.
+        int stop = b64.TrimEnd('=').Length;
+        var cuts = Enumerable.Range(0, rng.Next(0, 3)).Select(_ => rng.Next(0, stop + 1)).OrderBy(c => c).ToList();
+        cuts.Add(b64.Length);
+        int start = 0;
+        for (int i = 0; i < cuts.Count; i++)
+        {
+            bool more = i < cuts.Count - 1 || leaveOpen;
+            string control = i == 0 ? keys + (more ? ",m=1" : "") : (more ? "m=1" : "m=0");
+            rig.Apc(control, b64.Substring(start, cuts[i] - start));
+            start = cuts[i];
+        }
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    [InlineData(8)]
+    public void SeededRandomCommandSequencesKeepTheStoreConsistentAndLeakNothing(int seed)
+    {
+        var baseline = new GraphicsBaseline();
+        var rng = new Random(seed);
+        using (var rig = new KittyRig(new KittyGraphicsOptions { Enabled = true, StorageLimitBytes = 6000 }))
+        {
+            for (int step = 0; step < 300; step++)
+            {
+                switch (rng.Next(14))
+                {
+                    case 0:
+                    case 1:
+                    case 2:
+                    case 3:
+                    case 4:
+                        RandomTransmit(rig, rng, leaveOpen: false);
+                        break;
+                    case 5:
+                        RandomTransmit(rig, rng, leaveOpen: true);
+                        break;
+                    case 6:
+                        rig.Apc("m=0", B64(RandomBytes(rng.Next(0, 60) * 3, rng.Next()))); // maybe a stray, maybe a finish
+                        break;
+                    case 7:
+                        rig.Apc($"i={rng.Next(1, 7)},s=1,v=1,a=q,f=24", OnePixel);
+                        break;
+                    case 8:
+                        rig.Apc("a=d,d=a");
+                        break;
+                    case 9:
+                        rig.CancelledApc("m=1", OnePixel);
+                        break;
+                    case 10:
+                        rig.Apc($"i={rng.Next(1, 7)},s=1,v=1,f=24", "AA!A");
+                        break;
+                    case 11:
+                        rig.Controller.Configure(
+                            new KittyGraphicsOptions { Enabled = true, StorageLimitBytes = rng.Next(500, 8000) }, rig.Decoder);
+                        break;
+                    case 12:
+                        if (rng.Next(4) == 0)
+                            rig.Controller.ClearImages();
+                        else
+                            rig.Controller.AbortTransfer();
+                        break;
+                    default:
+                        {
+                            int pw = rng.Next(1, 6), ph = rng.Next(1, 6);
+                            rig.Apc($"i={rng.Next(1, 7)},f=100", B64(TestPng.Build(pw, ph, RandomBytes(pw * ph * 4, rng.Next()))));
+                            break;
+                        }
+                }
+
+                rig.Store.ValidateInvariants();
+                Assert.Equal(rig.Store.UsedBytes, baseline.LiveBytesDelta);   // pixels alive == pixels stored
+                Assert.Equal(rig.Store.Count, baseline.LiveCountDelta);
+                if (!rig.Controller.HasOpenTransfer)
+                    Assert.Equal(0, baseline.PendingDelta);
+                Assert.Equal(rig.Store.StorageLimitBytes, rig.Controller.Options.StorageLimitBytes);
+            }
+
+            foreach (string reply in rig.Replies)
+            {
+                Assert.StartsWith("\u001b_G", reply);
+                Assert.EndsWith("\u001b\\", reply);
+            }
         }
         baseline.AssertRestored();
     }

@@ -31,8 +31,9 @@ internal interface IKittyGraphicsHost
     /// Releases the buffer lock around a long pure-CPU step (inflate, PNG decode, premultiply) so the renderer can
     /// keep capturing frames. Returns true when the lock was held and has been released; the caller must then call
     /// <see cref="ReacquireSyncRoot"/> exactly once (in a <c>finally</c>). Returns false, releasing nothing, when
-    /// the current thread does not hold the lock (tests feeding the parser directly). Only the PTY consumer thread
-    /// may call it, holding the lock with a recursion count of one.
+    /// the current thread does not hold the lock (tests feeding the parser directly) or holds it recursively (one
+    /// released level would not free it); the work then simply runs under the lock and nothing is re-acquired. Only
+    /// the PTY consumer thread may call it, normally holding the lock with a recursion count of one.
     /// </summary>
     bool ReleaseSyncRootForBlockingWork();
 

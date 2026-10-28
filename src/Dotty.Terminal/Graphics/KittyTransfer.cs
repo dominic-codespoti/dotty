@@ -1,5 +1,6 @@
 using System;
 using System.Buffers;
+using System.Runtime.InteropServices;
 using Dotty.Abstractions.Graphics;
 
 namespace Dotty.Terminal.Graphics;
@@ -13,21 +14,35 @@ namespace Dotty.Terminal.Graphics;
 /// memory exists, in this order: format (<c>f</c>), medium (<c>t</c>), compression (<c>o</c>), dimensions, decoded
 /// size against the quota, payload cap. Declared sizes are computed in 64-bit arithmetic. A transfer that failed
 /// has released its buffers and ignores further input; <see cref="Status"/> keeps the first error.</para>
-/// <para>Payload handling per kind: uncompressed <c>f=24/32</c> decodes base64 straight into the destination
-/// <see cref="ImagePixels"/> (allocated at the first payload byte from <c>s*v*bpp</c>); <c>o=z</c> and PNG
-/// accumulate the decoded bytes in a pooled buffer capped at <see cref="KittyGraphicsOptions.MaxPayloadBytes"/>.
-/// <see cref="Complete"/> inflates / decodes and premultiplies; when the work is large it runs with the buffer lock
-/// released through the host (see <see cref="IKittyGraphicsHost.ReleaseSyncRootForBlockingWork"/>).</para>
+/// <para>Payload handling per kind: uncompressed <c>f=24/32</c> decodes base64 into a native staging block that
+/// grows with the data actually received (geometrically, capped at <c>s*v*bpp</c>) and becomes the final
+/// <see cref="ImagePixels"/> without a copy, so a header that promises hundreds of MiB followed by a few bytes
+/// never reserves that memory; staged bytes count as pending transfer bytes. <c>o=z</c> and PNG accumulate the
+/// decoded bytes in a pooled buffer capped at <see cref="KittyGraphicsOptions.MaxPayloadBytes"/>; their
+/// destination is allocated only after the whole payload is in and only when its size is plausible for that much
+/// compressed data (zlib cannot expand beyond about 1032:1). <see cref="Complete"/> inflates / decodes and
+/// premultiplies; when the work is large it runs with the buffer lock released through the host (see
+/// <see cref="IKittyGraphicsHost.ReleaseSyncRootForBlockingWork"/>).</para>
 /// <para>Threading: all members run on the PTY consumer thread except <see cref="Cancel"/>, which any thread may call
 /// under the buffer lock; <see cref="Busy"/> tells the canceller not to free the buffers the consumer is using.</para>
 /// </remarks>
-internal sealed class KittyTransfer : IDisposable
+internal sealed unsafe class KittyTransfer : IDisposable
 {
     /// <summary>Decoded-size threshold from which inflate/decode/premultiply run without the buffer lock.</summary>
     public const long HeavyThresholdBytes = 256 * 1024;
 
     private const int InitialAccumulatorBytes = 16 * 1024;
+    private const int InitialStagingBytes = 64 * 1024;
     private const int PngHeaderBytes = 33;
+
+    // Deflate cannot expand by more than 258 bytes per 2 bits = 1032:1; the slack covers headers and tiny streams.
+    private const long MaxInflateRatio = 1040;
+    private const long InflateSlackBytes = 1024;
+
+    // A PNG pixel costs at least one bit (1-bit grey) before deflate, so a file of N bytes cannot describe more than
+    // about 8 * 1032 * N pixels.
+    private const long MaxPngPixelsPerByte = 8300;
+    private const long PngSlackBytes = 4096;
 
     private readonly KittyGraphicsCommand _first;
     private readonly KittyGraphicsOptions _options;
@@ -41,6 +56,9 @@ internal sealed class KittyTransfer : IDisposable
 
     private ImagePixels? _dest;
     private int _destPos;
+    // Uncompressed raw formats: native staging block written by base64 decoding; _rawCap <= _expectedBytes.
+    private byte* _raw;
+    private int _rawCap;
     private byte[]? _acc;
     private int _accLen;
     private bool _pngHeaderChecked;
@@ -214,9 +232,12 @@ internal sealed class KittyTransfer : IDisposable
 
         if (!_isPng && !_compressed)
         {
-            _dest ??= ImagePixels.Allocate((int)_first.Width, (int)_first.Height, _rawFormat);
-            var window = _dest.AsWritableSpan().Slice(_destPos);
-            var st = _base64.Decode(base64, window, out int written, final);
+            // Upper bound of the bytes this call can write: whole quartets, plus up to 2 bytes when padding that
+            // arrives in its own slice completes a carried quartet. Never beyond the declared size, so a surplus is
+            // reported by the decoder as an overflow.
+            long bound = _destPos + ((long)_base64.PendingChars + base64.Length) / 4 * 3 + 3;
+            EnsureStaging(Math.Min(bound, _expectedBytes));
+            var st = _base64.Decode(base64, StagingWindow(), out int written, final);
             if (st != KittyBase64Status.Ok)
             {
                 Fail(MapBase64(st));
@@ -227,14 +248,15 @@ internal sealed class KittyTransfer : IDisposable
         }
 
         // Every complete quartet (a padded one included) is counted as 3 bytes, which over-counts a padded quartet by
-        // at most 2: beyond the cap + 2 the real size is certainly beyond the cap.
+        // at most 2: beyond the cap + 2 the real size is certainly beyond the cap. The 3 spare bytes cover padding
+        // that arrives in a slice of its own and completes a carried quartet.
         long need = _accLen + ((long)_base64.PendingChars + base64.Length) / 4 * 3;
         if (need > _options.MaxPayloadBytes + 2)
         {
             Fail(KittyStatus.PayloadTooLarge);
             return;
         }
-        EnsureAccumulator((int)Math.Max(need, 1));
+        EnsureAccumulator((int)(need + 3));
         var acc = _acc!;
         var accStatus = _base64.Decode(base64, acc.AsSpan(_accLen), out int accWritten, final);
         if (accStatus != KittyBase64Status.Ok)
@@ -290,15 +312,21 @@ internal sealed class KittyTransfer : IDisposable
         // 1. Flush the base64 carry.
         if (raw && !_compressed)
         {
-            if (_dest == null)
+            if (_raw == null)
                 return KittyStatus.InsufficientData;
-            var window = _dest.AsWritableSpan().Slice(_destPos);
-            var st = _base64.Finish(window, out int written);
+            EnsureStaging(Math.Min((long)_destPos + 2, _expectedBytes));
+            var st = _base64.Finish(StagingWindow(), out int written);
             if (st != KittyBase64Status.Ok)
                 return MapBase64(st);
             _destPos += written;
             if (_destPos < _expectedBytes)
                 return KittyStatus.InsufficientData;
+
+            // The staging block is complete and exactly s*v*bpp bytes: it becomes the image without a copy.
+            _dest = ImagePixels.Adopt(_raw, (int)_first.Width, (int)_first.Height, _rawFormat);
+            GraphicsMemoryMetrics.ChangePendingTransferBytes(-_rawCap);
+            _raw = null;
+            _rawCap = 0;
         }
         else
         {
@@ -320,7 +348,11 @@ internal sealed class KittyTransfer : IDisposable
         if (raw)
         {
             if (_compressed)
+            {
+                if (!InflatePlausible(_expectedBytes))
+                    return KittyStatus.SizeMismatch;
                 _dest = ImagePixels.Allocate((int)_first.Width, (int)_first.Height, _rawFormat);
+            }
             workBytes = _expectedBytes;
             hasWork = _compressed || _rawFormat == ImagePixelFormat.Rgba8Premultiplied;
         }
@@ -329,6 +361,8 @@ internal sealed class KittyTransfer : IDisposable
             hasWork = true;
             if (_compressed)
             {
+                if (!InflatePlausible(_expectedBytes))
+                    return KittyStatus.SizeMismatch;
                 workBytes = _expectedBytes;
             }
             else
@@ -336,6 +370,8 @@ internal sealed class KittyTransfer : IDisposable
                 var headerStatus = CheckPngHeader(_acc == null ? default : _acc.AsSpan(0, _accLen), out var info);
                 if (headerStatus != KittyStatus.Ok)
                     return headerStatus;
+                if (!PngPlausible(info, _accLen))
+                    return KittyStatus.BadPng;
                 _pngInfo = info;
                 workBytes = (long)info.Width * info.Height * 4;
             }
@@ -418,6 +454,8 @@ internal sealed class KittyTransfer : IDisposable
                 var headerStatus = CheckPngHeader(png, out info);
                 if (headerStatus != KittyStatus.Ok)
                     return headerStatus;
+                if (!PngPlausible(info, png.Length))
+                    return KittyStatus.BadPng;
             }
             else
             {
@@ -459,6 +497,30 @@ internal sealed class KittyTransfer : IDisposable
         return KittyStatus.Ok;
     }
 
+    /// <summary>
+    /// True when <paramref name="expected"/> inflated bytes can come out of the compressed data received so far
+    /// (deflate expands at most about 1032:1). Checked before the destination is allocated, so a tiny payload cannot
+    /// reserve a large buffer by declaring large dimensions.
+    /// </summary>
+    private bool InflatePlausible(long expected) => expected <= _accLen * MaxInflateRatio + InflateSlackBytes;
+
+    // A PNG file of this length cannot describe more pixels than this (see MaxPngPixelsPerByte).
+    private static bool PngPlausible(in PngInfo info, long fileLength) =>
+        (long)info.Width * info.Height <= (fileLength + PngSlackBytes) * MaxPngPixelsPerByte;
+
+    // Grows the staging block to at least "need" bytes (geometric steps, never beyond the declared size).
+    private void EnsureStaging(long need)
+    {
+        if (need <= _rawCap)
+            return;
+        long target = Math.Min(_expectedBytes, Math.Max(need, Math.Max(InitialStagingBytes, (long)_rawCap * 2)));
+        _raw = (byte*)NativeMemory.Realloc(_raw, (nuint)target);
+        GraphicsMemoryMetrics.ChangePendingTransferBytes(target - _rawCap);
+        _rawCap = (int)target;
+    }
+
+    private Span<byte> StagingWindow() => new Span<byte>(_raw + _destPos, _rawCap - _destPos);
+
     private static KittyStatus MapBase64(KittyBase64Status status) =>
         status == KittyBase64Status.Overflow ? KittyStatus.PayloadTooLarge : KittyStatus.InvalidBase64;
 
@@ -493,6 +555,14 @@ internal sealed class KittyTransfer : IDisposable
             ArrayPool<byte>.Shared.Return(_acc);
             _acc = null;
             _accLen = 0;
+        }
+        if (_raw != null)
+        {
+            GraphicsMemoryMetrics.ChangePendingTransferBytes(-_rawCap);
+            NativeMemory.Free(_raw);
+            _raw = null;
+            _rawCap = 0;
+            _destPos = 0;
         }
         if (_dest != null)
         {

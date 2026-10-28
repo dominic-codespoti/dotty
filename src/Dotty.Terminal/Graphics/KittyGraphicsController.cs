@@ -329,6 +329,14 @@ internal sealed class KittyGraphicsController : IDisposable
             return;
         }
 
+        // A plain transmit with neither id nor number can never be addressed again: there is nothing to keep, and
+        // storing it would only evict images that can still be used.
+        if (first.Action == KittyAction.Transmit && first.ImageId == 0 && first.ImageNumber == 0)
+        {
+            pixels.Dispose();
+            return;
+        }
+
         uint clientId = first.ImageId;
         KittyImage? image = null;
         bool added;
@@ -357,7 +365,17 @@ internal sealed class KittyGraphicsController : IDisposable
         }
 
         if (first.Action == KittyAction.TransmitAndPut)
-            PlaceAfterTransmit(first, image);
+        {
+            var placed = PlaceAfterTransmit(first, image);
+            if (placed != KittyStatus.Ok)
+            {
+                // The image stays stored (the transmit itself succeeded); the reply reports the failed placement.
+                if (image.ClientId == 0 && image.PlacementCount == 0)
+                    _store.Delete(image);
+                SetPending(placed, clientId, first.ImageNumber, first.PlacementId, quiet);
+                return;
+            }
+        }
 
         // An image nobody can address (no id) and nothing displays is garbage.
         if (image.ClientId == 0 && image.PlacementCount == 0)
@@ -366,10 +384,13 @@ internal sealed class KittyGraphicsController : IDisposable
         SetPending(KittyStatus.Ok, clientId, first.ImageNumber, first.PlacementId, quiet);
     }
 
-    /// <summary>Seam for the placement stage: <c>a=T</c> puts the freshly stored image using the transmit command's keys.</summary>
-    private void PlaceAfterTransmit(in KittyGraphicsCommand cmd, KittyImage image)
-    {
-    }
+    /// <summary>
+    /// Seam for the placement stage: <c>a=T</c> puts the freshly stored image using the transmit command's keys
+    /// (<paramref name="cmd"/> is the first chunk's command, so <c>p c r x y w h X Y z C U P Q H V</c> are all
+    /// there). Runs at the final-chunk commit, after the image is in the store and before the reply; a non-Ok
+    /// result becomes the reply and the image is kept.
+    /// </summary>
+    private KittyStatus PlaceAfterTransmit(in KittyGraphicsCommand cmd, KittyImage image) => KittyStatus.Ok;
 
     // ---- replies and failure handling ------------------------------------------------------------------------
 

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Dotty.Runtime.Panes;
 using Dotty.Runtime.Tabs;
 using Xunit;
 
@@ -81,5 +82,28 @@ public sealed class TabInitialPixelSizeTests
 
         Assert.Empty(ptys[1].Resizes());      // it already started with exactly this size
         Assert.Equal(2, ptys[0].Resizes().Length); // the first tab learned its pixels and then its grid
+    }
+}
+
+public sealed class SplitInitialPixelSizeTests
+{
+    [Fact]
+    public void ASplitStartsItsPtyWithThePixelSizeOfTheTargetPane()
+    {
+        var ptys = new List<SilentPty>();
+        using var tree = new PaneTree(rows: 24, columns: 80, ptyFactory: () =>
+        {
+            var pty = new SilentPty();
+            ptys.Add(pty);
+            return pty;
+        });
+        var target = tree.ActivePane;
+        target.PixelWidth = 80 * 9;
+        target.PixelHeight = 24 * 18;
+
+        tree.Split(target, SplitDirection.Vertical, workingDirectory: "/", shell: "/bin/sh");
+
+        var started = Assert.Single(ptys);
+        Assert.Equal((80 * 9, 24 * 18), started.StartedPixelSize);
     }
 }

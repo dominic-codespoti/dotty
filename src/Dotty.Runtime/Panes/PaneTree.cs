@@ -121,10 +121,13 @@ public sealed class PaneTree : IDisposable
         Subscribe(newPane);
         if (!string.IsNullOrEmpty(effectiveWorkingDirectory) || !string.IsNullOrEmpty(effectiveShell))
         {
+            // The new session has the target's grid, so the target's text-area pixel size is the matching start size.
             session.StartWithOptions(
                 shell: effectiveShell,
                 workingDirectory: effectiveWorkingDirectory,
-                shellIsExecutable: effectiveShellIsExecutable);
+                shellIsExecutable: effectiveShellIsExecutable,
+                initialPixelWidth: target.PixelWidth,
+                initialPixelHeight: target.PixelHeight);
         }
         var parent = target.Parent;
 

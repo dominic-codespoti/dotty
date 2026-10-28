@@ -24,6 +24,7 @@ public sealed class Osc8IngestValidationTests
     [InlineData(0x202E)]
     [InlineData(0x200B)]
     [InlineData(0x85)]
+    [InlineData(0x7F)]
     [InlineData(0x2028)]
     public void InvalidUri_LeavesTextWithoutHyperlink(int code)
     {
@@ -36,12 +37,33 @@ public sealed class Osc8IngestValidationTests
         Assert.Equal(0, adapter.Buffer.GetColdCell(0, 3).HyperlinkId);
     }
 
+    [Theory]
+    [InlineData(0x00)]
+    [InlineData(0x01)]
+    [InlineData(0x0A)]
+    [InlineData(0x1B)]
+    [InlineData(0x7F)]
+    [InlineData(0x9F)]
+    public void OscDispatch_InvalidUriWithControl_ClosesActiveLink(int code)
+    {
+        // Bypasses the parser (which aborts C0 itself) to test the adapter gate.
+        var adapter = new TerminalAdapter(rows: 4, columns: 20);
+        adapter.OnOperatingSystemCommand(8, (";https://good.test/").AsSpan());
+        adapter.OnPrint("A".AsSpan());
+        adapter.OnOperatingSystemCommand(8, (";https://evil.test/a" + (char)code + "b").AsSpan());
+        adapter.OnPrint("B".AsSpan());
+
+        Assert.NotEqual(0, adapter.Buffer.GetColdCell(0, 0).HyperlinkId);
+        Assert.Equal(0, adapter.Buffer.GetColdCell(0, 1).HyperlinkId);
+    }
+
     [Fact]
     public void InvalidUri_ClosesPreviouslyActiveLink()
     {
         var (adapter, parser) = Create();
 
-        Feed(parser, "\u001b]8;;https://good.test/\u001b\\A\u001b]8;;https://evil.test/a\nb\u001b\\B");
+        // U+200B (format char): C0 controls would abort the OSC in the parser before the adapter sees it.
+        Feed(parser, "\u001b]8;;https://good.test/\u001b\\A\u001b]8;;https://evil.test/a\u200Bb\u001b\\B");
 
         Assert.NotEqual(0, adapter.Buffer.GetColdCell(0, 0).HyperlinkId);
         Assert.Equal(0, adapter.Buffer.GetColdCell(0, 1).HyperlinkId);

@@ -223,11 +223,22 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     }
 
 
+    /// <summary>Longest window title retained from OSC 0/2, in UTF-16 chars.</summary>
+    public const int MaxTitleChars = 4096;
+
     public void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload)
     {
         if (TryHandleShellIntegration(code, payload)) return;
         if (code == 0 || code == 2)
         {
+            // The parser admits OSC strings up to 1 MiB (OSC 52); a title never needs that.
+            if (payload.Length > MaxTitleChars)
+            {
+                int keep = MaxTitleChars;
+                if (char.IsHighSurrogate(payload[keep - 1]))
+                    keep--;
+                payload = payload[..keep];
+            }
             if (_windowTitle is null || !payload.SequenceEqual(_windowTitle.AsSpan()))
                 _windowTitle = payload.ToString();
             TitleChanged?.Invoke(_windowTitle);

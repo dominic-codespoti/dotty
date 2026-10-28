@@ -280,6 +280,12 @@ namespace Dotty.Terminal.Parser
                         ResetSequence();
                         _sequenceState = SequenceState.Escape;
                     }
+                    else if (b < 0x20)
+                    {
+                        // Same rule as a live OSC: any other control aborts the
+                        // (already overflowed) string and executes.
+                        AbortStringAndExecute(b);
+                    }
                     break;
                 case SequenceState.DiscardString:
                     ProcessDiscardStringByte(b);
@@ -1068,7 +1074,9 @@ namespace Dotty.Terminal.Parser
                 case 1004:
                     Handler?.OnSetFocusReporting(enabled);
                     break;
-                case 9:
+                // Mode 9 (X10 mouse) is deliberately not routed: TerminalInputEncoder
+                // has no press-only/no-modifier X10 encoding and would report releases
+                // and modifiers to an application that asked for neither.
                 case 1000:
                 case 1002:
                 case 1003:

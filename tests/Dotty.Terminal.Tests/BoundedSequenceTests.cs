@@ -52,7 +52,7 @@ public sealed class BoundedSequenceTests
         parser.Feed(Encoding.ASCII.GetBytes($"\u001b]52;c;{payload}\u0007"));
 
         Assert.Single(handler.OscCalls);
-        Assert.Equal((52, ";c;" + payload), handler.OscCalls[0]);
+        Assert.Equal((52, "c;" + payload), handler.OscCalls[0]);
     }
 
     [Fact]

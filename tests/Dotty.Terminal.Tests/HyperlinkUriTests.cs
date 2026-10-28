@@ -121,13 +121,17 @@ public sealed class HyperlinkUriTests
         string clean = "https://example.com/path";
         string dirty = "https://example.com/pa\nth";
 
+        int mismatches = 0;
         AllocationAssert.NoAllocations(() =>
         {
-            Assert.True(HyperlinkUri.TryParseOsc8Payload(payload, out var id, out var uri));
-            Assert.Equal(HyperlinkUriStatus.Ok, HyperlinkUri.Validate(uri));
-            Assert.Equal(HyperlinkUriStatus.Ok, HyperlinkUri.Validate(clean));
-            Assert.Equal(HyperlinkUriStatus.ControlChar, HyperlinkUri.Validate(dirty));
-            Assert.Equal(3, id.Length);
+            // Plain comparisons only: xunit's generic Assert.Equal allocates a comparer.
+            if (!HyperlinkUri.TryParseOsc8Payload(payload, out var id, out var uri)
+                || HyperlinkUri.Validate(uri) != HyperlinkUriStatus.Ok
+                || HyperlinkUri.Validate(clean) != HyperlinkUriStatus.Ok
+                || HyperlinkUri.Validate(dirty) != HyperlinkUriStatus.ControlChar
+                || id.Length != 3)
+                mismatches++;
         });
+        Assert.Equal(0, mismatches);
     }
 }

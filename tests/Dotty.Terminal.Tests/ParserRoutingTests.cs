@@ -95,11 +95,11 @@ public sealed class ParserRoutingTests
     }
 
     [Fact]
-    public void PrivateModes_X10Mouse_RoutesToMouseMode()
+    public void PrivateModes_X10Mouse_IsNotRoutedWhileEncoderLacksX10Semantics()
     {
         var (parser, handler) = Setup();
         Feed(parser, "\u001b[?9h\u001b[?9l");
-        Assert.Equal(new[] { (9, true), (9, false) }, handler.PrivateModeCalls);
+        Assert.Empty(handler.PrivateModeCalls);
     }
 
     [Fact]

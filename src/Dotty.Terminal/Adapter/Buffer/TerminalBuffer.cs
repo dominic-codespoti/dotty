@@ -723,10 +723,13 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
     public bool OriginMode => _originMode;
 
+    private static int SaturatingAdd(int a, int b) =>
+        (int)Math.Clamp((long)a + b, int.MinValue, int.MaxValue);
+
     public void MoveCursorBy(int dRow, int dCol)
     {
-        int newRow = _cursor.Row + dRow;
-        int newCol = _cursor.Col + dCol;
+        int newRow = SaturatingAdd(_cursor.Row, dRow);
+        int newCol = SaturatingAdd(_cursor.Col, dCol);
 
         if (_originMode)
         {
@@ -799,6 +802,9 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         int row = _cursor.Row;
         int col = _cursor.Col;
         int cols = Columns;
+        // Saturated parameters must not overflow col + count (negative columns index unsafe memory).
+        count = Math.Min(count, cols - col);
+        if (count <= 0) return;
         // Shift cells to the right
         for (int c = cols - 1; c >= col + count; c--)
         {
@@ -821,6 +827,9 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         int row = _cursor.Row;
         int col = _cursor.Col;
         int cols = Columns;
+        // DCH never reaches left of the cursor: cap at the characters that remain.
+        count = Math.Min(count, cols - col);
+        if (count <= 0) return;
         int endShift = cols - count;
         for (int c = col; c < endShift; c++)
         {
@@ -866,7 +875,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
         int row = _cursor.Row;
         int start = Math.Clamp(_cursor.Col, 0, Columns - 1);
-        int endExclusive = Math.Min(Columns, start + count);
+        // Saturated parameters (CSI 99999999999 X) must not overflow start + count.
+        int endExclusive = (int)Math.Min((long)Columns, (long)start + count);
 
         ActiveBuffer.ClearColumns(row, start, endExclusive);
 

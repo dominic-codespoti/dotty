@@ -69,8 +69,8 @@ public sealed class ShellIntegrationOsc7Tests
     public void OversizedPayloadsAreIgnored()
     {
         var (adapter, parser, changes) = Setup();
-        // Above the parser's own OSC cap: discarded by the parser.
-        Feed(parser, "\u001b]7;file:///" + new string('a', 70_000) + "\a");
+        // Above the parser's own 1 MiB OSC cap: discarded by the parser.
+        Feed(parser, "\u001b]7;file:///" + new string('a', 1_048_577) + "\a");
         // Between Osc7WorkingDirectory.MaxPayloadLength and the parser cap: rejected by TryParse.
         Feed(parser, "\u001b]7;file:///" + new string('a', Osc7WorkingDirectory.MaxPayloadLength + 100) + "\a");
         Assert.Null(adapter.CurrentWorkingDirectory);

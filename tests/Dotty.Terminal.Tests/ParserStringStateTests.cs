@@ -191,4 +191,43 @@ public sealed class ParserStringStateTests
         Feed(parser, "\u001b(0\u001bcq");
         Assert.Equal(new[] { "q" }, handler.PrintCalls);
     }
+
+    [Fact]
+    public void Apc_BelAbortsStringAndRings()
+    {
+        var (parser, handler) = Setup();
+        // BEL terminates only an OSC; inside APC/PM/SOS/DCS it is a control that aborts.
+        Feed(parser, "\u001b_ab\u0007cd\u001b\\");
+        Assert.Equal(new[] { "BEL" }, handler.ControlCalls);
+        Assert.Equal(new[] { "cd" }, handler.PrintCalls);
+    }
+
+    [Fact]
+    public void Dcs_BelAbortsStringAndRings()
+    {
+        var (parser, handler) = Setup();
+        Feed(parser, "\u001bP+q544E\u0007tail");
+        Assert.Equal(new[] { "BEL" }, handler.ControlCalls);
+        Assert.Equal(new[] { "tail" }, handler.PrintCalls);
+    }
+
+    [Fact]
+    public void OscOverflow_ControlAbortsDiscardAndExecutes()
+    {
+        var (parser, handler) = Setup();
+        Feed(parser, "\u001b]0;" + new string('x', 1_048_577) + "\ntail");
+        Assert.Empty(handler.OscCalls);
+        Assert.Equal(new[] { "LF" }, handler.ControlCalls);
+        Assert.Equal(new[] { "tail" }, handler.PrintCalls);
+    }
+
+    [Fact]
+    public void OscAtExactCap_IsDispatched()
+    {
+        var (parser, handler) = Setup();
+        // "0;" + data == 1 MiB payload bytes.
+        string data = new string('x', 1_048_576 - 2);
+        Feed(parser, "\u001b]0;" + data + "\u0007");
+        Assert.Equal(new[] { (0, data) }, handler.OscCalls);
+    }
 }

@@ -14,6 +14,7 @@ public sealed partial class LuaScriptHost
         String,
         Number,
         Integer,
+        Long,
         Boolean,
         Map,
         StringList,
@@ -67,6 +68,8 @@ public sealed partial class LuaScriptHost
         ["hyperlinks.allowed_schemes"] = new(ConfigValueKind.StringList, c => c.Hyperlinks.AllowedSchemes, (c, v) => c.Hyperlinks.AllowedSchemes = (System.Collections.Generic.List<string>)v!),
         ["vt.checksum_report_enabled"] = new(ConfigValueKind.Boolean, c => c.Vt.ChecksumReportEnabled, (c, v) => c.Vt.ChecksumReportEnabled = (bool)v!),
         ["vt.window_resize_allowed"] = new(ConfigValueKind.Boolean, c => c.Vt.WindowResizeAllowed, (c, v) => c.Vt.WindowResizeAllowed = (bool)v!),
+        ["scrollback.limit_lines"] = new(ConfigValueKind.Integer, c => c.Scrollback.LimitLines, (c, v) => c.Scrollback.LimitLines = (int)v!),
+        ["scrollback.limit_bytes"] = new(ConfigValueKind.Long, c => c.Scrollback.LimitBytes, (c, v) => c.Scrollback.LimitBytes = (long)v!),
         ["mouse.copy_on_select"] = new(ConfigValueKind.String, c => c.Mouse.CopyOnSelect, (c, v) => c.Mouse.CopyOnSelect = (string)v!),
         ["mouse.middle_click_action"] = new(ConfigValueKind.String, c => c.Mouse.MiddleClickAction, (c, v) => c.Mouse.MiddleClickAction = (string)v!)
     };
@@ -111,7 +114,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback")
         {
             host.PushConfigProxyTable(lua, key);
             return 1;
@@ -146,7 +149,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback")
         {
             if (lua.Type(3) != LuaType.Table)
             {
@@ -189,7 +192,7 @@ public sealed partial class LuaScriptHost
         }
 
         string path = NormalizeConfigKey(parent + "." + key);
-        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse")
+        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback")
         {
             host.PushConfigProxyTable(lua, path);
             return 1;
@@ -241,6 +244,9 @@ public sealed partial class LuaScriptHost
                 break;
             case ConfigValueKind.Integer:
                 lua.PushInteger((int)value!);
+                break;
+            case ConfigValueKind.Long:
+                lua.PushInteger((long)value!);
                 break;
             case ConfigValueKind.Boolean:
                 lua.PushBoolean((bool)value!);
@@ -305,6 +311,14 @@ public sealed partial class LuaScriptHost
                 }
 
                 break;
+            case ConfigValueKind.Long:
+                valid = type == LuaType.Number;
+                if (valid)
+                {
+                    value = lua.ToInteger(index);
+                }
+
+                break;
             case ConfigValueKind.Boolean:
                 valid = type == LuaType.Boolean;
                 if (valid)
@@ -352,7 +366,7 @@ public sealed partial class LuaScriptHost
             {
                 string path = NormalizeConfigKey((prefix.Length == 0 ? "" : prefix + ".") + key);
                 if (lua.Type(-1) == LuaType.Table
-                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse"))
+                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback"))
                 {
                     ApplyConfigTable(lua, -1, path);
                 }

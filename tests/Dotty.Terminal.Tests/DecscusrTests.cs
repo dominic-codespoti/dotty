@@ -32,10 +32,6 @@ public class DecscusrTests
         Assert.Equal(expectedShape, adapter.Buffer.CursorShape);
         Assert.Equal(expectedBlinking, adapter.Buffer.CursorBlinking);
 
-        using var snapFull = adapter.Buffer.CaptureRenderSnapshot(0, 0);
-        Assert.Equal(expectedShape, snapFull.CursorShape);
-        Assert.Equal(expectedBlinking, snapFull.CursorBlinking);
-
         using var snapVisible = adapter.Buffer.CaptureRenderSnapshotVisible(scrollOffset: 0, sbStart: 0, sbEnd: 0);
         Assert.Equal(expectedShape, snapVisible.CursorShape);
         Assert.Equal(expectedBlinking, snapVisible.CursorBlinking);
@@ -50,7 +46,7 @@ public class DecscusrTests
         Assert.Equal(TerminalCursorShape.Beam, buffer.CursorShape);
         Assert.False(buffer.CursorBlinking);
 
-        using var snapshot = buffer.CaptureRenderSnapshot(0, 0);
+        using var snapshot = buffer.CaptureRenderSnapshotVisible(sbStart: 0, sbEnd: 0);
         Assert.Equal(TerminalCursorShape.Beam, snapshot.CursorShape);
         Assert.False(snapshot.CursorBlinking);
     }

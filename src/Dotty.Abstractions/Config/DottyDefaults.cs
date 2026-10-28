@@ -19,7 +19,7 @@ public static class DottyDefaults
 
     // Terminal Settings
     public const int ScrollbackLines = 5000;
-    public const int InactiveTabDestroyDelayMs = 5000;
+    public const long ScrollbackLimitBytes = 64L * 1024 * 1024;
 
     // UI Colors (ARGB format)
     public const uint SelectionColor = 0xA03385DB;

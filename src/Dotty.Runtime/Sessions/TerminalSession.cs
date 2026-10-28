@@ -7,6 +7,7 @@ using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Parser;
 using Dotty.Abstractions.Pty;
 using Dotty.NativePty;
+using Dotty.Runtime.Config;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
 
@@ -189,12 +190,9 @@ public partial class TerminalSession : IDisposable
         _ptyFactory = ptyFactory ?? throw new ArgumentNullException(nameof(ptyFactory));
         _checkPtySupport = checkPtySupport;
         Parser = new BasicAnsiParser();
-        // The arena is allocated at construction; honor the configured scrollback
-        // depth here so the default (5k) actually applies instead of the
-        // TerminalBuffer fallback (10k).
-        var scrollbackLines = DottyDefaults.ScrollbackLines;
-        if (scrollbackLines <= 0)
-            scrollbackLines = 5000;
+        // The arena is allocated at construction, so the configured scrollback policy is resolved here;
+        // a later config change only affects sessions created afterwards.
+        int scrollbackLines = UserConfigService.Current.Scrollback.ToPolicy().CapacityFor(rows, columns);
         Adapter = new TerminalAdapter(rows: rows, columns: columns, scrollbackCapacity: scrollbackLines);
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();

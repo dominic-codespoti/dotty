@@ -138,68 +138,6 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         return snap;
     }
 
-    internal static RenderSnapshot Capture(
-        TerminalBuffer owner,
-        Screen screen,
-        ulong[] rowGenerations,
-        CellAttributes[] styles,
-        int scrollbackCount,
-        bool altActive,
-        int cursorRow,
-        int cursorCol,
-        TerminalCursorShape cursorShape = TerminalCursorShape.Block,
-        bool cursorBlinking = true)
-    {
-        int rows = screen.Rows;
-        int columns = screen.Columns;
-        int totalRows = screen.TotalRows;
-        int cellCount = totalRows * columns;
-        var snap = owner.RentRenderSnapshot();
-        owner.GetHyperlinkTable(out snap._hyperlinkTable, out snap._hyperlinkCount);
-        snap.Rows = rows;
-        snap.Columns = columns;
-        snap.TotalRows = totalRows;
-        snap.Head = screen.Head;
-        snap.ScrollbackCount = scrollbackCount;
-        snap.IsAlternateScreenActive = altActive;
-        snap.CursorRow = cursorRow;
-        snap.CursorCol = cursorCol;
-        snap.CursorShape = cursorShape;
-        snap.CursorBlinking = cursorBlinking;
-        snap._styles = styles;
-        snap.ScrollbackText = Array.Empty<string>();
-        snap.CapturedSbStart = 0;
-        snap.RowOffsets = Array.Empty<int>();
-
-        EnsureCapacity(ref snap._cellsStorage, cellCount);
-        EnsureCapacity(ref snap._coldStorage, cellCount);
-        EnsureCapacity(ref snap._rowMaxColStorage, totalRows);
-        EnsureCapacity(ref snap._rowMapStorage, rows);
-        EnsureCapacity(ref snap._rowGenerationsStorage, Math.Max(1, rows));
-        snap.Cells = snap._cellsStorage;
-        snap.Cold = snap._coldStorage;
-        snap.RowMaxCol = snap._rowMaxColStorage;
-        snap.RowMap = snap._rowMapStorage;
-        snap.RowGenerationsArray = snap._rowGenerationsStorage;
-
-        unsafe
-        {
-            fixed (CellHot* pCells = snap.Cells)
-            fixed (ColdCell* pCold = snap.Cold)
-            {
-                System.Buffer.MemoryCopy((void*)screen.CellsPtr, pCells, (long)cellCount * sizeof(CellHot), (long)cellCount * sizeof(CellHot));
-                System.Buffer.MemoryCopy((void*)screen.ColdCellsPtr, pCold, (long)cellCount * sizeof(ColdCell), (long)cellCount * sizeof(ColdCell));
-            }
-        }
-
-        Array.Copy(screen.RowMaxCol, snap.RowMaxCol, totalRows);
-        for (int row = 0; row < rows; row++)
-            snap.RowMap[row] = screen.GetPhysicalRow(row);
-        int copyGens = Math.Min(rowGenerations.Length, rows);
-        Array.Copy(rowGenerations, snap.RowGenerationsArray, copyGens);
-        return snap;
-    }
-
     internal void Activate(TerminalBuffer owner)
     {
         _owner = owner;

@@ -27,7 +27,7 @@ internal sealed class ScreenManager : IDisposable
         screen.BuildSourceLayout(scrollbackRows, _alternateLayout);
 
 
-    public ScreenManager(int rows, int columns, int scrollbackCapacity = 10000)
+    public ScreenManager(int rows, int columns, int scrollbackCapacity = global::Dotty.Abstractions.Config.DottyDefaults.ScrollbackLines)
     {
         _scrollbackCapacity = scrollbackCapacity;
         _main = new Screen(rows, columns, scrollbackCapacity);

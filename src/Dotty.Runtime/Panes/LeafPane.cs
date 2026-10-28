@@ -17,8 +17,9 @@ public sealed class LeafPane : PaneNode, IDisposable
 
     public LeafPane(TerminalSession session, string? id = null)
     {
-        Id = id ?? Guid.NewGuid().ToString("N");
         Session = session ?? throw new ArgumentNullException(nameof(session));
+        Id = id ?? session.SurfaceId;
+        session.SurfaceId = Id;
         Selection = new TextSelectionService();
         Columns = session.Adapter.Buffer.Columns;
         Rows = session.Adapter.Buffer.Rows;

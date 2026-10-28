@@ -14,6 +14,12 @@
     <ProjectReference Include="..\Dotty.Rendering.Gpu\Dotty.Rendering.Gpu.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- GenerateAssemblyInfo is off, so publish the central <Version> for DottyVersion explicitly. -->
+    <AssemblyAttribute Include="System.Reflection.AssemblyInformationalVersionAttribute">
+      <_Parameter1>$(Version)</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="KeraLua" />
   </ItemGroup>
 </Project>

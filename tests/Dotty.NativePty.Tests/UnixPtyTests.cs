@@ -92,6 +92,24 @@ public class UnixPtyTests : IDisposable
         Assert.Equal(0, exitCode);
         Assert.Equal("<tag><><-n>", output);
     }
+
+    [ConditionalFacts.UnixOnlyFact]
+    public async Task UnixPty_DoesNotLeakHelperProtocolVariablesIntoCommand()
+    {
+        _pty = new Unix.UnixPty();
+        _pty.Start(
+            workingDirectory: Path.GetTempPath(),
+            command: ["/bin/sh", "-c", "printf 'X%s%s%sY' \"${DOTTY_CONTROL_SOCKET-}\" \"${DOTTY_INITIAL_COLS-}\" \"${DOTTY_INITIAL_ROWS-}\""]);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var reader = new StreamReader(_pty.OutputStream!);
+        Task<string> outputTask = reader.ReadToEndAsync(timeout.Token);
+        int exitCode = await _pty.WaitForExitAsync(timeout.Token);
+        string output = await outputTask;
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("XY", output);
+    }
     #region Start() Tests
 
     /// <summary>

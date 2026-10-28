@@ -72,6 +72,32 @@ public sealed class TerminalCoreAllocationTests
     }
 
     [Fact]
+    public void LargeScrollbackWideResizeAllocatesNothingAfterWarmup()
+    {
+        // The default configuration: a 10,000-line scrollback of soft-wrapped lines reflowed between 80 and 200
+        // columns. Pooled reflow state grows to its peak during warm-up and must then be reused (plan 08, WI-R1).
+        var buffer = new TerminalBuffer(rows: 24, columns: 80, scrollbackCapacity: 10_000);
+        FillWrappedScrollback(buffer, new string('x', 120), lines: 5_100);
+        Assert.Equal(10_000, buffer.ScrollbackCount);
+
+        for (int i = 0; i < 4; i++)
+        {
+            buffer.Resize(40, 200);
+            buffer.Resize(24, 80);
+        }
+
+        AllocationAssert.NoAllocations(
+            () =>
+            {
+                buffer.Resize(40, 200);
+                buffer.Resize(24, 80);
+            },
+            warmupIterations: 0,
+            measuredIterationsPerWindow: 2,
+            windows: 3);
+    }
+
+    [Fact]
     public void VisibleSnapshotCaptureAndDisposeAllocateNothingAfterWarmup()
     {
         var buffer = new TerminalBuffer(rows: 24, columns: 80, scrollbackCapacity: 64);
@@ -126,9 +152,9 @@ public sealed class TerminalCoreAllocationTests
             beforeEachWindow: () => parser.Feed(reset));
     }
 
-    private static void FillWrappedScrollback(TerminalBuffer buffer, string line)
+    private static void FillWrappedScrollback(TerminalBuffer buffer, string line, int lines = 160)
     {
-        for (int i = 0; i < 160; i++)
+        for (int i = 0; i < lines; i++)
         {
             buffer.WriteText(line.AsSpan(), CellAttributes.Default);
             buffer.CarriageReturn();

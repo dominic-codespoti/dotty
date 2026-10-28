@@ -17,7 +17,8 @@ public class Program
 
     private static readonly string[] ValidFilterCategories =
     [
-        "parser", "memory", "rendering", "silk", "startup", "throughput", "bulk"
+        "parser", "memory", "rendering", "silk", "startup", "throughput", "bulk",
+        "experiment"
     ];
 
     public static void Main(string[] args)
@@ -98,12 +99,16 @@ public class Program
                 Console.WriteLine("Running Parser Benchmarks...");
                 summaries.Add(BenchmarkRunner.Run<ParserBenchmarks>(benchmarkConfig));
                 summaries.Add(BenchmarkRunner.Run<ParserMicroBenchmarks>(benchmarkConfig));
+                summaries.Add(BenchmarkRunner.Run<ParserScanBenchmarks>(benchmarkConfig));
+                summaries.Add(BenchmarkRunner.Run<ParserOscBenchmarks>(benchmarkConfig));
             }
 
             if (string.IsNullOrEmpty(filter) || filter.Contains("memory", StringComparison.OrdinalIgnoreCase))
             {
                 Console.WriteLine("Running Memory Benchmarks...");
                 summaries.Add(BenchmarkRunner.Run<MemoryBenchmarks>(benchmarkConfig));
+                summaries.Add(BenchmarkRunner.Run<ReflowBenchmarks>(benchmarkConfig));
+                summaries.Add(BenchmarkRunner.Run<TextFormatBenchmarks>(benchmarkConfig));
             }
 
             if (string.IsNullOrEmpty(filter) || filter.Contains("rendering", StringComparison.OrdinalIgnoreCase))
@@ -134,6 +139,15 @@ public class Program
             {
                 Console.WriteLine("Running Bulk Output Benchmarks...");
                 summaries.Add(BenchmarkRunner.Run<BulkOutputBenchmark>(benchmarkConfig));
+            }
+
+            // Experiment classes are A/B tools, not gated benchmarks: they run only when the filter explicitly
+            // names "experiment", and their summaries are deliberately not added to `summaries`, so they never
+            // reach report generation, regression checks or baseline updates.
+            if (!string.IsNullOrEmpty(filter) && filter.Contains("experiment", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine("Running Experiment Benchmarks (ungated)...");
+                BenchmarkRunner.Run<ParserScanExperiments>(benchmarkConfig);
             }
 
             // Generate reports
@@ -449,7 +463,8 @@ public class Program
     [
         typeof(ParserBenchmarks), typeof(ParserMicroBenchmarks), typeof(MemoryBenchmarks),
         typeof(RenderingBenchmarks), typeof(SilkRenderingBenchmarks), typeof(StartupBenchmarks),
-        typeof(ThroughputBenchmarks), typeof(LatencyBenchmarks), typeof(BulkOutputBenchmark)
+        typeof(ThroughputBenchmarks), typeof(LatencyBenchmarks), typeof(BulkOutputBenchmark),
+        typeof(ParserScanBenchmarks), typeof(ParserOscBenchmarks), typeof(ReflowBenchmarks), typeof(TextFormatBenchmarks)
     ];
 
     private static IEnumerable<BenchmarkCase> GetAllBenchmarkCases() =>

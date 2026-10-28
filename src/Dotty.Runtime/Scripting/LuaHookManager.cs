@@ -190,15 +190,27 @@ public sealed class LuaHookManager
         return false;
     }
 
-    public bool AllowClipboardWrite(LeafPane pane, TerminalTab tab, string text)
+    public bool AllowClipboardWrite(LeafPane pane, TerminalTab tab, string text) =>
+        AllowClipboardAccess("clipboard_write", pane, tab, text);
+
+    /// <summary>
+    /// Runs the <c>clipboard_read</c> hooks for an OSC 52 read request. <paramref name="selection"/> is
+    /// <c>"clipboard"</c> (the only selection served today). Same veto semantics as
+    /// <see cref="AllowClipboardWrite"/>: the first non-nil result decides (<c>false</c> denies), a nil result
+    /// defers to the next hook, and a callback invocation error denies. No handler allows.
+    /// </summary>
+    public bool AllowClipboardRead(LeafPane pane, TerminalTab tab, string selection) =>
+        AllowClipboardAccess("clipboard_read", pane, tab, selection);
+
+    private bool AllowClipboardAccess(string hook, LeafPane pane, TerminalTab tab, string argument)
     {
         if (Owner == null)
             return true;
 
-        LuaCallbackReference[] callbacks = Get("clipboard_write");
+        LuaCallbackReference[] callbacks = Get(hook);
         for (int i = 0; i < callbacks.Length; i++)
         {
-            if (!callbacks[i].Invoke(LuaValue.FromPane(pane, tab), LuaValue.From(text), out LuaValue value))
+            if (!callbacks[i].Invoke(LuaValue.FromPane(pane, tab), LuaValue.From(argument), out LuaValue value))
                 return false;
             if (value.IsNil)
                 continue;

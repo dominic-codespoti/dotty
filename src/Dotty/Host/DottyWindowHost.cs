@@ -618,6 +618,16 @@ internal static class DottyWindowHost
             _clipboardSubscriptions.Add(session, callback);
         }
 
+        foreach (var session in _sessionScratch)
+        {
+            if (_clipboardReadSubscriptions.ContainsKey(session))
+                continue;
+
+            Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest> readCallback = CreateClipboardReadHandler(session);
+            session.ClipboardReadRequested += readCallback;
+            _clipboardReadSubscriptions.Add(session, readCallback);
+        }
+
         _staleSessionScratch.Clear();
         foreach (var pair in _clipboardSubscriptions)
         {
@@ -631,10 +641,27 @@ internal static class DottyWindowHost
             _clipboardSubscriptions.Remove(session);
             _renderCallbackCache.Remove(session);
         }
+
+        _staleSessionScratch.Clear();
+        foreach (var pair in _clipboardReadSubscriptions)
+        {
+            if (!_sessionScratch.Contains(pair.Key))
+                _staleSessionScratch.Add(pair.Key);
+        }
+        for (int i = 0; i < _staleSessionScratch.Count; i++)
+        {
+            var session = _staleSessionScratch[i];
+            session.ClipboardReadRequested -= _clipboardReadSubscriptions[session];
+            _clipboardReadSubscriptions.Remove(session);
+            _clipboardReads.RemoveSession(session);
+        }
     }
 
     private static Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> CreateClipboardHandler(TerminalSession session) =>
         request => EnqueueClipboardWrite(session, request);
+
+    private static Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest> CreateClipboardReadHandler(TerminalSession session) =>
+        request => _clipboardReads.OnRequested(session, request);
 
     private static void EnqueueClipboardWrite(TerminalSession session, Dotty.Abstractions.Clipboard.ClipboardWriteRequest request)
     {
@@ -1461,6 +1488,8 @@ internal static class DottyWindowHost
 
             _clipboard?.SetText(request.Text);
         }
+
+        _clipboardReads.Drain();
     }
 
     private static bool TryDequeuePendingTitle(out string title)
@@ -2186,6 +2215,10 @@ internal static class DottyWindowHost
         foreach (var pair in _clipboardSubscriptions)
             pair.Key.ClipboardWriteRequested -= pair.Value;
         _clipboardSubscriptions.Clear();
+        foreach (var pair in _clipboardReadSubscriptions)
+            pair.Key.ClipboardReadRequested -= pair.Value;
+        _clipboardReadSubscriptions.Clear();
+        _clipboardReads.Clear();
         foreach (var pair in _renderSubscriptions)
             pair.Key.RenderScheduled -= pair.Value;
         _renderSubscriptions.Clear();
@@ -2237,6 +2270,42 @@ internal static class DottyWindowHost
             _atlas = null!;
         }
     }
+    private static readonly Dictionary<TerminalSession, Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest>> _clipboardReadSubscriptions = new();
+    private static readonly ClipboardReadService _clipboardReads = new(
+        new ClipboardReadEnvironment(),
+        static () => UserConfigService.Current.Clipboard,
+        GetClockMilliseconds);
+
+    /// <summary>Connects <see cref="ClipboardReadService"/> to the window state owned by this host.</summary>
+    private sealed class ClipboardReadEnvironment : IClipboardReadEnvironment
+    {
+        public bool IsAvailable => !_closed && _keyboard is not null;
+        public bool IsWindowFocused => _lastWindowFocus != false;
+        public bool IsMenuVisible => _activeContextMenu?.IsVisible == true;
+
+        public bool TryResolveOwner(TerminalSession session, out TerminalTab tab, out LeafPane pane) =>
+            TryFindOwningPane(session, out tab, out pane);
+
+        public bool IsActiveTab(TerminalTab tab) => ReferenceEquals(tab, _tabManager?.ActiveTab);
+
+        public bool AllowRead(LeafPane pane, TerminalTab tab) =>
+            _luaHost.Hooks.AllowClipboardRead(pane, tab, "clipboard");
+
+        public string? ReadClipboard() => _clipboard?.GetText();
+
+        public void WriteReply(TerminalSession session, byte[] reply) => session.WriteInput(reply);
+
+        public void ShowPrompt(ContextMenuModel prompt)
+        {
+            var size = _window.FramebufferSize;
+            ClipboardReadPromptBuilder.Center(prompt, size.X, size.Y, _cellWidth * _scale, _cellHeight * _scale);
+            _mouseHost.ActiveContextMenu = prompt;
+            WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
+        }
+
+        public void Wake() => HostWake.Request();
+    }
+
     private sealed class KeyboardClipboard : ITerminalClipboard
     {
         private readonly IKeyboard _keyboard;

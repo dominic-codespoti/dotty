@@ -8,7 +8,7 @@ namespace Dotty.Terminal.Adapter;
 // OSC 52 clipboard write/read requests.
 public partial class TerminalAdapter
 {
-    /// <summary>Raised for OSC 52 "?" queries. Concrete adapter only; no subscribers yet.</summary>
+    /// <summary>Raised on the parser thread for OSC 52 "?" queries. Concrete adapter only (not on <c>ITerminalHandler</c>); <c>TerminalSession</c> forwards it.</summary>
     public event Action<ClipboardReadRequest>? ClipboardReadRequested;
 
     private void HandleOsc52(ReadOnlySpan<char> payload)

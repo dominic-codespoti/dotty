@@ -137,6 +137,32 @@ public sealed class ClipboardUserConfig
     [JsonPropertyName("allowOsc52Write")]
     public bool AllowOsc52Write { get; set; }
 
+    /// <summary>Default for <see cref="Osc52ReadLimitBytes"/>: 1 MiB.</summary>
+    public const int DefaultOsc52ReadLimitBytes = 1_048_576;
+
+    /// <summary>Upper clamp for <see cref="Osc52ReadLimitBytes"/>: 8 MiB.</summary>
+    public const int MaxOsc52ReadLimitBytes = 8 * 1024 * 1024;
+
+    private int _osc52ReadLimitBytes = DefaultOsc52ReadLimitBytes;
+
+    /// <summary>
+    /// OSC 52 clipboard read (<c>?</c> query) policy: <c>deny</c> (default), <c>ask</c> or <c>allow</c>,
+    /// case-insensitive. Any other value is treated as <c>deny</c> (fail closed); see <c>ClipboardReadModes.Parse</c>.
+    /// </summary>
+    [JsonPropertyName("osc52Read")]
+    public string Osc52Read { get; set; } = "deny";
+
+    /// <summary>
+    /// Largest clipboard payload, in UTF-8 bytes, an OSC 52 read may return. Larger clipboards are dropped
+    /// without a reply. Values are clamped to [1, <see cref="MaxOsc52ReadLimitBytes"/>].
+    /// </summary>
+    [JsonPropertyName("osc52ReadLimitBytes")]
+    public int Osc52ReadLimitBytes
+    {
+        get => _osc52ReadLimitBytes;
+        set => _osc52ReadLimitBytes = Math.Clamp(value, 1, MaxOsc52ReadLimitBytes);
+    }
+
     [JsonPropertyName("confirmPaste")]
     public bool ConfirmPaste { get; set; } = true;
 

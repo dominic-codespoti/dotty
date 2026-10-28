@@ -967,31 +967,12 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
     public string GetRowText(int row)
     {
-        using var sb = ZStr.CreateStringBuilder(Columns);
         var buf = _screens.Active;
-        for (int j = 0; j < Columns; j++)
-        {
-            var cell = buf.GetCell(row, j);
-            var cold = buf.GetColdCell(row, j);
-            if (cell.IsContinuation)
-            {
-                sb.Append(' ');
-            }
-            else
-            {
-                var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
-                if (string.IsNullOrEmpty(grapheme))
-                {
-                    sb.Append(' ');
-                }
-                else
-                {
-                    sb.Append(grapheme);
-                }
-            }
-        }
-
-        return sb.ToString();
+        var hot = buf.GetRowCells(row);
+        // An out-of-range row reads as blank cells (as GetCell reports for it).
+        if (hot.IsEmpty)
+            return new string(' ', Columns);
+        return RowText.Build(hot, buf.GetRowColdCells(row), 0, Columns - 1, ContinuationPolicy.SpaceCell);
     }
 
     private BufferTextWriter CreateWriter()

@@ -13,6 +13,12 @@ public static class SearchEngine
 {
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>
+    /// Finds every match of <paramref name="query"/> in the scrollback and visible rows of <paramref name="source"/>.
+    /// Scrollback rows are numbered <c>index - ScrollbackCount</c> (-1 = newest); visible rows 0..Rows-1. Scrollback is
+    /// read from the source's cells (<see cref="IRenderSource.TryGetScrollbackRow"/>), so the source must have captured
+    /// them: use <c>TerminalBuffer.CaptureRenderSnapshotForSearch</c>, not the per-frame visible-only capture.
+    /// </summary>
     public static IReadOnlyList<SearchMatch> FindMatches(
         IRenderSource source,
         string query,
@@ -24,25 +30,54 @@ public static class SearchEngine
         if (string.IsNullOrEmpty(query)) return Array.Empty<SearchMatch>();
 
         var results = new List<SearchMatch>();
-        int scrollbackCount = source.ScrollbackCount;
-        for (int i = 0; i < scrollbackCount; i++)
+        var matcher = new LineMatcher(query, regex, matchCase, results);
+        var map = new ColumnMap();
+        var text = ZStr.CreateStringBuilder(notNested: false);
+        try
         {
-            string lineText = source.GetScrollbackLineText(i);
-            if (string.IsNullOrEmpty(lineText)) continue;
-            SearchLine(BuildScrollbackText(lineText), i - scrollbackCount, query, regex, matchCase, results);
-        }
+            int scrollbackCount = source.ScrollbackCount;
+            for (int i = 0; i < scrollbackCount; i++)
+            {
+                text.Clear();
+                map.Reset();
+                int length;
+                if (source.TryGetScrollbackRow(i, out var scrollbackHot, out var scrollbackCold))
+                {
+                    if (scrollbackHot.IsEmpty) continue;
+                    length = BuildCellText(ref text, map, scrollbackHot, scrollbackCold, scrollbackHot.Length);
+                }
+                else
+                {
+                    // Source without scrollback cells (legacy materialized text range).
+                    string lineText = source.GetScrollbackLineText(i);
+                    if (string.IsNullOrEmpty(lineText)) continue;
+                    BuildScrollbackText(lineText, ref text, map);
+                    length = text.Length;
+                }
 
-        int rows = source.Rows;
-        int cols = source.Columns;
-        for (int r = 0; r < rows; r++)
+                if (length != 0)
+                    matcher.SearchLine(text.AsSpan().Slice(0, length), map, i - scrollbackCount);
+            }
+
+            int rows = source.Rows;
+            int cols = source.Columns;
+            for (int r = 0; r < rows; r++)
+            {
+                var cells = source.GetRowCells(r);
+                var cold = source.GetRowColdCells(r);
+                if (cells.IsEmpty) continue;
+
+                text.Clear();
+                map.Reset();
+                int length = BuildCellText(ref text, map, cells, cold, Math.Min(cols, cells.Length));
+                if (length != 0)
+                    matcher.SearchLine(text.AsSpan().Slice(0, length), map, r);
+            }
+        }
+        finally
         {
-            var cells = source.GetRowCells(r);
-            var cold = source.GetRowColdCells(r);
-            if (cells.IsEmpty) continue;
-            int lineLen = Math.Min(cols, cells.Length);
-            var line = BuildRowText(cells, cold, lineLen);
-            if (line.Text.Length != 0)
-                SearchLine(line, r, query, regex, matchCase, results);
+            text.Dispose();
+            map.Dispose();
         }
 
         if (results.Count == 0) return Array.Empty<SearchMatch>();
@@ -54,112 +89,68 @@ public static class SearchEngine
         return results;
     }
 
-    private static void SearchLine(
-        MappedText line,
-        int row,
-        string query,
-        bool regex,
-        bool matchCase,
-        List<SearchMatch> results)
+    /// <summary>
+    /// Appends the searchable text of the first <paramref name="length"/> cells to <paramref name="text"/> and records, for
+    /// every character, the display columns of its cell. Wide-glyph placeholder cells are skipped and trailing blanks are
+    /// not searchable. Returns the searchable text length.
+    /// </summary>
+    private static int BuildCellText(
+        ref ValueStringBuilder text,
+        ColumnMap map,
+        ReadOnlySpan<CellHot> cells,
+        ReadOnlySpan<ColdCell> cold,
+        int length)
     {
-        if (regex)
-        {
-            try
-            {
-                var options = matchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
-                foreach (Match match in Regex.Matches(line.Text, query, options, RegexTimeout))
-                {
-                    if (match.Success && match.Length > 0)
-                        AddMatch(line, row, match.Index, match.Length, results);
-                }
-            }
-            catch (Exception ex) when (ex is ArgumentException or RegexMatchTimeoutException)
-            {
-                SearchLiteral(line, row, query, matchCase, results);
-            }
-        }
-        else
-        {
-            SearchLiteral(line, row, query, matchCase, results);
-        }
-    }
-
-    private static void SearchLiteral(
-        MappedText line,
-        int row,
-        string query,
-        bool matchCase,
-        List<SearchMatch> results)
-    {
-        var comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-        int index = 0;
-        while (index < line.Text.Length)
-        {
-            int foundIndex = line.Text.IndexOf(query, index, comparison);
-            if (foundIndex < 0) break;
-            AddMatch(line, row, foundIndex, query.Length, results);
-            index = foundIndex + 1; // Preserve overlapping literal matches.
-        }
-    }
-
-    private static void AddMatch(MappedText line, int row, int index, int length, List<SearchMatch> results)
-    {
-        int start = Math.Clamp(index, 0, line.Text.Length);
-        int end = Math.Clamp(index + length, start, line.Text.Length);
-        results.Add(new SearchMatch(row, line.StartColumns[start], line.EndColumns[end], false));
-    }
-
-    private static MappedText BuildRowText(ReadOnlySpan<CellHot> cells, ReadOnlySpan<ColdCell> cold, int length)
-    {
-        var line = new MappedText();
         for (int c = 0; c < length; c++)
         {
             ref readonly var hot = ref cells[c];
             if (hot.IsContinuation) continue;
 
-            string? grapheme = null;
-            if (hot.Rune != 0)
-            {
-                short index = c < cold.Length ? cold[c].GraphemeIndex : (short)-1;
-                grapheme = GraphemeHelper.Resolve(hot.Rune, index);
-            }
-            line.Append(grapheme ?? " ", c, c + (hot.Rune == 0 ? 1 : Math.Max(1, (int)hot.Width)));
+            short graphemeIndex = c < cold.Length ? cold[c].GraphemeIndex : (short)-1;
+            int written = RowText.AppendCell(ref text, in hot, graphemeIndex);
+            map.Add(written, c, c + (hot.Rune == 0 ? 1 : Math.Max(1, (int)hot.Width)));
         }
 
         // Match the previous visible-row behavior: trailing blank cells are not searchable.
-        while (line.Text.Length > 0 && line.Text[^1] == ' ')
-            line.RemoveLast();
-        return line;
+        ReadOnlySpan<char> built = text.AsSpan();
+        int end = built.Length;
+        while (end > 0 && built[end - 1] == ' ')
+            end--;
+        map.Truncate(end);
+        return end;
     }
 
-    private static MappedText BuildScrollbackText(string text)
+    /// <summary>
+    /// Builds searchable text and its column map from a scrollback line materialized as a string (the legacy capture):
+    /// graphemes are re-segmented and widths re-derived, and the placeholder space that follows a wide grapheme is consumed.
+    /// </summary>
+    private static void BuildScrollbackText(string source, ref ValueStringBuilder text, ColumnMap map)
     {
-        var line = new MappedText();
-        int[] starts = StringInfo.ParseCombiningCharacters(text);
-        for (int i = 0; i < starts.Length; i++)
+        ReadOnlySpan<char> line = source;
+        int position = 0;
+        while (position < line.Length)
         {
-            int start = starts[i];
-            int end = i + 1 < starts.Length ? starts[i + 1] : text.Length;
-            string grapheme = text.Substring(start, end - start);
+            int length = StringInfo.GetNextTextElementLength(line.Slice(position));
+            ReadOnlySpan<char> grapheme = line.Slice(position, length);
             int width = GetGraphemeWidth(grapheme);
-            line.Append(grapheme, line.DisplayColumn, line.DisplayColumn + width);
+            text.Append(grapheme);
+            map.Add(length, map.DisplayColumn, map.DisplayColumn + width);
+            position += length;
 
             // Scrollback serializes the continuation cell of a wide grapheme as one
             // literal space. Consume that placeholder, but retain any following space.
-            if (width == 2 && i + 1 < starts.Length)
+            if (width == 2 && position < line.Length)
             {
-                int nextStart = starts[i + 1];
-                int nextEnd = i + 2 < starts.Length ? starts[i + 2] : text.Length;
-                if (nextEnd - nextStart == 1 && text[nextStart] == ' ')
-                    i++;
+                int nextLength = StringInfo.GetNextTextElementLength(line.Slice(position));
+                if (nextLength == 1 && line[position] == ' ')
+                    position++;
             }
         }
-        return line;
     }
 
-    private static int GetGraphemeWidth(string grapheme)
+    private static int GetGraphemeWidth(ReadOnlySpan<char> grapheme)
     {
-        if (string.IsNullOrEmpty(grapheme)) return 0;
+        if (grapheme.IsEmpty) return 0;
         var runes = grapheme.EnumerateRunes();
         if (!runes.MoveNext()) return 0;
         Rune first = runes.Current;
@@ -171,7 +162,7 @@ public static class SearchEngine
         return 1;
     }
 
-    private static bool ContainsEmojiIndicator(string value)
+    private static bool ContainsEmojiIndicator(ReadOnlySpan<char> value)
     {
         foreach (Rune rune in value.EnumerateRunes())
         {
@@ -189,37 +180,151 @@ public static class SearchEngine
         (v >= 0xFF01 && v <= 0xFF60) || (v >= 0xFFE0 && v <= 0xFFE6) ||
         (v >= 0x1F300 && v <= 0x1FAFF) || (v >= 0x20000 && v <= 0x3FFFD);
 
-    private sealed class MappedText
+    /// <summary>Per-call matcher: one query, one lazily built <see cref="Regex"/>, shared result list.</summary>
+    private sealed class LineMatcher
     {
-        private readonly StringBuilder _text = new();
-        private readonly List<int> _starts = new() { 0 };
-        private readonly List<int> _ends = new() { 0 };
+        private readonly string _query;
+        private readonly Regex? _regex;
+        private readonly StringComparison _comparison;
+        private readonly List<SearchMatch> _results;
 
-        public string Text => _text.ToString();
-        public int DisplayColumn { get; private set; }
-        public int[] StartColumns => _starts.ToArray();
-        public int[] EndColumns => _ends.ToArray();
-
-        public void Append(string value, int startColumn, int endColumn)
+        public LineMatcher(string query, bool regex, bool matchCase, List<SearchMatch> results)
         {
-            if (value.Length == 0) return;
-            _text.Append(value);
-            for (int i = 0; i < value.Length; i++)
+            _query = query;
+            _results = results;
+            _comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            if (regex)
             {
-                _starts.Add(startColumn);
-                _ends.Add(endColumn);
+                try
+                {
+                    var options = matchCase ? RegexOptions.None : RegexOptions.IgnoreCase;
+                    _regex = new Regex(query, options, RegexTimeout);
+                }
+                catch (ArgumentException)
+                {
+                    // Invalid pattern: every row falls back to a literal search.
+                    _regex = null;
+                }
             }
-            _starts[^1] = endColumn;
-            _ends[^1] = endColumn;
+        }
+
+        public void SearchLine(ReadOnlySpan<char> text, ColumnMap map, int row)
+        {
+            if (_regex is null)
+            {
+                SearchLiteral(text, map, row);
+                return;
+            }
+
+            try
+            {
+                foreach (ValueMatch match in _regex.EnumerateMatches(text))
+                {
+                    if (match.Length > 0)
+                        AddMatch(text.Length, map, row, match.Index, match.Length);
+                }
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                SearchLiteral(text, map, row);
+            }
+        }
+
+        private void SearchLiteral(ReadOnlySpan<char> text, ColumnMap map, int row)
+        {
+            ReadOnlySpan<char> query = _query;
+            if (query.Length > text.Length) return;
+
+            int index = 0;
+            while (index < text.Length)
+            {
+                int found = text.Slice(index).IndexOf(query, _comparison);
+                if (found < 0) break;
+                int foundIndex = index + found;
+                AddMatch(text.Length, map, row, foundIndex, query.Length);
+                index = foundIndex + 1; // Preserve overlapping literal matches.
+            }
+        }
+
+        private void AddMatch(int textLength, ColumnMap map, int row, int index, int length)
+        {
+            int start = Math.Clamp(index, 0, textLength);
+            int end = Math.Clamp(index + length, start, textLength);
+            _results.Add(new SearchMatch(row, map.StartAt(start), map.EndAt(end), false));
+        }
+    }
+
+    /// <summary>
+    /// Character-index to display-column map for one line, backed by pooled arrays reused across rows. Entry <c>i</c> of
+    /// the start map is the column where character <c>i</c> begins (the column after its predecessor); entry <c>i</c> of
+    /// the end map is the column where character <c>i - 1</c> ends. A match [index, index + length) therefore spans
+    /// columns <c>StartAt(index)</c> to <c>EndAt(index + length)</c>.
+    /// </summary>
+    private sealed class ColumnMap : IDisposable
+    {
+        private int[] _starts = ArrayPool<int>.Shared.Rent(256);
+        private int[] _ends = ArrayPool<int>.Shared.Rent(256);
+
+        /// <summary>Characters mapped so far.</summary>
+        public int Length { get; private set; }
+
+        /// <summary>Column where the last appended unit ended.</summary>
+        public int DisplayColumn { get; private set; }
+
+        public int StartAt(int index) => _starts[index];
+
+        public int EndAt(int index) => _ends[index];
+
+        public void Reset()
+        {
+            Length = 0;
+            DisplayColumn = 0;
+            _starts[0] = 0;
+            _ends[0] = 0;
+        }
+
+        /// <summary>Maps the next <paramref name="charCount"/> characters to the cell columns [startColumn, endColumn).</summary>
+        public void Add(int charCount, int startColumn, int endColumn)
+        {
+            if (charCount <= 0) return;
+            int first = Length + 1;
+            Ensure(first + charCount);
+            _starts.AsSpan(first, charCount).Fill(startColumn);
+            _ends.AsSpan(first, charCount).Fill(endColumn);
+            // The slot after the unit's last character starts where the unit ends.
+            _starts[Length + charCount] = endColumn;
+            Length += charCount;
             DisplayColumn = endColumn;
         }
 
-        public void RemoveLast()
+        /// <summary>Drops characters past <paramref name="length"/> (trailing-blank trim).</summary>
+        public void Truncate(int length)
         {
-            _text.Length--;
-            _starts.RemoveAt(_starts.Count - 1);
-            _ends.RemoveAt(_ends.Count - 1);
-            DisplayColumn = _ends[^1];
+            if (length >= Length) return;
+            Length = length;
+            DisplayColumn = _ends[length];
+        }
+
+        private void Ensure(int required)
+        {
+            if (_starts.Length >= required) return;
+            int size = Math.Max(required, _starts.Length * 2);
+            int[] starts = ArrayPool<int>.Shared.Rent(size);
+            int[] ends = ArrayPool<int>.Shared.Rent(size);
+            _starts.AsSpan(0, Length + 1).CopyTo(starts);
+            _ends.AsSpan(0, Length + 1).CopyTo(ends);
+            ArrayPool<int>.Shared.Return(_starts);
+            ArrayPool<int>.Shared.Return(_ends);
+            _starts = starts;
+            _ends = ends;
+        }
+
+        public void Dispose()
+        {
+            ArrayPool<int>.Shared.Return(_starts);
+            ArrayPool<int>.Shared.Return(_ends);
+            _starts = Array.Empty<int>();
+            _ends = Array.Empty<int>();
         }
     }
 }

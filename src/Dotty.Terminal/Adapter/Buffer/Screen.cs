@@ -322,34 +322,9 @@ public unsafe partial class Screen : IDisposable
 
     public string GetScrollbackRow(int scrollbackIndex)
     {
-        int total = _scrollbackCapacity + Rows;
-        int pRow = (_head - 1 - scrollbackIndex + total * 2) % total;
-        int maxCol = _rowMaxCol[pRow];
-        int endCol = RowEndCol[pRow] >= 0 ? RowEndCol[pRow] : maxCol;
-
-        if (endCol < 0) return string.Empty;
-
-        int offset = pRow * Columns;
-        using var sb = ZStr.CreateStringBuilder(endCol + 1);
-        for (int i = 0; i <= endCol; i++)
-        {
-            ref var cell = ref UnsafeAsRef<CellHot>(_cellsPtr, offset + i);
-            if (cell.IsContinuation || cell.Rune == 0)
-            {
-                sb.Append(' ');
-                continue;
-            }
-
-            // Resolve through the cold cell so multi-char graphemes are not
-            // reduced to their first rune (or U+FFFD for supplementary planes).
-            ref var cold = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + i);
-            var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
-            if (string.IsNullOrEmpty(grapheme))
-                sb.Append(' ');
-            else
-                sb.Append(grapheme);
-        }
-        return sb.ToString();
+        if (!TryReadScrollbackRow(scrollbackIndex, out var hot, out var cold))
+            return string.Empty;
+        return RowText.Build(hot, cold, 0, hot.Length - 1, ContinuationPolicy.SpaceCell);
     }
 
     public int GetScrollbackRowLength(int scrollbackIndex)

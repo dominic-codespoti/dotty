@@ -38,8 +38,20 @@ public interface IRenderSource
     /// </summary>
     string? GetHyperlinkUrl(ushort id);
 
-    /// <summary>Text of one scrollback line, newest = 0.</summary>
+    /// <summary>
+    /// Text of one scrollback line. Index 0 is the OLDEST line and <c>ScrollbackCount - 1</c> the newest, so a line's
+    /// row number is <c>index - ScrollbackCount</c> (-1 = newest). Empty when the source did not materialize it.
+    /// </summary>
     string GetScrollbackLineText(int index);
+
+    /// <summary>
+    /// Cells of one scrollback line (same index convention as <see cref="GetScrollbackLineText"/>: 0 = oldest), covering
+    /// columns 0..the line's last occupied column. An empty line returns true with empty spans. Returns false when the
+    /// source holds no cell data for that index (a visible-only <see cref="RenderSnapshot"/> or an out-of-range index);
+    /// callers then fall back to <see cref="GetScrollbackLineText"/>. The spans are valid until the source is mutated
+    /// (live buffer) or disposed (snapshot).
+    /// </summary>
+    bool TryGetScrollbackRow(int index, out ReadOnlySpan<CellHot> hot, out ReadOnlySpan<ColdCell> cold);
 
     /// <summary>Diagnostic state string (debug overlay; never per-frame content).</summary>
     string GetDebugInfo();

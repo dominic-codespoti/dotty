@@ -49,8 +49,9 @@
     <ProjectReference Include="..\Dotty.Runtime\Dotty.Runtime.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="../../shell-integration/*"
-             Link="shell-integration/%(Filename)%(Extension)"
+    <!-- `**/*` also matches dotfiles (inject/zsh/.zshenv, required by zsh injection) and keeps the subdirectories. -->
+    <Content Include="../../shell-integration/**/*"
+             Link="shell-integration/%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>

@@ -222,8 +222,10 @@ public partial class TerminalSession : IDisposable
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
             _hasReceivedInitialResize = false;
+            ShellLaunch integration = PrepareShellIntegration(shell, false, null);
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows, workingDirectory: LaunchWorkingDirectory,
-                       environmentVariables: BuildLaunchEnvironment(null));
+                       environmentVariables: BuildLaunchEnvironment(null, integration.Environment),
+                       command: integration.Command);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }
@@ -257,9 +259,11 @@ public partial class TerminalSession : IDisposable
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
             _hasReceivedInitialResize = false;
+            ShellLaunch integration = PrepareShellIntegration(shell, shellIsExecutable, command);
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows,
-                       workingDirectory: LaunchWorkingDirectory, environmentVariables: BuildLaunchEnvironment(environmentVariables),
-                       command: command, shellIsExecutable: shellIsExecutable);
+                       workingDirectory: LaunchWorkingDirectory,
+                       environmentVariables: BuildLaunchEnvironment(environmentVariables, integration.Environment),
+                       command: integration.Command ?? command, shellIsExecutable: shellIsExecutable);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }

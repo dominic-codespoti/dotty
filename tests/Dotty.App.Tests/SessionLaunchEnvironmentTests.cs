@@ -39,6 +39,20 @@ public sealed class SessionLaunchEnvironmentTests
     }
 
     [Fact]
+    public void DefaultConfig_LaunchesWithoutShellIntegration()
+    {
+        var (session, ptys) = CreateSession();
+        using var leaf = new LeafPane(session);
+
+        session.StartWithOptions(shell: "/bin/bash");
+
+        SilentPty pty = Assert.Single(ptys);
+        Assert.Null(pty.StartedCommand);
+        Assert.False(pty.StartedEnvironment!.ContainsKey("DOTTY_SHELL_INTEGRATION"));
+        Assert.False(pty.StartedEnvironment!.ContainsKey("ZDOTDIR"));
+    }
+
+    [Fact]
     public void Start_SetsTermProgramVersionAndSurfaceId()
     {
         var (session, ptys) = CreateSession();

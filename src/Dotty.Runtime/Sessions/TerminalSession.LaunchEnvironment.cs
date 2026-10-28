@@ -11,9 +11,11 @@ public partial class TerminalSession
 
     /// <summary>
     /// Builds the environment passed to the PTY: Dotty identification variables first, then the
-    /// caller's variables (which win). The caller's dictionary is never mutated.
+    /// shell-integration variables, then the caller's variables (which win). The caller's dictionary is never mutated.
     /// </summary>
-    private Dictionary<string, string> BuildLaunchEnvironment(IDictionary<string, string>? caller)
+    private Dictionary<string, string> BuildLaunchEnvironment(
+        IDictionary<string, string>? caller,
+        IReadOnlyDictionary<string, string>? integration = null)
     {
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         var environment = new Dictionary<string, string>(comparer)
@@ -22,6 +24,11 @@ public partial class TerminalSession
             ["TERM_PROGRAM_VERSION"] = DottyVersion.Current,
             ["DOTTY_SURFACE_ID"] = SurfaceId,
         };
+        if (integration is not null)
+        {
+            foreach (KeyValuePair<string, string> pair in integration)
+                environment[pair.Key] = pair.Value;
+        }
         if (caller is not null)
         {
             foreach (KeyValuePair<string, string> pair in caller)

@@ -20,8 +20,6 @@ public sealed class QuadRowCache
         public ulong ContentHash;
         public int SelectionStart;
         public int SelectionEnd;
-        public int CursorColumn;
-        public byte CursorShape;
         public ulong SearchHash;
         public CellInstance[] Instances = Array.Empty<CellInstance>();
         public int InstanceCount;
@@ -29,8 +27,6 @@ public sealed class QuadRowCache
         public int SelectionExtraCount;
         public CellHot[] SourceCells = Array.Empty<CellHot>();
         public ColdCell[] SourceColdCells = Array.Empty<ColdCell>();
-        public CellInstance CursorExtra;
-        public bool HasCursorExtra;
 
         // Kept for the existing row-local quad cache helpers and callers.
         public SKPoint[] GlyphPos = Array.Empty<SKPoint>();
@@ -257,14 +253,10 @@ public sealed class QuadRowCache
         entry.ContentHash = 0;
         entry.SelectionStart = -1;
         entry.SelectionEnd = -1;
-        entry.CursorColumn = -1;
-        entry.CursorShape = 0;
         entry.SearchHash = 0;
         entry.InstanceCount = 0;
         entry.SelectionExtraCount = 0;
-        entry.CursorExtra = default;
         entry.RowIdentity = 0;
-        entry.HasCursorExtra = false;
         entry.GlyphCount = 0;
         entry.SolidCount = 0;
     }

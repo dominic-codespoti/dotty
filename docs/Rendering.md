@@ -209,7 +209,7 @@ expected to change the row; it is not a release date or a commitment.
 | Italic, faint, conceal, text blink (SGR 3, 2, 8, 5) | Not supported | Parsed and stored, not drawn | W4-B3 |
 | Inverse, strikethrough, overline | Supported | | |
 | Underline | Partial | Single underline only. Double, curly, dotted, and dashed (SGR 4:2–4:5) and the SGR 58 underline colour are parsed but drawn as the same single underline | W4-C3 |
-| Cursor shape | Partial | DECSCUSR selects the shape; `cursor.shape` is not applied. `Beam` draws nothing over a drawn cell; empty cells always get a half-transparent block. DECSCUSR blink bit ignored | W4-B2 |
+| Cursor shape | Supported | Block (text drawn in the cell background), beam and underline; DECSCUSR shape and blink bit, else `cursor.shape`/`cursor.blink`; DECTCEM hides it; wide characters get a two-cell cursor; unfocused windows draw `cursor.unfocusedStyle` (hollow outline by default) | |
 | Pane dividers / active-pane border | Not supported | Fixed 2-pixel gap; `panes.dividerThickness` and `panes.activeBorder` are not read | W4-B5 |
 | Window opacity | Not supported | `window.opacity` is not read; the window is opaque | W4-C12 |
 | Configured window title | Not supported | `window.title` is not read; the title follows the active tab | W4-C13 |

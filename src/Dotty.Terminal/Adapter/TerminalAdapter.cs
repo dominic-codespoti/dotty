@@ -651,17 +651,17 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public void OnSetCursorShape(int shape)
     {
         CursorShape = shape;
-        var (cursorShape, blinking) = shape switch
+        switch (shape)
         {
-            0 or 1 => (TerminalCursorShape.Block, true),
-            2 => (TerminalCursorShape.Block, false),
-            3 => (TerminalCursorShape.Underline, true),
-            4 => (TerminalCursorShape.Underline, false),
-            5 => (TerminalCursorShape.Beam, true),
-            6 => (TerminalCursorShape.Beam, false),
-            _ => (TerminalCursorShape.Block, true),
-        };
-        _buffer.SetCursorStyle(cursorShape, blinking);
+            case 1: _buffer.SetCursorStyle(TerminalCursorShape.Block, blinking: true); break;
+            case 2: _buffer.SetCursorStyle(TerminalCursorShape.Block, blinking: false); break;
+            case 3: _buffer.SetCursorStyle(TerminalCursorShape.Underline, blinking: true); break;
+            case 4: _buffer.SetCursorStyle(TerminalCursorShape.Underline, blinking: false); break;
+            case 5: _buffer.SetCursorStyle(TerminalCursorShape.Beam, blinking: true); break;
+            case 6: _buffer.SetCursorStyle(TerminalCursorShape.Beam, blinking: false); break;
+            // 0 and unknown values restore the user's configured default (cursor.shape / cursor.blink).
+            default: _buffer.ResetCursorStyle(); break;
+        }
         RequestRender();
     }
 

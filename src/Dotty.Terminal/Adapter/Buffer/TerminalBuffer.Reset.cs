@@ -1,5 +1,3 @@
-using Dotty.Abstractions.Config;
-
 namespace Dotty.Terminal.Adapter;
 
 public partial class TerminalBuffer
@@ -19,7 +17,7 @@ public partial class TerminalBuffer
         _scrollBottom = Rows - 1;
         _originMode = false;
         _autoWrap = true;
-        SetCursorStyle(TerminalCursorShape.Block, blinking: true);
+        ResetCursorStyle();
         _hasSavedCursor = true;
         _savedCursorState = new CursorState(0, 0, Visible: true, WrapPending: false);
     }

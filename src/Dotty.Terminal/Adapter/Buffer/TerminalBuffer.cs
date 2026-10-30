@@ -229,10 +229,27 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     public TerminalCursorShape CursorShape { get; private set; } = TerminalCursorShape.Block;
     public bool CursorBlinking { get; private set; } = true;
 
+    /// <summary>
+    /// True until the application selects a style with DECSCUSR 1-6, and again after DECSCUSR 0, DECSTR or RIS.
+    /// The renderer then draws the configured <c>cursor.shape</c>/<c>cursor.blink</c> instead of
+    /// <see cref="CursorShape"/>/<see cref="CursorBlinking"/> (which hold the VT default, a blinking block).
+    /// </summary>
+    public bool CursorStyleIsDefault { get; private set; } = true;
+
+    /// <summary>Applies an explicit application cursor style (DECSCUSR 1-6).</summary>
     public void SetCursorStyle(TerminalCursorShape shape, bool blinking)
     {
         CursorShape = shape;
         CursorBlinking = blinking;
+        CursorStyleIsDefault = false;
+    }
+
+    /// <summary>Returns to the user's configured default cursor style (DECSCUSR 0, DECSTR, RIS).</summary>
+    public void ResetCursorStyle()
+    {
+        CursorShape = TerminalCursorShape.Block;
+        CursorBlinking = true;
+        CursorStyleIsDefault = true;
     }
 
     public void SetCursorVisible(bool visible) => _cursor.SetVisible(visible);
@@ -691,6 +708,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             CursorCol,
             CursorShape,
             CursorBlinking,
+            CursorStyleIsDefault,
+            CursorVisible,
             scrollOffset);
         snapshot.GlobalGeneration = Generation;
         CaptureGraphics(snapshot, scrollOffset);

@@ -155,6 +155,14 @@ public sealed class CursorUserConfig
 
     [JsonPropertyName("blinkIntervalMs")]
     public int BlinkIntervalMs { get; set; } = 500;
+
+    /// <summary>Cursor drawn while the window is unfocused: <c>hollow</c>, <c>same</c> or <c>hidden</c>.</summary>
+    [JsonPropertyName("unfocusedStyle")]
+    public string UnfocusedStyle { get; set; } = "hollow";
+
+    /// <summary>Text colour inside a block cursor: <c>auto</c> (cell background) or <c>cell-foreground</c>.</summary>
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = "auto";
 }
 public sealed class ClipboardUserConfig
 {

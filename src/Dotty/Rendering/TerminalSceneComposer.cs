@@ -178,6 +178,12 @@ public sealed class TerminalSceneComposer : IDisposable
     public long CachedRowHits => _cachedRowHits;
     public long CachedRowMisses => _cachedRowMisses;
 
+    /// <summary>
+    /// True when the last composed frame drew a blinking cursor (DECSCUSR blink bit, or <c>cursor.blink</c> while the
+    /// application keeps the default style). The host runs the shared blink timer only while this is set.
+    /// </summary>
+    public bool BlinkActive { get; private set; }
+
     private readonly ImageDrawList _imageDraws = new();
 
     /// <summary>Scratch output of <see cref="PlaceholderResolver"/>: filled and drained within one leaf, never holds pixels across frames.</summary>
@@ -236,7 +242,8 @@ public sealed class TerminalSceneComposer : IDisposable
         bool statusWarning = false,
         float captionButtonsWidth = 0f,
         bool isMaximized = false,
-        ImePreeditState? preeditState = null)
+        ImePreeditState? preeditState = null,
+        bool windowFocused = true)
     {
         ArgumentNullException.ThrowIfNull(activeTab);
         ArgumentNullException.ThrowIfNull(tabManager);
@@ -265,6 +272,7 @@ public sealed class TerminalSceneComposer : IDisposable
         SKRect imeCaretBounds = default;
         bool imeCaretBoundsValid = false;
         _dirtyAtlasRows.Clear();
+        BlinkActive = false;
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
         int atlasVersionAtStart = _atlas.ContentVersion;
@@ -448,50 +456,66 @@ public sealed class TerminalSceneComposer : IDisposable
                     }
                 }
 
-                if (cursorVisible && scrollOffset == 0 && ReferenceEquals(leaf, activePane)
+                // cursorVisible is the shared blink phase: it hides only a blinking cursor in its off phase.
+                if (leafSnapshot.CursorVisible && scrollOffset == 0 && ReferenceEquals(leaf, activePane)
                     && leafSnapshot.CursorRow >= 0 && leafSnapshot.CursorRow < paneRows
                     && leafSnapshot.CursorCol >= 0 && leafSnapshot.CursorCol < paneColumns)
                 {
+                    var cursorConfig = UserConfigService.Current.Cursor;
+                    var (cursorShape, cursorBlinks) = CursorGeometry.ResolveStyle(
+                        leafSnapshot.CursorStyleIsDefault, leafSnapshot.CursorShape, leafSnapshot.CursorBlinking,
+                        CursorGeometry.ParseShape(cursorConfig.Shape), cursorConfig.Blink);
+                    if (cursorBlinks)
+                        BlinkActive = true;
+
+                    // A continuation cell resolves to its wide lead, and the cursor then spans both columns.
+                    ReadOnlySpan<CellHot> cursorCells = leafSnapshot.GetRowCells(leafSnapshot.CursorRow);
+                    int leadColumn = leafSnapshot.CursorCol;
+                    if (leadColumn > 0 && leadColumn < cursorCells.Length && cursorCells[leadColumn].IsContinuation)
+                        leadColumn--;
+                    int cursorSpan = leadColumn + 1 < paneColumns && leadColumn < cursorCells.Length
+                        && cursorCells[leadColumn].Width == 2 ? 2 : 1;
                     int cursorRow = leafSnapshot.CursorRow + startRowOffset;
-                    int cursorColumn = leafSnapshot.CursorCol + startColumnOffset;
-                    bool found = false;
-                    for (int i = startInstanceIndex; i < instanceCount; i++)
+                    int cursorColumn = leadColumn + startColumnOffset;
+                    float cursorCellWidth = cellWidth * scale;
+                    float cursorCellHeight = cellHeight * scale;
+                    CursorPlan cursorPlan = CursorGeometry.Plan(
+                        cursorShape,
+                        windowFocused,
+                        CursorGeometry.ParseUnfocusedStyle(cursorConfig.UnfocusedStyle),
+                        visible: !cursorBlinks || cursorVisible,
+                        padLeft + cursorColumn * cursorCellWidth,
+                        padTop + cursorRow * cursorCellHeight,
+                        cursorCellWidth,
+                        cursorCellHeight,
+                        cursorSpan,
+                        scale);
+                    if (cursorPlan.RectCount > 0)
                     {
-                        ref var instance = ref _frameScratch[i];
-                        if (instance.Row != cursorRow || instance.Col != cursorColumn)
-                            continue;
-
-                        if (leafSnapshot.CursorShape == TerminalCursorShape.Block)
-                        {
-                            instance.BgR = leafForeground.R;
-                            instance.BgG = leafForeground.G;
-                            instance.BgB = leafForeground.B;
-                            instance.BgA = 128;
-                        }
-                        else if (leafSnapshot.CursorShape == TerminalCursorShape.Underline)
-                        {
-                            instance.Flags |= CellFlags.Underline;
-                        }
-                        found = true;
-                        break;
+                        // Base chrome is drawn between cell backgrounds and glyphs, so the text stays on top.
+                        EnsureChromeScratchCapacity(chromeQuadCount + cursorPlan.RectCount);
+                        for (int i = 0; i < cursorPlan.RectCount; i++)
+                            _chromeScratch[chromeQuadCount++] = MakeSolidQuad(cursorPlan[i], leafForeground);
                     }
-
-                    if (!found)
+                    if (cursorPlan.RecolorsText)
                     {
-                        EnsureScratchCapacity(instanceCount + 1);
-                        _frameScratch[instanceCount++] = new CellInstance
+                        var textMode = CursorGeometry.ParseTextMode(cursorConfig.Text);
+                        for (int i = startInstanceIndex; i < instanceCount; i++)
                         {
-                            Col = (ushort)cursorColumn,
-                            Row = (ushort)cursorRow,
-                            FgR = themeForeground.R,
-                            FgG = themeForeground.G,
-                            FgB = themeForeground.B,
-                            FgA = 255,
-                            BgR = themeForeground.R,
-                            BgG = themeForeground.G,
-                            BgB = themeForeground.B,
-                            BgA = 128,
-                        };
+                            ref var instance = ref _frameScratch[i];
+                            if (instance.Row != cursorRow || instance.Col != cursorColumn)
+                                continue;
+
+                            var cellForeground = SgrColorArgb.FromRgb(instance.FgR, instance.FgG, instance.FgB);
+                            var cellBackground = instance.BgA != 0
+                                ? SgrColorArgb.FromRgb(instance.BgR, instance.BgG, instance.BgB)
+                                : leafBackground;
+                            var text = CursorGeometry.ResolveTextColor(textMode, cellForeground, cellBackground, leafForeground);
+                            instance.FgR = text.R;
+                            instance.FgG = text.G;
+                            instance.FgB = text.B;
+                            break;
+                        }
                     }
                 }
                 if (ReferenceEquals(leaf, activePane) && scrollOffset == 0 &&
@@ -749,21 +773,28 @@ public sealed class TerminalSceneComposer : IDisposable
         return _cachedFrame;
     }
     private static ChromeQuadInstance MakeImeCaretQuad(SKRect rect, SgrColorArgb color)
-        => new()
+        => MakeSolidQuad(new CursorRect(rect.Left, rect.Top, rect.Width, rect.Height), color);
+
+    /// <summary>Opaque chrome quad; chrome colours are 0-1 floats (straight alpha).</summary>
+    private static ChromeQuadInstance MakeSolidQuad(CursorRect rect, SgrColorArgb color)
+    {
+        float r = color.R / 255f, g = color.G / 255f, b = color.B / 255f;
+        return new ChromeQuadInstance
         {
-            X = rect.Left,
-            Y = rect.Top,
+            X = rect.X,
+            Y = rect.Y,
             W = rect.Width,
             H = rect.Height,
-            TopR = color.R,
-            TopG = color.G,
-            TopB = color.B,
+            TopR = r,
+            TopG = g,
+            TopB = b,
             TopA = 1f,
-            BottomR = color.R,
-            BottomG = color.G,
-            BottomB = color.B,
+            BottomR = r,
+            BottomG = g,
+            BottomB = b,
             BottomA = 1f
         };
+    }
     private void ConfigureRowCaches(
         IColorScheme theme,
         SgrColorArgb foreground,

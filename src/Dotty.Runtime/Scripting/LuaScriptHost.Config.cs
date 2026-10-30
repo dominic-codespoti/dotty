@@ -55,6 +55,8 @@ public sealed partial class LuaScriptHost
         ["cursor.shape"] = new(ConfigValueKind.String, c => c.Cursor.Shape, (c, v) => c.Cursor.Shape = (string)v!),
         ["cursor.blink"] = new(ConfigValueKind.Boolean, c => c.Cursor.Blink, (c, v) => c.Cursor.Blink = (bool)v!),
         ["cursor.blink_interval_ms"] = new(ConfigValueKind.Integer, c => c.Cursor.BlinkIntervalMs, (c, v) => c.Cursor.BlinkIntervalMs = (int)v!),
+        ["cursor.unfocused_style"] = new(ConfigValueKind.String, c => c.Cursor.UnfocusedStyle, (c, v) => c.Cursor.UnfocusedStyle = (string)v!),
+        ["cursor.text"] = new(ConfigValueKind.String, c => c.Cursor.Text, (c, v) => c.Cursor.Text = (string)v!),
         ["panes.divider_thickness"] = new(ConfigValueKind.Number, c => c.Panes.DividerThickness, (c, v) => c.Panes.DividerThickness = (double)v!),
         ["panes.active_border"] = new(ConfigValueKind.Boolean, c => c.Panes.ActiveBorder, (c, v) => c.Panes.ActiveBorder = (bool)v!),
         ["keybindings"] = new(ConfigValueKind.Map, c => c.Keybindings, (c, v) => c.Keybindings = (Dictionary<string, string>)v!),

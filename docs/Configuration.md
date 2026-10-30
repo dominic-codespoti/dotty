@@ -182,14 +182,23 @@ chrome style; the stored `style` value does not select a different appearance.
 | `shape` | string | `Block` |
 | `blink` | boolean | `true` |
 | `blinkIntervalMs` | integer | `500` |
+| `unfocusedStyle` | string | `hollow` |
+| `text` | string | `auto` |
 
-`shape` accepts `Block`, `Beam`, and `Underline`, but is accepted and not yet
-applied: the drawn shape comes only from the application's DECSCUSR request
-(`CSI Ps SP q`). Over a drawn cell, `Block` is a half-transparent foreground
-block and `Underline` an underline; `Beam` currently draws nothing there. On
-an empty cell every shape draws the half-transparent block. `blink` and
-`blinkIntervalMs` control blinking; the DECSCUSR steady/blink bit is not yet
-honoured.
+`shape` (`Block`, `Beam`, `Underline`) and `blink` are the default style. An
+application that selects a style with DECSCUSR (`CSI Ps SP q`, `Ps` 1–6) gets
+that shape and its steady/blink bit; DECSCUSR 0, DECSTR and RIS return to the
+configured default. `Block` fills the cell (both cells of a wide character)
+and draws the text under it in the `text` colour; `Beam` is a bar at the left
+edge and `Underline` a bar at the bottom, 2 px × display scale. A cursor hidden
+with DECTCEM (`CSI ? 25 l`) is not drawn. Blinking uses `blinkIntervalMs`
+(raised to at least 100) and stops, showing the cursor, while the window is
+unfocused. `unfocusedStyle` selects the unfocused cursor: `hollow` outlines the
+cursor cell(s) whatever the shape, `same` keeps the focused shape, and `hidden`
+draws none. `text` is `auto` (the cell background, or the cell foreground when
+the background equals the cursor colour) or `cell-foreground` (the text keeps
+its colour). The cursor colour is the pane's default foreground. Only the
+active pane draws a cursor, and not while it is scrolled back.
 
 ### `theme`, `selectionColor`, and `panes`
 

@@ -17,8 +17,12 @@ public interface IRenderSource
     bool IsAlternateScreenActive { get; }
     int CursorRow { get; }
     int CursorCol { get; }
+    /// <summary>DECTCEM cursor visibility.</summary>
+    bool CursorVisible { get; }
     TerminalCursorShape CursorShape { get; }
     bool CursorBlinking { get; }
+    /// <summary>True while no DECSCUSR 1-6 style is in effect; the renderer then uses the configured cursor style.</summary>
+    bool CursorStyleIsDefault { get; }
     ReadOnlySpan<ulong> RowGenerations { get; }
 
     /// <summary>Zero-copy read-only view of one visible row's hot cells.</summary>

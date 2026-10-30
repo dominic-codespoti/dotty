@@ -1663,8 +1663,27 @@ internal static class DottyWindowHost
         }
     }
 
+    /// <summary>
+    /// Whether the shared blink timer runs: the last composed frame drew a blinking cursor (see
+    /// <see cref="TerminalSceneComposer.BlinkActive"/>) and the window is not known to be unfocused. While it is idle
+    /// the blink phase stays on, so an unfocused window shows a steady cursor.
+    /// </summary>
     private static bool CursorBlinks(bool hasActiveTab) =>
-        hasActiveTab && _lastWindowFocus != false && UserConfigService.Current.Cursor.Blink;
+        hasActiveTab && _lastWindowFocus != false && (_sceneComposer?.BlinkActive ?? false);
+
+    /// <summary>
+    /// The shared blink phase (<see cref="_cursorBlinkVisible"/>). <see cref="_lastCursorBlinkTimestampMs"/> is the
+    /// start of the current on or off segment; input and focus changes restart an on segment.
+    /// <see cref="BlinkPolicy.Steady"/> while the timer is idle.
+    /// </summary>
+    private static BlinkPolicy CurrentBlinkPolicy(bool hasActiveTab)
+    {
+        if (!CursorBlinks(hasActiveTab))
+            return BlinkPolicy.Steady;
+        int interval = Math.Max(100, UserConfigService.Current.Cursor.BlinkIntervalMs);
+        long onSegmentStart = _cursorBlinkVisible ? _lastCursorBlinkTimestampMs : _lastCursorBlinkTimestampMs - interval;
+        return new BlinkPolicy(onSegmentStart, interval);
+    }
 
     /// <summary>
     /// Blocks until input, a cross-thread wake, or the nearest deadline. Replaces a
@@ -1913,7 +1932,8 @@ internal static class DottyWindowHost
                     ? Math.Min(framebufferWidth, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
                     : 0f,
                 isMaximized: _window.WindowState == WindowState.Maximized,
-                preeditState: _nativeTextInput?.Preedit);
+                preeditState: _nativeTextInput?.Preedit,
+                windowFocused: _lastWindowFocus != false);
 
             _nextImageDeadlineTicks = frame.NextImageDeadlineTicks;
             if (frame.IsIncomplete)
@@ -1979,22 +1999,27 @@ internal static class DottyWindowHost
         if (!hasActiveTab)
             return;
 
-        var cursorConfig = UserConfigService.Current.Cursor;
-        if (CursorBlinks(hasActiveTab))
+        BlinkPolicy blink = CurrentBlinkPolicy(hasActiveTab);
+        if (blink.IsBlinking)
         {
-            int blinkInterval = Math.Max(100, cursorConfig.BlinkIntervalMs);
-            if (now - _lastCursorBlinkTimestampMs >= blinkInterval)
+            bool on = blink.IsOn(now);
+            // Always advance to the segment containing now, so the idle wait's next deadline is never in the past.
+            _lastCursorBlinkTimestampMs = blink.NextToggleMs(now) - blink.IntervalMs;
+            if (on != _cursorBlinkVisible)
             {
-                _cursorBlinkVisible = !_cursorBlinkVisible;
-                _lastCursorBlinkTimestampMs = now;
+                _cursorBlinkVisible = on;
                 WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
             }
         }
-        else if (!_cursorBlinkVisible)
+        else
         {
-            _cursorBlinkVisible = true;
+            // An idle timer restarts with a full on segment when blinking resumes.
             _lastCursorBlinkTimestampMs = now;
-            WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
+            if (!_cursorBlinkVisible)
+            {
+                _cursorBlinkVisible = true;
+                WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
+            }
         }
     }
 

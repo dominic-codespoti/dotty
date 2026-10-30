@@ -262,11 +262,15 @@ public static class ConfigOptionCatalog
             "Tab bar style; the renderer currently uses one chrome style, so the stored value does not change the appearance."),
 
         Opt("cursor.shape", "cursor.shape", "string", ["Block", "Beam", "Underline"], c => c.Cursor.Shape,
-            "Default cursor shape. Accepted but not yet applied: only the application's DECSCUSR request selects the shape."),
+            "Default cursor shape, used until the application selects one with DECSCUSR (CSI Ps SP q); DECSCUSR 0, DECSTR and RIS return to it."),
         Opt("cursor.blink", "cursor.blink", "boolean", null, c => c.Cursor.Blink,
-            "Blink the cursor while the window is focused."),
+            "Default cursor blinking, used until the application selects a style with DECSCUSR; blinking stops while the window is unfocused."),
         Opt("cursor.blinkIntervalMs", "cursor.blink_interval_ms", "integer", null, c => c.Cursor.BlinkIntervalMs,
-            "Cursor blink interval in milliseconds; values below 100 are raised to 100."),
+            "Blink interval in milliseconds for the cursor and SGR 5/6 blinking text; values below 100 are raised to 100."),
+        Opt("cursor.unfocusedStyle", "cursor.unfocused_style", "string", ["hollow", "same", "hidden"], c => c.Cursor.UnfocusedStyle,
+            "Cursor while the window is unfocused: an outline of the cursor cell ('hollow'), the focused shape ('same'), or none ('hidden')."),
+        Opt("cursor.text", "cursor.text", "string", ["auto", "cell-foreground"], c => c.Cursor.Text,
+            "Text colour inside a block cursor: 'auto' uses the cell background (the cell foreground when the background matches the cursor), 'cell-foreground' keeps the text colour."),
 
         Opt("panes.dividerThickness", "panes.divider_thickness", "number", null, c => c.Panes.DividerThickness,
             "Split-pane divider thickness. Accepted but not yet applied: splits use a fixed 2-pixel gap and no divider is drawn."),

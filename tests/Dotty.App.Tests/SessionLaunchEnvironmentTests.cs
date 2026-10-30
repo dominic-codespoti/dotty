@@ -49,6 +49,8 @@ public sealed class SessionLaunchEnvironmentTests
         Assert.Equal(DottyVersion.Describe(), env["TERM_PROGRAM_VERSION"]);
         Assert.Equal(leaf.Id, env["DOTTY_SURFACE_ID"]);
         Assert.Matches("^[0-9a-f]{32}$", env["DOTTY_SURFACE_ID"]);
+        Assert.Equal("xterm-256color", env["TERM"]);
+        Assert.False(env.ContainsKey("TERMINFO_DIRS"));
     }
 
     [Fact]
@@ -62,10 +64,17 @@ public sealed class SessionLaunchEnvironmentTests
 
         session.Adapter.OnRequestTerminalVersion();
         session.Adapter.OnSendDeviceAttributes(2);
+        session.Adapter.OnQueryCapability("544E"); // TN
 
-        string version = Assert.Single(ptys).StartedEnvironment!["TERM_PROGRAM_VERSION"];
+        IDictionary<string, string> env = Assert.Single(ptys).StartedEnvironment!;
+        string version = env["TERM_PROGRAM_VERSION"];
         Assert.Equal(
-            new[] { "\u001bP>|Dotty " + version + "\u001b\\", $"\u001b[>1;{TerminalAdapter.Da2VersionNumber(version)};0c" },
+            new[]
+            {
+                "\u001bP>|Dotty " + version + "\u001b\\",
+                $"\u001b[>1;{TerminalAdapter.Da2VersionNumber(version)};0c",
+                "\u001bP1+r544E=" + Convert.ToHexString(System.Text.Encoding.ASCII.GetBytes(env["TERM"])) + "\u001b\\",
+            },
             replies);
     }
 
@@ -77,6 +86,7 @@ public sealed class SessionLaunchEnvironmentTests
         var caller = new Dictionary<string, string>
         {
             ["TERM_PROGRAM"] = "custom",
+            ["TERM"] = "dumb",
             ["FOO"] = "bar",
         };
 
@@ -87,8 +97,10 @@ public sealed class SessionLaunchEnvironmentTests
         Assert.Equal("bar", env["FOO"]);
         Assert.Equal(DottyVersion.Describe(), env["TERM_PROGRAM_VERSION"]);
         Assert.Equal(leaf.Id, env["DOTTY_SURFACE_ID"]);
-        Assert.Equal(2, caller.Count);
+        Assert.Equal("xterm-256color", env["TERM"]); // TERM is the session's identity, not the caller's
+        Assert.Equal(3, caller.Count);
         Assert.Equal("custom", caller["TERM_PROGRAM"]);
+        Assert.Equal("dumb", caller["TERM"]);
     }
 
     [Fact]

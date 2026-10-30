@@ -227,8 +227,9 @@ public partial class TerminalSession : IDisposable
             _initialPixelHeight = 0;
             _hasReceivedInitialResize = false;
             ShellLaunch integration = PrepareShellIntegration(shell, false, null);
+            TermSelection term = SelectTerm();
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows, workingDirectory: LaunchWorkingDirectory,
-                       environmentVariables: BuildLaunchEnvironment(null, integration.Environment),
+                       environmentVariables: BuildLaunchEnvironment(null, integration.Environment, term),
                        command: integration.Command);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
@@ -277,9 +278,10 @@ public partial class TerminalSession : IDisposable
             _initialPixelHeight = Math.Max(0, initialPixelHeight);
             _hasReceivedInitialResize = false;
             ShellLaunch integration = PrepareShellIntegration(shell, shellIsExecutable, command);
+            TermSelection term = SelectTerm();
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows,
                        workingDirectory: LaunchWorkingDirectory,
-                       environmentVariables: BuildLaunchEnvironment(environmentVariables, integration.Environment),
+                       environmentVariables: BuildLaunchEnvironment(environmentVariables, integration.Environment, term),
                        command: integration.Command ?? command, shellIsExecutable: shellIsExecutable,
                        initialPixelWidth: _initialPixelWidth, initialPixelHeight: _initialPixelHeight);
             _readCancellation = new CancellationTokenSource();

@@ -183,14 +183,14 @@ public sealed class UnixPty : IPty
             psi.EnvironmentVariables["DOTTY_INITIAL_XPIXEL"] = _startupPixelWidth.ToString();
             psi.EnvironmentVariables["DOTTY_INITIAL_YPIXEL"] = _startupPixelHeight.ToString();
 
-            // Add environment variables before forcing terminal identity.
+            // Add environment variables before setting terminal identity.
             if (environmentVariables != null)
             {
                 foreach (var kvp in environmentVariables)
                     psi.EnvironmentVariables[kvp.Key] = kvp.Value;
             }
 
-            psi.EnvironmentVariables["TERM"] = "xterm-256color";
+            psi.EnvironmentVariables["TERM"] = TerminalEnvironment.Term(environmentVariables);
             psi.EnvironmentVariables["COLORTERM"] = "truecolor";
 
             try

@@ -1,0 +1,22 @@
+# Terminfo entry for the Dotty terminal emulator.
+#
+# Compile with ncurses tic (extended capabilities need -x):
+#   tic -x -o <dir> terminfo/xterm-dotty.src
+# and check the result with:
+#   infocmp -x -A <dir> xterm-dotty
+#
+# The entry is xterm-256color plus the capabilities below. Each one is
+# implemented by Dotty, answered by XTGETTCAP with the same value, and run
+# through Dotty by TerminfoCapabilityTests (tests/Dotty.App.Tests), which also
+# fails when this file and Dotty.Terminal.Adapter.TerminfoCapabilities differ.
+# Styled underlines (Smulx, Setulc) are not advertised until they are drawn.
+xterm-dotty|dotty|Dotty terminal emulator,
+	Tc,
+	Ss=\E[%p1%d q,
+	Se=\E[2 q,
+	Sync=\E[?2026%?%p1%{1}%=%th%el%;,
+	BE=\E[?2004h,
+	BD=\E[?2004l,
+	PS=\E[200~,
+	PE=\E[201~,
+	use=xterm-256color,

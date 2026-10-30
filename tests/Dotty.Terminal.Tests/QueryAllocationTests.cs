@@ -48,6 +48,10 @@ public sealed class QueryAllocationTests
         AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001bP+q544E;436F\u001b\\"));
 
     [Fact]
+    public void RepeatedXtgettcapTerminfoCapabilityQueryDoesNotAllocate() =>
+        AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001bP+q53796E63;5373\u001b\\")); // Sync;Ss
+
+    [Fact]
     public void RepeatedIdentityQueriesDoNotAllocate() =>
         AssertNoAllocations(
             CreateParser(),

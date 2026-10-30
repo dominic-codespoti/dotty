@@ -309,6 +309,9 @@ public static class ConfigOptionCatalog
         Opt("shellIntegration", "shell_integration", "string", ["detect", "none"], c => c.ShellIntegration,
             "Automatically inject Dotty's shell-integration scripts (OSC 7 / OSC 133) into recognized interactive shells: 'detect' injects, 'none' never does; any other value is treated as none. An explicit command and the DOTTY_SHELL_INTEGRATION opt-out are never overridden.",
             "Applies to new tabs and panes only."),
+        Opt("term", "term", "string", null, c => c.Term,
+            "TERM value for shells and commands Dotty starts: 'xterm-256color', or a terminfo entry such as 'xterm-dotty' (shipped in the packages). When the entry is not found in any terminfo directory (TERMINFO, ~/.terminfo, TERMINFO_DIRS, the system directories, or the bundled terminfo directory), xterm-256color is used. XTGETTCAP TN reports the value actually used.",
+            "Applies to new tabs and panes only."),
 
         Opt("scrollback.limitLines", "scrollback.limit_lines", "integer", null, c => c.Scrollback.LimitLines,
             "Maximum history lines kept per session; 0 keeps no history. Clamped to at most 1000000; negative values fall back to the default. The first of this and limitBytes to be reached applies.",

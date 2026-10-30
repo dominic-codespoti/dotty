@@ -224,22 +224,24 @@ public class WindowsPtyTests : IDisposable
     [InlineData(true)]
     public async Task WindowsPty_Start_AdvertisesTerminalCapabilities(bool withOverrides)
     {
+        // TERM defaults to xterm-256color and otherwise is the caller's (the session passes its resolved
+        // `term`); COLORTERM is forced either way.
         IDictionary<string, string>? environment = withOverrides
             ? new Dictionary<string, string>
             {
-                ["term"] = "dumb",
+                ["term"] = "xterm-dotty",
                 ["colorterm"] = "monochrome",
                 ["DOTTY_ENV_TEST_VALUE"] = "custom"
             }
             : null;
         string fields = "%TERM%,%COLORTERM%" + (withOverrides ? ",%DOTTY_ENV_TEST_VALUE%" : string.Empty);
-        string marker = "DOTTY_ENV=xterm-256color,truecolor" + (withOverrides ? ",custom" : string.Empty);
+        string marker = withOverrides ? "DOTTY_ENV=xterm-dotty,truecolor,custom" : "DOTTY_ENV=xterm-256color,truecolor";
 
         await StartShellAndReadOutput($"cmd.exe /d /c echo DOTTY_ENV={fields}", marker, environment);
 
         if (environment != null)
         {
-            environment["term"].Should().Be("dumb");
+            environment["term"].Should().Be("xterm-dotty");
             environment["colorterm"].Should().Be("monochrome");
         }
     }

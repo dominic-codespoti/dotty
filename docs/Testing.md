@@ -268,7 +268,12 @@ string classification, version parsing), `FrameTimingsTests` (percentiles, ring
 wrap, present interval, input-to-swap, allocation-free recording and
 summaries), `FramebufferScreenshotTests` (row flip, opaque alpha, un-premultiply
 through a PNG round trip) and `IdleWaitTests` (the parked-request deadline).
-None of these has been run by the author of this change (no SDK available);
+Frame scheduling is covered by `FramePlannerTests` (gate, idle/hold/render
+table, refresh-rate interval table), `IdleWaitTests` (absolute blink and Lua
+deadlines, bell and control deadlines, safety cap) and `HostWakeCoverageTests`
+(cross-thread enqueue APIs post a wake; a source scan of `src/Dotty/Host`
+requires `HostWake.Request()` after every queue producer). None of these has
+been run by the author of this change (no SDK available);
 `needs runtime verification`.
 
 ## Native Dotty output benchmark

@@ -50,20 +50,47 @@ The host does not poll. When a frame iteration has nothing to do it blocks in
 `glfwWaitEventsTimeout`, so input events end the wait on their own and every
 other producer calls `HostWake.Request()` (a single deduplicated
 `glfwPostEmptyEvent`) after queueing work: PTY output and other invalidations
-through `WindowPresentationGate`, lifecycle callbacks, title, clipboard and
-process-exit queues, and control-server commands. The wait is bounded by the
-nearest deadline, computed by the pure `IdleWait.Compute`: cursor blink (only
-while the window is focused), the 1 s Lua status refresh, the remaining
-frame-coalescing interval, the remaining synchronized-update failsafe (which
-expires lazily, so nothing else would wake the loop), selection autoscroll,
-and a 100 ms safety cap that turns any missed wake into bounded lag rather
-than a stall. A frame action re-entered from a GLFW refresh callback never
-waits, because `glfwWaitEventsTimeout` must not be called from a callback.
+through `WindowPresentationGate`, lifecycle callbacks, title, clipboard,
+OSC 52 read and process-exit queues, VT resize requests, and control-server
+commands (`HostWakeCoverageTests` drives the reachable enqueue APIs from another
+thread and scans `src/Dotty/Host` so that every queue producer requests a
+wake). The wait is bounded by the nearest deadline, computed by the pure
+`IdleWait.Compute`: the next cursor blink toggle (only while the window is
+focused and not iconified), the 1 s Lua status poll (only while an
+`update_status` hook is registered and the window is not iconified), the
+remaining frame-coalescing interval, the remaining synchronized-update failsafe
+(which expires lazily, so nothing else would wake the loop), selection
+autoscroll, a parked `WAIT_FOR_IDLE` deadline, and a 1000 ms safety cap (raised
+from 100 ms once the wake-coverage test existed) that turns any missed wake into
+bounded lag rather than a stall. A frame action re-entered from a GLFW refresh
+callback never waits, because `glfwWaitEventsTimeout` must not be called from a
+callback.
 
-Content-only frames are held to at least 8 ms apart while output streams, and
-to 30 ms while the PTY consumer is backlogged, so rendering does not take the
-buffer lock on every flush and interrupt parsing. Frames within 250 ms of
-interactive input, and the first frame after idle, are never held back.
+Without an `update_status` hook the status area shows the shell command state
+(`running`, `exit N`), which only changes with PTY output, so it is refreshed on
+frames that have pending invalidations instead of every second. While the window
+is iconified nothing is drawn (pending reasons stay queued for the restore
+frame), the blink and Lua deadlines are dropped, and the `theme: auto` poller,
+which runs on a 5 s timer off the UI thread and spawns a helper process on
+Linux and macOS, skips its checks.
+
+The per-frame decisions live in the pure `FramePlanner` (`FramePlannerTests`):
+`Gate` separates a synchronized-update hold from a missing surface (iconified or
+zero-sized framebuffer); `Decide` returns `Idle` (nothing changed, keep the front
+buffer), `Hold(ms)` or `Render`. Content-only frames are held to at least 8 ms
+apart while output streams, and to 30 ms while the PTY consumer is backlogged,
+so rendering does not take the buffer lock on every flush and interrupt parsing.
+Frames within 250 ms of interactive input, the first frame, and frames with any
+reason other than content are never held back.
+
+`FramePlanner.MinContentFrameIntervalMs` can instead derive the content interval
+from the refresh rate of the monitor that Silk.NET associates with the window
+(its current video mode; re-read after the window moves or changes state): one
+refresh period rounded down, the rate clamped to 30–240 Hz, 60 Hz when the rate
+is unknown or implausible, and never below 30 ms while backlogged. That is
+opt-in with `DOTTY_REFRESH_PACING=1` and off by default: the change ships only
+after the `STATS` frame timings show it helps (plan-11 WI-3b). `STATS` reports
+`refreshRateHz`, `refreshAwarePacing`, `contentFrameIntervalMs` and `iconified`.
 
 Animated Kitty images add one more deadline: the earliest next frame change of
 the visible animated placements (`RenderSnapshot.Graphics.NextAnimationDeadlineTicks`,

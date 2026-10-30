@@ -1,24 +1,35 @@
 namespace Dotty.Silk;
 
+/// <summary>Inputs of <see cref="IdleWait.Compute"/>; all times share one millisecond clock.</summary>
+/// <param name="NextBlinkToggleMs">Absolute time of the next cursor/text blink toggle; <see cref="IdleWait.NoDeadline"/> when nothing blinks.</param>
+/// <param name="NextLuaStatusRefreshMs">Absolute time of the next Lua status poll; <see cref="IdleWait.NoDeadline"/> when no poll runs.</param>
+/// <param name="ImageAnimationRemainingMs">Relative; 0 = none (see <see cref="IdleWait.ImageAnimationRemainingMs"/>).</param>
+/// <param name="ControlWaitRemainingMs">Relative; 0 = no parked <c>WAIT_FOR_IDLE</c>.</param>
+/// <param name="BellFlashRemainingMs">Relative; 0 = no visual-bell frame due.</param>
 internal readonly record struct IdleWaitInputs(
     long NowMs,
     bool RetryShortly,
-    bool CursorBlinkActive,
-    long LastCursorBlinkMs,
-    int CursorBlinkIntervalMs,
-    long LastLuaStatusRefreshMs,
-    int LuaStatusRefreshIntervalMs,
+    long NextBlinkToggleMs,
+    long NextLuaStatusRefreshMs,
     long CoalesceRemainingMs,
     long SyncHoldRemainingMs,
     bool SelectionAutoscrollActive,
     long ImageAnimationRemainingMs = 0,
-    long ControlWaitRemainingMs = 0);
+    long ControlWaitRemainingMs = 0,
+    long BellFlashRemainingMs = 0);
 
+/// <summary>
+/// How long the idle UI loop may block in <c>glfwWaitEventsTimeout</c>: the nearest deadline, bounded by
+/// <see cref="SafetyCapMs"/>. Input events and <see cref="HostWake.Request"/> end the wait early, so the cap only
+/// bounds the lag of a wake that was never requested; <c>HostWakeCoverageTests</c> guards that every host queue
+/// producer requests one.
+/// </summary>
 internal static class IdleWait
 {
-    internal const int SafetyCapMs = 100;
+    internal const int SafetyCapMs = 1000;
     internal const int AutoscrollTickMs = 16;
     internal const int RetryMs = 1;
+    internal const long NoDeadline = long.MaxValue;
 
     internal static int Compute(in IdleWaitInputs inputs)
     {
@@ -29,11 +40,15 @@ internal static class IdleWait
         if (inputs.SyncHoldRemainingMs > 0) timeout = Math.Min(timeout, inputs.SyncHoldRemainingMs);
         if (inputs.ImageAnimationRemainingMs > 0) timeout = Math.Min(timeout, inputs.ImageAnimationRemainingMs);
         if (inputs.ControlWaitRemainingMs > 0) timeout = Math.Min(timeout, inputs.ControlWaitRemainingMs);
-        if (inputs.CursorBlinkActive)
-            timeout = Math.Min(timeout, Math.Max(0, inputs.LastCursorBlinkMs + inputs.CursorBlinkIntervalMs - inputs.NowMs));
-        timeout = Math.Min(timeout, Math.Max(0, inputs.LastLuaStatusRefreshMs + inputs.LuaStatusRefreshIntervalMs - inputs.NowMs));
+        if (inputs.BellFlashRemainingMs > 0) timeout = Math.Min(timeout, inputs.BellFlashRemainingMs);
+        timeout = Math.Min(timeout, UntilDeadline(inputs.NextBlinkToggleMs, inputs.NowMs));
+        timeout = Math.Min(timeout, UntilDeadline(inputs.NextLuaStatusRefreshMs, inputs.NowMs));
         return (int)timeout;
     }
+
+    /// <summary>Milliseconds until an absolute deadline: 0 when due or overdue, <see cref="SafetyCapMs"/> for none.</summary>
+    private static long UntilDeadline(long deadlineMs, long nowMs) =>
+        deadlineMs == NoDeadline ? SafetyCapMs : Math.Max(0L, deadlineMs - nowMs);
 
     /// <summary>
     /// Milliseconds until an image animation deadline, for <see cref="IdleWaitInputs.ImageAnimationRemainingMs"/>:

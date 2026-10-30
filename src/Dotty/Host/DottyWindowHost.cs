@@ -32,7 +32,7 @@ using SkiaSharp;
 using InputKey = Silk.NET.Input.Key;
 namespace Dotty.Silk;
 
-internal static class DottyWindowHost
+internal static partial class DottyWindowHost
 {
     private static IWindow _window = null!;
     private static GL _gl = null!;
@@ -357,6 +357,7 @@ internal static class DottyWindowHost
         {
             _exitCode = 1;
             Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));
+            LogGraphicsInfoOnInitFailure();
             _window.Close();
         }
     }
@@ -389,9 +390,10 @@ internal static class DottyWindowHost
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
 
         _gl = _window.CreateOpenGL();
-        string openGlVersion = _gl.GetStringS(StringName.Version);
-        if (!GraphicsCapabilities.IsOpenGlVersionSupported(openGlVersion))
-            throw new PlatformNotSupportedException(GraphicsCapabilities.DescribeUnsupportedVersion(openGlVersion));
+        CaptureGraphicsInfo(_gl);
+        if (!GraphicsCapabilities.IsOpenGlVersionSupported(_glVersion))
+            throw new PlatformNotSupportedException(GraphicsCapabilities.DescribeUnsupportedVersion(_glVersion));
+        ConfigureGlDebug(_gl);
 
         ResolveFontAndMetrics();
         _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
@@ -470,6 +472,7 @@ internal static class DottyWindowHost
         VtHostBridge.Attach(_window, _tabManager,
             static () => new VtHostLayout(_cellWidth, _cellHeight, _scale, IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0, _cols, _rows),
             static (width, height) => SetWindowClientSize(new Vector2D<int>(width, height)));
+        LogGraphicsInfoIfRequested();
         StartControlServer();
         StartSystemThemeRefresher();
         _luaHost.NotifyGuiStartup();
@@ -1268,6 +1271,8 @@ internal static class DottyWindowHost
     {
         while (_pendingControlCommands.TryDequeue(out var request))
         {
+            if (TryDeferControlCommand(request.Command, request.Completion))
+                continue;
             string response;
             try
             {
@@ -1283,8 +1288,8 @@ internal static class DottyWindowHost
 
     private static string ExecuteControlCommand(string command)
     {
-        if (string.Equals(command, "WAIT_FOR_IDLE", StringComparison.OrdinalIgnoreCase))
-            return "IDLE";
+        if (string.Equals(command, "GL", StringComparison.OrdinalIgnoreCase))
+            return BuildGraphicsInfoJson();
         if (string.Equals(command, "DUMP", StringComparison.OrdinalIgnoreCase))
             return BuildControlDump();
         if (string.Equals(command, "GET_STATE", StringComparison.OrdinalIgnoreCase))
@@ -1334,7 +1339,10 @@ internal static class DottyWindowHost
                 ? generation.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : "null";
             bool syncActive = session?.Adapter.SynchronizedUpdateActive ?? false;
-            return $"{{\"windowBackend\":{QuoteJson(_windowBackend)},\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount}}}";
+            var json = new StringBuilder(1024);
+            json.Append($"{{\"windowBackend\":{QuoteJson(_windowBackend)},\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount},\"frameTimings\":");
+            AppendFrameTimingsJson(json);
+            return json.Append('}').ToString();
         }
         if (string.Equals(command, "SHUTDOWN", StringComparison.OrdinalIgnoreCase))
         {
@@ -1696,7 +1704,8 @@ internal static class DottyWindowHost
             ImageAnimationRemainingMs: includeImageAnimation
                 ? IdleWait.ImageAnimationRemainingMs(
                     _nextImageDeadlineTicks, TimeProvider.System.GetTimestamp(), TimeProvider.System.TimestampFrequency)
-                : 0));
+                : 0,
+            ControlWaitRemainingMs: IdleWaiterRemainingMs(now)));
         if (timeoutMs > 0)
             _glfwApi!.WaitEventsTimeout(timeoutMs / 1000.0);
     }
@@ -1714,6 +1723,7 @@ internal static class DottyWindowHost
         var tabManager = _tabManager;
         var activeTab = tabManager.ActiveTab;
         long now = GetClockMilliseconds();
+        ExpireIdleWaiters(now);
         if (now - _lastLuaStatusRefreshTimestampMs >= LuaStatusRefreshIntervalMs)
             RefreshLuaStatus();
         // While a synchronized update (CSI 2026, used by nvim for every
@@ -1804,6 +1814,7 @@ internal static class DottyWindowHost
             // at startup) — a periodic fullscreen flash to old content every
             // time the keepalive would have fired. Holding the front buffer is
             // always correct when nothing changed.
+            CompleteIdleWaitersIfIdle(framebufferWidth, framebufferHeight);
             WaitForWork(includeBlink: true, includeImageAnimation: true);
             return;
         }
@@ -1841,6 +1852,7 @@ internal static class DottyWindowHost
             if (activeTab == null)
             {
                 _nextImageDeadlineTicks = 0;
+                long emptyRenderStart = FrameTimestamp();
                 _renderer.Render(
                     ReadOnlySpan<CellInstance>.Empty,
                     ReadOnlySpan<ChromeQuadInstance>.Empty,
@@ -1855,7 +1867,10 @@ internal static class DottyWindowHost
                     0.04f,
                     _themeBackground,
                     false);
-                _window.SwapBuffers();
+                _frameTimings.RecordRender(emptyRenderStart, FrameTimestamp());
+                CheckGlErrorsIfDebugging("render");
+                CaptureScreenshotsBeforeSwap(framebufferWidth, framebufferHeight);
+                SwapBuffersTimed();
                 _lastPresentTimestampMs = GetClockMilliseconds();
                 CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
                 return;
@@ -1878,6 +1893,7 @@ internal static class DottyWindowHost
                 barRows * _cellHeight * _scale,
                 statusWidth);
 
+            long composeStart = FrameTimestamp();
             var frame = _sceneComposer.Compose(
                 activeTab,
                 tabManager,
@@ -1916,6 +1932,7 @@ internal static class DottyWindowHost
                 preeditState: _nativeTextInput?.Preedit);
 
             _nextImageDeadlineTicks = frame.NextImageDeadlineTicks;
+            _frameTimings.RecordCompose(composeStart, FrameTimestamp());
             if (frame.IsIncomplete)
             {
                 // A leaf lost the buffer-lock race mid-burst; its quads are missing.
@@ -1938,6 +1955,7 @@ internal static class DottyWindowHost
                     Math.Max(1, (int)MathF.Ceiling(caret.Right / _scale) - left),
                     Math.Max(1, (int)MathF.Ceiling(caret.Bottom / _scale) - top));
             }
+            long renderStart = FrameTimestamp();
             _renderer.Render(
                 frame.AsSpan(),
                 frame.AsChromeSpan(),
@@ -1959,10 +1977,13 @@ internal static class DottyWindowHost
                 frame.MenuInstanceStart,
                 frame.MenuChromeStart,
                 frame.ImageDraws);
+            _frameTimings.RecordRender(renderStart, FrameTimestamp());
+            CheckGlErrorsIfDebugging("render");
             frame.ReleaseImageLeases();
             if (_renderer.ImageUploadsDeferred)
                 WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload);
-            _window.SwapBuffers();
+            CaptureScreenshotsBeforeSwap(framebufferWidth, framebufferHeight);
+            SwapBuffersTimed();
             _lastPresentTimestampMs = GetClockMilliseconds();
             _presentCount++;
             CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
@@ -2154,8 +2175,11 @@ internal static class DottyWindowHost
 
     private static long GetClockMilliseconds() =>
         System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
-    private static void RecordInteraction() =>
+    private static void RecordInteraction()
+    {
         _lastInteractionTimestampMs = GetClockMilliseconds();
+        _frameTimings.MarkInput(FrameTimestamp());
+    }
 
     private static void OnMouseDown(IMouse mouse, MouseButton button)
     {
@@ -2276,6 +2300,7 @@ internal static class DottyWindowHost
         _controlServer = null;
         while (_pendingControlCommands.TryDequeue(out var request))
             request.Completion.TrySetResult("ERROR host is closed");
+        FailParkedControlRequests();
         _window.FocusChanged -= OnWindowFocusChanged;
         VtHostBridge.Detach();
         UserConfigService.ConfigChanged -= OnConfigChanged;

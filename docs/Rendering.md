@@ -321,6 +321,30 @@ not provide a usable OpenGL context. Those paths are verified manually or on
 local native sessions. X11/Xvfb startup does not prove Wayland, macOS, or
 Windows GUI behavior.
 
+### GL diagnostics
+
+Right after context creation the host reads `GL_VENDOR`, `GL_RENDERER`,
+`GL_VERSION`, the GLSL version and `GL_MAX_TEXTURE_SIZE`, and classifies the
+driver with the pure `GraphicsCapabilities.Classify(vendor, renderer, version)`:
+`IsSoftware` is true for llvmpipe, softpipe, SwiftShader, the Mesa "Software
+Rasterizer", Windows "GDI Generic", the Microsoft Basic Render Driver and the
+Apple Software Renderer; hardware families (NVIDIA, AMD, Intel, Apple, Arm Mali,
+Qualcomm Adreno) are named when recognised, anything else is `Unknown`. The
+function accepts null, empty or localised strings. A startup failure after
+context creation always prints the classification summary (renderer, vendor,
+version) to stderr; `DOTTY_GL_INFO=1` prints the full diagnostics JSON (also
+returned by the `GL` control command, see
+[E2E testing](E2ETesting.md#host-control-interface)).
+
+`DOTTY_GL_DEBUG=1` installs a `KHR_debug` message callback (synchronous output,
+notifications filtered) when the context is 4.3+ or exposes `GL_KHR_debug`, and
+drains `glGetError` after every `Render` call, which covers atlas and image
+uploads and the draws. Messages go to stderr with a `[gl-debug]` prefix. The
+callback is an `UnmanagedCallersOnly` function pointer (no delegate
+marshalling), so it also works in the NativeAOT build. This is a debugging aid
+with a per-frame cost; it is off by default. Unverified on real drivers
+(`needs runtime verification`).
+
 ## Tests
 
 Headless rendering contracts live in `tests/Dotty.App.Tests` and

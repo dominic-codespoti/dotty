@@ -48,12 +48,48 @@ by the developer smoke harness. Commands are newline-delimited:
 | `RESIZE:<columns>:<rows>` | Resize the active terminal |
 | `DUMP` | Return visible terminal text |
 | `GET_STATE` | Return dimensions, cursor, and scrollback |
-| `WAIT_FOR_IDLE` | Wait for pending host work |
-| `STATS` | Return tab/session statistics |
+| `WAIT_FOR_IDLE[:<timeoutMs>]` | Answer `IDLE` once the render pipeline is quiet, or `TIMEOUT` after the timeout (default 5000 ms, at most 9000 ms) |
+| `STATS` | Return tab/session statistics and frame-timing percentiles (`frameTimings`) |
+| `GL` | Return the OpenGL driver and window diagnostics as JSON |
+| `SCREENSHOT:<path>` | Write the next presented frame to `<path>` as PNG; answers `OK <width>x<height> <full path>` |
 | `SHUTDOWN` | Close the host cleanly |
 
 The protocol is transport-only. Assertions about parser modes, exact PTY bytes,
 focus reports, paste wrappers, and reflow remain in deterministic tests.
+
+`WAIT_FOR_IDLE` is answered on a frame that found nothing to draw and only when
+every condition holds: no pending frame reasons, no pending host wake, no
+synchronized-update hold, every visible pane presented at its current buffer
+generation with no unparsed PTY output chunks, no deferred image upload, and
+the framebuffer size and glyph atlas version already presented. Until then the
+request is parked (the UI thread keeps running); the deadline is part of the
+idle wait, so `TIMEOUT` arrives on time. The control server abandons any
+request after 10 s, hence the 9000 ms ceiling.
+
+`SCREENSHOT:<path>` forces one frame and reads its back buffer with
+`glReadPixels` after the last draw and before `SwapBuffers` (the back buffer is
+undefined after a swap, notably on Wayland). The image is the framebuffer in
+device pixels (HiDPI sizes are not scaled down). Rows are flipped to top-down,
+alpha is forced opaque unless the window has a transparent framebuffer, and
+premultiplied colour is un-premultiplied by Skia's PNG encoder. Encoding and the
+file write run on the thread pool; a relative path resolves against the host's
+working directory. A frame withheld by a synchronized update delays the capture.
+
+`STATS` adds `frameTimings` with `compose`, `render`, `swap`, `presentInterval`
+and `inputToSwap`, each `{"count","p50Ms","p95Ms","maxMs"}` over the newest 512
+samples (nearest-rank percentiles). `compose` and `render` are CPU time on the
+UI thread; `swap` is the `SwapBuffers` call; `presentInterval` is the time
+between two swap returns; `inputToSwap` runs from the oldest input event not yet
+presented to the return of the swap that presents it (the internal part of
+input-to-photon latency, without compositor or display time).
+
+`GL` returns `vendor`, `renderer`, `version`, `shadingLanguageVersion`,
+`maxTextureSize`, `swapInterval`, window and framebuffer sizes,
+`contentScaleX`/`contentScaleY` (`glfwGetWindowContentScale`, `0` when
+unavailable), `glfwPlatform`, the `GraphicsCapabilities.Classify` result
+(`software`, `family`, `summary`) and whether `DOTTY_GL_DEBUG` is active
+(`glDebug`, `khrDebugCallback`). `DOTTY_GL_INFO=1` prints the same JSON to
+stderr at startup, prefixed with `DOTTY_GL_INFO `.
 
 The `MEMORY` command returns the host's memory counters as JSON, including
 `terminalArenaCapacityBytes` (reserved virtual), `terminalArenaCommittedBoundBytes`

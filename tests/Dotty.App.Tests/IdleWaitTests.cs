@@ -5,10 +5,17 @@ namespace Dotty.App.Tests;
 
 public sealed class IdleWaitTests
 {
-    private static IdleWaitInputs Inputs(long now = 0, bool retry = false, bool blink = false, long lastBlink = 0, int blinkInterval = 100, long lastLua = 0, int luaInterval = 1000, long coalesce = 0, long syncHold = 0, bool autoscroll = false, long image = 0) => new(now, retry, blink, lastBlink, blinkInterval, lastLua, luaInterval, coalesce, syncHold, autoscroll, image);
+    private static IdleWaitInputs Inputs(long now = 0, bool retry = false, bool blink = false, long lastBlink = 0, int blinkInterval = 100, long lastLua = 0, int luaInterval = 1000, long coalesce = 0, long syncHold = 0, bool autoscroll = false, long image = 0, long control = 0) => new(now, retry, blink, lastBlink, blinkInterval, lastLua, luaInterval, coalesce, syncHold, autoscroll, image, control);
 
     [Fact]
     public void NoDeadlinesUsesSafetyCap() => Assert.Equal(IdleWait.SafetyCapMs, IdleWait.Compute(Inputs()));
+
+    [Fact]
+    public void ParkedControlWaitDeadlineBoundsTheWait()
+    {
+        Assert.Equal(7, IdleWait.Compute(Inputs(control: 7, coalesce: 14)));
+        Assert.Equal(IdleWait.SafetyCapMs, IdleWait.Compute(Inputs(control: 0)));
+    }
 
     [Theory]
     [InlineData(10, 0, 90)]

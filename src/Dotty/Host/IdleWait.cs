@@ -11,7 +11,8 @@ internal readonly record struct IdleWaitInputs(
     long CoalesceRemainingMs,
     long SyncHoldRemainingMs,
     bool SelectionAutoscrollActive,
-    long ImageAnimationRemainingMs = 0);
+    long ImageAnimationRemainingMs = 0,
+    long ControlWaitRemainingMs = 0);
 
 internal static class IdleWait
 {
@@ -27,6 +28,7 @@ internal static class IdleWait
         if (inputs.CoalesceRemainingMs > 0) timeout = Math.Min(timeout, inputs.CoalesceRemainingMs);
         if (inputs.SyncHoldRemainingMs > 0) timeout = Math.Min(timeout, inputs.SyncHoldRemainingMs);
         if (inputs.ImageAnimationRemainingMs > 0) timeout = Math.Min(timeout, inputs.ImageAnimationRemainingMs);
+        if (inputs.ControlWaitRemainingMs > 0) timeout = Math.Min(timeout, inputs.ControlWaitRemainingMs);
         if (inputs.CursorBlinkActive)
             timeout = Math.Min(timeout, Math.Max(0, inputs.LastCursorBlinkMs + inputs.CursorBlinkIntervalMs - inputs.NowMs));
         timeout = Math.Min(timeout, Math.Max(0, inputs.LastLuaStatusRefreshMs + inputs.LuaStatusRefreshIntervalMs - inputs.NowMs));

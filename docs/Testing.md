@@ -296,7 +296,7 @@ The authoritative workflow is `.github/workflows/ci.yml`:
 | `build-and-test` | Windows `win-x64` | Host-native tests and ConPTY smoke |
 | `aot-publish` (reusable `aot-publish.yml`) | Ubuntu `linux-x64`, Windows `win-x64`, macOS arm64 `osx-arm64`, macOS Intel `osx-x64` | NativeAOT `dotnet publish` of the shipped configuration; `scripts/dist/verify-publish.sh`/`.ps1` file asserts, `dotty --version` (central version or a `-dev+<rev>` build) and `dotty +explain-config font.size`; fails on IL2xxx/IL3xxx warnings in Dotty's own code and lists third-party ones (`scripts/dist/aot_warnings.py`) |
 | `gui-smoke-linux` | Ubuntu `linux-x64` | X11 desktop startup under Xvfb |
-| `code-quality` | Ubuntu | `dotnet format whitespace` verification, plus the Python unit tests for the benchmark, esctest and distribution (`scripts/dist/tests`) scripts |
+| `code-quality` | Ubuntu | `dotnet format whitespace` verification, the Python unit tests for the benchmark, esctest and distribution (`scripts/dist/tests`) scripts, and `tools/gen-width-tables.py --check` on Python 3.14 (its `unicodedata` is UCD 16.0.0) |
 | `esctest-linux` | Ubuntu | esctest2 conformance against the headless host; **not gating** until `tests/esctest/expected-failures.txt` carries the `# baseline-captured:` marker (see [Conformance](Conformance.md)) |
 | `performance-tests` | Ubuntu | Quick BenchmarkDotNet run on pull requests and `main` |
 

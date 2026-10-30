@@ -235,6 +235,17 @@ jobs:
       - name: Run distribution script tests
         run: python3 -m unittest discover -s scripts/dist/tests
 
+      # tools/gen-width-tables.py derives the width tables from Python's unicodedata and refuses
+      # any UCD other than 16.0.0. Python 3.14's unicodedata is UCD 16.0.0
+      # (docs.python.org/3.14/library/unicodedata.html), so pin 3.14 for this check.
+      - name: Setup Python 3.14 (unicodedata 16.0.0)
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Check generated Unicode width tables are current
+        run: python3 tools/gen-width-tables.py --check
+
   # esctest2 conformance (Linux only; esctest needs Unix tty/termios, so no Windows).
   # NOT GATING UNTIL A BASELINE EXISTS: while tests/esctest/expected-failures.txt has no
   # "# baseline-captured:" marker (written by the esctest-baseline workflow's

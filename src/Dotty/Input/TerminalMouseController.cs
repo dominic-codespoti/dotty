@@ -45,6 +45,9 @@ public interface ITerminalMouseHost
     /// <summary>What a middle click does outside mouse reporting (live configuration).</summary>
     MiddleClickAction MiddleClick { get; }
 
+    /// <summary>Wheel multiplier, alternate scroll and reporting bypass modifier (live configuration).</summary>
+    MouseInputSettings MouseInput { get; }
+
     /// <summary>Pastes the PRIMARY selection into <paramref name="targetPane"/> through the shared paste router.</summary>
     void PastePrimary(LeafPane targetPane);
 
@@ -65,7 +68,11 @@ public sealed class TerminalMouseController
 {
     private readonly ITerminalMouseHost _host;
     private readonly Func<long> _clockMilliseconds;
-    private readonly TerminalInputEncoder _inputEncoder = new();
+    private MouseMotionFilter _motionFilter;
+    private LeafPane? _motionFilterPane;
+    private ScrollAccumulator _scrollAccumulator;
+    private LeafPane? _scrollAccumulatorPane;
+    private bool _scrollAccumulatorReports;
 
     private long _lastClickTimestampMs;
     private Vector2 _lastClickPosition;
@@ -191,22 +198,38 @@ public sealed class TerminalMouseController
         HitTestContent(tab, x, y, forcedPane);
 
 
-    private void SendMouse(LeafPane pane, int button, int row, int col, bool press, bool move)
+    private void SendMouse(LeafPane pane, int button, in PaneHit hit, MouseEventKind kind)
     {
         var adapter = pane.Session.Adapter;
-        Span<byte> bytes = stackalloc byte[32];
-        int length = _inputEncoder.EncodeMouseEvent(
+        var report = new MouseReport(
             adapter.CurrentMouseMode,
             adapter.CurrentMouseEncoding,
             button,
-            Math.Clamp(row, 0, Math.Max(0, pane.Rows - 1)),
-            Math.Clamp(col, 0, Math.Max(0, pane.Columns - 1)),
-            press,
-            move,
-            GetCurrentKeyModifiers(),
-            bytes);
-        if (length != 0)
+            kind,
+            Math.Clamp(hit.ViewColumn, 0, Math.Max(0, pane.Columns - 1)),
+            Math.Clamp(hit.ViewRow, 0, Math.Max(0, pane.Rows - 1)),
+            PixelOffset(hit.RelativeX, pane.Bounds.Width),
+            PixelOffset(hit.RelativeY, pane.Bounds.Height),
+            GetCurrentKeyModifiers());
+        Span<byte> bytes = stackalloc byte[MouseEncoder.MaxSequenceLength];
+        int length = MouseEncoder.Encode(report, bytes);
+        if (length == 0)
+            return;
+
+        if (!ReferenceEquals(_motionFilterPane, pane))
+        {
+            _motionFilter.Reset();
+            _motionFilterPane = pane;
+        }
+        if (_motionFilter.Admit(report))
             pane.Session.WriteInput(bytes[..length]);
+    }
+
+    // SGR-pixels position: framebuffer pixels from the pane origin, clamped into the pane (drags may leave it).
+    private static int PixelOffset(float relative, float extent)
+    {
+        float last = MathF.Max(0f, MathF.Ceiling(extent) - 1f);
+        return (int)Math.Clamp(MathF.Floor(relative), 0f, last);
     }
 
     private static int ReportingButton(int pressedButtons)
@@ -217,8 +240,17 @@ public sealed class TerminalMouseController
         return 3;
     }
 
+    private bool ReportingBypassed() => _host.MouseInput.ReportBypassModifier switch
+    {
+        MouseReportBypassModifier.Shift => _host.Shift,
+        MouseReportBypassModifier.Ctrl => _host.Ctrl,
+        MouseReportBypassModifier.Alt => _host.Alt,
+        MouseReportBypassModifier.Super => _host.Super,
+        _ => false,
+    };
+
     private bool Reports(LeafPane pane) =>
-        !_host.Shift && pane.Session.Adapter.MouseReportingEnabled;
+        !ReportingBypassed() && pane.Session.Adapter.MouseReportingEnabled;
 
     public void HandleMouseDown(IMouse mouse, MouseButton button)
     {
@@ -236,8 +268,7 @@ public sealed class TerminalMouseController
             _pressedButtons |= mask;
             _reportingButtons |= mask;
             var reportHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-            SendMouse(_reportingPane, ButtonNumber(button), reportHit.ViewRow, reportHit.ViewColumn,
-                press: true, move: false);
+            SendMouse(_reportingPane, ButtonNumber(button), reportHit, MouseEventKind.Press);
             return;
         }
         var activeContextMenu = _host.ActiveContextMenu;
@@ -282,8 +313,7 @@ public sealed class TerminalMouseController
                 _reportingPane = pane!;
                 _pressedButtons |= mask;
                 _reportingButtons |= mask;
-                SendMouse(pane!, ButtonNumber(button), hit.ViewRow, hit.ViewColumn,
-                    press: true, move: false);
+                SendMouse(pane!, ButtonNumber(button), hit, MouseEventKind.Press);
                 return;
             }
         }
@@ -475,11 +505,10 @@ public sealed class TerminalMouseController
         float physY = position.Y * geom.Scale;
         if (_reportingPane != null && _reportingButtons != 0)
         {
-            if (!_host.Shift)
+            if (!ReportingBypassed())
             {
                 var reportHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-                SendMouse(_reportingPane, ReportingButton(_reportingButtons), reportHit.ViewRow, reportHit.ViewColumn,
-                    press: true, move: true);
+                SendMouse(_reportingPane, ReportingButton(_reportingButtons), reportHit, MouseEventKind.Motion);
             }
             return;
         }
@@ -544,10 +573,10 @@ public sealed class TerminalMouseController
             return;
         }
 
-        if (!_host.Shift && hit.Pane != null && hit.Inside &&
+        if (!ReportingBypassed() && hit.Pane != null && hit.Inside &&
             hit.Pane.Session.Adapter.CurrentMouseMode == TerminalAdapter.MouseMode.AnyEvent)
         {
-            SendMouse(hit.Pane, 3, hit.ViewRow, hit.ViewColumn, press: true, move: true);
+            SendMouse(hit.Pane, MouseEncoder.ButtonNone, hit, MouseEventKind.Motion);
             return;
         }
 
@@ -572,7 +601,7 @@ public sealed class TerminalMouseController
         if (_reportingPane != null && (_reportingButtons & mask) != 0)
         {
             var hit = HitTestAtContent(_host.ActiveTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-            SendMouse(_reportingPane, ButtonNumber(button), hit.ViewRow, hit.ViewColumn, press: false, move: false);
+            SendMouse(_reportingPane, ButtonNumber(button), hit, MouseEventKind.Release);
             _reportingButtons &= ~mask;
             if (_reportingButtons == 0)
                 _reportingPane = null;
@@ -593,17 +622,16 @@ public sealed class TerminalMouseController
 
     public void HandleMouseScroll(IMouse mouse, ScrollWheel wheel)
     {
-        if (wheel.Y == 0f) return;
+        if (wheel.X == 0f && wheel.Y == 0f) return;
 
         var activeTab = _host.ActiveTab;
         if (activeTab == null) return;
         if (_reportingPane != null && _reportingButtons != 0)
         {
-            if (!_host.Shift)
+            if (!ReportingBypassed())
             {
                 var reportHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-                SendMouse(_reportingPane, wheel.Y > 0f ? 64 : 65, reportHit.ViewRow, reportHit.ViewColumn,
-                    press: true, move: false);
+                ReportWheel(_reportingPane, reportHit, wheel);
             }
             return;
         }
@@ -616,15 +644,67 @@ public sealed class TerminalMouseController
 
         if (Reports(pane))
         {
-            SendMouse(pane, wheel.Y > 0f ? 64 : 65, hit.ViewRow, hit.ViewColumn, press: true, move: false);
+            ReportWheel(pane, hit, wheel);
             return;
         }
 
-        int lines = Math.Max(1, (int)Math.Ceiling(Math.Abs(wheel.Y) * 3));
-        if (wheel.Y > 0f)
-            pane.ScrollUp(lines, pane.Session.Adapter.Buffer.ScrollbackCount);
+        // Local scrolling and alternate scroll are vertical only.
+        var settings = _host.MouseInput;
+        int lines = AccumulateScroll(pane, reports: false, 0f, wheel.Y, settings.ScrollMultiplier).Vertical;
+        if (lines == 0) return;
+
+        var adapter = pane.Session.Adapter;
+        if (settings.AlternateScroll && adapter.AlternateScrollMode &&
+            adapter.Buffer.IsAlternateScreenActive && !adapter.MouseReportingEnabled)
+        {
+            SendAlternateScroll(pane, lines, adapter.ApplicationCursorKeysEnabled);
+            return;
+        }
+
+        if (lines > 0)
+            pane.ScrollUp(lines, adapter.Buffer.ScrollbackCount);
         else
-            pane.ScrollDown(lines);
+            pane.ScrollDown(-lines);
+    }
+
+    // One wheel report per notch (the multiplier is for local lines; applications apply their own), both axes.
+    private void ReportWheel(LeafPane pane, in PaneHit hit, ScrollWheel wheel)
+    {
+        var steps = AccumulateScroll(pane, reports: true, wheel.X, wheel.Y, 1.0);
+        SendWheelButtons(pane, hit, steps.Vertical, MouseEncoder.WheelUp, MouseEncoder.WheelDown);
+        SendWheelButtons(pane, hit, steps.Horizontal, MouseEncoder.WheelLeft, MouseEncoder.WheelRight);
+    }
+
+    private void SendWheelButtons(LeafPane pane, in PaneHit hit, int steps, int positiveButton, int negativeButton)
+    {
+        int button = steps > 0 ? positiveButton : negativeButton;
+        for (int i = Math.Abs(steps); i > 0; i--)
+            SendMouse(pane, button, hit, MouseEventKind.Press);
+    }
+
+    // The carry belongs to one pane and one target (reports vs local lines); switching either starts afresh.
+    private ScrollSteps AccumulateScroll(LeafPane pane, bool reports, float deltaX, float deltaY, double multiplier)
+    {
+        if (!ReferenceEquals(_scrollAccumulatorPane, pane) || _scrollAccumulatorReports != reports)
+        {
+            _scrollAccumulator.Reset();
+            _scrollAccumulatorPane = pane;
+            _scrollAccumulatorReports = reports;
+        }
+        return _scrollAccumulator.Add(deltaX, deltaY, multiplier);
+    }
+
+    private static void SendAlternateScroll(LeafPane pane, int lines, bool applicationCursorKeys)
+    {
+        Span<byte> bytes = stackalloc byte[48];
+        bool up = lines > 0;
+        int remaining = Math.Abs(lines);
+        while (remaining > 0)
+        {
+            int length = MouseEncoder.EncodeAlternateScroll(up, applicationCursorKeys, remaining, bytes);
+            pane.Session.WriteInput(bytes[..length]);
+            remaining -= length / 3;
+        }
     }
 
     /// <summary>
@@ -696,6 +776,10 @@ public sealed class TerminalMouseController
         _pressedButtons = 0;
         _reportingButtons = 0;
         _reportingPane = null;
+        _motionFilter.Reset();
+        _motionFilterPane = null;
+        _scrollAccumulator.Reset();
+        _scrollAccumulatorPane = null;
         _selectionPane = null;
         _selectionMoved = false;
         _scrollbarPane = null;

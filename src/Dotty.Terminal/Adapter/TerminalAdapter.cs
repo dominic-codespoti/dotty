@@ -27,7 +27,8 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         Default = 0,
         UTF8 = 1005,
         SGR = 1006,
-        URXVT = 1015
+        URXVT = 1015,
+        SGRPixels = 1016
     }
 
     private readonly TerminalBuffer _buffer;
@@ -50,6 +51,13 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public MouseMode CurrentMouseMode { get; private set; } = MouseMode.None;
     public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
     public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
+
+    /// <summary>
+    /// Alternate scroll (DECSET 1007): while the alternate screen is shown and no mouse mode is set, the wheel sends
+    /// cursor up/down. Set at power-on and after RIS (kitty/foot/Alacritty behaviour); the <c>mouse.alternateScroll</c>
+    /// setting can disable the translation in the host.
+    /// </summary>
+    public bool AlternateScrollMode { get; private set; } = true;
 
     public TerminalAdapter(int rows = 24, int columns = 80, TimeProvider? timeProvider = null)
         : this(rows, columns, ScrollbackPolicy.Default, timeProvider)
@@ -560,6 +568,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         _lastPrintedChar = '\0';
         CurrentMouseMode = MouseMode.None;
         CurrentMouseEncoding = MouseEncoding.Default;
+        AlternateScrollMode = true;
         _focusReportingEnabled = false;
         OnSetSynchronizedUpdate(false);
         OnSetReverseVideo(false);
@@ -696,8 +705,19 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     {
     }
 
+    /// <summary>
+    /// Mouse-related private modes. Tracking modes 9/1000/1002/1003 share one slot, as do the coordinate encodings
+    /// 1005/1006/1015/1016 (the last one set wins; resetting the active one restores the default, like xterm);
+    /// 1007 is the independent alternate-scroll flag.
+    /// </summary>
     public void OnSetMouseMode(int mode, bool enabled)
     {
+        if (mode == 1007)
+        {
+            AlternateScrollMode = enabled;
+            return;
+        }
+
         if (mode == 9 || mode == 1000 || mode == 1002 || mode == 1003)
         {
             if (enabled)
@@ -709,7 +729,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
                 CurrentMouseMode = MouseMode.None;
             }
         }
-        else if (mode == 1005 || mode == 1006 || mode == 1015)
+        else if (mode == 1005 || mode == 1006 || mode == 1015 || mode == 1016)
         {
             if (enabled)
             {

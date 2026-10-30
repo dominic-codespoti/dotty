@@ -135,7 +135,7 @@ Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather t
 | `CSI ? 2033 h/l` | `OnSetVisibilityReports(enabled)` | Implemented: see [Visibility reports](#visibility-reports-mode-2033-and-csi--998-n). |
 | `CSI ? 5 h/l` (DECSCNM) | `OnSetReverseVideo(enabled)` | Implemented: `TerminalAdapter.ReverseVideo`; the renderer swaps the pane's effective default foreground and background (after OSC 10/11 overrides). A change repaints like a palette change. Kept by DECSTR, cleared by RIS. |
 
-Mode 9 (X10 mouse) is deliberately **not** routed because the input encoder has no press-only X10 encoding.
+Mouse modes go to `OnSetMouseMode(mode, enabled)`: tracking modes 9 (X10, presses only), 1000, 1002 and 1003 share one slot, the coordinate encodings 1005 (UTF-8), 1006 (SGR), 1015 (urxvt) and 1016 (SGR-pixels) share another (the last one set wins; resetting the active one restores the default encoding, like xterm), and 1007 (alternate scroll) is an independent flag that is **set** at power-on. The host encodes reports with `MouseEncoder`; see [Mouse reporting (host side)](#mouse-reporting-host-side).
 
 #### DECSTR and RIS reset sets
 
@@ -156,6 +156,7 @@ DECSTR (`CSI ! p`, `TerminalAdapter.OnSoftReset`) and RIS (`ESC c`, `TerminalAda
 | Alternate screen | kept | left (main screen restored, both screens cleared) |
 | Tab stops | kept | back to the defaults |
 | Bracketed paste (2004), mouse modes and encodings, focus reporting (1004) | kept | reset |
+| Alternate scroll (1007) | kept | set (its power-on state) |
 | Synchronized update (2026) | kept | ended |
 | Kitty keyboard flags and stacks | kept | reset |
 | Prompt marks (OSC 133) | kept | cleared |
@@ -236,10 +237,10 @@ DECRQM (`CSI ? Pd $ p`, `CSI Pd $ p`) answers `CSI ? Pd ; Ps $ y` / `CSI Pd ; Ps
 |---|---|
 | 1 (DECCKM), 5 (DECSCNM), 6 (DECOM), 7 (DECAWM), 25 (DECTCEM), 66 (DECNKM), 67 (DECBKM) | 1 or 2, live state |
 | 47, 1047, 1049 (alternate screen) | 1 or 2, live state |
-| 1000, 1002, 1003 (mouse tracking), 1005, 1006, 1015 (mouse encoding), 1004 (focus) | 1 or 2, live state |
+| 9, 1000, 1002, 1003 (mouse tracking), 1005, 1006, 1015, 1016 (mouse encoding), 1007 (alternate scroll), 1004 (focus) | 1 or 2, live state |
 | 2004 (bracketed paste), 2026 (synchronized update), 2033 (visibility reports) | 1 or 2, live state |
 | 2 (DECANM; there is no VT52 mode), 2027 (grapheme clustering) | 3 |
-| 3, 4, 8, 9, 12, 18, 19, 40, 42, 45, 69, 80, 95, 1007, 1016, 1048 | 4: recognized and ignored (or, for 1048, an action) |
+| 3, 4, 8, 12, 18, 19, 40, 42, 45, 69, 80, 95, 1048 | 4: recognized and ignored (or, for 1048, an action) |
 | 11, 16, 53, 59, 60, 61, 64, 68, 73, 81 | 4: xterm "recognized, unimplemented" modes |
 | anything else | 0 |
 
@@ -646,6 +647,29 @@ ESC [ < Cb ; Cx ; Cy m  (release)
 
 Handled via the fallback path with string-based parsing for the `<` prefix.
 
+#### Mouse reporting (host side)
+
+`Dotty.Runtime.Input.MouseEncoder` turns pointer events into reports for the tracking mode and encoding the application selected. It is pure and allocation-free (`Encode(in MouseReport, Span<byte>)`, at most `MouseEncoder.MaxSequenceLength` bytes).
+
+| Tracking mode | Reports |
+|---|---|
+| 9 (X10) | Presses of buttons 1-3 only: no release, no motion, no wheel, no modifier bits |
+| 1000 (normal) | Presses, releases, wheel (buttons 64-67) |
+| 1002 (button event) | As 1000, plus motion while a button is held (`Cb + 32`) |
+| 1003 (any event) | As 1002, plus motion with no button (`Cb = 35`) |
+
+| Encoding | Format | Largest position |
+|---|---|---|
+| default | `CSI M Cb Cx Cy`, each byte value + 32; a release reports button 3 | 223 (larger positions send nothing) |
+| 1005 (UTF-8) | as default, values of 128 and up written as 2-byte UTF-8 | 2015 (larger positions send nothing) |
+| 1015 (urxvt) | `CSI Cb+32 ; x ; y M`, decimal; a release reports button 3 | none |
+| 1006 (SGR) | `CSI < Cb ; x ; y M` press/motion, `m` release keeping the button number | none |
+| 1016 (SGR-pixels) | as 1006 with 1-based pixel positions inside the pane (framebuffer pixels, clamped into the pane) | none |
+
+Positions are 1-based. Modifier bits: Shift 4, Alt 8, Ctrl 16 (Super is not reported). Motion is de-duplicated per reporting pane like xterm: a motion report at the same cell as the last report (the same pixel under 1016) is dropped; presses and releases are always sent.
+
+The wheel reports one press per notch (buttons 64 up, 65 down, 66 left, 67 right; no release); fractional touchpad deltas carry over between events (`ScrollAccumulator`) and `mouse.scrollMultiplier` does not apply, because the application decides how far a notch scrolls. Without mouse reporting the wheel scrolls the pane by `mouse.scrollMultiplier` lines per notch, again with fractional carry. On the alternate screen, with mode 1007 set, no tracking mode active and `mouse.alternateScroll` = `auto`, it sends that many cursor-up/down keys instead (`CSI A`/`CSI B`, or `SS3 A`/`SS3 B` under DECCKM), which scrolls `less`, `man` and similar programs. Holding `mouse.reportBypassModifier` (Shift by default) keeps clicks, drags and the wheel local while an application tracks the mouse.
+
 ### Charset Selection (DECSCL/DESIGNATE)
 
 Format: `ESC ( <charset>` or `ESC ) <charset>`
@@ -761,6 +785,7 @@ Typical performance on modern hardware:
 | `tests/Dotty.App.Tests/SgrColorTests.cs` | Tests for color parsing and conversion |
 | `tests/Dotty.App.Tests/ControlCodeTests.cs` | Tests for C0 control character handling |
 | `tests/Dotty.App.Tests/MouseModeTests.cs` | Tests for mouse protocol parsing |
+| `tests/Dotty.App.Tests/MouseEncoderTests.cs`, `ScrollAccumulatorTests.cs` | Mouse report golden bytes per mode and encoding (positions 1, 95, 96, 127, 128, 222, 223, 224, 2015, 2016), motion de-duplication, alternate-scroll keys, wheel accumulation |
 | `tests/Dotty.Terminal.Tests/Osc8ParserTests.cs` | Tests for OSC 8 hyperlink parsing |
 | `tests/Dotty.Terminal.Tests/ParserStringStateTests.cs` | ESC/CAN/SUB/C0 handling in OSC, DCS, APC/PM/SOS, and CSI |
 | `tests/Dotty.Terminal.Tests/KittyApcParserTests.cs`, `KittyControlParserTests.cs` | APC framing, abort rules, the 512-byte control cap, control key parsing |

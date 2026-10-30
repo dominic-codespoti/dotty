@@ -1,12 +1,11 @@
 using System;
 using System.Text;
-using Dotty.Terminal.Adapter;
 
 namespace Dotty.Runtime.Input;
 
 /// <summary>
-/// Encodes terminal keyboard and mouse events into byte sequences following
-/// standard xterm legacy sequences, Kitty keyboard protocol, and SGR/X10 mouse protocols.
+/// Encodes terminal keyboard events into byte sequences following standard xterm legacy
+/// sequences and the Kitty keyboard protocol. Mouse reports are <see cref="MouseEncoder"/>'s.
 /// </summary>
 public class TerminalInputEncoder
 {
@@ -104,55 +103,6 @@ public class TerminalInputEncoder
     }
 
     private static bool IsControlScalar(int scalar) => scalar <= 0x1F || scalar is >= 0x7F and <= 0x9F;
-
-    /// <summary>Encodes a mouse event into caller-owned storage.</summary>
-
-    public int EncodeMouseEvent(
-        TerminalAdapter.MouseMode mode,
-        TerminalAdapter.MouseEncoding encoding,
-        int button,
-        int row,
-        int column,
-        bool isPress,
-        bool isMove,
-        TerminalKeyModifiers modifiers,
-        Span<byte> destination)
-    {
-        if (mode == TerminalAdapter.MouseMode.None) return 0;
-        if (isMove && mode != TerminalAdapter.MouseMode.ButtonEvent && mode != TerminalAdapter.MouseMode.AnyEvent) return 0;
-        if (isMove && button == 3 && mode != TerminalAdapter.MouseMode.AnyEvent) return 0;
-
-        int cb = button;
-        if (!isPress && !isMove && encoding != TerminalAdapter.MouseEncoding.SGR) cb = 3;
-        if (isMove) cb += 32;
-        if ((modifiers & TerminalKeyModifiers.Shift) != 0) cb += 4;
-        if ((modifiers & TerminalKeyModifiers.Alt) != 0) cb += 8;
-        if ((modifiers & TerminalKeyModifiers.Control) != 0) cb += 16;
-        int x = column + 1;
-        int y = row + 1;
-
-        int offset = 0;
-        destination[offset++] = 0x1b;
-        destination[offset++] = (byte)'[';
-        if (encoding == TerminalAdapter.MouseEncoding.SGR)
-        {
-            destination[offset++] = (byte)'<';
-            offset = WriteNumber(destination, offset, cb);
-            destination[offset++] = (byte)';';
-            offset = WriteNumber(destination, offset, x);
-            destination[offset++] = (byte)';';
-            offset = WriteNumber(destination, offset, y);
-            destination[offset++] = (byte)((isPress || isMove) ? 'M' : 'm');
-            return offset;
-        }
-
-        if (x > 223 || y > 223) return 0;
-        destination[offset++] = (byte)'M';
-        destination[offset++] = (byte)(cb + 32);
-        destination[offset++] = (byte)(x + 32);
-        destination[offset++] = (byte)(y + 32);
-        return offset;
-    }
 
     /// <summary>Writes a key sequence into caller-owned storage. Returns zero for unsupported keys.</summary>
     public int Encode(

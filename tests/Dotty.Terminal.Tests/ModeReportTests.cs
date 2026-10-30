@@ -38,6 +38,7 @@ public sealed class ModeReportTests
         { 5, 2 }, { 1, 2 }, { 6, 2 }, { 7, 1 }, { 25, 1 }, { 47, 2 }, { 66, 2 }, { 67, 2 },
         { 1000, 2 }, { 1002, 2 }, { 1003, 2 }, { 1004, 2 }, { 1005, 2 }, { 1006, 2 }, { 1015, 2 },
         { 1047, 2 }, { 1049, 2 }, { 2004, 2 }, { 2026, 2 }, { 2033, 2 },
+        { 9, 2 }, { 1007, 1 }, { 1016, 2 },
     };
 
     [Theory]
@@ -54,12 +55,52 @@ public sealed class ModeReportTests
         Assert.Equal(Private(mode, 2), Query(parser, replies, $"{Esc}[?{mode}$p"));
     }
 
+    [Fact]
+    public void MouseEncodings_ShareOneSlot_LastSetWins()
+    {
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, $"{Esc}[?1006h{Esc}[?1016h");
+        Assert.Equal(TerminalAdapter.MouseEncoding.SGRPixels, adapter.CurrentMouseEncoding);
+        Assert.Equal(Private(1006, 2), Query(parser, replies, $"{Esc}[?1006$p"));
+        Assert.Equal(Private(1016, 1), Query(parser, replies, $"{Esc}[?1016$p"));
+
+        // Resetting an encoding that is not active leaves the active one alone.
+        Feed(parser, $"{Esc}[?1006l");
+        Assert.Equal(TerminalAdapter.MouseEncoding.SGRPixels, adapter.CurrentMouseEncoding);
+        Feed(parser, $"{Esc}[?1016l");
+        Assert.Equal(TerminalAdapter.MouseEncoding.Default, adapter.CurrentMouseEncoding);
+    }
+
+    [Fact]
+    public void X10TrackingMode_SharesSlotWithOtherTrackingModes()
+    {
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, $"{Esc}[?1000h{Esc}[?9h");
+        Assert.Equal(TerminalAdapter.MouseMode.X10, adapter.CurrentMouseMode);
+        Assert.Equal(Private(1000, 2), Query(parser, replies, $"{Esc}[?1000$p"));
+        Assert.Equal(Private(9, 1), Query(parser, replies, $"{Esc}[?9$p"));
+    }
+
+    [Fact]
+    public void AlternateScroll_SurvivesDecstr_RisRestoresDefault()
+    {
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, $"{Esc}[?1007l{Esc}[!p");
+        Assert.False(adapter.AlternateScrollMode);
+        Assert.Equal(Private(1007, 2), Query(parser, replies, $"{Esc}[?1007$p"));
+
+        Feed(parser, $"{Esc}[?1016h{Esc}[?9h{Esc}c");
+        Assert.True(adapter.AlternateScrollMode);
+        Assert.Equal(TerminalAdapter.MouseMode.None, adapter.CurrentMouseMode);
+        Assert.Equal(TerminalAdapter.MouseEncoding.Default, adapter.CurrentMouseEncoding);
+        Assert.Equal(Private(1007, 1), Query(parser, replies, $"{Esc}[?1007$p"));
+    }
+
     [Theory]
     [InlineData(2, 3)]
     [InlineData(3, 4)]
     [InlineData(4, 4)]
     [InlineData(8, 4)]
-    [InlineData(9, 4)]
     [InlineData(11, 4)]
     [InlineData(12, 4)]
     [InlineData(16, 4)]
@@ -79,8 +120,6 @@ public sealed class ModeReportTests
     [InlineData(80, 4)]
     [InlineData(81, 4)]
     [InlineData(95, 4)]
-    [InlineData(1007, 4)]
-    [InlineData(1016, 4)]
     [InlineData(1048, 4)]
     [InlineData(2027, 3)]
     [InlineData(0, 0)]

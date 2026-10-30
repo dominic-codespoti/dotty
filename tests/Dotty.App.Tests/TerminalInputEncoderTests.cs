@@ -1,6 +1,5 @@
 using System;
 using Dotty.Runtime.Input;
-using Dotty.Terminal.Adapter;
 using System.Text;
 using Xunit;
 
@@ -8,80 +7,6 @@ namespace Dotty.App.Tests;
 
 public class TerminalInputEncoderTests
 {
-    [Fact]
-    public void EncodeMouseEvent_SgrPress_EncodesExpectedSequence()
-    {
-        var encoder = new TerminalInputEncoder();
-
-        var bytes = encoder.EncodeMouseEvent(
-            TerminalAdapter.MouseMode.Normal,
-            TerminalAdapter.MouseEncoding.SGR,
-            button: 0,
-            row: 4,
-            column: 9,
-            isPress: true,
-            isMove: false,
-            modifiers: TerminalKeyModifiers.Control);
-
-        Assert.NotNull(bytes);
-        Assert.Equal("\u001b[<16;10;5M", Encoding.UTF8.GetString(bytes!));
-    }
-
-    [Fact]
-    public void EncodeMouseEvent_SgrRelease_EncodesExpectedSequence()
-    {
-        var encoder = new TerminalInputEncoder();
-
-        var bytes = encoder.EncodeMouseEvent(
-            TerminalAdapter.MouseMode.Normal,
-            TerminalAdapter.MouseEncoding.SGR,
-            button: 0,
-            row: 1,
-            column: 2,
-            isPress: false,
-            isMove: false,
-            modifiers: TerminalKeyModifiers.None);
-
-        Assert.NotNull(bytes);
-        Assert.Equal("\u001b[<0;3;2m", Encoding.UTF8.GetString(bytes!));
-    }
-
-    [Fact]
-    public void EncodeMouseEvent_ButtonEventMoveWithoutButton_ReturnsNull()
-    {
-        var encoder = new TerminalInputEncoder();
-
-        var bytes = encoder.EncodeMouseEvent(
-            TerminalAdapter.MouseMode.ButtonEvent,
-            TerminalAdapter.MouseEncoding.SGR,
-            button: 3,
-            row: 0,
-            column: 0,
-            isPress: true,
-            isMove: true,
-            modifiers: TerminalKeyModifiers.None);
-
-        Assert.Null(bytes);
-    }
-
-    [Fact]
-    public void EncodeMouseEvent_WheelUp_EncodesExpectedSequence()
-    {
-        var encoder = new TerminalInputEncoder();
-
-        var bytes = encoder.EncodeMouseEvent(
-            TerminalAdapter.MouseMode.Normal,
-            TerminalAdapter.MouseEncoding.SGR,
-            button: 64,
-            row: 2,
-            column: 3,
-            isPress: true,
-            isMove: false,
-            modifiers: TerminalKeyModifiers.None);
-
-        Assert.NotNull(bytes);
-        Assert.Equal("\u001b[<64;4;3M", Encoding.UTF8.GetString(bytes!));
-    }
     [Fact]
     public void Encode_CtrlBackspace_EncodesWordErase()
     {
@@ -506,22 +431,6 @@ internal static class TerminalInputEncoderTestExtensions
     {
         Span<byte> buffer = stackalloc byte[64];
         int length = encoder.Encode(key, modifiers, buffer, keypadApplicationMode, applicationCursorKeys, modifyOtherKeysLevel);
-        return length == 0 ? null : buffer[..length].ToArray();
-    }
-
-    internal static byte[]? EncodeMouseEvent(
-        this TerminalInputEncoder encoder,
-        TerminalAdapter.MouseMode mode,
-        TerminalAdapter.MouseEncoding encoding,
-        int button,
-        int row,
-        int column,
-        bool isPress,
-        bool isMove,
-        TerminalKeyModifiers modifiers)
-    {
-        Span<byte> buffer = stackalloc byte[64];
-        int length = encoder.EncodeMouseEvent(mode, encoding, button, row, column, isPress, isMove, modifiers, buffer);
         return length == 0 ? null : buffer[..length].ToArray();
     }
 }

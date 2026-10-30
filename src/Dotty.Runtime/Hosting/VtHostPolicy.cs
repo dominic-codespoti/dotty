@@ -82,8 +82,9 @@ public static class VtHostPolicy
 
     /// <summary>
     /// Client (window content) size in logical pixels that holds <paramref name="cols"/> x
-    /// <paramref name="rows"/> cells plus tab-bar rows and padding. Inverse of the host's
-    /// framebuffer layout; rounds up so float error can never produce one cell too few.
+    /// <paramref name="rows"/> cells plus tab-bar rows and padding. Inverse of
+    /// <see cref="ComputeGrid"/>; rounds up so float error can never produce one cell too few.
+    /// Used for the initial window size and for CSI 8 t.
     /// </summary>
     public static void ComputeClientSize(
         int cols,
@@ -100,6 +101,32 @@ public static class VtHostPolicy
     {
         width = ClampClientPixels((double)Math.Max(1, cols) * Finite(cellWidth) + Finite(paddingLeft) + Finite(paddingRight));
         height = ClampClientPixels(((double)Math.Max(1, rows) + Math.Max(0, barRows)) * Finite(cellHeight) + Finite(paddingTop) + Finite(paddingBottom));
+    }
+
+    /// <summary>
+    /// Grid that fits a framebuffer: the host's layout rule. Cell size, tab-bar rows and padding
+    /// are logical; the framebuffer is in device pixels with <paramref name="scale"/> device
+    /// pixels per logical unit. Returns at least one column and one row.
+    /// </summary>
+    public static void ComputeGrid(
+        int framebufferWidth,
+        int framebufferHeight,
+        float cellWidth,
+        float cellHeight,
+        float scale,
+        int barRows,
+        double paddingLeft,
+        double paddingRight,
+        double paddingTop,
+        double paddingBottom,
+        out int cols,
+        out int rows)
+    {
+        float padX = (float)(paddingLeft + paddingRight) * scale;
+        float padY = (float)(paddingTop + paddingBottom) * scale;
+        float topOffset = barRows * cellHeight * scale;
+        cols = Math.Max(1, (int)((framebufferWidth - padX) / (cellWidth * scale)));
+        rows = Math.Max(1, (int)((framebufferHeight - topOffset - padY) / (cellHeight * scale)));
     }
 
     private static double Finite(double value) => double.IsFinite(value) ? Math.Max(0d, value) : 0d;

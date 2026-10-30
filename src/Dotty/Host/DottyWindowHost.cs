@@ -13,6 +13,7 @@ using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Hyperlinks;
+using Dotty.Runtime.Hosting;
 using Dotty.Runtime.Clipboard;
 using Dotty.Runtime.Input;
 using Dotty.Runtime.Panes;
@@ -199,12 +200,17 @@ internal static class DottyWindowHost
     private static DottyLaunchOptions _launchOptions = new();
     private static TerminalSession? _initialCommandSession;
     private static int _exitCode;
+    private static bool _windowRevealed;
+    private static long _revealDeadlineMs = long.MaxValue;
+    private const long RevealFallbackMs = 500;
 
     public static int Run(DottyLaunchOptions launchOptions)
     {
         _launchOptions = launchOptions;
         _initialCommandSession = null;
         _exitCode = 0;
+        _windowRevealed = false;
+        _revealDeadlineMs = long.MaxValue;
         _closed = false;
         Volatile.Write(ref _themeApplyPending, 0);
         _lastWindowFocus = null;
@@ -227,6 +233,9 @@ internal static class DottyWindowHost
         var options = WindowOptions.Default with
         {
             Title = "Dotty (Silk)",
+            // Shown by RevealWindowWhenReady once the first frame is presented, so the user
+            // never sees an unpainted or wrongly sized window.
+            IsVisible = false,
             VSync = false,
             ShouldSwapAutomatically = false,
             API = new global::Silk.NET.Windowing.GraphicsAPI(
@@ -301,6 +310,34 @@ internal static class DottyWindowHost
             Win32WindowFrame.SetClientSize(size.X, size.Y);
         else
             _window.Size = size;
+    }
+
+    // The window is created hidden. Called after every frame iteration: shows the window once
+    // the first frame has been presented, or RevealFallbackMs after load if no frame could be
+    // presented yet (a synchronized-update hold, an empty framebuffer), so it never stays hidden.
+    // Costs one bool test per frame once shown.
+    private static void RevealWindowWhenReady()
+    {
+        if (!_windowRevealed &&
+            (_lastPresentTimestampMs != 0 || GetClockMilliseconds() >= _revealDeadlineMs))
+        {
+            RevealWindow();
+        }
+    }
+
+    // One-shot show. The render-failure path calls it directly so a failing first frame never
+    // leaves the window hidden. Invalidates a frame first because Wayland drops swaps on a hidden
+    // surface (vendor/glfw/source/src/egl_context.c, swapBuffersEGL), so the first visible content
+    // needs a present after the show; showing can re-enter the frame action through the GLFW
+    // refresh callback, which then already sees the pending frame.
+    private static void RevealWindow()
+    {
+        if (_windowRevealed || _closed)
+            return;
+
+        _windowRevealed = true;
+        WindowPresentationGate.Invalidate(WindowFrameReason.Initial);
+        _window.IsVisible = true;
     }
 
     private static void PublishCustomFrameHitTestGeometry(
@@ -466,8 +503,13 @@ internal static class DottyWindowHost
         if (_customFrameActive)
             InstallCustomFrame();
         int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
-        float topOffset = barRows * _cellHeight * _scale;
-        SetWindowClientSize(new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale)));
+        var padding = UserConfigService.Current.Window.Padding;
+        VtHostPolicy.ComputeClientSize(
+            _cols, _rows, _cellWidth, _cellHeight, barRows,
+            padding.Left, padding.Right, padding.Top, padding.Bottom,
+            out int clientWidth, out int clientHeight);
+        SetWindowClientSize(new Vector2D<int>(clientWidth, clientHeight));
+        _revealDeadlineMs = GetClockMilliseconds() + RevealFallbackMs;
         VtHostBridge.Attach(_window, _tabManager,
             static () => new VtHostLayout(_cellWidth, _cellHeight, _scale, IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0, _cols, _rows),
             static (width, height) => SetWindowClientSize(new Vector2D<int>(width, height)));
@@ -1235,16 +1277,12 @@ internal static class DottyWindowHost
     private static void ApplyFramebufferLayout(Vector2D<int> size)
     {
         _gl.Viewport(size);
-        var config = UserConfigService.Current;
-        var pad = config.Window.Padding;
-        float padX = (float)(pad.Left + pad.Right) * _scale;
-        float padY = (float)(pad.Top + pad.Bottom) * _scale;
-
+        var pad = UserConfigService.Current.Window.Padding;
         int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
-        float topOffset = barRows * _cellHeight * _scale;
-
-        _cols = Math.Max(1, (int)((size.X - padX) / (_cellWidth * _scale)));
-        _rows = Math.Max(1, (int)((size.Y - topOffset - padY) / (_cellHeight * _scale)));
+        VtHostPolicy.ComputeGrid(
+            size.X, size.Y, _cellWidth, _cellHeight, _scale, barRows,
+            pad.Left, pad.Right, pad.Top, pad.Bottom,
+            out _cols, out _rows);
         // Physical text-area pixels: the same rounded cell size the VT metrics report, times the grid.
         int cellPixelWidth = Math.Max(1, (int)MathF.Round(_cellWidth * _scale));
         int cellPixelHeight = Math.Max(1, (int)MathF.Round(_cellHeight * _scale));
@@ -1645,9 +1683,11 @@ internal static class DottyWindowHost
         try
         {
             OnRenderCore(delta);
+            RevealWindowWhenReady();
         }
         catch (Exception exception)
         {
+            RevealWindow();
             if (!_closed)
             {
                 Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));

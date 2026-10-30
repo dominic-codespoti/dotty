@@ -30,6 +30,16 @@ demand-driven rather than a continuously swapped/vblank-paced loop. Clean
 frames keep the existing front buffer instead of swapping stale back-buffer
 contents.
 
+The window is created hidden and sized before it is shown. The initial client
+size comes from `VtHostPolicy.ComputeClientSize` (the same function CSI 8 t
+uses): 80x24 cells plus tab-bar rows and `window.padding`, rounded up, so the
+first layout pass (`VtHostPolicy.ComputeGrid`, the host's grid-fit rule) yields
+exactly 80x24 at integer scales. The window is shown once: after the first
+frame is presented, on the first render error, or 500 ms after load if no frame
+could be presented yet (for example a synchronized-update hold), so it never
+stays hidden. Showing invalidates one more frame: Wayland drops swaps on a
+hidden surface, so the first visible content is presented after the show.
+
 Focus and topology changes are presentation inputs, not just input-routing
 events. Losing window focus invalidates a frame and resets transient keyboard
 and mouse state (including held modifiers, pressed buttons, reporting and

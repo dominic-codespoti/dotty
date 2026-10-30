@@ -46,7 +46,8 @@ Versioned self-contained archives are published on
 [GitHub Releases](https://github.com/dominic-codespoti/dotty/releases) only when a
 release is explicitly requested. See the [release policy](docs/Releasing.md) for
 versioning and publication. Release signing and a graphical installer are not
-currently provided.
+currently provided. Every archive contains `License.md`, the third-party
+notices (`THIRD-PARTY-NOTICES.md`) and `licenses/GLFW-LICENSE.md`.
 
 Linux x64:
 

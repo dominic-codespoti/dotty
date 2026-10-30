@@ -50,6 +50,9 @@ Require-File 'lua54.dll'
 foreach ($asset in @('dotty.bash', 'Dotty.ps1', 'inject\bash\dotty-rcfile.bash', 'inject\zsh\.zshenv')) {
     Require-File "shell-integration\$asset"
 }
+Require-File 'License.md'
+Require-File 'THIRD-PARTY-NOTICES.md'
+Require-File 'licenses\GLFW-LICENSE.md'
 
 $exe = Join-Path $PublishDir 'dotty.exe'
 if (Test-Path -LiteralPath $exe -PathType Leaf) {

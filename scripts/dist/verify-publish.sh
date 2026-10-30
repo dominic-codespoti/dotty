@@ -76,6 +76,9 @@ require_file shell-integration/dotty.bash
 require_file shell-integration/inject/bash/dotty-rcfile.bash
 require_file shell-integration/inject/zsh/.zshenv
 require_file shell-integration/inject/xdg/fish/vendor_conf.d/dotty-shell-integration.fish
+require_file License.md
+require_file THIRD-PARTY-NOTICES.md
+require_file licenses/GLFW-LICENSE.md
 
 if [ -x "$dir/dotty" ]; then
   # Isolate the run from the runner's real configuration directories.

@@ -17,6 +17,7 @@ SHELL_INTEGRATION = [
     "shell-integration/inject/zsh/.zshenv",
     "shell-integration/inject/xdg/fish/vendor_conf.d/dotty-shell-integration.fish",
 ]
+LICENSES = ["License.md", "THIRD-PARTY-NOTICES.md", "licenses/GLFW-LICENSE.md"]
 
 
 def fake_dotty(version_output, explain_output="font.size\nLua key: font.size\n", version_status=0):
@@ -31,7 +32,7 @@ exit 9
 
 
 def make_tree(root, rid, version_output="0.3.0", omit=(), non_executable=(), **dotty_options):
-    files = ["dotty", "pty-helper", *UNIX_FILES[rid], *SHELL_INTEGRATION]
+    files = ["dotty", "pty-helper", *UNIX_FILES[rid], *SHELL_INTEGRATION, *LICENSES]
     for relative in files:
         if relative in omit:
             continue
@@ -73,6 +74,15 @@ class VerifyPublishTests(unittest.TestCase):
         self.assertIn("missing file shell-integration/inject/zsh/.zshenv", result.stderr)
         self.assertIn("pty-helper is not executable", result.stderr)
         self.assertIn("3 check(s) failed", result.stderr)
+
+    def test_license_payload_is_required(self):
+        for missing in LICENSES:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                make_tree(root, "osx-arm64", omit=(missing,))
+                result = run(root, "osx-arm64")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"missing file {missing}", result.stderr)
 
     def test_version_mode_table(self):
         cases = [

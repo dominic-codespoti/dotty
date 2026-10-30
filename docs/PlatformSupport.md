@@ -282,6 +282,7 @@ Support promotion is staged:
 - [ ] Build and package `pty-helper` for Unix artifacts.
 - [ ] Run native PTY tests without filtering the host backend.
 - [ ] Verify `dotty`/`dotty.exe`, native GLFW/Skia/Lua assets, and helper placement (`scripts/dist/verify-publish.*`).
+- [ ] Confirm every archive carries `License.md`, `THIRD-PARTY-NOTICES.md` and `licenses/GLFW-LICENSE.md` (`scripts/dist/verify_archive.py`), and that `THIRD-PARTY-NOTICES.md` lists every shipped dependency.
 - [ ] Smoke Linux X11 startup under Xvfb (the automated GUI coverage).
 - [ ] Manually verify Wayland, macOS, and Windows desktop startup on native sessions.
 - [ ] Extract every archive into a clean directory and run the host.

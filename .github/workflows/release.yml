@@ -110,6 +110,9 @@ jobs:
     needs: [validate-release, build]
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
       - name: Download release artifacts
         uses: actions/download-artifact@v8
         with:
@@ -120,31 +123,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          archive_count="$(find ./artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)"
-          test "$archive_count" -eq 4
-          for archive in ./artifacts/*/*.tar.gz; do
-            [ -f "$archive" ] || continue
-            listing="$(tar -tzf "$archive")"
-            printf '%s\n' "$listing" | grep -Eq '/dotty$'
-            printf '%s\n' "$listing" | grep -Eq '/libglfw(\.so\.3|\.3\.dylib)$'
-            printf '%s\n' "$listing" | grep -Eq '/libSkiaSharp\.(so|dylib)$'
-            printf '%s\n' "$listing" | grep -Eq '/liblua54\.(so|dylib)$'
-            printf '%s\n' "$listing" | grep -Eq '/pty-helper$'
-            printf '%s\n' "$listing" | grep -Eq '/shell-integration/dotty\.bash$'
-            printf '%s\n' "$listing" | grep -Eq '/shell-integration/inject/bash/dotty-rcfile\.bash$'
-            printf '%s\n' "$listing" | grep -Eq '/shell-integration/inject/zsh/\.zshenv$'
-            printf '%s\n' "$listing" | grep -Eq '/shell-integration/inject/xdg/fish/vendor_conf\.d/dotty-shell-integration\.fish$'
-          done
-          for archive in ./artifacts/*/*.zip; do
-            [ -f "$archive" ] || continue
-            listing="$(unzip -Z1 "$archive")"
-            printf '%s\n' "$listing" | grep -Eq '(^|/)dotty\.exe$'
-            printf '%s\n' "$listing" | grep -Eq '(^|/)glfw3\.dll$'
-            printf '%s\n' "$listing" | grep -Eq '(^|/)libSkiaSharp\.dll$'
-            printf '%s\n' "$listing" | grep -Eq '(^|/)lua54\.dll$'
-            printf '%s\n' "$listing" | grep -Eq '(^|[/\\])shell-integration[/\\]Dotty\.ps1$'
-            printf '%s\n' "$listing" | grep -Eq '(^|[/\\])shell-integration[/\\]inject[/\\]bash[/\\]dotty-rcfile\.bash$'
-          done
+          shopt -s nullglob
+          python3 scripts/dist/verify_archive.py --expect-count 4 ./artifacts/*/*.tar.gz ./artifacts/*/*.zip
+
   # Create GitHub Release
   create-release:
     name: Create Release

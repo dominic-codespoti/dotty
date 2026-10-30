@@ -315,9 +315,10 @@ exact release version. Release jobs must:
 2. NativeAOT-publish each RID and verify it with `scripts/dist/verify-publish.sh`
    (Linux, macOS) or `scripts/dist/verify-publish.ps1` (Windows): `dotty`/`dotty.exe`,
    RID-specific GLFW/Skia/Lua native libraries, the shell-integration payload,
+   `License.md`, `THIRD-PARTY-NOTICES.md` and `licenses/GLFW-LICENSE.md`,
    `dotty --version` equal to the release version, and `+explain-config`;
 3. fail on IL2xxx/IL3xxx warnings in Dotty's own code;
-4. inspect every tar/zip archive before release creation;
+4. inspect every tar/zip archive before release creation (`scripts/dist/verify_archive.py`);
 5. extract and start the Linux archive under Xvfb;
 6. generate `MANIFEST.txt` and `SHA256SUMS`.
 

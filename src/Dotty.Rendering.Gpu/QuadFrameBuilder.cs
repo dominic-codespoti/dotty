@@ -46,6 +46,13 @@ public static class QuadFrameBuilder
     public static readonly SgrColorArgb DefaultBackground = SgrColorArgb.FromRgb(0, 0, 0);
 
     /// <summary>
+    /// Whole-pixel glyph placement offset, rounded half away from zero. A fallback glyph's baseline offset is
+    /// fractional; truncation moved negative offsets down and positive ones up by up to a pixel.
+    /// </summary>
+    public static short RoundPixelOffset(float offset) =>
+        (short)Math.Clamp(MathF.Round(offset, MidpointRounding.AwayFromZero), short.MinValue, short.MaxValue);
+
+    /// <summary>
     /// Builds cell instances from the given render source into a newly allocated array or destination buffer.
     /// </summary>
     public static QuadFrameBuildResult Build(
@@ -278,7 +285,7 @@ public static class QuadFrameBuilder
                     Col = (ushort)column,
                     Row = (ushort)row,
                     OffX = (short)glyphInfo.LeftBearing,
-                    OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+                    OffY = RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
                     GlyphX = (short)glyphInfo.X,
                     GlyphY = (short)glyphInfo.Y,
                     GlyphW = (short)glyphInfo.Width,

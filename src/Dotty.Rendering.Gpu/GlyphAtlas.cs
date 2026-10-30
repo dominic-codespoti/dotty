@@ -41,10 +41,10 @@ public readonly struct GlyphInfo
 /// <summary>
 /// Atlas lookup key. Deliberately has NO foreground color: the atlas stores
 /// either grayscale coverage or intrinsic premultiplied color, so one entry
-/// serves every foreground color/alpha. Typeface identity is by instance — canvases share
-/// resolved typefaces through a static cache, so same-family instances compare
-/// equal in practice. <see cref="Style"/> separates regular, bold, italic and
-/// bold-italic rasterizations of the same grapheme.
+/// serves every foreground color/alpha. Typeface identity is by instance: the host
+/// resolves each configured family once and reuses that instance across reloads,
+/// zoom and resize (W4-B7), so keys stay stable. <see cref="Style"/> separates
+/// regular, bold, italic and bold-italic rasterizations of the same grapheme.
 /// </summary>
 public readonly struct GlyphKey : IEquatable<GlyphKey>
 {
@@ -570,8 +570,7 @@ public sealed class GlyphAtlas : IDisposable
             return RasterizeTight(key);
         }
 
-        var resolvedTypeface = fallbackChain.ResolveTypefaceForGrapheme(
-            key.Grapheme, key.IsBold, out bool isFallback);
+        var resolvedTypeface = fallbackChain.ResolveTypefaceForGrapheme(key.Grapheme, out bool isFallback);
         // The primary font, including its Nerd Font PUA glyphs, keeps the
         // exact existing raster path. Normalization is only for a resolved
         // fallback typeface.

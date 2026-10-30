@@ -219,7 +219,7 @@ public sealed class QuadFrameBuilderTests
             var key = new GlyphKey(graphemes[i], SKTypeface.Default, TextSize, GlyphStyle.Regular);
             Assert.True(atlas.TryGetGlyph(key, out var info));
 
-            Assert.Equal((short)(info.BaselineOffset + info.TopBearing), inst.OffY);
+            Assert.Equal(QuadFrameBuilder.RoundPixelOffset(info.BaselineOffset + info.TopBearing), inst.OffY);
             Assert.Equal((short)info.LeftBearing, inst.OffX);
         }
     }

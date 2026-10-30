@@ -447,7 +447,7 @@ public static class TabBarQuadBuilder
                 Col = (ushort)Math.Max(0, col),
                 Row = (ushort)Math.Max(0, (int)baselineRow),
                 OffX = (short)(glyphInfo.LeftBearing + pixelColOffset),
-                OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing + extraOffsetY),
+                OffY = QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing + extraOffsetY),
                 GlyphX = (short)glyphInfo.X,
                 GlyphY = (short)glyphInfo.Y,
                 GlyphW = (short)glyphInfo.Width,

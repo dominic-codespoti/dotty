@@ -165,10 +165,20 @@ geometry aligned instead of accumulating fractional-pixel drift. These
 settings match the atlas raster policy and avoid color-channel-dependent
 subpixel coverage.
 
-A framebuffer resize recomputes scale and cell metrics. If the scale changes,
-the host obtains/acquires a new glyph atlas, updates renderer and scene-composer
-resources, then releases the previous atlas. Session dimensions are recalculated
-from the scaled cell geometry. Fallback typefaces are normalized to the primary
+The host resolves the typeface only when `font.family` changes (config load,
+reload, zoom and resize reuse the same `SKTypeface` object, so the glyph atlas
+and the composer row cache keep hitting); a font installed while Dotty runs is
+picked up on the next `font.family` change or restart. `MeasureCell` results
+are cached by value: typeface family name and style (weight, width, slant),
+clamped size, line height and scale. Equal inputs never re-measure, separate
+wrapper objects for the same face share an entry, and the cache is a
+least-recently-used map bounded at 32 entries.
+
+A framebuffer resize recomputes only the scale and the (cached) cell metrics.
+If the scale changes, the host obtains/acquires a new glyph atlas, updates
+renderer and scene-composer resources, then releases the previous atlas.
+Session dimensions are recalculated from the scaled cell geometry. Fallback
+typefaces are normalized to the primary
 font's cell height and constrained to the available one-cell or two-cell width;
 oversized fallback ink is re-rasterized at smaller scales, then replaced by the
 reserved tofu glyph if it still cannot fit.

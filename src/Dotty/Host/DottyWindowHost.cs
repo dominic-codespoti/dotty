@@ -38,6 +38,7 @@ internal static class DottyWindowHost
     private static GL _gl = null!;
     private static GlyphAtlas _atlas = null!;
     private static SKTypeface _typeface = null!;
+    private static readonly TypefaceResolutionCache _typefaces = new(FontMetricsService.ResolveTypeface);
     private static float _cellWidth, _cellHeight, _scale = 1f;
     private const float MinRuntimeFontSize = 6f;
     private const float MaxRuntimeFontSize = 72f;
@@ -1151,17 +1152,26 @@ internal static class DottyWindowHost
     }
 
 
+    // Config, zoom and load path. The typeface is re-resolved only when font.family changes,
+    // so its object identity (which keys the glyph atlas and the composer row cache) is stable.
     private static void ResolveFontAndMetrics()
     {
         var config = UserConfigService.Current;
         _configuredFontSize = double.IsFinite(config.Font.Size) ? config.Font.Size : 14d;
+        _typeface = _typefaces.Resolve(config.Font.Family);
+        UpdateScaleAndCellMetrics();
+    }
+
+    // Resize path: only the framebuffer/window ratio can have changed. MeasureCell is cached by
+    // value, so an unchanged scale costs a dictionary hit and no Skia work.
+    private static void UpdateScaleAndCellMetrics()
+    {
         float rawScale = _window.FramebufferSize.X / (float)MathF.Max(1, _window.Size.X);
         _scale = float.IsFinite(rawScale) ? Math.Clamp(rawScale, 0.1f, 16f) : 1f;
-        _typeface = FontMetricsService.ResolveTypeface(config.Font.Family);
         (_cellWidth, _cellHeight) = FontMetricsService.MeasureCell(
             _typeface,
             EffectiveFontSize(),
-            config.Font.LineHeight,
+            UserConfigService.Current.Font.LineHeight,
             _scale);
     }
 
@@ -1215,7 +1225,7 @@ internal static class DottyWindowHost
         if (size.X <= 0 || size.Y <= 0) return;
 
         float previousScale = _scale;
-        ResolveFontAndMetrics();
+        UpdateScaleAndCellMetrics();
         if (MathF.Abs(previousScale - _scale) > 0.01f)
             RefreshFontResources();
 

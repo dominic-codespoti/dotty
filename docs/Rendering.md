@@ -153,8 +153,7 @@ side works like this (written from the source, never run or measured):
   pixels through `ImageRetirementQueue`. The host's render recovery (see
   [Render failures and context loss](#render-failures-and-context-loss)) replaces
   the whole renderer, so a new cache starts empty and textures re-upload on
-  demand; `ResetImagesAfterContextLoss` resets the image pass in place and is only
-  exercised by tests. Hidden tabs are not captured, so their textures
+  demand. Hidden tabs are not captured, so their textures
   go idle and age out like any other.
 
 These numbers are constants in the source, not measurements.

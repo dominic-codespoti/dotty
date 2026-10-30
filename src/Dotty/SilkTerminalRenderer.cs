@@ -1176,18 +1176,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         }
     }
 
-    /// <summary>
-    /// The GL context was replaced: every object name this renderer cached is invalid. Drops the cached GL state and
-    /// recreates the image pass (its textures re-upload on demand). Atlas textures are the caller's concern
-    /// (<see cref="SilkGlTextureManager"/>), as before.
-    /// </summary>
-    public void ResetImagesAfterContextLoss()
-    {
-        EnsureNotDisposed();
-        InvalidateGlStateCache();
-        _images?.ResetAfterContextLoss();
-    }
-
     private void InvalidateGlStateCache()
     {
         _boundProgram = uint.MaxValue;

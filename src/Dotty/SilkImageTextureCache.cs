@@ -58,15 +58,6 @@ public sealed class DirectGlBindingCache : IGlBindingCache
         _gl.BindTexture(TextureTarget.Texture2D, texture);
         _texture = texture;
     }
-
-    /// <summary>Forget everything (context loss, or foreign code changed GL state).</summary>
-    public void Invalidate()
-    {
-        _program = uint.MaxValue;
-        _vao = uint.MaxValue;
-        _texture = uint.MaxValue;
-        _unitSet = false;
-    }
 }
 
 /// <summary>
@@ -204,20 +195,6 @@ public sealed unsafe class SilkImageTextureCache : IDisposable
 
     /// <summary>Deletes the texture of one image (its pixels were freed).</summary>
     public void Retire(long serial) => Remove(serial);
-
-    /// <summary>
-    /// The GL context was lost or replaced: every texture name is invalid. Forget them without
-    /// issuing GL calls; images re-upload on demand.
-    /// </summary>
-    public void ResetAfterContextLoss()
-    {
-        _entries.Clear();
-        _textureBytes = 0;
-        _maxTextureSize = 0;
-        _budget = new UploadBudgetTracker(_uploadBudgetBytes);
-        if (_bindings is DirectGlBindingCache direct)
-            direct.Invalidate();
-    }
 
     public void Dispose()
     {

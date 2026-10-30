@@ -124,5 +124,74 @@ namespace Dotty.App.Tests
             Assert.True(float.IsFinite(cellWidth) && cellWidth >= 4f);
             Assert.True(float.IsFinite(cellHeight) && cellHeight > 0f);
         }
+
+        [Fact]
+        public void MeasureCell_EqualInputsNeverGrowTheCache()
+        {
+            var cache = new CellMetricsCache(capacity: 4);
+            var typeface = SKTypeface.Default;
+
+            var first = FontMetricsService.MeasureCell(cache, typeface, 14f, 1.2, 1.5f);
+            for (int i = 0; i < 10; i++)
+                Assert.Equal(first, FontMetricsService.MeasureCell(cache, typeface, 14f, 1.2, 1.5f));
+
+            Assert.Equal(1, cache.Count);
+        }
+
+        [Theory]
+        // Size, line height and scale that clamp to the same value share one entry.
+        [InlineData(14f, 1.2, 0f, 14f, 1.2, -1f, 1)]
+        [InlineData(1000f, 1.2, 1f, 512f, 1.2, 1f, 1)]
+        [InlineData(14f, 20.0, 1f, 14f, 8.0, 1f, 1)]
+        [InlineData(14f, 1.2, 100f, 14f, 1.2, 16f, 1)]
+        // Any differing measurement input is a different entry.
+        [InlineData(14f, 1.2, 1f, 15f, 1.2, 1f, 2)]
+        [InlineData(14f, 1.2, 1f, 14f, 1.3, 1f, 2)]
+        [InlineData(14f, 1.2, 1f, 14f, 1.2, 2f, 2)]
+        public void MeasureCell_KeysByClampedValue(
+            float sizeA, double lineHeightA, float scaleA,
+            float sizeB, double lineHeightB, float scaleB,
+            int expectedEntries)
+        {
+            var cache = new CellMetricsCache(capacity: 4);
+            var typeface = SKTypeface.Default;
+
+            FontMetricsService.MeasureCell(cache, typeface, sizeA, lineHeightA, scaleA);
+            FontMetricsService.MeasureCell(cache, typeface, sizeB, lineHeightB, scaleB);
+
+            Assert.Equal(expectedEntries, cache.Count);
+        }
+
+        [Fact]
+        public void MeasureCell_DistinctWrappersOfTheSameFaceShareOneEntry()
+        {
+            var original = SKTypeface.Default;
+            var stream = original.OpenStream(out int ttcIndex);
+            Assert.SkipUnless(stream != null, "The default typeface exposes no font data stream");
+            using var copy = SKTypeface.FromStream(stream, ttcIndex);
+            Assert.SkipUnless(
+                copy != null && !ReferenceEquals(copy, original)
+                    && FontMetricsService.GetIdentity(copy) == FontMetricsService.GetIdentity(original),
+                "Reloading the default font data did not yield a separate wrapper with the same family and style");
+            var cache = new CellMetricsCache(capacity: 4);
+
+            var fromOriginal = FontMetricsService.MeasureCell(cache, original, 14f, 1.2, 1f);
+            var fromCopy = FontMetricsService.MeasureCell(cache, copy!, 14f, 1.2, 1f);
+
+            Assert.Equal(fromOriginal, fromCopy);
+            Assert.Equal(1, cache.Count);
+        }
+
+        [Fact]
+        public void MeasureCell_CacheStaysWithinCapacity()
+        {
+            var cache = new CellMetricsCache(capacity: 3);
+            var typeface = SKTypeface.Default;
+
+            for (int size = 10; size < 20; size++)
+                FontMetricsService.MeasureCell(cache, typeface, size, 1.2, 1f);
+
+            Assert.Equal(3, cache.Count);
+        }
     }
 }

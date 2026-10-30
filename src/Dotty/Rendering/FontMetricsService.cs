@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Dotty.Abstractions.Config;
 using SkiaSharp;
@@ -11,35 +10,16 @@ namespace Dotty.Silk.Rendering;
 /// </summary>
 public static class FontMetricsService
 {
-    private readonly struct MeasureKey : IEquatable<MeasureKey>
-    {
-        private readonly SKTypeface _typeface;
-        private readonly float _fontSize;
-        private readonly double _lineHeight;
-        private readonly float _scale;
+    /// <summary>
+    /// Entry bound of the shared metrics cache. Each distinct face, size, line height and scale
+    /// takes one entry; zoom steps and monitor moves stay far below this.
+    /// </summary>
+    internal const int MetricsCacheCapacity = 32;
 
-        public MeasureKey(SKTypeface typeface, float fontSize, double lineHeight, float scale)
-        {
-            _typeface = typeface;
-            _fontSize = fontSize;
-            _lineHeight = lineHeight;
-            _scale = scale;
-        }
-
-        public bool Equals(MeasureKey other) =>
-            ReferenceEquals(_typeface, other._typeface)
-            && _fontSize.Equals(other._fontSize)
-            && _lineHeight.Equals(other._lineHeight)
-            && _scale.Equals(other._scale);
-
-        public override bool Equals(object? obj) => obj is MeasureKey other && Equals(other);
-        public override int GetHashCode() =>
-            HashCode.Combine(RuntimeHelpers.GetHashCode(_typeface), _fontSize, _lineHeight, _scale);
-    }
-
-    private readonly record struct CellMetrics(float Width, float Height);
     private static readonly object MetricsLock = new();
-    private static readonly Dictionary<MeasureKey, CellMetrics> MetricsCache = new();
+    private static readonly CellMetricsCache SharedMetricsCache = new(MetricsCacheCapacity);
+    private static readonly ConditionalWeakTable<SKTypeface, TypefaceIdentity> Identities = new();
+
     /// <summary>
     /// Matches the first available font family from a comma-separated list, falling back to <see cref="SKTypeface.Default"/>.
     /// </summary>
@@ -65,10 +45,28 @@ public static class FontMetricsService
     }
 
     /// <summary>
-    /// Measures character cell width and height in device pixels, accounting for font metrics, line height, and DPI scale.
+    /// Measures character cell width and height in logical (window-coordinate) units, accounting
+    /// for font metrics, line height, and DPI scale; the device cell is the result times
+    /// <paramref name="scale"/>. Results are cached by value (typeface family and style, size,
+    /// line height, scale) in a bounded least-recently-used cache, so equal inputs never re-measure
+    /// and the cache never grows past <see cref="MetricsCacheCapacity"/> entries.
     /// </summary>
     public static (float CellWidth, float CellHeight) MeasureCell(SKTypeface typeface, float fontSize, double lineHeight, float scale)
     {
+        lock (MetricsLock)
+        {
+            return MeasureCell(SharedMetricsCache, typeface, fontSize, lineHeight, scale);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="MeasureCell(SKTypeface, float, double, float)"/> against an explicit cache.
+    /// The caller synchronizes access to <paramref name="cache"/>.
+    /// </summary>
+    internal static (float CellWidth, float CellHeight) MeasureCell(
+        CellMetricsCache cache, SKTypeface typeface, float fontSize, double lineHeight, float scale)
+    {
+        ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(typeface);
 
         fontSize = float.IsFinite(fontSize)
@@ -81,17 +79,23 @@ public static class FontMetricsService
             ? Math.Clamp(scale, 0.1f, 16f)
             : 1.0f;
 
-        var key = new MeasureKey(typeface, fontSize, lineHeight, scale);
-        lock (MetricsLock)
-        {
-            if (MetricsCache.TryGetValue(key, out CellMetrics cached))
-                return (cached.Width, cached.Height);
+        var key = new CellMetricsKey(GetIdentity(typeface), fontSize, lineHeight, scale);
+        if (cache.TryGet(key, out CellMetrics cached))
+            return (cached.Width, cached.Height);
 
-            CellMetrics measured = MeasureCellCore(typeface, fontSize, lineHeight, scale);
-            MetricsCache.Add(key, measured);
-            return (measured.Width, measured.Height);
-        }
+        CellMetrics measured = MeasureCellCore(typeface, fontSize, lineHeight, scale);
+        cache.Set(key, measured);
+        return (measured.Width, measured.Height);
     }
+
+    /// <summary>
+    /// Value identity of <paramref name="typeface"/>, read from Skia once per wrapper object
+    /// (the family name read allocates) and remembered for the wrapper's lifetime.
+    /// </summary>
+    internal static TypefaceIdentity GetIdentity(SKTypeface typeface) =>
+        Identities.GetValue(
+            typeface,
+            static face => new TypefaceIdentity(face.FamilyName ?? string.Empty, face.FontWeight, face.FontWidth, face.FontSlant));
 
     private static CellMetrics MeasureCellCore(SKTypeface typeface, float fontSize, double lineHeight, float scale)
     {

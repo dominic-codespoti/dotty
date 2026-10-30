@@ -89,6 +89,55 @@ public sealed class VtHostPolicyTests
         Assert.InRange(height, 1, 65536);
     }
 
+    // cols, rows, cell width/height (logical), tab-bar rows, padding left/right/top/bottom, scale.
+    public static TheoryData<int, int, float, float, int, double, double, double, double, int> InitialSizes => new()
+    {
+        { 80, 24, 9f, 19f, 0, 14, 14, 8, 8, 1 },          // default padding, no tab bar
+        { 80, 24, 9f, 19f, 1, 14, 14, 8, 8, 1 },          // tab bar row
+        { 132, 43, 8f, 17f, 2, 0, 0, 0, 0, 1 },           // no padding, two bar rows
+        { 100, 30, 10f, 21f, 1, 14, 14, 8, 8, 2 },        // Retina-style scale 2
+        { 200, 60, 12f, 25f, 1, 20, 20, 10, 10, 2 },
+        { 97, 31, 8f, 17f, 1, 10.5, 6.25, 4.75, 3, 1 },   // fractional padding
+        { 100, 30, 8.4f, 17.5f, 2, 14, 14, 8, 8, 1 },     // fractional cell
+        { 1, 1, 4f, 8f, 0, 0, 0, 0, 0, 1 },
+    };
+
+    [Theory]
+    [MemberData(nameof(InitialSizes))]
+    public void ComputeClientSize_RoundTripsThroughTheHostLayout(
+        int cols, int rows, float cellWidth, float cellHeight, int barRows,
+        double padLeft, double padRight, double padTop, double padBottom, int scale)
+    {
+        VtHostPolicy.ComputeClientSize(cols, rows, cellWidth, cellHeight, barRows, padLeft, padRight, padTop, padBottom, out int width, out int height);
+
+        VtHostPolicy.ComputeGrid(width * scale, height * scale, cellWidth, cellHeight, scale, barRows, padLeft, padRight, padTop, padBottom, out int fitCols, out int fitRows);
+
+        Assert.Equal((cols, rows), (fitCols, fitRows));
+    }
+
+    [Theory]
+    [InlineData(80, 24, 9f, 19f, 0, 14, 8, 1)]
+    [InlineData(80, 24, 9f, 19f, 1, 14, 8, 1)]
+    [InlineData(100, 30, 10f, 21f, 1, 14, 8, 2)]
+    public void ComputeClientSize_IsTheSmallestSizeThatFits(
+        int cols, int rows, float cellWidth, float cellHeight, int barRows, double padX, double padY, int scale)
+    {
+        VtHostPolicy.ComputeClientSize(cols, rows, cellWidth, cellHeight, barRows, padX, padX, padY, padY, out int width, out int height);
+
+        VtHostPolicy.ComputeGrid((width - 1) * scale, (height - 1) * scale, cellWidth, cellHeight, scale, barRows, padX, padX, padY, padY, out int fitCols, out int fitRows);
+
+        Assert.Equal((cols - 1, rows - 1), (fitCols, fitRows));
+    }
+
+    [Theory]
+    [InlineData(0, 0)]
+    [InlineData(10, 10)]
+    public void ComputeGrid_NeverReturnsLessThanOneCell(int framebufferWidth, int framebufferHeight)
+    {
+        VtHostPolicy.ComputeGrid(framebufferWidth, framebufferHeight, 9f, 19f, 1f, 1, 14, 14, 8, 8, out int cols, out int rows);
+        Assert.Equal((1, 1), (cols, rows));
+    }
+
     [Fact]
     public void ResizeQueue_TakesTheLatestRequestOnce()
     {

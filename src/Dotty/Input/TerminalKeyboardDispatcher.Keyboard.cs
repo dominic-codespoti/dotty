@@ -54,7 +54,10 @@ public sealed partial class TerminalKeyboardDispatcher
                     WriteMetaText(activeTab, associatedText);
                     return;
                 }
-                HandleText(associatedText);
+                // A press already encoded from the key (keypad application/navigation keys, Ctrl and name-based
+                // Meta chords) must not type its character a second time.
+                if (!(correlated && _lastPhysicalPressEncoded))
+                    HandleText(associatedText);
                 return;
             }
 
@@ -84,7 +87,7 @@ public sealed partial class TerminalKeyboardDispatcher
                         _lastPhysicalPressDeferred = false;
                         WriteMetaText(activeTab, associatedText);
                     }
-                    else
+                    else if (!(correlated && _lastPhysicalPressEncoded))
                     {
                         HandleText(associatedText);
                     }
@@ -98,7 +101,9 @@ public sealed partial class TerminalKeyboardDispatcher
                     Defer(TerminalKeyEventType.Repeat, primaryCodepoint, repeatModifiers);
                     return;
                 }
-                WriteLegacyKey(activeTab, key, primaryCodepoint, repeatModifiers);
+                bool repeatEncoded = WriteLegacyKey(activeTab, key, primaryCodepoint, repeatModifiers);
+                if (correlated)
+                    _lastPhysicalPressEncoded = repeatEncoded;
                 return;
             }
 
@@ -190,7 +195,7 @@ public sealed partial class TerminalKeyboardDispatcher
         _currentPhysicalKeyIndex = index;
         if (kittyFlags == 0)
         {
-            WriteLegacyKey(tab, state.Key, state.DeferredCodepoint, state.DeferredModifiers);
+            _physicalKeyStates[index].Encoded = WriteLegacyKey(tab, state.Key, state.DeferredCodepoint, state.DeferredModifiers);
         }
         else
         {
@@ -230,7 +235,8 @@ public sealed partial class TerminalKeyboardDispatcher
     private bool WriteKeyEvent(TerminalTab tab, Key key, int primaryCodepoint, TerminalKeyEventType eventType,
         ReadOnlySpan<char> associatedText, int kittyFlags)
     {
-        var (terminalKey, modifiers) = SilkKeyMapper.Map(key, _host.Ctrl, _host.Shift, _host.Alt, _host.Super);
+        var (terminalKey, modifiers) = SilkKeyMapper.Map(key, _host.Ctrl, _host.Shift, _host.Alt, _host.Super,
+            _host.KeypadNavigation && SilkKeyMapper.IsNumLockKeypadKey(key));
         GetAlternateCodepoints(key, primaryCodepoint, associatedText,
             out int shiftedCodepoint, out int baseCodepoint);
         TerminalKeyModifiers eventModifiers = modifiers | _host.LockModifiers;
@@ -288,17 +294,23 @@ public sealed partial class TerminalKeyboardDispatcher
         _ => 0
     };
 
-    private void WriteLegacyKey(TerminalTab tab, Key key, int primaryCodepoint, TerminalKeyModifiers modifiers)
+    private bool WriteLegacyKey(TerminalTab tab, Key key, int primaryCodepoint, TerminalKeyModifiers modifiers)
     {
         bool ctrl = (modifiers & TerminalKeyModifiers.Control) != 0;
         bool shift = (modifiers & TerminalKeyModifiers.Shift) != 0;
         bool alt = (modifiers & TerminalKeyModifiers.Alt) != 0;
         bool super = (modifiers & TerminalKeyModifiers.Meta) != 0;
+        var adapter = tab.Session.Adapter;
+        bool keypadNavigation = _host.KeypadNavigation && SilkKeyMapper.IsNumLockKeypadKey(key);
+        // Keypad keys in application keypad mode or at their navigation level (Num Lock off) are encoded from the
+        // key even though GLFW names them; otherwise the keypad types the layout's character (plan-12 D8).
+        bool keypadEncoded = key is >= Key.Keypad0 and <= Key.KeypadEqual &&
+            (keypadNavigation || adapter.KeypadApplicationMode);
         Span<byte> bytes = stackalloc byte[64];
-        if (primaryCodepoint > 0)
+        if (primaryCodepoint > 0 && !keypadEncoded)
         {
             if (!ctrl && !alt)
-                return;
+                return false;
             int codepoint = primaryCodepoint;
             if (ctrl)
             {
@@ -313,18 +325,22 @@ public sealed partial class TerminalKeyboardDispatcher
                 codepoint = ToUpperScalar(codepoint);
             }
             int textLength = EncodeLegacyTextCodepoint(codepoint, ctrl, alt, bytes);
-            if (textLength != 0)
-                _host.WriteInput(tab, bytes[..textLength]);
-            return;
+            if (textLength == 0)
+                return false;
+            _host.WriteInput(tab, bytes[..textLength]);
+            return true;
         }
 
         int length = SilkKeyMapper.Encode(key, ctrl, shift, alt,
-            tab.Session.Adapter.KeypadApplicationMode, bytes, super: super,
-            applicationCursorKeys: tab.Session.Adapter.ApplicationCursorKeysEnabled,
-            modifyOtherKeysLevel: tab.Session.Adapter.ModifyOtherKeysLevel,
-            backarrowSendsBackspace: tab.Session.Adapter.BackarrowSendsBackspace);
-        if (length != 0)
-            _host.WriteInput(tab, bytes[..length]);
+            adapter.KeypadApplicationMode, bytes, super: super,
+            applicationCursorKeys: adapter.ApplicationCursorKeysEnabled,
+            modifyOtherKeysLevel: adapter.ModifyOtherKeysLevel,
+            backarrowSendsBackspace: adapter.BackarrowSendsBackspace,
+            keypadNavigation: keypadNavigation);
+        if (length == 0)
+            return false;
+        _host.WriteInput(tab, bytes[..length]);
+        return true;
     }
 
     private static int ToUpperScalar(int codepoint) =>

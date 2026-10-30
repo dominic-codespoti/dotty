@@ -55,6 +55,13 @@ public sealed class KeybindingManager
         Bind("ctrl+shift+pageup", TerminalAction.PreviousPrompt);
         Bind("ctrl+shift+pagedown", TerminalAction.NextPrompt);
         Bind("ctrl+alt+o", TerminalAction.CopyCommandOutput);
+        // Scrollback (decision K2): Shift+arrows/Home/End go to the application.
+        Bind("shift+pageup", TerminalAction.ScrollPageUp);
+        Bind("shift+pagedown", TerminalAction.ScrollPageDown);
+        Bind("ctrl+shift+up", TerminalAction.ScrollLineUp);
+        Bind("ctrl+shift+down", TerminalAction.ScrollLineDown);
+        Bind("ctrl+shift+home", TerminalAction.ScrollToTop);
+        Bind("ctrl+shift+end", TerminalAction.ScrollToBottom);
         // Window, zoom, and application controls
         Bind("f11", TerminalAction.ToggleFullscreen);
         Bind("ctrl+equal", TerminalAction.ZoomIn);

@@ -26,13 +26,16 @@ public static class SilkKeyMapper
 
     /// <summary>
     /// Maps Silk.NET Key and modifier flags to <see cref="TerminalKey"/> and <see cref="TerminalKeyModifiers"/>.
+    /// With <paramref name="keypadNavigation"/> (Num Lock off) the keypad digits and decimal map to their
+    /// navigation level (<see cref="TerminalKey.KeypadHome"/> … <see cref="TerminalKey.KeypadDelete"/>).
     /// </summary>
     public static (TerminalKey Key, TerminalKeyModifiers Modifiers) Map(
         SilkKey key,
         bool ctrl,
         bool shift,
         bool alt,
-        bool super = false)
+        bool super = false,
+        bool keypadNavigation = false)
     {
         var modifiers = TerminalKeyModifiers.None;
         if (shift) modifiers |= TerminalKeyModifiers.Shift;
@@ -181,8 +184,30 @@ public static class SilkKeyMapper
             _ => TerminalKey.Unknown
         };
 
+        if (keypadNavigation)
+            terminalKey = KeypadNavigationKey(terminalKey);
         return (terminalKey, modifiers);
     }
+
+    private static TerminalKey KeypadNavigationKey(TerminalKey key) => key switch
+    {
+        TerminalKey.Keypad7 => TerminalKey.KeypadHome,
+        TerminalKey.Keypad8 => TerminalKey.KeypadUp,
+        TerminalKey.Keypad9 => TerminalKey.KeypadPageUp,
+        TerminalKey.Keypad4 => TerminalKey.KeypadLeft,
+        TerminalKey.Keypad5 => TerminalKey.KeypadBegin,
+        TerminalKey.Keypad6 => TerminalKey.KeypadRight,
+        TerminalKey.Keypad1 => TerminalKey.KeypadEnd,
+        TerminalKey.Keypad2 => TerminalKey.KeypadDown,
+        TerminalKey.Keypad3 => TerminalKey.KeypadPageDown,
+        TerminalKey.Keypad0 => TerminalKey.KeypadInsert,
+        TerminalKey.KeypadDecimal => TerminalKey.KeypadDelete,
+        _ => key
+    };
+
+    /// <summary>True for the keypad keys whose level depends on Num Lock.</summary>
+    public static bool IsNumLockKeypadKey(SilkKey key) =>
+        key is >= SilkKey.Keypad0 and <= SilkKey.Keypad9 or SilkKey.KeypadDecimal;
 
     /// <summary>
     /// Encodes Silk.NET key input into terminal escape sequences or control bytes.
@@ -197,9 +222,10 @@ public static class SilkKeyMapper
         bool super = false,
         bool applicationCursorKeys = false,
         int modifyOtherKeysLevel = 0,
-        bool backarrowSendsBackspace = false)
+        bool backarrowSendsBackspace = false,
+        bool keypadNavigation = false)
     {
-        var (terminalKey, modifiers) = Map(key, ctrl, shift, alt, super);
+        var (terminalKey, modifiers) = Map(key, ctrl, shift, alt, super, keypadNavigation);
         if (terminalKey == TerminalKey.Unknown)
             return 0;
         return s_encoder.Encode(terminalKey, modifiers, destination, keypadAppMode, applicationCursorKeys, modifyOtherKeysLevel,

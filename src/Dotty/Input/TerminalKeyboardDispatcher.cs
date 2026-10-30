@@ -33,6 +33,8 @@ public interface ITerminalKeyboardHost
     TerminalKeyModifiers LockModifiers { get; }
     /// <summary>A Meta chord's delivered character is the key's layout character (see <see cref="KeyboardModifierState.MetaUsesCommittedText"/>).</summary>
     bool MetaUsesCommittedText { get; }
+    /// <summary>Keypad digits send navigation keys (Num Lock off; see <see cref="KeyboardModifierState.KeypadNavigation"/>).</summary>
+    bool KeypadNavigation { get; }
     void CopySelection();
     void PasteClipboard();
     void ToggleFullscreen();
@@ -218,44 +220,17 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
             return;
         }
 
+        // Keys that produce no input (bare modifiers, lock keys, Menu) leave the scroll position and the
+        // selection alone, so Ctrl+click on a scrollback link and Shift+click extension keep working (plan-12 D5).
+        // Scrollback navigation is bound to actions (ScrollPageUp, ScrollLineUp, ...), not hard-wired to Shift.
         var activePane = activeTab.ActivePane;
-        if (_host.Shift && !activeTab.Session.Adapter.MouseReportingEnabled)
+        if (!IsInputlessKey(key))
         {
-            var buffer = activePane.Session.Adapter.Buffer;
-            int pageStep = Math.Max(1, activePane.Rows / 2);
-            switch (key)
-            {
-                case Key.PageUp:
-                    activePane.ScrollUp(pageStep, buffer.ScrollbackCount);
-                    _lastPhysicalPressConsumed = true;
-                    return;
-                case Key.PageDown:
-                    activePane.ScrollDown(pageStep);
-                    _lastPhysicalPressConsumed = true;
-                    return;
-                case Key.Up:
-                    activePane.ScrollUp(1, buffer.ScrollbackCount);
-                    _lastPhysicalPressConsumed = true;
-                    return;
-                case Key.Down:
-                    activePane.ScrollDown(1);
-                    _lastPhysicalPressConsumed = true;
-                    return;
-                case Key.Home:
-                    activePane.ScrollUp(buffer.ScrollbackCount, buffer.ScrollbackCount);
-                    _lastPhysicalPressConsumed = true;
-                    return;
-                case Key.End:
-                    activePane.ScrollToBottom();
-                    _lastPhysicalPressConsumed = true;
-                    return;
-            }
+            if (activePane.Selection.HasSelection && !_host.Ctrl && !_host.Alt)
+                activePane.Selection.ClearSelection();
+            if (activePane.ScrollOffset > 0)
+                activePane.ScrollToBottom();
         }
-
-        if (activePane.Selection.HasSelection && !_host.Ctrl && !_host.Alt)
-            activePane.Selection.ClearSelection();
-        if (activePane.ScrollOffset > 0 && !_host.Shift)
-            activePane.ScrollToBottom();
 
         var adapter = activeTab.Session.Adapter;
         if (adapter.KittyKeyboardFlags != 0)
@@ -265,8 +240,13 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
             Defer(TerminalKeyEventType.Press, primaryCodepoint, state.PressModifiers);
             return;
         }
-        WriteLegacyKey(activeTab, key, primaryCodepoint, state.PressModifiers);
+        _lastPhysicalPressEncoded = WriteLegacyKey(activeTab, key, primaryCodepoint, state.PressModifiers);
     }
+
+    private static bool IsInputlessKey(Key key) => key is
+        Key.ShiftLeft or Key.ShiftRight or Key.ControlLeft or Key.ControlRight or
+        Key.AltLeft or Key.AltRight or Key.SuperLeft or Key.SuperRight or
+        Key.CapsLock or Key.NumLock or Key.ScrollLock or Key.Menu;
 
     private static int EncodeLegacyTextCodepoint(int codepoint, bool ctrl, bool alt, Span<byte> destination)
     {

@@ -208,8 +208,8 @@ internal sealed class KeyPipelineHarness : IDisposable
             return null;
         KeyChars chars = Layout[key];
         bool shift = (mods & GlfwModShift) != 0;
-        if (key is >= Key.Keypad0 and <= Key.KeypadEqual)
-            return NumLock ? chars.Plain : null;
+        if (key is >= Key.Keypad0 and <= Key.Keypad9 or Key.KeypadDecimal)
+            return NumLock || Platform == KeyPlatform.Cocoa ? chars.Plain : null;
 
         bool physicalCtrl = Held(Key.ControlLeft, Key.ControlRight);
         bool altGr = _held.Contains(Key.AltRight) && RightAltIsLevel3;
@@ -270,6 +270,7 @@ internal sealed class KeyPipelineHarness : IDisposable
         public bool Super => _modifiers.Super;
         public TerminalKeyModifiers LockModifiers => _modifiers.LockModifiers;
         public bool MetaUsesCommittedText => _modifiers.MetaUsesCommittedText;
+        public bool KeypadNavigation => _modifiers.KeypadNavigation;
         public List<byte> InputBytes { get; } = new();
         public int CopyCount { get; private set; }
 

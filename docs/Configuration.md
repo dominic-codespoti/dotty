@@ -516,11 +516,24 @@ startup set; an em dash means that the action has no built-in chord.
 | `FocusPaneUp` | `alt+up` | Focus the pane above. |
 | `FocusPaneDown` | `alt+down` | Focus the pane below. |
 | `ClosePane` | `ctrl+shift+w` | Close the focused pane; if it is the tab's only pane, close the tab. |
+| `ScrollPageUp` | `shift+pageup` | Scroll the active pane's scrollback up by half the pane height (at least one line). |
+| `ScrollPageDown` | `shift+pagedown` | Scroll the scrollback down by half the pane height. |
+| `ScrollLineUp` | `ctrl+shift+up` | Scroll the scrollback up one line. |
+| `ScrollLineDown` | `ctrl+shift+down` | Scroll the scrollback down one line. |
+| `ScrollToTop` | `ctrl+shift+home` | Scroll to the oldest scrollback line. |
+| `ScrollToBottom` | `ctrl+shift+end` | Return to the live screen. |
 
 The configurable actions with no built-in chord are `CloseTab`, `Clear`,
 `DuplicateTab`, and `CloseOtherTabs`. Assigning `None` to a chord explicitly
 unbinds it. A custom binding replaces the built-in action for that chord;
 unknown action names are ignored and leave the built-in binding unchanged.
+
+The scroll actions are not performed on the alternate screen or when the pane
+has no scrollback; the key then goes to the application. `Shift+Up/Down/Home/End`
+are not bound, so editors receive them (`CSI 1;2A` and so on). Any key that
+produces terminal input returns a scrolled pane to the live screen and clears
+its selection (unless Ctrl or Alt is held); pressing a modifier, lock key, or
+Menu on its own changes neither.
 
 ### `keyboard`
 

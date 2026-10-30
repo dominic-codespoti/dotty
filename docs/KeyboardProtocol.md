@@ -38,6 +38,13 @@ This keeps DA2 identity replies separate from Kitty keyboard capability negotiat
 
 With no Kitty flags enabled, key presses retain xterm-compatible legacy encoding and plain committed text remains UTF-8. The F25 key maps to Kitty codepoint 57388 and legacy `CSI 46~`. Existing application cursor, keypad application, focus-reporting, and mouse modes remain independent. Applications can probe the actual running terminal with `CSI ? u` and DA requests; a probe must read replies from the PTY rather than infer support from the executable name.
 
+Legacy encoding details (the full table is `LegacyKeyEncodingTableTests`):
+
+- Cursor keys, Home, End, and keypad Begin send `SS3 A/B/C/D/H/F/E` in application cursor mode (DECCKM) when unmodified and `CSI x` otherwise; with modifiers they always send `CSI 1 ; m x` (m = 1 + Shift 1 + Alt 2 + Ctrl 4 + Super 8). Insert, Delete, Page Up and Page Down send `CSI n ~` / `CSI n ; m ~`.
+- Keypad: with Num Lock on, keypad keys type their character, or the `SS3` keypad codes in application keypad mode (DECKPAM), which also apply when Caps Lock or Num Lock is on. With Num Lock off the digits and decimal are navigation keys (KP7 Home, KP8 Up, KP9 Page Up, KP4 Left, KP5 Begin, KP6 Right, KP1 End, KP2 Down, KP3 Page Down, KP0 Insert, decimal Delete) encoded like the editing keys. macOS has no Num Lock, so its keypad always types digits.
+- Ctrl maps letters to C0 and Space/2 to NUL, 3/`[` to ESC, 4/`\` to FS, 5/`]` to GS, 6/`` ` `` to RS, 7/`-`/`/` to US, 8 to DEL (the kitty "Legacy ctrl mapping"); Ctrl+Alt prefixes the same byte with ESC. Alt+Shift+Tab sends `ESC CSI Z`.
+- A key that produces input returns a scrolled pane to the live screen and clears its selection; bare modifier, lock and Menu presses do neither. Shift+arrows/Home/End are sent to the application; scrollback uses the `ScrollPageUp`/`ScrollLineUp`/… actions (`shift+pageup`, `ctrl+shift+up`, …; see [`keybindings`](Configuration.md#keybindings)).
+
 ## DECBKM (backarrow key mode, 67)
 
 `CSI ? 67 h` makes Backspace send BS (`0x08`); `CSI ? 67 l` (the default) makes it send DEL (`0x7F`). Alt+Backspace sends the same byte prefixed with ESC (`ESC 0x08` or `ESC 0x7F`). Ctrl+Backspace (`0x17`) and Ctrl+Alt+Backspace (`ESC 0x17`) do not depend on the mode. The mode only affects legacy encoding: when Kitty flags select Backspace for CSI-u reporting (disambiguate or report-all-keys), the key is sent as `CSI 127 u` regardless of DECBKM. DECRQM `CSI ? 67 $ p` reports the live state. RIS resets it to DEL; DECSTR leaves it unchanged. The key dispatcher passes `adapter.BackarrowSendsBackspace` to the encoder on each key press.

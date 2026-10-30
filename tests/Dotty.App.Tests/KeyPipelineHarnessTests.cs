@@ -191,7 +191,7 @@ public sealed class KeyPipelineHarnessTests
     public void KeyboardPolicyResolvesConfigPerPlatform(string? left, string? right, bool macOS,
         AltKeyRole expectedLeft, AltKeyRole expectedRight, bool metaUsesCommittedText)
     {
-        Assert.Equal(new KeyboardPolicy(expectedLeft, expectedRight, metaUsesCommittedText),
+        Assert.Equal(new KeyboardPolicy(expectedLeft, expectedRight, metaUsesCommittedText, HonorsNumLock: !macOS),
             KeyboardPolicy.Resolve(left, right, macOS));
     }
 
@@ -308,6 +308,85 @@ public sealed class KeyPipelineHarnessTests
         Assert.Equal(0, pane.ScrollOffset);
         Assert.False(pane.Selection.HasSelection);
         Assert.Equal("x", harness.Output);
+    }
+
+    [Fact]
+    public void ShiftPressBeforeCtrlShiftC_KeepsTheSelectionForCopy()
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11);
+        harness.Pane.Selection.StartSelection(0, 0);
+
+        harness.Chord(Key.C, Key.ShiftLeft, Key.ControlLeft);
+
+        Assert.Equal(1, harness.CopyCount);
+        Assert.True(harness.Pane.Selection.HasSelection);
+    }
+
+    // D7: Home/End ignored DECCKM.
+    [Theory]
+    [InlineData(Key.Home, "\x1bOH")]
+    [InlineData(Key.End, "\x1bOF")]
+    public void HomeEndInApplicationCursorMode_UseSs3(Key key, string expected)
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11);
+        harness.Feed("\x1b[?1h");
+
+        harness.Tap(key);
+
+        Assert.Equal(expected, harness.Output);
+    }
+
+    // D8: with Num Lock off the keypad digits are navigation keys; GLFW still names them "0".."9".
+    [Theory]
+    [InlineData(Key.Keypad8, false, "\x1b[A")]
+    [InlineData(Key.Keypad2, false, "\x1b[B")]
+    [InlineData(Key.Keypad6, false, "\x1b[C")]
+    [InlineData(Key.Keypad4, false, "\x1b[D")]
+    [InlineData(Key.Keypad7, false, "\x1b[H")]
+    [InlineData(Key.Keypad1, false, "\x1b[F")]
+    [InlineData(Key.Keypad5, false, "\x1b[E")]
+    [InlineData(Key.Keypad9, false, "\x1b[5~")]
+    [InlineData(Key.Keypad3, false, "\x1b[6~")]
+    [InlineData(Key.Keypad0, false, "\x1b[2~")]
+    [InlineData(Key.KeypadDecimal, false, "\x1b[3~")]
+    [InlineData(Key.Keypad8, true, "\x1bOA")]
+    public void KeypadWithNumLockOff_SendsNavigationKeys(Key key, bool applicationCursor, string expected)
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11) { NumLock = false };
+        if (applicationCursor)
+            harness.Feed("\x1b[?1h");
+
+        harness.Tap(key);
+
+        Assert.Equal(expected, harness.Output);
+    }
+
+    [Theory]
+    [InlineData(KeyPlatform.X11, true, "8")]
+    [InlineData(KeyPlatform.Win32, true, "8")]
+    [InlineData(KeyPlatform.Cocoa, false, "8")]
+    public void KeypadDigit_TypesOnceWhenNumLockIsOnOrThePlatformHasNone(KeyPlatform platform, bool numLock, string expected)
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, platform) { NumLock = numLock };
+
+        harness.Tap(Key.Keypad8);
+
+        Assert.Equal(expected, harness.Output);
+    }
+
+    // D8: keypad application mode must win over the key's name and the delivered digit.
+    [Theory]
+    [InlineData(Key.Keypad8, "\x1bOx")]
+    [InlineData(Key.KeypadAdd, "\x1bOm")]
+    [InlineData(Key.KeypadDecimal, "\x1bOn")]
+    public void KeypadInApplicationMode_SendsSs3OnlyOnce(Key key, string expected)
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11) { NumLock = true };
+        harness.Feed("\x1b=");
+
+        harness.Tap(key);
+
+        Assert.Equal(expected, harness.Output);
     }
 
     private static void CreateScrollback(LeafPane pane, int lines)

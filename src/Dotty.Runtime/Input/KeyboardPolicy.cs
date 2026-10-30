@@ -32,7 +32,11 @@ public enum AltKeyRole : byte
 /// applied), so a Meta chord sends <c>ESC</c> + that character. False on macOS, where the delivered character is the
 /// Option-composed one and Meta chords are built from the key's unshifted name instead.
 /// </param>
-public readonly record struct KeyboardPolicy(AltKeyRole LeftAlt, AltKeyRole RightAlt, bool MetaUsesCommittedText)
+/// <param name="HonorsNumLock">
+/// True when the platform reports Num Lock, so keypad digits with Num Lock off send navigation keys. False on macOS,
+/// whose keyboards have no Num Lock (GLFW never reports it there) and whose keypad always types digits.
+/// </param>
+public readonly record struct KeyboardPolicy(AltKeyRole LeftAlt, AltKeyRole RightAlt, bool MetaUsesCommittedText, bool HonorsNumLock)
 {
     public const string AutoMode = "auto";
     public const string MetaMode = "meta";
@@ -46,7 +50,8 @@ public readonly record struct KeyboardPolicy(AltKeyRole LeftAlt, AltKeyRole Righ
     public static KeyboardPolicy Resolve(string? leftAlt, string? rightAlt, bool macOS) => new(
         ResolveSide(leftAlt, macOS, rightSide: false),
         ResolveSide(rightAlt, macOS, rightSide: true),
-        MetaUsesCommittedText: !macOS);
+        MetaUsesCommittedText: !macOS,
+        HonorsNumLock: !macOS);
 
     private static AltKeyRole ResolveSide(string? mode, bool macOS, bool rightSide)
     {

@@ -2476,6 +2476,7 @@ internal static class DottyWindowHost
         public bool Super => _keyboardController?.Modifiers.Super ?? false;
         public TerminalKeyModifiers LockModifiers => _keyboardController?.Modifiers.LockModifiers ?? TerminalKeyModifiers.None;
         public bool MetaUsesCommittedText => _keyboardController?.Modifiers.MetaUsesCommittedText ?? false;
+        public bool KeypadNavigation => _keyboardController?.Modifiers.KeypadNavigation ?? false;
 
         public void CopySelection() => CopySelectionToClipboard();
         public void PasteClipboard() => PasteClipboardToSession();

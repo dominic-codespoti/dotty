@@ -70,6 +70,9 @@ public sealed class KeyboardModifierState
     /// </summary>
     public bool MetaUsesCommittedText => Policy.MetaUsesCommittedText && !AltConsumedByLayout;
 
+    /// <summary>Keypad digits send their navigation level: the platform reports Num Lock and it is off.</summary>
+    public bool KeypadNavigation => Policy.HonorsNumLock && (_native & TerminalKeyModifiers.NumLock) == 0;
+
     // AltGr / ISO Level 3: no Alt bit (X11/Wayland) or Ctrl+Alt without a physical Ctrl key (Windows).
     private bool AltConsumedByLayout =>
         (_native & TerminalKeyModifiers.Alt) == 0 ||

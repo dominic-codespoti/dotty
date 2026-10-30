@@ -29,6 +29,7 @@ public sealed class TerminalKeyboardDispatcherTests
         public bool Super { get; set; }
         public TerminalKeyModifiers LockModifiers { get; set; }
         public bool MetaUsesCommittedText { get; set; } = true;
+        public bool KeypadNavigation { get; set; }
         public int CopyCount { get; private set; }
         public int PasteCount { get; private set; }
         public int CreateTabCount { get; private set; }
@@ -415,20 +416,64 @@ public sealed class TerminalKeyboardDispatcherTests
         Assert.True(next.IsVisible);
     }
 
-    [Fact]
-    public void HandleKeyEvent_ShiftNavigation_ScrollsWhenMouseReportingDisabled()
+    [Theory]
+    [InlineData(SilkKey.Up, "\x1b[1;2A")]
+    [InlineData(SilkKey.Down, "\x1b[1;2B")]
+    [InlineData(SilkKey.Home, "\x1b[1;2H")]
+    [InlineData(SilkKey.End, "\x1b[1;2F")]
+    public void HandleKeyEvent_ShiftNavigation_GoesToTheApplication(SilkKey key, string expected)
     {
         using var host = CreateHost();
         host.Shift = true;
         var pane = host.ActiveTab!.ActivePane;
-        CreateScrollback(pane, 2);
-        pane.ScrollUp(1, pane.Session.Adapter.Buffer.ScrollbackCount);
-        pane.ScrollToBottom();
+        CreateScrollback(pane, 4);
         var dispatcher = new TerminalKeyboardDispatcher(host);
 
-        dispatcher.HandleKeyEvent(SilkKey.Up, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(key, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
-        Assert.Equal(1, pane.ScrollOffset);
+        Assert.Equal(0, pane.ScrollOffset);
+        Assert.Equal(expected, Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    // expectedOffset -1 means "the whole scrollback".
+    [Theory]
+    [InlineData(true, SilkKey.Up, 0, 1)]
+    [InlineData(true, SilkKey.Down, 3, 2)]
+    [InlineData(true, SilkKey.Home, 0, -1)]
+    [InlineData(true, SilkKey.End, 3, 0)]
+    [InlineData(false, SilkKey.PageDown, 3, 0)]
+    public void ScrollbackBindings_ScrollTheActivePane(bool ctrl, SilkKey key, int startOffset, int expectedOffset)
+    {
+        using var host = CreateHost();
+        var pane = host.ActiveTab!.ActivePane;
+        CreateScrollback(pane, 8);
+        int scrollback = pane.Session.Adapter.Buffer.ScrollbackCount;
+        Assert.True(scrollback >= 4);
+        pane.ScrollUp(startOffset, scrollback);
+        host.Ctrl = ctrl;
+        host.Shift = true;
+        var dispatcher = new TerminalKeyboardDispatcher(host);
+
+        dispatcher.HandleKeyEvent(key, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal(expectedOffset < 0 ? scrollback : expectedOffset, pane.ScrollOffset);
+        Assert.Empty(host.InputBytes);
+    }
+
+    [Fact]
+    public void ScrollbackBinding_OnTheAlternateScreen_GoesToTheApplication()
+    {
+        using var host = CreateHost();
+        var pane = host.ActiveTab!.ActivePane;
+        CreateScrollback(pane, 8);
+        host.ActiveTab!.Session.Parser.Feed("\x1b[?1049h"u8);
+        host.Shift = true;
+        var dispatcher = new TerminalKeyboardDispatcher(host);
+
+        dispatcher.HandleKeyEvent(SilkKey.PageUp, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal(0, pane.ScrollOffset);
+        Assert.Equal("\x1b[5;2~", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
     }
 
     [Theory]

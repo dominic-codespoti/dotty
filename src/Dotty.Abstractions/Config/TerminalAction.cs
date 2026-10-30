@@ -94,4 +94,22 @@ public enum TerminalAction
 
     /// <summary>Select and copy the latest command's output.</summary>
     CopyCommandOutput,
+
+    /// <summary>Scroll the active pane's scrollback up by half a page.</summary>
+    ScrollPageUp,
+
+    /// <summary>Scroll the active pane's scrollback down by half a page.</summary>
+    ScrollPageDown,
+
+    /// <summary>Scroll the active pane's scrollback up one line.</summary>
+    ScrollLineUp,
+
+    /// <summary>Scroll the active pane's scrollback down one line.</summary>
+    ScrollLineDown,
+
+    /// <summary>Scroll the active pane to the top of its scrollback.</summary>
+    ScrollToTop,
+
+    /// <summary>Scroll the active pane back to the live screen.</summary>
+    ScrollToBottom,
 }

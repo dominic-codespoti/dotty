@@ -245,6 +245,8 @@ The Python unit tests for the esctest scripts run with `python3 -m unittest disc
 
 `KeyPipelineHarnessTests` replays AltGr, Right Alt, Alt+Shift, non-Latin Ctrl, Option, Super, and bare-modifier sequences and asserts the PTY bytes, the search query, bindings, scroll offset and selection. The harness proves the managed routing for a given event sequence; whether a real OS delivers that sequence is checked manually (see [Native desktop and IME](NativeDesktopAndIme.md)).
 
+`LegacyKeyEncodingTableTests` is the legacy (no Kitty flags) encoder table: more than 150 rows of key × {none, Shift, Alt, Ctrl, Ctrl+Shift, Alt+Shift, Ctrl+Alt} × {DECCKM, DECKPAM, DECBKM}, built from the xterm and kitty reference tables; it doubles as the encoding reference cited by [Keyboard Protocol](KeyboardProtocol.md#compatibility-behavior).
+
 ## Desktop smoke
 
 Linux X11:

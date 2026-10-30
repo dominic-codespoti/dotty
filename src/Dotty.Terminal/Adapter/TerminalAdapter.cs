@@ -562,6 +562,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         CurrentMouseEncoding = MouseEncoding.Default;
         _focusReportingEnabled = false;
         OnSetSynchronizedUpdate(false);
+        OnSetReverseVideo(false);
         ResetPaletteForRis();
         ResetKittyKeyboardState();
         ResetBackarrowKeyMode();
@@ -780,6 +781,24 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     }
 
     public bool FocusReportingEnabled => _focusReportingEnabled;
+
+    private volatile bool _reverseVideo;
+
+    /// <summary>
+    /// DECSCNM (<c>CSI ? 5 h/l</c>): when set, the renderer swaps this terminal's effective default foreground and
+    /// background (after OSC 10/11 overrides). Cells with explicit colours keep them. Kept by DECSTR, cleared by RIS.
+    /// Written on the parser thread, read by the render thread.
+    /// </summary>
+    public bool ReverseVideo => _reverseVideo;
+
+    public void OnSetReverseVideo(bool enabled)
+    {
+        if (_reverseVideo == enabled)
+            return;
+        _reverseVideo = enabled;
+        // The default colours change exactly as for an OSC 10/11 set: repaint every row and wake the host.
+        NotifyPaletteChanged();
+    }
 
 
     public void FlushRender()

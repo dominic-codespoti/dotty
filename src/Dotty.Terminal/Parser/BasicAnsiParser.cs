@@ -1309,6 +1309,9 @@ namespace Dotty.Terminal.Parser
                 case 1:
                     Handler?.OnSetApplicationCursorKeys(enabled);
                     break;
+                case 5:
+                    Handler?.OnSetReverseVideo(enabled);
+                    break;
                 case 7:
                     Handler?.OnSetAutoWrap(enabled);
                     break;

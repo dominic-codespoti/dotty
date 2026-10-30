@@ -697,7 +697,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
 
         int underlayCount = Math.Clamp(underlayChromeCount, 0, scrollbarChromeFirst);
 
-        // Underlay chrome (pane dividers, active-pane ring) sits below everything the panes draw. Base
+        // Underlay chrome (pane backgrounds, dividers, active-pane ring) sits below everything the panes draw. Base
         // backgrounds/chrome/glyphs follow. Scrollbar chrome is a separate overlay so rightmost glyphs can never
         // cover the thumb.
         if (underlayCount > 0)

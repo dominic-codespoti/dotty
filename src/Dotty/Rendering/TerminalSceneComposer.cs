@@ -42,8 +42,8 @@ public sealed class TerminalSceneFrame
     public ChromeQuadInstance[] ChromeQuads { get; private set; } = null!;
     public int ChromeQuadCount { get; private set; }
     /// <summary>
-    /// Chrome quads <c>[0, UnderlayChromeCount)</c> are drawn below the cell backgrounds (pane dividers and the
-    /// active-pane ring); the rest of the base chrome is drawn between the background and glyph passes.
+    /// Chrome quads <c>[0, UnderlayChromeCount)</c> are drawn below the cell backgrounds (pane backgrounds, pane
+    /// dividers and the active-pane ring); the rest of the base chrome is drawn between the background and glyph passes.
     /// </summary>
     public int UnderlayChromeCount { get; private set; }
     public int ScrollbarChromeStart { get; private set; }
@@ -195,6 +195,12 @@ public sealed class TerminalSceneComposer : IDisposable
     /// <summary>Per-cell "has an instance" scratch for the selection overlay; grows, never shrinks.</summary>
     private bool[] _selectionCoverage = Array.Empty<bool>();
 
+    /// <summary>A leaf's effective default colours for one frame: OSC 10/11 overrides, then the DECSCNM swap.</summary>
+    private readonly record struct LeafColors(SgrColorArgb Foreground, SgrColorArgb Background);
+
+    /// <summary>Per-leaf colours resolved once per frame (index = leaf index); grows, never shrinks.</summary>
+    private LeafColors[] _leafColors = Array.Empty<LeafColors>();
+
     /// <summary>
     /// Test seam: invoked for every captured leaf snapshot (no buffer lock held) before its rows and images are
     /// composed, so tests can attach synthetic graphics (<c>BeginGraphics</c>/<c>AttachGraphics</c>).
@@ -289,8 +295,24 @@ public sealed class TerminalSceneComposer : IDisposable
         float dividerThickness = PaneDecorationBuilder.ResolveThickness(panes.DividerThickness, scale);
         activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness);
 
-        // Underlay chrome (drawn below the cell backgrounds): dividers, then the active-pane ring.
-        EnsureChromeScratchCapacity(PaneDecorationBuilder.MaxQuadCount(leaves.Count));
+        // Underlay chrome (drawn below the cell backgrounds): pane backgrounds that differ from the window
+        // background (OSC 11, DECSCNM), then dividers, then the active-pane ring.
+        if (_leafColors.Length < leaves.Count)
+            Array.Resize(ref _leafColors, Math.Max(leaves.Count, Math.Max(2, _leafColors.Length * 2)));
+        EnsureChromeScratchCapacity(leaves.Count + PaneDecorationBuilder.MaxQuadCount(leaves.Count));
+        var themeBackground = new SgrColorArgb(theme.Background);
+        float gridCellWidth = cellWidth * scale;
+        float gridCellHeight = cellHeight * scale;
+        for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
+        {
+            var leaf = leaves[leafIndex];
+            var colors = ResolveLeafColors(leaf.Session.Adapter, themeForeground, themeBackground);
+            _leafColors[leafIndex] = colors;
+            if ((colors.Background.Argb & 0x00FFFFFFu) != (themeBackground.Argb & 0x00FFFFFFu))
+                _chromeScratch[chromeQuadCount++] = MakePaneBackgroundQuad(
+                    leaf, colors.Background, padLeft, padTop + topOffset, gridCellWidth, gridCellHeight);
+        }
+
         var chromePalette = ChromeStyleUtils.ResolvePalette(theme);
         chromeQuadCount += PaneDecorationBuilder.Build(
             activeTab.PaneTree.Root,
@@ -354,11 +376,8 @@ public sealed class TerminalSceneComposer : IDisposable
                 int paneRows = leafSnapshot.Rows;
                 int paneColumns = leafSnapshot.Columns;
                 EnsureScratchCapacity(instanceCount + checked(paneRows * paneColumns * 2 + 1024));
-                var adapter = leaf.Session.Adapter;
-                var leafForeground = adapter.DefaultForegroundOverrideArgb is uint foregroundOverride
-                    ? new SgrColorArgb(foregroundOverride) : themeForeground;
-                var leafBackground = adapter.DefaultBackgroundOverrideArgb is uint backgroundOverride
-                    ? new SgrColorArgb(backgroundOverride) : new SgrColorArgb(theme.Background);
+                var leafForeground = _leafColors[leafIndex].Foreground;
+                var leafBackground = _leafColors[leafIndex].Background;
                 int written = AppendCachedLeafRows(
                     leafIndex, leaf, leafSnapshot, _frameScratch.AsSpan(startInstanceIndex),
                     paneRows, paneColumns, leafForeground, leafBackground);
@@ -430,7 +449,7 @@ public sealed class TerminalSceneComposer : IDisposable
                         startRowOffset,
                         selectionColor,
                         selectionAlpha,
-                        themeForeground,
+                        leafForeground,
                         _selectionCoverage);
                 }
 
@@ -734,6 +753,50 @@ public sealed class TerminalSceneComposer : IDisposable
                 scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, underlayChromeCount);
         }
         return _cachedFrame;
+    }
+
+    private static LeafColors ResolveLeafColors(TerminalAdapter adapter, SgrColorArgb themeForeground, SgrColorArgb themeBackground)
+    {
+        var foreground = adapter.DefaultForegroundOverrideArgb is uint foregroundOverride
+            ? new SgrColorArgb(foregroundOverride) : themeForeground;
+        var background = adapter.DefaultBackgroundOverrideArgb is uint backgroundOverride
+            ? new SgrColorArgb(backgroundOverride) : themeBackground;
+        return adapter.ReverseVideo ? new LeafColors(background, foreground) : new LeafColors(foreground, background);
+    }
+
+    /// <summary>
+    /// Opaque quad painting a pane's effective default background below its cells (default-background cells have
+    /// no background of their own). Covers the pane rect and its cell grid, which snaps to whole cells and can start
+    /// up to half a cell before the rect; the window padding keeps the theme background.
+    /// </summary>
+    private static ChromeQuadInstance MakePaneBackgroundQuad(
+        LeafPane leaf, SgrColorArgb color, float originX, float originY, float cellWidth, float cellHeight)
+    {
+        var bounds = leaf.Bounds;
+        float gridLeft = originX + (int)Math.Round(bounds.X / cellWidth) * cellWidth;
+        float gridTop = originY + (int)Math.Round(bounds.Y / cellHeight) * cellHeight;
+        float left = MathF.Floor(Math.Min(originX + bounds.X, gridLeft) + 0.5f);
+        float top = MathF.Floor(Math.Min(originY + bounds.Y, gridTop) + 0.5f);
+        float right = MathF.Floor(Math.Max(originX + bounds.Right, gridLeft + leaf.Columns * cellWidth) + 0.5f);
+        float bottom = MathF.Floor(Math.Max(originY + bounds.Bottom, gridTop + leaf.Rows * cellHeight) + 0.5f);
+        float r = color.R / 255f;
+        float g = color.G / 255f;
+        float b = color.B / 255f;
+        return new ChromeQuadInstance
+        {
+            X = left,
+            Y = top,
+            W = Math.Max(0f, right - left),
+            H = Math.Max(0f, bottom - top),
+            TopR = r,
+            TopG = g,
+            TopB = b,
+            TopA = 1f,
+            BottomR = r,
+            BottomG = g,
+            BottomB = b,
+            BottomA = 1f
+        };
     }
     private static ChromeQuadInstance MakeImeCaretQuad(SKRect rect, SgrColorArgb color)
         => new()

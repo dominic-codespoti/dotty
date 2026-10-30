@@ -35,7 +35,7 @@ public sealed class ModeReportTests
     // Default state of every mode that is tracked (set/reset) on a fresh adapter.
     public static TheoryData<int, int> TrackedDefaults => new()
     {
-        { 1, 2 }, { 6, 2 }, { 7, 1 }, { 25, 1 }, { 47, 2 }, { 66, 2 }, { 67, 2 },
+        { 5, 2 }, { 1, 2 }, { 6, 2 }, { 7, 1 }, { 25, 1 }, { 47, 2 }, { 66, 2 }, { 67, 2 },
         { 1000, 2 }, { 1002, 2 }, { 1003, 2 }, { 1004, 2 }, { 1005, 2 }, { 1006, 2 }, { 1015, 2 },
         { 1047, 2 }, { 1049, 2 }, { 2004, 2 }, { 2026, 2 }, { 2033, 2 },
     };
@@ -58,7 +58,6 @@ public sealed class ModeReportTests
     [InlineData(2, 3)]
     [InlineData(3, 4)]
     [InlineData(4, 4)]
-    [InlineData(5, 4)]
     [InlineData(8, 4)]
     [InlineData(9, 4)]
     [InlineData(11, 4)]

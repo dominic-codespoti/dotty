@@ -100,13 +100,21 @@ Keep these verification targets separate:
 The configuration file is JSON and is watched for atomic changes:
 
 - Linux: `$XDG_CONFIG_HOME/dotty/config.json`, or `~/.config/dotty/config.json`
-- macOS: `~/Library/Application Support/Dotty/config.json`
+- macOS: `~/.config/dotty/config.json` (or `$XDG_CONFIG_HOME/dotty`) when that
+  directory exists, otherwise `~/Library/Application Support/Dotty/config.json`
 - Windows: `%APPDATA%/Dotty/config.json`
 
 Set `DOTTY_CONFIG_HOME` to override the complete configuration directory. Theme
 files are in `<config-directory>/themes`; Lua startup scripts (`config.lua` or
 `init.lua`) are in the configuration directory. The watcher debounces writes,
 rename/write patterns, and dispatches accepted changes to the desktop UI thread.
+
+Dotty does not write `config.json` itself; `dotty +init-config` creates a
+commented starter file. Files Dotty writes for itself go to the per-user state
+directory: `$XDG_STATE_HOME/dotty` or `~/.local/state/dotty` on Linux,
+`~/Library/Application Support/Dotty` on macOS, and `%LOCALAPPDATA%\Dotty` on
+Windows. `dotty +diagnose` prints both directories (see
+[Configuration](Configuration.md#file-location)).
 
 ## Diagnostics
 

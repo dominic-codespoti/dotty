@@ -6,20 +6,47 @@ and applies accepted changes on the desktop UI thread.
 
 ## File location
 
-The configuration directory is selected by the host platform:
+The configuration directory is selected by the host platform
+(`PlatformPaths.Resolve`):
 
-- Linux: `$XDG_CONFIG_HOME/dotty`, or `~/.config/dotty`
-- macOS: `~/Library/Application Support/Dotty`
-- Windows: `%APPDATA%/Dotty`
+- Linux: `$XDG_CONFIG_HOME/dotty`, or `~/.config/dotty` when the variable is
+  unset, empty, or relative (the XDG specification says relative values are
+  ignored)
+- macOS: `$XDG_CONFIG_HOME/dotty` (absolute values only), or `~/.config/dotty`,
+  when that directory already exists; otherwise
+  `~/Library/Application Support/Dotty`
+- Windows: `%APPDATA%\Dotty`, or `<profile>\AppData\Roaming\Dotty` when the
+  roaming folder is unknown
 
 The file is `config.json`. Set `DOTTY_CONFIG_HOME` to override the complete
 configuration directory. This override is useful for tests, portable installs,
 and parallel development sessions.
 
-Dotty creates the directory and a default `config.json` when the file is
-missing. Writes are atomic: a temporary file is written and moved over the
-previous file. A malformed replacement leaves the last valid in-memory config
-active and records the parse error in `UserConfigService.LastError`.
+Dotty writes no configuration on its own. Without `config.json` every option has
+its built-in default, and a later release that changes a default reaches you
+automatically; Dotty only creates the empty directory so a file created later is
+picked up live. Run `dotty +init-config` to write a short commented starter file
+(see [Command-line usage](CommandLine.md#init-config)); it lists the commands
+below and leaves every option commented out. A `config.json` written by an older
+Dotty that froze every default still works unchanged; delete the lines you never
+meant to set so their defaults can follow future releases.
+
+A malformed replacement leaves the last valid in-memory config active and
+records the parse error in `UserConfigService.LastError`.
+`dotty +validate-config` reports such problems, values of the wrong type, and
+unknown (misspelled) keys with `file:line:column`; `dotty +show-config` prints
+the effective JSON settings.
+
+Dotty also has a per-user state directory for files it writes itself (never
+read as configuration):
+
+- Linux: `$XDG_STATE_HOME/dotty` (absolute values only), or
+  `~/.local/state/dotty`
+- macOS: `~/Library/Application Support/Dotty`
+- Windows: `%LOCALAPPDATA%\Dotty`, or `<profile>\AppData\Local\Dotty`
+
+`DOTTY_CONFIG_HOME` does not move the state directory. `dotty +diagnose` prints
+both directories.
 
 ## Session launch context
 
@@ -617,11 +644,13 @@ The guard checks that every config property and every Lua key has a catalog entr
 
 ## Troubleshooting
 
-1. Print the expected directory from the platform support guide and check
+1. Run `dotty +diagnose` to print the configuration directory Dotty uses and
+   whether `config.json` and the Lua config are valid; check
    `DOTTY_CONFIG_HOME`.
-2. Validate that `config.json` is complete JSON after the editor finishes its
-   atomic rename.
-3. Check `UserConfigService.LastError` in a diagnostic host.
+2. Run `dotty +validate-config` after the editor finishes its atomic rename;
+   it prints `file:line:column` for syntax errors, wrong value types, and
+   unknown keys, and exits `1` when anything is wrong.
+3. Run `dotty +show-config` to see the settings `config.json` produces.
 4. Restore the last known-good file if a setting is rejected.
 5. If a font is unavailable, provide a comma-separated fallback stack ending in
    `monospace`.

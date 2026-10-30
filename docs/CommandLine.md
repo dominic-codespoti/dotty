@@ -4,7 +4,7 @@ Dotty accepts options before an optional command:
 
 ```text
  dotty [--working-directory DIR|-d DIR] [--shell PATH] [--] [COMMAND [ARG...]]
- dotty +explain-config [OPTION]
+ dotty +ACTION [ARG...]
 ```
 
 - `-h`, `--help`: print usage and exit without loading configuration or initializing graphics.
@@ -29,9 +29,28 @@ Examples:
  dotty --shell /usr/bin/fish
 ```
 
+## Actions
+
+Arguments starting with `+` are *actions*: they print, exit, and never open a terminal window.
+
+| Action | Purpose |
+|---|---|
+| `+explain-config [OPTION]` | Document configuration options |
+| `+init-config [--force]` | Write a commented starter `config.json` |
+| `+show-config [--default]` | Print the effective JSON settings, or the built-in defaults |
+| `+validate-config` | Check `config.json` and the Lua config |
+| `+list-themes` | List built-in and user theme names |
+| `+diagnose [--gl]` | Print what a bug report needs |
+
+Rules shared by every action:
+
+- One action per invocation. Its flags (`--force`, `--default`, `--gl`) are accepted only after the action they belong to, each at most once; only `+explain-config` takes a positional argument.
+- Exit code `2` for a usage error: a second action, an unknown `+action`, a flag the action does not take, an extra argument, or combining the action with `--shell`, `-d`, or a command. The message goes to standard error with a hint to run `dotty --help`. `--help` and `--version` win over the action.
+- Early-exit contract: the action runs before launch validation and console detach (`Program.Main` returns the result of `CliActions.Run` immediately). No action loads the live configuration, starts the config watcher, or creates a terminal window, so all of them work on a machine with no display; the only graphics use is the hidden probe window of `+diagnose --gl`. Which files an action reads or writes is listed in its section.
+
 ## `+explain-config`
 
-`dotty +explain-config [OPTION]` prints documentation for configuration options and exits; it is the one command-line *action* (arguments starting with `+`).
+`dotty +explain-config [OPTION]` prints documentation for configuration options and exits.
 
 - With no argument it lists every option, one per line: the JSON path, then the description.
 - With `OPTION` it documents one option: JSON path, `Lua key`, `Type`, `Default`, `Values` (for enumerations), `Scope` (when a change does not apply everywhere at once, for example "Applies to new tabs and panes only"), then a blank line and the description.
@@ -39,12 +58,54 @@ Examples:
 - A group name such as `mouse` or `window.padding` lists the options below it.
 - The defaults shown are those of a fresh default configuration, not of your `config.json`.
 
-Exit codes: `0` on success; `1` when nothing matches (the message `dotty: no such option 'X'`, up to five `Did you mean:` suggestions and a hint to list every option go to standard error); `2` for a usage error, such as a second `OPTION`, a second action, an unknown `+action`, an option-looking argument after the action, or combining the action with `--shell`, `-d`, or a command. `--help` and `--version` win over the action.
-
-Early-exit contract: the action runs before launch validation, console detach, configuration loading, and any window or graphics initialization (`Program.Main` returns the result of `CliActions.Run` immediately). It therefore works on a machine with no display and does not read, create, or validate `config.json`. For how to keep the catalog complete when adding an option, see [Configuration](Configuration.md#adding-an-option).
+Exit codes: `0` on success; `1` when nothing matches (the message `dotty: no such option 'X'`, up to five `Did you mean:` suggestions and a hint to list every option go to standard error); `2` for a usage error. It reads no file. For how to keep the catalog complete when adding an option, see [Configuration](Configuration.md#adding-an-option).
 
 ```sh
  dotty +explain-config
  dotty +explain-config vt
  dotty +explain-config mouse.copyOnSelect
+```
+
+## `+init-config`
+
+`dotty +init-config` writes a short starter `config.json` into the configuration directory (see [Configuration](Configuration.md#file-location)), creating the directory if needed, and prints `Wrote <path>`. The file is JSON with `//` comments: it lists the other actions and shows `theme`, `font.family` and `font.size` with their current defaults, all commented out, so it parses to the built-in defaults. Dotty itself never writes `config.json`.
+
+When `config.json` already exists the action refuses, prints `dotty: <path> already exists; use '+init-config --force' to replace it` to standard error and exits `1`. `--force` replaces the file. The write is atomic (temporary file, then rename), so a running Dotty reloads it like any other edit. Exit `1` also when the file cannot be written.
+
+## `+show-config`
+
+`dotty +show-config` prints the configuration that `config.json` produces as indented JSON: every option, with the file's values over the built-in defaults (exactly what the loader reads, so unknown keys are dropped). Without a `config.json` it prints the defaults. `--default` always prints the built-in defaults and ignores the file.
+
+A `config.lua` (or `init.lua`) runs only at launch and is not evaluated here; when one exists, a note naming it goes to standard error, so standard output stays valid JSON. Exit `1`, with the parse error and a hint to run `+validate-config`, when `config.json` cannot be read.
+
+## `+validate-config`
+
+`dotty +validate-config` checks the configuration files without applying them:
+
+- `config.json`: JSON syntax (comments and trailing commas are allowed, as in the loader), that the top level and every group such as `font` are objects, unknown keys (the loader silently ignores them, so a typo has no effect), and value types such as a string where a number belongs. Key names are matched case-insensitively, like the loader. Allowed values of enumerations are not checked.
+- `config.lua` or `init.lua`: compiled, never run, so syntax errors are found and runtime errors still appear only at launch.
+
+Each problem goes to standard error as `file:line:column: message` (`file:line: message` for Lua), for example `/home/me/.config/dotty/config.json:3:5: unknown option 'font.sise'; run 'dotty +explain-config' to list every option`. Exit codes: `0` when everything present is valid, or when neither file exists (`No config file at <path>; built-in defaults apply.`); `1` when any problem was found or a file cannot be read; `2` for a usage error.
+
+## `+list-themes`
+
+`dotty +list-themes` prints the built-in theme names, then the user themes found in `<config-directory>/themes` under a heading that names the directory (`(none)` when there are none). Names are sorted case-insensitively; a user theme with the name of a built-in one replaces it. Exit `0`.
+
+## `+diagnose`
+
+`dotty +diagnose` prints one `label: value` line per fact, for pasting into a bug report:
+
+- Dotty version (with the development marker of non-release builds), .NET version and runtime identifier, OS description and architecture
+- configuration directory, `config.json` and Lua config status (missing, valid, or the number of problems with a hint to run `+validate-config`), and the state directory
+- the `pty-helper` Dotty would start (Linux and macOS; the source of the match, or every probed path when it is missing) and the shell-integration directory
+- the `TERM` value new sessions get, whether it fell back from the configured `term`, and the bundled terminfo directory
+- on Linux, `WAYLAND_DISPLAY` and `DISPLAY`, or a note that neither is set
+
+`--gl` additionally opens a hidden window with Dotty's OpenGL 3.3 core context request and prints the driver's version, vendor and renderer strings, the adapter classification (for example a software rasterizer), and whether the version meets Dotty's minimum; when no context can be created it prints `probe failed:` and the reason. The report never contains environment dumps beyond the two display variables, and exit is always `0`; problems are part of the text.
+
+```sh
+ dotty +init-config
+ dotty +validate-config
+ dotty +show-config --default
+ dotty +diagnose --gl
 ```

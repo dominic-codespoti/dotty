@@ -4,7 +4,8 @@ Dotty loads user themes as JSON from the platform-specific themes directory.
 The directory is resolved by `Dotty.Runtime.Config.PlatformPaths`:
 
 - Linux: `$XDG_CONFIG_HOME/dotty/themes`, or `~/.config/dotty/themes`
-- macOS: `~/Library/Application Support/Dotty/themes`
+- macOS: `~/.config/dotty/themes` when `~/.config/dotty` exists, otherwise
+  `~/Library/Application Support/Dotty/themes`
 - Windows: `%APPDATA%/Dotty/themes`
 
 Set `DOTTY_CONFIG_HOME` to override the parent directory on every platform.

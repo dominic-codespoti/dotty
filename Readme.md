@@ -196,11 +196,15 @@ Dotty loads JSON configuration at startup and watches the file for atomic
 updates. The active path is:
 
 - Linux: `$XDG_CONFIG_HOME/dotty/config.json`, or `~/.config/dotty/config.json`
-- macOS: `~/Library/Application Support/Dotty/config.json`
+- macOS: `~/.config/dotty/config.json` when that directory exists, otherwise
+  `~/Library/Application Support/Dotty/config.json`
 - Windows: `%APPDATA%/Dotty/config.json`
 
-Set `DOTTY_CONFIG_HOME` to override the platform directory. The file is
-created with defaults on first run.
+Set `DOTTY_CONFIG_HOME` to override the platform directory. Dotty does not
+write the file itself, so every option you leave out follows the current
+default; `dotty +init-config` writes a commented starter file,
+`dotty +validate-config` checks it, and `dotty +diagnose` prints the paths in
+use.
 
 ```json
 {

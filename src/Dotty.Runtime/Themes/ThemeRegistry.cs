@@ -86,6 +86,24 @@ public sealed class ThemeRegistry
         }
     }
 
+    /// <summary>Names of the built-in themes, sorted case-insensitively.</summary>
+    public IReadOnlyList<string> GetBuiltInThemeNames() => SortedKeys(_builtInThemes);
+
+    /// <summary>Canonical names of the user themes (aliases excluded), sorted case-insensitively.</summary>
+    public IReadOnlyList<string> GetUserThemeNames() => SortedKeys(_userThemes);
+
+    private string[] SortedKeys(Dictionary<string, IColorScheme> themes)
+    {
+        string[] names;
+        lock (_lock)
+        {
+            names = new string[themes.Count];
+            themes.Keys.CopyTo(names, 0);
+        }
+        Array.Sort(names, StringComparer.OrdinalIgnoreCase);
+        return names;
+    }
+
     /// <summary>
     /// Gets a theme by name.
     /// User themes take priority over built-in themes.

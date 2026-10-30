@@ -8,9 +8,11 @@ property list changes.
 
 ## Quick start
 
-Dotty creates a JSON configuration file on first run. Edit config.json and the
-host applies a complete valid replacement after the watcher debounce; no
-rebuild or restart is required.
+Dotty runs on built-in defaults until you create `config.json`; it never writes
+the file itself. `dotty +init-config` writes a commented starter file. Edit
+config.json and the host applies a complete valid replacement after the watcher
+debounce; no rebuild or restart is required. `dotty +validate-config` points at
+mistakes with `file:line:column`.
 
 ```json
 {

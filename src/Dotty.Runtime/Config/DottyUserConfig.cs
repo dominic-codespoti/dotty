@@ -342,7 +342,12 @@ public static class UserConfigService
                 }
                 else
                 {
-                    CreateDefaultConfigFile(path);
+                    // No file means "all defaults". Nothing is written, so later default changes reach
+                    // every user; `dotty +init-config` creates a commented starter file on request. The
+                    // directory is created so the watcher sees a config.json created later.
+                    string? directory = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(directory))
+                        Directory.CreateDirectory(directory);
                 }
             }
             catch (Exception ex)
@@ -355,6 +360,16 @@ public static class UserConfigService
             return _current;
         }
     }
+
+    /// <summary>
+    /// Reads one config file without touching <see cref="Current"/> or the watcher. A file holding
+    /// JSON <c>null</c> yields defaults; malformed JSON throws <see cref="JsonException"/>.
+    /// </summary>
+    public static DottyUserConfig ReadFile(string path) => ReadConfig(path) ?? new DottyUserConfig();
+
+    /// <summary>Indented JSON in the same shape <c>config.json</c> is read in.</summary>
+    public static string Serialize(DottyUserConfig config) =>
+        JsonSerializer.Serialize(config, DottyUserConfigJsonContext.Default.DottyUserConfig);
 
     private static DottyUserConfig? ReadConfig(string path)
     {
@@ -376,30 +391,6 @@ public static class UserConfigService
             config.Graphics ??= new GraphicsUserConfig();
         }
         return config;
-    }
-
-    private static void CreateDefaultConfigFile(string path)
-    {
-        string? directory = Path.GetDirectoryName(path);
-        if (string.IsNullOrEmpty(directory))
-            return;
-
-        Directory.CreateDirectory(directory);
-        string tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            var defaultConfig = new DottyUserConfig();
-            string json = JsonSerializer.Serialize(
-                defaultConfig,
-                DottyUserConfigJsonContext.Default.DottyUserConfig);
-            File.WriteAllText(tempPath, json);
-            File.Move(tempPath, path, overwrite: true);
-        }
-        catch (Exception ex)
-        {
-            _lastError = ex.Message;
-            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
-        }
     }
 
     private static void EnsureWatcher(string? directory)

@@ -1155,6 +1155,28 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
     }
 
     /// <summary>
+    /// Reads the default framebuffer's back buffer as RGBA8, bottom row first (<c>glReadPixels</c> order), into
+    /// <paramref name="destination"/>. Call on the UI thread after <see cref="Render"/> and before the swap: the
+    /// back buffer is undefined after <c>SwapBuffers</c>. Used by the <c>SCREENSHOT:</c> control command.
+    /// </summary>
+    public void ReadBackBuffer(int width, int height, Span<byte> destination)
+    {
+        EnsureNotDisposed();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        if (destination.Length < (long)width * height * 4)
+            throw new ArgumentException("The destination is smaller than width * height * 4 bytes.", nameof(destination));
+
+        _gl.BindFramebuffer(GLEnum.ReadFramebuffer, 0);
+        _gl.ReadBuffer(GLEnum.Back);
+        _gl.PixelStore(GLEnum.PackAlignment, 1);
+        fixed (byte* pixels = destination)
+        {
+            _gl.ReadPixels(0, 0, (uint)width, (uint)height, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+        }
+    }
+
+    /// <summary>
     /// The GL context was replaced: every object name this renderer cached is invalid. Drops the cached GL state and
     /// recreates the image pass (its textures re-upload on demand). Atlas textures are the caller's concern
     /// (<see cref="SilkGlTextureManager"/>), as before.

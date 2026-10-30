@@ -170,6 +170,12 @@ public sealed class LuaHookManager
         return false;
     }
 
+    /// <summary>
+    /// True when an <c>update_status</c> hook is registered. Only such a hook can change the status text with time
+    /// alone, so the host polls <see cref="TryFormatStatus"/> only while this is true.
+    /// </summary>
+    public bool HasStatusFormatter => Owner != null && HasHandlers("update_status");
+
     public bool TryFormatStatus(ReusableTextBuffer destination)
     {
         ArgumentNullException.ThrowIfNull(destination);

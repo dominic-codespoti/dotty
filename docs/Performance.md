@@ -358,6 +358,25 @@ boundaries, and generation observations are not an atomic pipeline snapshot or
 a GPU/compositor fence. A null model generation means the diagnostic lock
 attempt failed, not that the terminal model is empty.
 
+`STATS` also carries `frameTimings`: p50/p95/max over the newest 512 frames of
+compose, render, swap-call, present-interval and input-to-swap time
+(`FrameTimings`, a fixed ring that allocates nothing per frame; field meanings
+in [E2E testing](E2ETesting.md#host-control-interface)). They are the inputs for
+the data-gated rendering decisions (vsync, instance packing, upload coalescing):
+no number has been recorded yet, so none is quoted here.
+
+Idle wakeups: CI gates the X11 idle process at 150 context switches/s
+(`scripts/perf/idle_wakeups.py --max-switches-per-s 150` in `ci.yml`). Wave 4
+B11 removed idle wake sources (safety cap 100 ms → 1000 ms after the
+wake-coverage test, Lua status poll only with an `update_status` hook, no blink,
+Lua or theme polling while iconified). The gate is deliberately unchanged:
+plan-11 sets the new figure from a measured median, and none has been recorded
+for this build. To be measured later with
+`python3 scripts/perf/idle_wakeups.py --max-switches-per-s 150 -- xvfb-run -a dotnet run --project src/Dotty -c Release`
+(focused and unfocused, before and after), then tightened to a margin above
+the new median. Refresh-rate-derived content pacing (`DOTTY_REFRESH_PACING=1`)
+stays opt-in until the `frameTimings` data supports making it the default.
+
 ### Focused CPU follow-up
 
 Use the direct profiler for a cheap, CPU-only workload matrix when the
@@ -987,6 +1006,8 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 | 2026-10-28 | Wave 3: lazily committed cell arenas and committed-bound/backend `MEMORY` fields (earlier arena figures marked pre-lazy-commit); scrollback config (default 5000 lines, 64 MiB cap, capacity follows columns on resize); new scan/OSC/reflow/text benchmark classes and `experiment` filter; `--mode scrollback-memory` and `scripts/perf/scrollback_memory.py`; anchor-only reflow mapping; single `RowText` and working scrollback search; OSC bulk scan and bytes-native OSC 52. Gains are hypotheses until measured |
 | 2026-10-28 | Fixes: selection maps scrollback row -1 to the newest history line; reverse index (RI) with limited or zero scrollback capacity |
 | 2026-10-28 | Kitty graphics: six experiment-only benchmark classes (`KittyApcDecodeBenchmarks`, `KittyRgbaTransmitBenchmarks`, `KittyInflateBenchmarks`, `KittyPlacementScrollBenchmarks`, `KittySnapshotBenchmarks`, `KittyLockHoldProbe`), no baselines, no measured numbers; every expectation is a hypothesis |
+| 2026-10-30 | Wave 4 A6: `STATS` `frameTimings` (compose/render/swap/present-interval/input-to-swap percentiles), real `WAIT_FOR_IDLE`, `SCREENSHOT:`, `GL`, `DOTTY_GL_INFO`/`DOTTY_GL_DEBUG`; no measurements yet |
+| 2026-10-30 | Wave 4 B11: `FramePlanner` extraction, opt-in refresh-rate content pacing, idle safety cap 1000 ms behind `HostWakeCoverageTests`, Lua status poll only with an `update_status` hook, no polling while iconified; idle CI gate unchanged until measured |
 
 ---
 

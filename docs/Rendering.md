@@ -60,20 +60,47 @@ The host does not poll. When a frame iteration has nothing to do it blocks in
 `glfwWaitEventsTimeout`, so input events end the wait on their own and every
 other producer calls `HostWake.Request()` (a single deduplicated
 `glfwPostEmptyEvent`) after queueing work: PTY output and other invalidations
-through `WindowPresentationGate`, lifecycle callbacks, title, clipboard and
-process-exit queues, and control-server commands. The wait is bounded by the
-nearest deadline, computed by the pure `IdleWait.Compute`: cursor blink (only
-while the window is focused), the 1 s Lua status refresh, the remaining
-frame-coalescing interval, the remaining synchronized-update failsafe (which
-expires lazily, so nothing else would wake the loop), selection autoscroll,
-and a 100 ms safety cap that turns any missed wake into bounded lag rather
-than a stall. A frame action re-entered from a GLFW refresh callback never
-waits, because `glfwWaitEventsTimeout` must not be called from a callback.
+through `WindowPresentationGate`, lifecycle callbacks, title, clipboard,
+OSC 52 read and process-exit queues, VT resize requests, and control-server
+commands (`HostWakeCoverageTests` drives the reachable enqueue APIs from another
+thread and scans `src/Dotty/Host` so that every queue producer requests a
+wake). The wait is bounded by the nearest deadline, computed by the pure
+`IdleWait.Compute`: the next cursor blink toggle (only while the window is
+focused and not iconified), the 1 s Lua status poll (only while an
+`update_status` hook is registered and the window is not iconified), the
+remaining frame-coalescing interval, the remaining synchronized-update failsafe
+(which expires lazily, so nothing else would wake the loop), selection
+autoscroll, a parked `WAIT_FOR_IDLE` deadline, and a 1000 ms safety cap (raised
+from 100 ms once the wake-coverage test existed) that turns any missed wake into
+bounded lag rather than a stall. A frame action re-entered from a GLFW refresh
+callback never waits, because `glfwWaitEventsTimeout` must not be called from a
+callback.
 
-Content-only frames are held to at least 8 ms apart while output streams, and
-to 30 ms while the PTY consumer is backlogged, so rendering does not take the
-buffer lock on every flush and interrupt parsing. Frames within 250 ms of
-interactive input, and the first frame after idle, are never held back.
+Without an `update_status` hook the status area shows the shell command state
+(`running`, `exit N`), which only changes with PTY output, so it is refreshed on
+frames that have pending invalidations instead of every second. While the window
+is iconified nothing is drawn (pending reasons stay queued for the restore
+frame), the blink and Lua deadlines are dropped, and the `theme: auto` poller,
+which runs on a 5 s timer off the UI thread and spawns a helper process on
+Linux and macOS, skips its checks.
+
+The per-frame decisions live in the pure `FramePlanner` (`FramePlannerTests`):
+`Gate` separates a synchronized-update hold from a missing surface (iconified or
+zero-sized framebuffer); `Decide` returns `Idle` (nothing changed, keep the front
+buffer), `Hold(ms)` or `Render`. Content-only frames are held to at least 8 ms
+apart while output streams, and to 30 ms while the PTY consumer is backlogged,
+so rendering does not take the buffer lock on every flush and interrupt parsing.
+Frames within 250 ms of interactive input, the first frame, and frames with any
+reason other than content are never held back.
+
+`FramePlanner.MinContentFrameIntervalMs` can instead derive the content interval
+from the refresh rate of the monitor that Silk.NET associates with the window
+(its current video mode; re-read after the window moves or changes state): one
+refresh period rounded down, the rate clamped to 30–240 Hz, 60 Hz when the rate
+is unknown or implausible, and never below 30 ms while backlogged. That is
+opt-in with `DOTTY_REFRESH_PACING=1` and off by default: the change ships only
+after the `STATS` frame timings show it helps (plan-11 WI-3b). `STATS` reports
+`refreshRateHz`, `refreshAwarePacing`, `contentFrameIntervalMs` and `iconified`.
 
 Animated Kitty images add one more deadline: the earliest next frame change of
 the visible animated placements (`RenderSnapshot.Graphics.NextAnimationDeadlineTicks`,
@@ -123,8 +150,11 @@ side works like this (written from the source, never run or measured):
   textures idle for more than 300 frames, then least recently used (larger first
   on ties) while over budget, never one used by the current frame; clamps uploads
   to `GL_MAX_TEXTURE_SIZE` with a box downscale; and deletes the textures of freed
-  pixels through `ImageRetirementQueue`. A context loss resets it
-  (`ResetImagesAfterContextLoss`). Hidden tabs are not captured, so their textures
+  pixels through `ImageRetirementQueue`. The host's render recovery (see
+  [Render failures and context loss](#render-failures-and-context-loss)) replaces
+  the whole renderer, so a new cache starts empty and textures re-upload on
+  demand; `ResetImagesAfterContextLoss` resets the image pass in place and is only
+  exercised by tests. Hidden tabs are not captured, so their textures
   go idle and age out like any other.
 
 These numbers are constants in the source, not measurements.
@@ -381,16 +411,82 @@ performance gate.
 ## Graphics contract
 
 The host requests an OpenGL 3.3 core context and validates the active driver
-version with `GraphicsCapabilities`. If context creation, version validation,
-shader compilation, or frame submission fails, the host reports a diagnostic and
-closes through the normal lifecycle path rather than leaving PTY processes
-running. There is no silent software-renderer fallback.
+version with `GraphicsCapabilities`. If context creation, version validation or
+startup shader compilation fails, the host reports a diagnostic and closes
+through the normal lifecycle path rather than leaving PTY processes running.
+There is no silent software-renderer fallback.
 
 CI exercises only Linux X11 startup under Xvfb; it does not run Wayland/Weston,
 macOS desktop, or Windows desktop smoke because those hosted GUI sessions do
 not provide a usable OpenGL context. Those paths are verified manually or on
 local native sessions. X11/Xvfb startup does not prove Wayland, macOS, or
 Windows GUI behavior.
+
+### Render failures and context loss
+
+A failure while drawing never closes the window or ends the shells. The pure
+`RenderRecoveryPolicy` (`RenderRecoveryPolicyTests`) decides: the first
+exception requeues the frame and retries it; a second one within 10 s disposes
+the `SilkTerminalRenderer` and creates a new one on the same context and atlas
+(new programs and buffers, a texture manager that re-uploads the whole glyph
+atlas, a fresh image texture cache) and redraws everything; a third shows a host
+prompt ("Try again" rebuilds once more, "Quit Dotty" closes) and stops retrying,
+so a frame that keeps failing waits for new input instead of spinning. A
+failure more than 10 s after the previous one starts over. Each step is logged
+to stderr with a `[render]` prefix; `STATS` reports `renderRecoveryState` and
+`renderFailures`.
+
+The window requests a robust context (`GLFW_CONTEXT_ROBUSTNESS` =
+`GLFW_LOSE_CONTEXT_ON_RESET`, ignored by GLFW where the platform lacks the
+robustness extension). When the context offers `glGetGraphicsResetStatus`
+(OpenGL 4.5, `GL_KHR_robustness` or `GL_ARB_robustness`) the host polls it
+before each frame; a reported reset skips the retry and rebuilds at once. A
+context lost on reset stays lost until it is recreated, which needs a new
+window and is not implemented: if the first frame after the rebuild still sees
+`GL_CONTEXT_LOST`, the host goes straight to the prompt. On a lost context the
+prompt itself may not be visible; the stderr message says the shells keep
+running and the window can be closed. The rebuild is exercised by
+`SilkTerminalRendererRebuildTests` (GL lane, skipped without a context); a real
+driver reset is a manual check.
+
+### Software renderers
+
+When `GraphicsCapabilities.Classify` reports a software rasterizer, the host
+prints a one-time notice to stderr and holds content-only frames to at least
+two refresh periods (at most refresh/2 frames per second; 60 Hz is assumed when
+the monitor reports no rate). On Linux, Mesa's llvmpipe is what
+`LIBGL_ALWAYS_SOFTWARE=1` or `GALLIUM_DRIVER=llvmpipe` select; both are useful
+to reproduce software-renderer behaviour and should be unset on a machine with
+a working GPU driver. Windows RDP sessions and VMs without a GPU driver offer
+only the "GDI Generic" OpenGL 1.1 implementation, which fails the 3.3 check;
+shipping Mesa's `opengl32sw.dll` next to the executable would cover them, but
+its size and licensing have not been evaluated with the distribution lane, so
+Dotty does not ship it. Menu shadows are drawn as before (the chrome blur is
+not yet skipped on software renderers).
+
+### GL diagnostics
+
+Right after context creation the host reads `GL_VENDOR`, `GL_RENDERER`,
+`GL_VERSION`, the GLSL version and `GL_MAX_TEXTURE_SIZE`, and classifies the
+driver with the pure `GraphicsCapabilities.Classify(vendor, renderer, version)`:
+`IsSoftware` is true for llvmpipe, softpipe, SwiftShader, the Mesa "Software
+Rasterizer", Windows "GDI Generic", the Microsoft Basic Render Driver and the
+Apple Software Renderer; hardware families (NVIDIA, AMD, Intel, Apple, Arm Mali,
+Qualcomm Adreno) are named when recognised, anything else is `Unknown`. The
+function accepts null, empty or localised strings. A startup failure after
+context creation always prints the classification summary (renderer, vendor,
+version) to stderr; `DOTTY_GL_INFO=1` prints the full diagnostics JSON (also
+returned by the `GL` control command, see
+[E2E testing](E2ETesting.md#host-control-interface)).
+
+`DOTTY_GL_DEBUG=1` installs a `KHR_debug` message callback (synchronous output,
+notifications filtered) when the context is 4.3+ or exposes `GL_KHR_debug`, and
+drains `glGetError` after every `Render` call, which covers atlas and image
+uploads and the draws. Messages go to stderr with a `[gl-debug]` prefix. The
+callback is an `UnmanagedCallersOnly` function pointer (no delegate
+marshalling), so it also works in the NativeAOT build. This is a debugging aid
+with a per-frame cost; it is off by default. Unverified on real drivers
+(`needs runtime verification`).
 
 ## Tests
 

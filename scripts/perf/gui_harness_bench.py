@@ -125,7 +125,7 @@ def wait_for_screenshot(pattern, before, timeout):
 def capture_or_wait_idle(args, port, screenshot_pattern, capture_command):
     started = time.perf_counter()
     _, response = send_command(port, "WAIT_FOR_IDLE", timeout=args.capture_timeout)
-    if response != "OK":
+    if response != "IDLE":
         raise RuntimeError(f"Unexpected idle response: {response}")
 
     if capture_command is None:

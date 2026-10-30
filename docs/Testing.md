@@ -265,6 +265,26 @@ The optional control transport is loopback-only and enabled with
 uses Python sockets instead of assuming `nc`, and never kills unrelated
 processes. See [GUI harness benchmarking](GuiHarnessBenchmarking.md).
 
+The control commands `WAIT_FOR_IDLE`, `SCREENSHOT:<path>`, `GL` and the
+`frameTimings` block of `STATS` are specified in
+[End-to-end Testing](E2ETesting.md#host-control-interface). Their pure parts are
+covered headlessly in `Dotty.App.Tests`: `GraphicsCapabilitiesTests` (driver
+string classification, version parsing), `FrameTimingsTests` (percentiles, ring
+wrap, present interval, input-to-swap, allocation-free recording and
+summaries), `FramebufferScreenshotTests` (row flip, opaque alpha, un-premultiply
+through a PNG round trip) and `IdleWaitTests` (the parked-request deadline).
+Frame scheduling is covered by `FramePlannerTests` (gate, idle/hold/render
+table, refresh-rate interval table), `IdleWaitTests` (absolute blink and Lua
+deadlines, bell and control deadlines, safety cap) and `HostWakeCoverageTests`
+(cross-thread enqueue APIs post a wake; a source scan of `src/Dotty/Host`
+requires `HostWake.Request()` after every queue producer). Render recovery is
+covered by `RenderRecoveryPolicyTests` (retry, rebuild, fatal, quiet-period
+reset, context resets) and, in the GL lane of `Dotty.App.SkiaTests`,
+`SilkTerminalRendererRebuildTests` (a disposed renderer is replaced on the same
+context and draws again; also the `ReadBackBuffer` capture hook), which skips
+without an OpenGL 3.3 context. None of these has been run by the author of this
+change (no SDK available); `needs runtime verification`.
+
 ## Native Dotty output benchmark
 
 Use `scripts/perf/dotty_output_bench.py` for the same unprofiled Dotty workload on native Windows and POSIX, including NativeAOT apphosts. It requires Python 3, `psutil` (`python -m pip install psutil`), a built/published apphost, and a usable desktop session. Missing `psutil` is an explicit error; .NET diagnostics tools and competitor terminals are not needed.

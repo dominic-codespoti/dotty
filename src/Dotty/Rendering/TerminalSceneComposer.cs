@@ -192,6 +192,9 @@ public sealed class TerminalSceneComposer : IDisposable
     /// <summary>Scratch output of <see cref="PlaceholderResolver"/>: filled and drained within one leaf, never holds pixels across frames.</summary>
     private readonly List<KittyRenderPlacement> _placeholderQuads = new();
 
+    /// <summary>Per-cell "has an instance" scratch for the selection overlay; grows, never shrinks.</summary>
+    private bool[] _selectionCoverage = Array.Empty<bool>();
+
     /// <summary>
     /// Test seam: invoked for every captured leaf snapshot (no buffer lock held) before its rows and images are
     /// composed, so tests can attach synthetic graphics (<c>BeginGraphics</c>/<c>AttachGraphics</c>).
@@ -409,71 +412,26 @@ public sealed class TerminalSceneComposer : IDisposable
                 if (leaf.Selection.HasSelection)
                 {
                     byte selectionAlpha = (byte)((selectionColor.A != 0 && selectionColor.A != 255) ? selectionColor.A : 128);
-
-                    for (int i = 0; i < written; i++)
-                    {
-                        ref var instance = ref _frameScratch[startInstanceIndex + i];
-                        int localColumn = instance.Col - startColumnOffset;
-                        int viewRow = instance.Row - startRowOffset;
-                        int logicalRow = viewRow - scrollOffset;
-                        if (leaf.Selection.IsCellSelected(logicalRow, localColumn))
-                        {
-                            instance.BgR = selectionColor.R;
-                            instance.BgG = selectionColor.G;
-                            instance.BgB = selectionColor.B;
-                            instance.BgA = selectionAlpha;
-                        }
-                    }
-
                     var range = leaf.Selection.GetNormalizedRange();
-                    int firstLogicalRow = Math.Max(range.StartRow, -scrollOffset);
-                    int lastLogicalRow = Math.Min(range.EndRow, paneRows - 1 - scrollOffset);
-                    int estimatedRows = Math.Max(0, lastLogicalRow - firstLogicalRow + 1);
-                    EnsureScratchCapacity(instanceCount + checked(estimatedRows * paneColumns));
-                    for (int logicalRow = firstLogicalRow; logicalRow <= lastLogicalRow; logicalRow++)
-                    {
-                        int viewRow = logicalRow + scrollOffset;
-                        int minColumn = logicalRow == range.StartRow ? range.StartColumn : 0;
-                        int maxColumn = logicalRow == range.EndRow ? range.EndColumn : paneColumns - 1;
-                        minColumn = Math.Max(0, minColumn);
-                        maxColumn = Math.Min(paneColumns - 1, maxColumn);
-                        for (int column = minColumn; column <= maxColumn; column++)
-                        {
-                            if (!leaf.Selection.IsCellSelected(logicalRow, column))
-                                continue;
-
-                            int targetColumn = column + startColumnOffset;
-                            int targetRow = viewRow + startRowOffset;
-                            bool covered = false;
-                            for (int i = startInstanceIndex; i < instanceCount; i++)
-                            {
-                                if (_frameScratch[i].Col == targetColumn && _frameScratch[i].Row == targetRow)
-                                {
-                                    covered = true;
-                                    break;
-                                }
-                            }
-
-                            if (!covered)
-                            {
-                                EnsureScratchCapacity(instanceCount + 1);
-                                _frameScratch[instanceCount++] = new CellInstance
-                                {
-                                    Col = (ushort)targetColumn,
-                                    Row = (ushort)targetRow,
-                                    FgR = themeForeground.R,
-                                    FgG = themeForeground.G,
-                                    FgB = themeForeground.B,
-                                    FgA = 255,
-                                    BgR = selectionColor.R,
-                                    BgG = selectionColor.G,
-                                    BgB = selectionColor.B,
-                                    BgA = selectionAlpha,
-                                    Flags = 0
-                                };
-                            }
-                        }
-                    }
+                    bool blockSelection = leaf.Selection.Mode == SelectionMode.Block;
+                    int coverageLength = SelectionQuadBuilder.CoverageLength(range, paneRows, paneColumns, scrollOffset);
+                    EnsureScratchCapacity(instanceCount + coverageLength);
+                    if (_selectionCoverage.Length < coverageLength)
+                        _selectionCoverage = new bool[Math.Max(coverageLength, _selectionCoverage.Length * 2)];
+                    instanceCount += SelectionQuadBuilder.Apply(
+                        _frameScratch.AsSpan(startInstanceIndex),
+                        written,
+                        range,
+                        blockSelection,
+                        paneRows,
+                        paneColumns,
+                        scrollOffset,
+                        startColumnOffset,
+                        startRowOffset,
+                        selectionColor,
+                        selectionAlpha,
+                        themeForeground,
+                        _selectionCoverage);
                 }
 
                 if (cursorVisible && scrollOffset == 0 && ReferenceEquals(leaf, activePane)

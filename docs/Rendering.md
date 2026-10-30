@@ -137,6 +137,14 @@ owning pane and invalidates presentation on every changed offset or active
 selection row. The cursor is deliberately suppressed while a pane is scrolled
 away from the bottom; it is drawn only for the active pane at offset zero.
 
+`SelectionQuadBuilder` paints a pane's selection in one pass over that pane's
+cell instances (recolouring the selected ones and marking them in a reused
+per-cell coverage mask covering only the visible selected rows), then appends a
+background-only instance for every selected visible cell no instance covers.
+The cost is linear in instances plus selected visible cells and the pass does
+not allocate after warm-up; linear (wrapped) and block selections follow
+`TextSelectionService.IsCellSelected` exactly.
+
 ### Dividers and the active pane
 
 `PaneTree.Layout` leaves a gap of `panes.dividerThickness` logical pixels

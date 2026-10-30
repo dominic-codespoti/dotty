@@ -131,7 +131,7 @@ Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather t
 | `CSI ? 47 h/l`, `CSI ? 1047 h/l` | `OnSwitchAlternateScreen(enabled)` | Screen switch only, no cursor save/restore; see [DECSET 47, 1047, 1048, 1049](#decset-47-1047-1048-and-1049). |
 | `CSI ? 1049 h/l` | `OnSetAlternateScreen(enabled)` | Cursor save + alternate screen; same section. |
 | `CSI ? 1048 h/l` | `OnSaveCursor()` / `OnRestoreCursor()` | Save/restore cursor; see the same section. |
-| `CSI ? 2027 h/l` | none | Accepted and ignored: grapheme clustering is always on (see [Grapheme clusters](#combining-cap-grapheme-clusters-and-the-grapheme-store)). |
+| `CSI ? 2027 h/l` | none | Accepted and ignored: grapheme clustering is always on (see [Grapheme clusters](#combining-cap-grapheme-clusters-cell-width-and-the-grapheme-store)). |
 | `CSI ? 2033 h/l` | `OnSetVisibilityReports(enabled)` | Implemented: see [Visibility reports](#visibility-reports-mode-2033-and-csi--998-n). |
 
 Mode 9 (X10 mouse) is deliberately **not** routed because the input encoder has no press-only X10 encoding.
@@ -212,12 +212,15 @@ Mode 2033 reports when the terminal becomes visible or hidden. Reports are `ESC 
 
 The checksum is the plain 16-bit sum of the code points in the rectangle (xterm's `checksumExtension` with positive, no-attributes, no-trim, drawn and byte flags; not negated, no attribute bits). An unwritten cell counts as a space (0x20), the continuation half of a wide character is skipped, and only the base code point of a combining cluster counts. Omitted or out-of-range bounds default to the whole screen; with origin mode set, rows are relative to the scroll region. An empty rectangle, or a page other than 0 or 1, sums to 0.
 
-#### Combining cap, grapheme clusters and the grapheme store
+#### Combining cap, grapheme clusters, cell width and the grapheme store
 
 - A cell holds at most one base code point plus **64** combining code points (`GraphemeHelper.MaxCombiningCodepointsPerCell`, the Ghostty 1.4 limit). Further marks are consumed and dropped, never splitting a surrogate pair.
 - Multi-code-point clusters live in one process-wide, append-only, de-duplicating `GraphemeStore` addressed by the 16-bit index in each cell: at most 32,767 distinct clusters, shared by all sessions. Entries are **never evicted**, because any live or scrollback cell may still hold an index. When the store is full a new cluster is not stored and the cell degrades to its base code point (a mark appended to an existing cell leaves the cell as it was). Indices never wrap or alias.
-- The text-run width cache in `BufferTextWriter` is separately bounded (4096 entries, cleared when exceeded).
-- Mode 2027 (grapheme clustering) is permanently set: `CSI ? 2027 h/l` is accepted and ignored and DECRQM reports `3`. **Limitation:** segmentation works per text run, not across the byte stream. A cluster split across parser runs or `Feed` calls is only re-joined for trailing zero-width marks, not for ZWJ, regional-indicator or Hangul continuations.
+- The cluster string cache in `BufferTextWriter` is separately bounded (4096 entries, cleared when exceeded).
+- Mode 2027 (grapheme clustering) is permanently set: `CSI ? 2027 h/l` is accepted and ignored and DECRQM reports `3`. Segmentation is .NET's `StringInfo` (UAX #29 extended grapheme clusters), pinned by `GraphemeSegmentationTests`; the runtime's Unicode version, not Dotty, decides boundaries.
+- Clusters span writes. When text arrives in a later parser run or `Feed` call, its start is segmented together with the cluster in the cell before the cursor on the cursor row (the cursor cell itself while a wrap is pending). If they form one cluster, the continuation is appended to that cell (within the 64-mark cap) and the cell is re-measured: a late U+FE0F widens it in place, or moves it to the next line when it fills the last column and autowrap is on (with autowrap off it stays one cell); a late U+FE0E narrows it and the cursor moves back. ZWJ sequences, regional-indicator pairs, keycaps, skin tones, Hangul jamo and Prepend characters (such as U+0600 followed by a digit) all re-join, so splitting the bytes anywhere leaves the same screen. A continuation never reaches into the previous row. Zero-width text that does not continue the cluster (U+200B, bidi marks, or a mark at column 0) is still appended to the previous non-empty cell, which may be on the previous row.
+- **Limitation:** with autowrap off the cursor stays on the last column after printing there, so a continuation that arrives later joins the cell before it, as zero-width marks always have.
+- Cell width comes from `UnicodeWidth`, whose tables (`UnicodeWidthTables.g.cs`) are generated from Unicode 16.0.0 by `tools/gen-width-tables.py` (Python's `unicodedata`; `python3 tools/gen-width-tables.py --check` verifies the committed tables and their golden). A scalar is 0 cells for General_Category Cc, Cf, Mn and Me and for Hangul medial/final jamo (U+1160–U+11FF, U+D7B0–U+D7FF), except U+00AD SOFT HYPHEN, which is 1; 2 cells for East_Asian_Width W or F (this includes every Emoji_Presentation character); otherwise 1, including East Asian ambiguous width. A cluster takes the width of its first non-zero-width scalar, then: a regional-indicator pair is 2 (a lone indicator 1); U+FE0F directly after one of the 371 emoji-variation bases of `emoji-variation-sequences.txt` makes it 2 and U+FE0E after such a base makes it 1 (no other base changes); ZWJ and skin-tone modifiers never widen. A cluster with no visible base is attached to the previous cell or, at the start of the screen, takes one cell. A wide cluster that does not fit before the right edge leaves the last column blank and wraps, scrolling at the bottom of the scroll region.
 
 #### DECSET 47, 1047, 1048 and 1049
 
@@ -766,6 +769,7 @@ Typical performance on modern hardware:
 | `tests/Dotty.Terminal.Tests/WindowOpsTests.cs`, `VisibilityReportTests.cs` | `CSI Ps t` replies and resize requests, mode 2033 and `CSI ? 998 n` |
 | `tests/Dotty.Terminal.Tests/ChecksumReportTests.cs` | gated DECRQCRA and the checksum definition |
 | `tests/Dotty.Terminal.Tests/CombiningCapTests.cs`, `tests/Dotty.App.Tests/GraphemeStorageTests.cs` | 64-mark cap and the bounded grapheme store |
+| `tests/Dotty.Terminal.Tests/UnicodeWidthTests.cs`, `GraphemeSegmentationTests.cs`, `BufferTextWriterClusterTests.cs` | Generated width tables and their golden, cluster width rules, UAX #29 segmentation, clusters re-joined across writes |
 | `tests/Dotty.Terminal.Tests/ModeReportTests.cs` | the DECRQM table and DECSET 47/1047/1048 |
 | `tests/Dotty.Terminal.Tests/SaturatedParameterTests.cs` | Saturating numeric parsing and cursor/ICH/DCH/ECH clamping |
 | `tests/Dotty.Terminal.Tests/RepeatCharacterTests.cs` | REP bound and equivalence |
@@ -789,6 +793,7 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-30 | W4-B1: cell width from tables generated out of Unicode 16.0.0 (`tools/gen-width-tables.py`), cluster width rules (RI pairs, VS15/VS16 limited to emoji-variation bases, zero-width Cf and Hangul jamo), clusters re-joined across writes with late VS16 widening, wide clusters that wrap at the bottom row scroll, and a cell overwrite keeps its row soft-wrapped. |
 | 2026-10-28 | Kitty graphics: APC `G` states (`ApcFirst`, `ApcControl`, `ApcPayload`, `ApcEscape`), 512-byte control cap, abort/termination rules, `0x9C` accepted as ST inside an enabled graphics APC, `ESC D` (IND) and `ESC E` (NEL), RIS deletes images. Written from the source; `needs runtime verification`. |
 | 2026-10-28 | Wave 3: bulk OSC scan, whole-OSC in-chunk dispatch and bytes-native OSC 52; zero-capacity scrollback note; reverse index limited to retained history; ED 2 / CSI 3 J / RIS discard history pages (see [Rendering](Rendering.md#lazily-committed-cell-arenas)). |
 | 2026-10-28 | Wave 2: DECSTR/RIS share one reset core; DSR/CPR/DECXCPR with silent unknown codes; DECBKM; window operations 13-19 and gated `CSI 8 t`; mode 2033 and `CSI ? 998 n`; gated DECRQCRA; 64-mark combining cap and a bounded, de-duplicating grapheme store; complete DECRQM table; DECSET 47/1047/1048. |

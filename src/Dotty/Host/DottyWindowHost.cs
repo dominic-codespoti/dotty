@@ -1664,9 +1664,9 @@ internal static class DottyWindowHost
     }
 
     /// <summary>
-    /// Whether the shared blink timer runs: the last composed frame drew a blinking cursor (see
+    /// Whether the shared blink timer runs: the last composed frame drew a blinking cursor or SGR 5/6 text (see
     /// <see cref="TerminalSceneComposer.BlinkActive"/>) and the window is not known to be unfocused. While it is idle
-    /// the blink phase stays on, so an unfocused window shows a steady cursor.
+    /// the blink phase stays on, so an unfocused window shows a steady cursor and steady text.
     /// </summary>
     private static bool CursorBlinks(bool hasActiveTab) =>
         hasActiveTab && _lastWindowFocus != false && (_sceneComposer?.BlinkActive ?? false);

@@ -137,6 +137,7 @@ trailing commas/comments are accepted by the JSON parser.
 | `size` | number | `14` | Font size in pixels before display scaling: the host rasterizes at `size × (framebuffer width / window width)`. Values are clamped to 1–512; a non-finite value falls back to the built-in default. Not points. |
 | `lineHeight` | number | `1.25` | Line-height multiplier; values below `0.1` are clamped. |
 | `symbolMap` | string[] | `[]` | Per-range font overrides; use `U+2500-U+257F: Preferred Font, Fallback Font`. For each range, the first installed family that contains the glyph wins; overlapping ranges use the first matching entry. |
+| `faintOpacity` | number | `0.5` | Faint (SGR 2) text keeps this share of its colour and is mixed toward the cell background (after inverse). Clamped to 0–1; a non-finite value uses `0.5`. |
 OpenType features and programming ligatures are not supported. The renderer draws
 one grapheme per terminal cell rather than shaping ligatures across cells.
 The renderer measures the selected typeface at the current framebuffer scale.

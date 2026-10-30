@@ -238,6 +238,8 @@ public static class ConfigOptionCatalog
             "Line-height multiplier; values below 0.1 are clamped."),
         Opt("font.symbolMap", "font.symbol_map", "string[]", null, c => c.Font.SymbolMap,
             "Per-range font overrides, one per entry: 'U+2500-U+257F: Preferred Font, Fallback Font'; the first installed family containing the glyph wins."),
+        Opt("font.faintOpacity", "font.faint_opacity", "number", null, c => c.Font.FaintOpacity,
+            "Share of its own colour that faint (SGR 2) text keeps when mixed toward the cell background; clamped to 0-1, non-finite values use 0.5."),
 
         Opt("window.decorations", "window.decorations", "string", ["custom", "native"], c => c.Window.Decorations,
             "Windows only: 'custom' draws the tab-bar caption controls instead of the native title bar; other platforms always keep native decorations."),

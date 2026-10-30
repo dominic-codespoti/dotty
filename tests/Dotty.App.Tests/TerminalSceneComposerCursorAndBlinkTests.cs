@@ -12,8 +12,8 @@ using Xunit;
 
 namespace Dotty.App.Tests;
 
-/// <summary>Cursor drawing in <see cref="TerminalSceneComposer"/> with the default <c>cursor.*</c> configuration.</summary>
-public sealed class TerminalSceneComposerCursorTests : IDisposable
+/// <summary>Cursor and SGR 5/6 blink drawing in <see cref="TerminalSceneComposer"/> with the default configuration.</summary>
+public sealed class TerminalSceneComposerCursorAndBlinkTests : IDisposable
 {
     private const float CellWidth = 10f;
     private const float CellHeight = 20f;
@@ -24,7 +24,7 @@ public sealed class TerminalSceneComposerCursorTests : IDisposable
     private readonly TerminalSceneComposer _composer;
     private readonly IColorScheme _theme = BuiltInThemes.DarkPlus;
 
-    public TerminalSceneComposerCursorTests()
+    public TerminalSceneComposerCursorAndBlinkTests()
     {
         _composer = new TerminalSceneComposer(_atlas, SKTypeface.Default, 14f);
         _tab.Session.Adapter.Buffer.SetCursor(0, 0);
@@ -37,6 +37,40 @@ public sealed class TerminalSceneComposerCursorTests : IDisposable
         _atlas.Dispose();
         _manager.Dispose();
         _tab.Dispose();
+    }
+
+    [Fact]
+    public void SgrBlinkTextFollowsTheSharedPhaseThroughTheRowCache()
+    {
+        var buffer = _tab.Session.Adapter.Buffer;
+        _tab.Session.Adapter.OnSetCursorShape(2); // steady cursor, so only the text drives BlinkActive
+        buffer.SetCursor(2, 0);
+        buffer.WriteText("Z".AsSpan(), new CellAttributes { SlowBlink = true });
+        buffer.SetCursor(3, 9);
+
+        bool HasGlyphAt(TerminalSceneFrame frame, int row, int column)
+        {
+            foreach (CellInstance instance in frame.AsSpan())
+            {
+                if (instance.Row == row && instance.Col == column && instance.GlyphW > 0)
+                    return true;
+            }
+            return false;
+        }
+
+        Assert.True(HasGlyphAt(Compose(blinkPhaseOn: true), 2, 0));
+        Assert.True(_composer.BlinkActive);
+        TerminalSceneFrame off = Compose(blinkPhaseOn: false);
+        Assert.False(HasGlyphAt(off, 2, 0));
+        Assert.True(HasGlyphAt(off, 0, 0)); // non-blinking text stays
+        Assert.True(_composer.BlinkActive);
+        Assert.True(HasGlyphAt(Compose(blinkPhaseOn: true), 2, 0));
+
+        buffer.SetCursor(2, 0);
+        buffer.WriteText("Z".AsSpan(), CellAttributes.Default);
+        buffer.SetCursor(3, 9);
+        Compose(blinkPhaseOn: true);
+        Assert.False(_composer.BlinkActive);
     }
 
     [Fact]

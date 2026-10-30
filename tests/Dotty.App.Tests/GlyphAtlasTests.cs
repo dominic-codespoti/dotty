@@ -66,7 +66,7 @@ public sealed class GlyphAtlasTests
     public void EnsureGlyph_RasterizesCoverage_WithPlacementMetadata()
     {
         using var atlas = new GlyphAtlas(Font, 16f);
-        var key = new GlyphKey("W", Font, 16f, bold: false);
+        var key = new GlyphKey("W", Font, 16f, GlyphStyle.Regular);
 
         Assert.True(atlas.EnsureGlyph(key, out var info));
         Assert.True(info.Width > 0 && info.Height > 0);
@@ -79,14 +79,14 @@ public sealed class GlyphAtlasTests
     public void TryGetGlyph_Missing_ReturnsFalse()
     {
         using var atlas = new GlyphAtlas(Font, 16f);
-        Assert.False(atlas.TryGetGlyph(new GlyphKey("ZZZ", Font, 16f, false), out _));
+        Assert.False(atlas.TryGetGlyph(new GlyphKey("ZZZ", Font, 16f, GlyphStyle.Regular), out _));
     }
 
     [Fact]
     public void SameKey_ReturnsSameEntry()
     {
         using var atlas = new GlyphAtlas(Font, 16f);
-        var key = new GlyphKey("=>", Font, 16f, bold: false);
+        var key = new GlyphKey("=>", Font, 16f, GlyphStyle.Regular);
         Assert.True(atlas.EnsureGlyph(key, out var first));
         Assert.True(atlas.EnsureGlyph(key, out var second));
         Assert.Equal(first, second);
@@ -94,12 +94,12 @@ public sealed class GlyphAtlasTests
     }
 
     [Fact]
-    public void Key_HasNoColorComponent_AndComparesByTypefaceSizeBold()
+    public void Key_HasNoColorComponent_AndComparesByTypefaceSizeStyle()
     {
-        var a = new GlyphKey("W", Font, 16f, bold: false);
-        var b = new GlyphKey("W", Font, 16f, bold: false);
-        var c = new GlyphKey("W", Font, 17f, bold: false);
-        var d = new GlyphKey("W", Font, 16f, bold: true);
+        var a = new GlyphKey("W", Font, 16f, GlyphStyle.Regular);
+        var b = new GlyphKey("W", Font, 16f, GlyphStyle.Regular);
+        var c = new GlyphKey("W", Font, 17f, GlyphStyle.Regular);
+        var d = new GlyphKey("W", Font, 16f, GlyphStyle.Bold);
 
         Assert.Equal(a, b);
         Assert.NotEqual(a, c);
@@ -108,12 +108,48 @@ public sealed class GlyphAtlasTests
         Assert.Equal(4, typeof(GlyphKey).GetFields().Length);
     }
 
+    [Theory]
+    // bold, italic, expected style
+    [InlineData(false, false, GlyphStyle.Regular)]
+    [InlineData(true, false, GlyphStyle.Bold)]
+    [InlineData(false, true, GlyphStyle.Italic)]
+    [InlineData(true, true, GlyphStyle.BoldItalic)]
+    public void StyleKeys_AreDistinctPerSgrCombination(bool bold, bool italic, GlyphStyle expected)
+    {
+        GlyphStyle style = GlyphStyles.From(bold, italic);
+        var key = new GlyphKey("W", Font, 16f, style);
+
+        Assert.Equal(expected, style);
+        Assert.Equal(bold, key.IsBold);
+        Assert.Equal(italic, key.IsItalic);
+        foreach (GlyphStyle other in new[] { GlyphStyle.Regular, GlyphStyle.Bold, GlyphStyle.Italic, GlyphStyle.BoldItalic })
+        {
+            var otherKey = new GlyphKey("W", Font, 16f, other);
+            Assert.Equal(other == style, key.Equals(otherKey));
+        }
+    }
+
+    [Fact]
+    public void SyntheticItalic_IsADistinctEntryWhoseInkLeansRight()
+    {
+        using var atlas = new GlyphAtlas(Font, 32f);
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("l", Font, 32f, GlyphStyle.Regular), out var upright));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("l", Font, 32f, GlyphStyle.Italic), out var italic));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("l", Font, 32f, GlyphStyle.BoldItalic), out var boldItalic));
+
+        Assert.Equal(3, atlas.EntryCount);
+        // The skew moves the top of a vertical stem right of its foot, so the italic ink box is wider; the
+        // widened scratch surface means none of it is clipped (bold-italic is wider still).
+        Assert.True(italic.Width > upright.Width, $"italic {italic.Width} vs upright {upright.Width}");
+        Assert.True(boldItalic.Width >= italic.Width, $"bold-italic {boldItalic.Width} vs italic {italic.Width}");
+    }
+
     [Fact]
     public void Bold_ProducesDistinctEntry_WithBolderCoverage()
     {
         using var atlas = new GlyphAtlas(Font, 16f);
-        Assert.True(atlas.EnsureGlyph(new GlyphKey("W", Font, 16f, bold: false), out var plain));
-        Assert.True(atlas.EnsureGlyph(new GlyphKey("W", Font, 16f, bold: true), out var bold));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("W", Font, 16f, GlyphStyle.Regular), out var plain));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("W", Font, 16f, GlyphStyle.Bold), out var bold));
 
         Assert.True(plain.X != bold.X || plain.Y != bold.Y, "bold must be a distinct atlas entry");
         Assert.Equal(2, atlas.EntryCount);
@@ -157,8 +193,8 @@ public sealed class GlyphAtlasTests
             Assert.Skip("No CJK-capable font installed");
         }
         using var wideAtlas = new GlyphAtlas(Font, 16f);
-        Assert.True(wideAtlas.EnsureGlyph(new GlyphKey("i", Font, 16f, false), out var narrow));
-        Assert.True(wideAtlas.EnsureGlyph(new GlyphKey("世", cjkFont, 16f, false), out var wide));
+        Assert.True(wideAtlas.EnsureGlyph(new GlyphKey("i", Font, 16f, GlyphStyle.Regular), out var narrow));
+        Assert.True(wideAtlas.EnsureGlyph(new GlyphKey("世", cjkFont, 16f, GlyphStyle.Regular), out var wide));
 
         // A CJK glyph occupies the full em box (~1 x textSize); a narrow
         // Latin glyph is well under it.
@@ -179,9 +215,9 @@ public sealed class GlyphAtlasTests
 
         using var chain = new FontFallbackChain(Font, new[] { fallbackTypeface });
         using var atlas = new GlyphAtlas(Font, 16f, fallbackChain: chain);
-        Assert.True(atlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var primary));
-        Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, false), out var fallback));
-        Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, false), out var cached));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("A", Font, 16f, GlyphStyle.Regular), out var primary));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, GlyphStyle.Regular), out var fallback));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, GlyphStyle.Regular), out var cached));
         Assert.Equal(fallback, cached);
         Assert.True(RegionHasCoverage(atlas, fallback));
 
@@ -207,8 +243,8 @@ public sealed class GlyphAtlasTests
         using var chain = new FontFallbackChain(Font, new[] { fallbackTypeface });
         using var plainAtlas = new GlyphAtlas(Font, 16f);
         using var fallbackAtlas = new GlyphAtlas(Font, 16f, fallbackChain: chain);
-        Assert.True(plainAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var plain));
-        Assert.True(fallbackAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, false), out var withFallback));
+        Assert.True(plainAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, GlyphStyle.Regular), out var plain));
+        Assert.True(fallbackAtlas.EnsureGlyph(new GlyphKey("A", Font, 16f, GlyphStyle.Regular), out var withFallback));
         // Atlas placement (X/Y) may differ: the reserved U+FFFD replacement glyph is
         // itself fallback-rendered when the primary font lacks it (e.g. Helvetica on
         // macOS), which shifts later shelf positions. Sizing must be identical.
@@ -229,7 +265,7 @@ public sealed class GlyphAtlasTests
 
         foreach (char c in glyphs)
         {
-            Assert.True(atlas.EnsureGlyph(new GlyphKey(c.ToString(), Font, 16f, false), out var info));
+            Assert.True(atlas.EnsureGlyph(new GlyphKey(c.ToString(), Font, 16f, GlyphStyle.Regular), out var info));
             placed.Add(info);
         }
 
@@ -254,7 +290,7 @@ public sealed class GlyphAtlasTests
         const string glyphs = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         foreach (char c in glyphs)
         {
-            Assert.True(atlas.EnsureGlyph(new GlyphKey(c.ToString(), Font, 16f, false), out _),
+            Assert.True(atlas.EnsureGlyph(new GlyphKey(c.ToString(), Font, 16f, GlyphStyle.Regular), out _),
                 $"glyph '{c}' should place (atlas may need to grow)");
         }
 
@@ -263,7 +299,7 @@ public sealed class GlyphAtlasTests
         atlas.PublishPendingGlyphs();
         foreach (char c in glyphs)
         {
-            Assert.True(atlas.TryGetGlyph(new GlyphKey(c.ToString(), Font, 16f, false), out var info));
+            Assert.True(atlas.TryGetGlyph(new GlyphKey(c.ToString(), Font, 16f, GlyphStyle.Regular), out var info));
             Assert.True(RegionHasCoverage(atlas, info), $"glyph '{c}' coverage should survive growth");
         }
     }
@@ -276,13 +312,13 @@ public sealed class GlyphAtlasTests
         bool filled = false;
         for (int i = 0; i < 500; i++)
         {
-            if (!atlas.EnsureGlyph(new GlyphKey($"g{i}", Font, 256f, false), out _))
+            if (!atlas.EnsureGlyph(new GlyphKey($"g{i}", Font, 256f, GlyphStyle.Regular), out _))
             {
                 filled = true;
                 // Filled: subsequent requests must also fail, existing entries intact.
                 atlas.PublishPendingGlyphs();
-                Assert.False(atlas.EnsureGlyph(new GlyphKey("overflow", Font, 256f, false), out _));
-                Assert.True(atlas.TryGetGlyph(new GlyphKey("g0", Font, 256f, false), out _));
+                Assert.False(atlas.EnsureGlyph(new GlyphKey("overflow", Font, 256f, GlyphStyle.Regular), out _));
+                Assert.True(atlas.TryGetGlyph(new GlyphKey("g0", Font, 256f, GlyphStyle.Regular), out _));
                 break;
             }
         }
@@ -325,7 +361,7 @@ public sealed class GlyphAtlasTests
         Assert.True(GlyphAtlasService.AtlasCount < 10, "unreferenced atlases should have been evicted");
 
         // The referenced atlas survives and still works.
-        Assert.True(kept.EnsureGlyph(new GlyphKey("W", Font, 100f, false), out _));
+        Assert.True(kept.EnsureGlyph(new GlyphKey("W", Font, 100f, GlyphStyle.Regular), out _));
         GlyphAtlasService.ReleaseAtlas(kept);
     }
 
@@ -335,7 +371,7 @@ public sealed class GlyphAtlasTests
         using var atlas = new GlyphAtlas(Font, 16f, initialSize: 256);
         Parallel.For(0, 400, i =>
         {
-            var key = new GlyphKey(((char)('a' + (i % 26))).ToString(), Font, 16f, (i % 3) == 0);
+            var key = new GlyphKey(((char)('a' + (i % 26))).ToString(), Font, 16f, (i % 3) == 0 ? GlyphStyle.Bold : GlyphStyle.Regular);
             Assert.True(atlas.EnsureGlyph(key, out _));
         });
         atlas.PublishPendingGlyphs();
@@ -344,7 +380,7 @@ public sealed class GlyphAtlasTests
         // Spot-check a few placements for validity (bounds within the atlas).
         for (int i = 0; i < 26; i++)
         {
-            Assert.True(atlas.TryGetGlyph(new GlyphKey(((char)('a' + i)).ToString(), Font, 16f, false), out var info));
+            Assert.True(atlas.TryGetGlyph(new GlyphKey(((char)('a' + i)).ToString(), Font, 16f, GlyphStyle.Regular), out var info));
             Assert.InRange(info.X, 0, atlas.Width - 1);
             Assert.InRange(info.Y, 0, atlas.Height - 1);
         }
@@ -355,7 +391,7 @@ public sealed class GlyphAtlasTests
     public async Task PublishPendingGlyphs_ExposesBatchToConcurrentReader()
     {
         using var atlas = new GlyphAtlas(Font, 16f);
-        var key = new GlyphKey("batch-visible", Font, 16f, false);
+        var key = new GlyphKey("batch-visible", Font, 16f, GlyphStyle.Regular);
         Assert.True(atlas.EnsureGlyph(key, out var expected));
         Assert.True(atlas.TryGetGlyph(key, out var workingMapHit));
         Assert.Equal(expected, workingMapHit);
@@ -385,14 +421,14 @@ public sealed class GlyphAtlasTests
 
         for (int i = 0; i < 500; i++)
         {
-            var key = new GlyphKey($"A{i:X3}", Font, 16f, false);
+            var key = new GlyphKey($"A{i:X3}", Font, 16f, GlyphStyle.Regular);
             Assert.True(atlas.EnsureGlyph(key, out _));
         }
 
         atlas.PublishPendingGlyphs();
         int copiesAfter = (int)countProperty.GetValue(atlas)!;
         Assert.Equal(copiesBefore + 1, copiesAfter);
-        Assert.True(atlas.TryGetGlyph(new GlyphKey("A1F3", Font, 16f, false), out _));
+        Assert.True(atlas.TryGetGlyph(new GlyphKey("A1F3", Font, 16f, GlyphStyle.Regular), out _));
     }
 
 }

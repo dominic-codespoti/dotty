@@ -52,9 +52,10 @@ against a framework presentation backend.
 
 - **Format:** single-channel coverage (alpha), not baked RGBA. Glyph color is applied
   at draw time via vertex color / shader — one atlas entry serves every fg color.
-- **Key:** `(grapheme, typeface, size, bold)`. No fg color or shaping policy is
-  in the key. Bold must actually apply to rasterization (the old code keyed on
-  Bold but never set it on the font — duplicate identical entries).
+- **Key:** `(grapheme, typeface, size, style)` where style is regular, bold, italic or
+  bold-italic. No fg color or shaping policy is in the key. The style must actually
+  apply to rasterization (the old code keyed on Bold but never set it on the font —
+  duplicate identical entries).
 - **GlyphInfo:** atlas X/Y, width/height, advance, baseline offset, **left/top
   bearings** (the old atlas omitted bearings — placement was unverifiable).
 - **Cells:** width-2 wide glyphs and continuation semantics must be represented
@@ -87,8 +88,8 @@ The implementation lives in `src/Dotty.Rendering.Gpu/GlyphAtlas.cs` and
 `tests/Dotty.App.Tests/GlyphAtlasTests.cs`.
 
 - A8 rasterization stores coverage, while the instance foreground supplies color.
-- `GlyphKey` contains grapheme, typeface instance, text size, and bold state; it
-  deliberately excludes foreground color.
+- `GlyphKey` contains grapheme, typeface instance, text size, and `GlyphStyle`
+  (bold/italic flags); it deliberately excludes foreground color.
 - `GlyphInfo` records tight bounds, bearings, advance, and baseline placement.
 - Wide cells preserve their width and continuation semantics in
   `QuadFrameBuilder`; a full atlas uses the reserved fallback glyph.

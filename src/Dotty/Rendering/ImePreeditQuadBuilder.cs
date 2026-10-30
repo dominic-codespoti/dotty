@@ -118,7 +118,7 @@ internal sealed class ImePreeditQuadBuilder
             {
                 if (written >= destination.Length) break;
                 string grapheme = graphemeSpan.ToString();
-                var key = new GlyphKey(grapheme, typeface, fontSize, false);
+                var key = new GlyphKey(grapheme, typeface, fontSize, GlyphStyle.Regular);
                 int oldEntryCount = atlas.EntryCount;
                 bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
                 if (!glyphOk) glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);

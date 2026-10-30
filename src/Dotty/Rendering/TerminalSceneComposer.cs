@@ -180,9 +180,13 @@ public sealed class TerminalSceneComposer : IDisposable
 
     /// <summary>
     /// True when the last composed frame drew a blinking cursor (DECSCUSR blink bit, or <c>cursor.blink</c> while the
-    /// application keeps the default style). The host runs the shared blink timer only while this is set.
+    /// application keeps the default style) or visible SGR 5/6 text. The host runs the shared blink timer only while
+    /// this is set.
     /// </summary>
     public bool BlinkActive { get; private set; }
+
+    /// <summary>Faint opacity and blink phase of the current Compose call (see <see cref="QuadRowCache.ApplyTextOptions"/>).</summary>
+    private TextAttributeOptions _textOptions = TextAttributeOptions.Default;
 
     private readonly ImageDrawList _imageDraws = new();
 
@@ -273,6 +277,9 @@ public sealed class TerminalSceneComposer : IDisposable
         bool imeCaretBoundsValid = false;
         _dirtyAtlasRows.Clear();
         BlinkActive = false;
+        // cursorVisible is the shared blink phase, so SGR 5/6 text blinks in step with the cursor.
+        _textOptions = new TextAttributeOptions(
+            TextAttributeOptions.NormalizeFaintOpacity(UserConfigService.Current.Font.FaintOpacity), cursorVisible);
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
         int atlasVersionAtStart = _atlas.ContentVersion;
@@ -889,6 +896,7 @@ public sealed class TerminalSceneComposer : IDisposable
 
         var cache = slot.Cache;
         cache.EnsureGeometry(rows, columns, 0f, 0f);
+        cache.ApplyTextOptions(in _textOptions);
         cache.BeginFrame();
 
         for (int row = 0; row < rows; row++)
@@ -934,7 +942,9 @@ public sealed class TerminalSceneComposer : IDisposable
                 cache.EnsureEntryCapacity(ref entry, columns);
                 int count = QuadFrameBuilder.BuildRow(
                     snapshot, row, _atlas, _typeface, _fontSize,
-                    entry.Instances.AsSpan(), _dirtyAtlasRows, columns, foreground, background);
+                    entry.Instances.AsSpan(), _dirtyAtlasRows, columns, foreground, background,
+                    in _textOptions, out bool hasBlinkingText);
+                entry.HasBlinkingText = hasBlinkingText;
                 hot.CopyTo(entry.SourceCells);
                 cold.CopyTo(entry.SourceColdCells);
                 entry.InstanceCount = count;
@@ -951,6 +961,8 @@ public sealed class TerminalSceneComposer : IDisposable
             }
             entry.Instances.AsSpan(0, entry.InstanceCount).CopyTo(destination[written..]);
             written += entry.InstanceCount;
+            if (entry.HasBlinkingText)
+                BlinkActive = true;
         }
         return written;
     }

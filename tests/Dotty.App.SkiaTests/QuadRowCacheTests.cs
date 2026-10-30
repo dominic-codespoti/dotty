@@ -211,6 +211,37 @@ public sealed class QuadRowCacheTests
     }
 
     [Fact]
+    public void ApplyTextOptions_blink_phase_invalidates_only_blinking_rows_and_faint_change_invalidates_all()
+    {
+        var cache = new QuadRowCache();
+        cache.EnsureGeometry(rows: 3, columns: 10, cellW: 10f, cellH: 20f);
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true));
+        void FillAll()
+        {
+            for (int r = 0; r < 3; r++)
+            {
+                ref var e = ref cache.GetEntryRef(r);
+                e.Valid = true;
+                e.HasBlinkingText = r == 1;
+            }
+        }
+
+        FillAll();
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true));
+        Assert.True(cache.GetEntryRef(0).Valid && cache.GetEntryRef(1).Valid && cache.GetEntryRef(2).Valid);
+
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: false));
+        Assert.True(cache.GetEntryRef(0).Valid);
+        Assert.False(cache.GetEntryRef(1).Valid);
+        Assert.False(cache.GetEntryRef(1).HasBlinkingText);
+        Assert.True(cache.GetEntryRef(2).Valid);
+
+        FillAll();
+        cache.ApplyTextOptions(new TextAttributeOptions(0.6f, BlinkVisible: false));
+        Assert.False(cache.GetEntryRef(0).Valid || cache.GetEntryRef(1).Valid || cache.GetEntryRef(2).Valid);
+    }
+
+    [Fact]
     public void Rebuild_after_shift_reuses_pooled_arrays()
     {
         var cache = new QuadRowCache();

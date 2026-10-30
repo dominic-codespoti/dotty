@@ -216,7 +216,7 @@ public sealed class QuadFrameBuilderTests
         for (int i = 0; i < result.InstanceCount; i++)
         {
             var inst = result.Instances[i];
-            var key = new GlyphKey(graphemes[i], SKTypeface.Default, TextSize, bold: false);
+            var key = new GlyphKey(graphemes[i], SKTypeface.Default, TextSize, GlyphStyle.Regular);
             Assert.True(atlas.TryGetGlyph(key, out var info));
 
             Assert.Equal((short)(info.BaselineOffset + info.TopBearing), inst.OffY);
@@ -306,5 +306,105 @@ public sealed class QuadFrameBuilderTests
         Assert.Equal((short)0, cell.GlyphW);
         Assert.Equal((short)0, cell.GlyphH);
         Assert.True((cell.Flags & CellFlags.Underline) != 0);
+    }
+
+    [Theory]
+    // inverse, expected fg (75 % of the visible foreground, 25 % of the visible background), expected bg
+    [InlineData(false, 150, 0, 25, 0, 0, 100)]
+    [InlineData(true, 50, 0, 75, 200, 0, 0)]
+    public void Faint_MixesTheVisibleForegroundTowardTheVisibleBackground(
+        bool inverse, int fgR, int fgG, int fgB, int bgR, int bgG, int bgB)
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 5);
+        var attrs = new CellAttributes
+        {
+            Foreground = SgrColorArgb.FromRgb(200, 0, 0),
+            Background = SgrColorArgb.FromRgb(0, 0, 100),
+            Faint = true,
+            Inverse = inverse,
+        };
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("X".AsSpan(), attrs);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, new FrameGeometry(CellW, CellH, 1, 5),
+            textOptions: new TextAttributeOptions(0.75f, BlinkVisible: true));
+
+        var inst = Assert.Single(result.Instances.AsSpan(0, result.InstanceCount).ToArray());
+        Assert.Equal((fgR, fgG, fgB), ((int)inst.FgR, (int)inst.FgG, (int)inst.FgB));
+        Assert.Equal((bgR, bgG, bgB), ((int)inst.BgR, (int)inst.BgG, (int)inst.BgB));
+        Assert.True(inst.GlyphW > 0);
+    }
+
+    [Fact]
+    public void Conceal_DropsTheGlyphButKeepsBackgroundAndDecorations()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 5);
+        var attrs = new CellAttributes
+        {
+            Background = SgrColorArgb.FromRgb(10, 20, 30),
+            Invisible = true,
+            UnderlineStyle = UnderlineStyle.Single,
+        };
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("AB".AsSpan(), attrs);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, new FrameGeometry(CellW, CellH, 1, 5));
+
+        Assert.Equal(2, result.InstanceCount);
+        foreach (var inst in result.Instances.AsSpan(0, result.InstanceCount))
+        {
+            Assert.Equal((short)0, inst.GlyphW);
+            Assert.Equal(((byte)10, (byte)20, (byte)30, (byte)255), (inst.BgR, inst.BgG, inst.BgB, inst.BgA));
+            Assert.True((inst.Flags & CellFlags.Underline) != 0);
+        }
+        Assert.False(atlas.TryGetGlyph(new GlyphKey("A", SKTypeface.Default, TextSize, GlyphStyle.Regular), out _));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Blink_DrawsTheGlyphOnlyInTheOnPhaseAndReportsTheRow(bool blinkVisible)
+    {
+        var buffer = new TerminalBuffer(rows: 2, columns: 5);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("A".AsSpan(), new CellAttributes { SlowBlink = true, Background = SgrColorArgb.FromRgb(1, 2, 3) });
+        buffer.SetCursor(1, 0);
+        buffer.WriteText("B".AsSpan(), CellAttributes.Default);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var destination = new CellInstance[5];
+        var options = new TextAttributeOptions(0.5f, blinkVisible);
+
+        int blinkRow = QuadFrameBuilder.BuildRow(buffer, 0, atlas, SKTypeface.Default, TextSize, destination, null, 5,
+            QuadFrameBuilder.DefaultForeground, QuadFrameBuilder.DefaultBackground, in options, out bool blinkRowHasBlink);
+        CellInstance blinkCell = destination[0];
+        int plainRow = QuadFrameBuilder.BuildRow(buffer, 1, atlas, SKTypeface.Default, TextSize, destination, null, 5,
+            QuadFrameBuilder.DefaultForeground, QuadFrameBuilder.DefaultBackground, in options, out bool plainRowHasBlink);
+
+        Assert.Equal(1, blinkRow);
+        Assert.Equal(1, plainRow);
+        Assert.True(blinkRowHasBlink);
+        Assert.False(plainRowHasBlink);
+        Assert.Equal(blinkVisible, blinkCell.GlyphW > 0);
+        Assert.Equal((byte)255, blinkCell.BgA);
+    }
+
+    [Theory]
+    [InlineData(false, false, GlyphStyle.Regular)]
+    [InlineData(true, false, GlyphStyle.Bold)]
+    [InlineData(false, true, GlyphStyle.Italic)]
+    [InlineData(true, true, GlyphStyle.BoldItalic)]
+    public void BoldAndItalic_SelectTheMatchingGlyphStyle(bool bold, bool italic, GlyphStyle expected)
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 5);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("W".AsSpan(), new CellAttributes { Bold = bold, Italic = italic });
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+
+        QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, new FrameGeometry(CellW, CellH, 1, 5));
+
+        foreach (GlyphStyle style in new[] { GlyphStyle.Regular, GlyphStyle.Bold, GlyphStyle.Italic, GlyphStyle.BoldItalic })
+            Assert.Equal(style == expected, atlas.TryGetGlyph(new GlyphKey("W", SKTypeface.Default, TextSize, style), out _));
     }
 }

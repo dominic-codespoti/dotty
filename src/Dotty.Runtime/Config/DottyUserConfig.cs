@@ -101,6 +101,10 @@ public sealed class FontUserConfig
     [JsonPropertyName("symbolMap")]
     public System.Collections.Generic.List<string> SymbolMap { get; set; } = new();
 
+    /// <summary>Faint (SGR 2) text keeps this share of its colour, mixed toward the cell background (0-1).</summary>
+    [JsonPropertyName("faintOpacity")]
+    public double FaintOpacity { get; set; } = 0.5;
+
 }
 
 public sealed class WindowUserConfig

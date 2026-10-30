@@ -276,7 +276,7 @@ public static class ContextMenuQuadBuilder
                 continue;
             }
 
-            var key = new GlyphKey(grapheme, typeface, fontSize, isBold);
+            var key = new GlyphKey(grapheme, typeface, fontSize, isBold ? GlyphStyle.Bold : GlyphStyle.Regular);
             if (!atlas.EnsureGlyph(key, out var glyphInfo)
                 && !atlas.TryGetFallbackGlyph(out glyphInfo))
             {

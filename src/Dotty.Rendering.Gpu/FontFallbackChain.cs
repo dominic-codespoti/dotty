@@ -237,17 +237,17 @@ public sealed class FontFallbackChain : IDisposable
     /// Resolves the matching <see cref="SKTypeface"/> for the given grapheme.
     /// Checks if the primary typeface contains the glyph (or measures > 0 without fallback missing character);
     /// if not, checks fallback typefaces in order, and finally queries <see cref="SKFontManager.Default.MatchCharacter"/>.
+    /// Resolution is by coverage only: bold and italic are synthesized from the resolved face by the atlas.
     /// </summary>
-    public SKTypeface ResolveTypefaceForGrapheme(string grapheme, bool bold = false)
-        => ResolveTypefaceForGrapheme(grapheme, bold, out _);
+    public SKTypeface ResolveTypefaceForGrapheme(string grapheme)
+        => ResolveTypefaceForGrapheme(grapheme, out _);
 
     /// <summary>
     /// Resolves a grapheme and reports whether the result came from a
     /// fallback typeface. The primary typeface is never classified as a
     /// fallback, even when the caller supplied an equivalent font instance.
     /// </summary>
-    public SKTypeface ResolveTypefaceForGrapheme(
-        string grapheme, bool bold, out bool isFallback)
+    public SKTypeface ResolveTypefaceForGrapheme(string grapheme, out bool isFallback)
     {
         if (string.IsNullOrEmpty(grapheme))
         {

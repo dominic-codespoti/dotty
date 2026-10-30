@@ -36,6 +36,17 @@ public class SgrParserTests
         Assert.False(cleared.Overline);
     }
 
+    [Theory]
+    [InlineData("5")]
+    [InlineData("6")]
+    public void SlowAndRapidBlink_BothSetBlink_AndSgr25ClearsIt(string parameters)
+    {
+        var palette = Palette();
+        var updated = SgrParserArgb.Apply(parameters.AsSpan(), CellAttributes.Default, palette);
+        Assert.True(updated.SlowBlink);
+        Assert.False(SgrParserArgb.Apply("25".AsSpan(), updated, palette).SlowBlink);
+    }
+
     [Fact]
     public void BasicAttributes_SetAndClear()
     {

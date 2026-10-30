@@ -20,8 +20,6 @@ public sealed class QuadRowCache
         public ulong ContentHash;
         public int SelectionStart;
         public int SelectionEnd;
-        public int CursorColumn;
-        public byte CursorShape;
         public ulong SearchHash;
         public CellInstance[] Instances = Array.Empty<CellInstance>();
         public int InstanceCount;
@@ -29,8 +27,8 @@ public sealed class QuadRowCache
         public int SelectionExtraCount;
         public CellHot[] SourceCells = Array.Empty<CellHot>();
         public ColdCell[] SourceColdCells = Array.Empty<ColdCell>();
-        public CellInstance CursorExtra;
-        public bool HasCursorExtra;
+        /// <summary>The cached run contains SGR 5/6 glyphs (see <see cref="ApplyTextOptions"/>).</summary>
+        public bool HasBlinkingText;
 
         // Kept for the existing row-local quad cache helpers and callers.
         public SKPoint[] GlyphPos = Array.Empty<SKPoint>();
@@ -52,6 +50,8 @@ public sealed class QuadRowCache
     private int _columns;
     private float _cellW;
     private float _cellH;
+    private TextAttributeOptions _textOptions;
+    private bool _hasTextOptions;
 
     public long Hits;
     public long Misses;
@@ -97,6 +97,28 @@ public sealed class QuadRowCache
     {
         if ((uint)row < (uint)_entries.Length)
             ClearEntry(ref _entries[row]);
+    }
+
+    /// <summary>
+    /// Records the frame's text options before <see cref="BeginFrame"/>. A faint-opacity change invalidates every row;
+    /// a blink-phase change invalidates only rows whose run contains blinking text.
+    /// </summary>
+    public void ApplyTextOptions(in TextAttributeOptions options)
+    {
+        if (!_hasTextOptions || !options.FaintOpacity.Equals(_textOptions.FaintOpacity))
+        {
+            InvalidateAll();
+        }
+        else if (options.BlinkVisible != _textOptions.BlinkVisible)
+        {
+            for (int i = 0; i < _entries.Length; i++)
+            {
+                if (_entries[i].HasBlinkingText)
+                    ClearEntry(ref _entries[i]);
+            }
+        }
+        _textOptions = options;
+        _hasTextOptions = true;
     }
 
     /// <summary>Snapshots the prior rows before the caller classifies the next frame.</summary>
@@ -257,15 +279,12 @@ public sealed class QuadRowCache
         entry.ContentHash = 0;
         entry.SelectionStart = -1;
         entry.SelectionEnd = -1;
-        entry.CursorColumn = -1;
-        entry.CursorShape = 0;
         entry.SearchHash = 0;
         entry.InstanceCount = 0;
         entry.SelectionExtraCount = 0;
-        entry.CursorExtra = default;
         entry.RowIdentity = 0;
-        entry.HasCursorExtra = false;
         entry.GlyphCount = 0;
         entry.SolidCount = 0;
+        entry.HasBlinkingText = false;
     }
 }

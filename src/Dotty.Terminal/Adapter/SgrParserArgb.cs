@@ -61,6 +61,7 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 5:
+                case 6: // rapid blink shares the single blink rate (cursor.blinkIntervalMs)
                     attributes.SlowBlink = true;
                     hasMore = enumerator.MoveNext();
                     break;

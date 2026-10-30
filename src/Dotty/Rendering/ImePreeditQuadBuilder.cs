@@ -118,7 +118,7 @@ internal sealed class ImePreeditQuadBuilder
             {
                 if (written >= destination.Length) break;
                 string grapheme = graphemeSpan.ToString();
-                var key = new GlyphKey(grapheme, typeface, fontSize, false);
+                var key = new GlyphKey(grapheme, typeface, fontSize, GlyphStyle.Regular);
                 int oldEntryCount = atlas.EntryCount;
                 bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
                 if (!glyphOk) glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
@@ -128,7 +128,7 @@ internal sealed class ImePreeditQuadBuilder
                     Col = (ushort)(firstColumn + cellOffset),
                     Row = (ushort)row,
                     OffX = glyphOk ? (short)glyphInfo.LeftBearing : (short)0,
-                    OffY = glyphOk ? (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing) : (short)0,
+                    OffY = glyphOk ? QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing) : (short)0,
                     GlyphX = glyphOk ? (short)glyphInfo.X : (short)0,
                     GlyphY = glyphOk ? (short)glyphInfo.Y : (short)0,
                     GlyphW = glyphOk ? (short)glyphInfo.Width : (short)0,

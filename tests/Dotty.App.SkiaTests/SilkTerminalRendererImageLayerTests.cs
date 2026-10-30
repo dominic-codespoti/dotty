@@ -165,7 +165,7 @@ public sealed class SilkTerminalRendererImageLayerTests
         using ImageGlHost? host = TryHost();
         if (host is null) return;
         using var atlas = new GlyphAtlas(SKTypeface.Default, 32f, initialSize: 256);
-        Assert.True(atlas.EnsureGlyph(new GlyphKey("I", SKTypeface.Default, 32f, bold: true), out GlyphInfo glyph));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("I", SKTypeface.Default, 32f, GlyphStyle.Bold), out GlyphInfo glyph));
         using var renderer = new SilkTerminalRenderer(host.Gl, atlas);
         CellInstance[] cells = { GlyphOnRed(glyph) };
         using ImagePixels blue = ImageTestData.Rgba(1, 1, (0, 0, 255, 255));
@@ -186,7 +186,7 @@ public sealed class SilkTerminalRendererImageLayerTests
         using ImageGlHost? host = TryHost();
         if (host is null) return;
         using var atlas = new GlyphAtlas(SKTypeface.Default, 32f, initialSize: 256);
-        Assert.True(atlas.EnsureGlyph(new GlyphKey("I", SKTypeface.Default, 32f, bold: true), out GlyphInfo glyph));
+        Assert.True(atlas.EnsureGlyph(new GlyphKey("I", SKTypeface.Default, 32f, GlyphStyle.Bold), out GlyphInfo glyph));
         using var renderer = new SilkTerminalRenderer(host.Gl, atlas);
         CellInstance[] cells = { GlyphOnRed(glyph) };
         using ImagePixels blue = ImageTestData.Rgba(1, 1, (0, 0, 255, 255));

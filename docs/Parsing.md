@@ -144,7 +144,7 @@ DECSTR (`CSI ! p`, `TerminalAdapter.OnSoftReset`) and RIS (`ESC c`, `TerminalAda
 
 | State | DECSTR | RIS |
 |---|---|---|
-| Cursor visibility (DECTCEM) and shape (DECSCUSR) | reset (visible, block, blinking) | reset |
+| Cursor visibility (DECTCEM) and shape (DECSCUSR) | reset (visible; shape back to the configured `cursor.shape`/`cursor.blink`, as DECSCUSR 0) | reset |
 | Scroll margins (DECSTBM) | reset to the full screen; cursor is **not** homed | reset |
 | Origin mode (DECOM), autowrap (DECAWM) | reset (off, on) | reset |
 | Saved cursor (DECSC) and saved SGR attributes | reset to home / default | reset |

@@ -239,7 +239,7 @@ public static class SearchQuadBuilder
         HashSet<int>? dirtyAtlasRows)
     {
         string grapheme = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(text, index, 1);
-        var key = new GlyphKey(grapheme, typeface, textSize, false);
+        var key = new GlyphKey(grapheme, typeface, textSize, GlyphStyle.Regular);
         int countBefore = atlas.EntryCount;
         bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
         if (!glyphOk)
@@ -255,7 +255,7 @@ public static class SearchQuadBuilder
             Col = (ushort)col,
             Row = (ushort)row,
             OffX = (short)glyphInfo.LeftBearing,
-            OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+            OffY = QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
             GlyphX = (short)glyphInfo.X,
             GlyphY = (short)glyphInfo.Y,
             GlyphW = (short)glyphInfo.Width,
@@ -290,7 +290,7 @@ public static class SearchQuadBuilder
         int col = (int)(rect.X / cellWidth);
         int row = (int)(rect.Y / cellHeight);
 
-        var key = new GlyphKey(glyphText, typeface, textSize, false);
+        var key = new GlyphKey(glyphText, typeface, textSize, GlyphStyle.Regular);
         int countBefore = atlas.EntryCount;
         bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
         if (!glyphOk)
@@ -305,7 +305,7 @@ public static class SearchQuadBuilder
                 Col = (ushort)col,
                 Row = (ushort)row,
                 OffX = (short)glyphInfo.LeftBearing,
-                OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+                OffY = QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
                 GlyphX = (short)glyphInfo.X,
                 GlyphY = (short)glyphInfo.Y,
                 GlyphW = (short)glyphInfo.Width,

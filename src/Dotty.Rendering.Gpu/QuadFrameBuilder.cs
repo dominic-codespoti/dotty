@@ -46,6 +46,13 @@ public static class QuadFrameBuilder
     public static readonly SgrColorArgb DefaultBackground = SgrColorArgb.FromRgb(0, 0, 0);
 
     /// <summary>
+    /// Whole-pixel glyph placement offset, rounded half away from zero. A fallback glyph's baseline offset is
+    /// fractional; truncation moved negative offsets down and positive ones up by up to a pixel.
+    /// </summary>
+    public static short RoundPixelOffset(float offset) =>
+        (short)Math.Clamp(MathF.Round(offset, MidpointRounding.AwayFromZero), short.MinValue, short.MaxValue);
+
+    /// <summary>
     /// Builds cell instances from the given render source into a newly allocated array or destination buffer.
     /// </summary>
     public static QuadFrameBuildResult Build(
@@ -55,7 +62,8 @@ public static class QuadFrameBuilder
         float textSize,
         in FrameGeometry geometry,
         SgrColorArgb? defaultFg = null,
-        SgrColorArgb? defaultBg = null)
+        SgrColorArgb? defaultBg = null,
+        TextAttributeOptions? textOptions = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(atlas);
@@ -69,7 +77,7 @@ public static class QuadFrameBuilder
         var instances = new CellInstance[rows * cols];
         var dirtyRows = new HashSet<int>();
         int count = Build(source, atlas, typeface, textSize, instances.AsSpan(), dirtyRows,
-            rows, cols, defaultFg ?? DefaultForeground, defaultBg ?? DefaultBackground);
+            rows, cols, defaultFg ?? DefaultForeground, defaultBg ?? DefaultBackground, textOptions);
         return new QuadFrameBuildResult(instances, count, dirtyRows);
     }
 
@@ -87,7 +95,8 @@ public static class QuadFrameBuilder
         int maxRows = -1,
         int maxCols = -1,
         SgrColorArgb? defaultFg = null,
-        SgrColorArgb? defaultBg = null)
+        SgrColorArgb? defaultBg = null,
+        TextAttributeOptions? textOptions = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(atlas);
@@ -100,11 +109,12 @@ public static class QuadFrameBuilder
 
         var fg = defaultFg ?? DefaultForeground;
         var bg = defaultBg ?? DefaultBackground;
+        var options = textOptions ?? TextAttributeOptions.Default;
         int written = 0;
         for (int row = 0; row < rows; row++)
         {
             written += BuildRow(source, row, atlas, typeface, textSize,
-                destination[written..], dirtyAtlasRows, cols, fg, bg);
+                destination[written..], dirtyAtlasRows, cols, fg, bg, in options, out _);
         }
 
         atlas.PublishPendingGlyphs();
@@ -114,6 +124,8 @@ public static class QuadFrameBuilder
     /// <summary>
     /// Builds one logical row into caller-owned storage. The caller may cache
     /// this run and should publish pending glyphs after its whole frame batch.
+    /// <paramref name="hasBlinkingText"/> reports SGR 5/6 glyphs, whose cached run must be rebuilt when
+    /// <see cref="TextAttributeOptions.BlinkVisible"/> changes.
     /// </summary>
     public static int BuildRow(
         IRenderSource source,
@@ -122,14 +134,17 @@ public static class QuadFrameBuilder
         SKTypeface typeface,
         float textSize,
         Span<CellInstance> destination,
-        HashSet<int>? dirtyAtlasRows = null,
-        int maxCols = -1,
-        SgrColorArgb? defaultFg = null,
-        SgrColorArgb? defaultBg = null)
+        HashSet<int>? dirtyAtlasRows,
+        int maxCols,
+        SgrColorArgb defaultFg,
+        SgrColorArgb defaultBg,
+        in TextAttributeOptions textOptions,
+        out bool hasBlinkingText)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(atlas);
         ArgumentNullException.ThrowIfNull(typeface);
+        hasBlinkingText = false;
         if ((uint)row >= (uint)source.Rows)
             return 0;
 
@@ -137,8 +152,8 @@ public static class QuadFrameBuilder
         if (cols <= 0)
             return 0;
 
-        var defFg = defaultFg ?? DefaultForeground;
-        var defBg = defaultBg ?? DefaultBackground;
+        var defFg = defaultFg;
+        var defBg = defaultBg;
         var cellHotSpan = source.GetRowCells(row);
         var coldSpan = source.GetRowColdCells(row);
         int rowLength = Math.Min(cols, cellHotSpan.Length);
@@ -205,6 +220,9 @@ public static class QuadFrameBuilder
             var effectiveBg = !style.Background.IsEmpty ? style.Background : defBg;
             if (style.Inverse)
                 (effectiveFg, effectiveBg) = (effectiveBg, effectiveFg);
+            // Faint mixes the visible text colour toward the visible background (after inverse); decorations follow it.
+            if (style.Faint)
+                effectiveFg = TextAttributeOptions.MixFaint(effectiveFg, effectiveBg, textOptions.FaintOpacity);
 
             byte bgA = !style.Background.IsEmpty || style.Inverse ? (byte)255 : (byte)0;
             byte flags = 0;
@@ -217,14 +235,20 @@ public static class QuadFrameBuilder
 
             GlyphInfo glyphInfo = default;
             bool glyphOk = false;
-            if (!(grapheme.Length == 1 && char.IsWhiteSpace(grapheme[0])))
+            // Conceal (SGR 8) and the off phase of blink (SGR 5/6) drop the glyph but keep background and decorations.
+            if (!style.Invisible && !(grapheme.Length == 1 && char.IsWhiteSpace(grapheme[0])))
             {
-                var key = new GlyphKey(grapheme, typeface, textSize, style.Bold);
-                glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
-                if (!glyphOk)
-                    glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-                if (glyphAdded)
-                    dirtyAtlasRows?.Add(row);
+                if (style.SlowBlink)
+                    hasBlinkingText = true;
+                if (!style.SlowBlink || textOptions.BlinkVisible)
+                {
+                    var key = new GlyphKey(grapheme, typeface, textSize, GlyphStyles.From(style.Bold, style.Italic));
+                    glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
+                    if (!glyphOk)
+                        glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+                    if (glyphAdded)
+                        dirtyAtlasRows?.Add(row);
+                }
             }
 
             if (!glyphOk)
@@ -261,7 +285,7 @@ public static class QuadFrameBuilder
                     Col = (ushort)column,
                     Row = (ushort)row,
                     OffX = (short)glyphInfo.LeftBearing,
-                    OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+                    OffY = RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
                     GlyphX = (short)glyphInfo.X,
                     GlyphY = (short)glyphInfo.Y,
                     GlyphW = (short)glyphInfo.Width,

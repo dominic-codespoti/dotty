@@ -41,6 +41,10 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
     public ulong GlobalGeneration;
     public TerminalCursorShape CursorShape { get; set; } = TerminalCursorShape.Block;
     public bool CursorBlinking { get; set; } = true;
+    /// <inheritdoc cref="TerminalBuffer.CursorStyleIsDefault"/>
+    public bool CursorStyleIsDefault { get; set; } = true;
+    /// <summary>DECTCEM (<c>CSI ? 25 h/l</c>) state at capture time; false hides the cursor.</summary>
+    public bool CursorVisible { get; set; } = true;
 
     /// <summary>Materialized scrollback text for the visible range, newest = 0.</summary>
     public string[] ScrollbackText = Array.Empty<string>();
@@ -113,6 +117,8 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         int cursorCol,
         TerminalCursorShape cursorShape = TerminalCursorShape.Block,
         bool cursorBlinking = true,
+        bool cursorStyleIsDefault = true,
+        bool cursorVisible = true,
         int scrollOffset = 0)
     {
         int rows = screen.Rows;
@@ -128,6 +134,8 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
         snap.CursorCol = cursorCol;
         snap.CursorShape = cursorShape;
         snap.CursorBlinking = cursorBlinking;
+        snap.CursorStyleIsDefault = cursorStyleIsDefault;
+        snap.CursorVisible = cursorVisible;
         snap._styles = styles;
         snap.ScrollbackText = Array.Empty<string>();
         snap.CapturedSbStart = 0;

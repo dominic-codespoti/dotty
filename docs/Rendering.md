@@ -271,10 +271,13 @@ expected to change the row; it is not a release date or a commitment.
 | Programming ligatures / OpenType features | Not supported | | W4-C11 |
 | Bidirectional / RTL text | Not supported | Decision: out of scope, as in Ghostty and kitty. Text is laid out left to right in logical order. Per-grapheme shaping (W4-C10) will shape within one cell only; it is not a bidi layout engine | none |
 | Bold | Partial | Synthetic: the regular face is stroked; no separate bold face | W4-C6 |
-| Italic, faint, conceal, text blink (SGR 3, 2, 8, 5) | Not supported | Parsed and stored, not drawn | W4-B3 |
+| Italic (SGR 3) | Partial | Synthetic: the regular face is skewed (`SkewX` −0.25) as its own atlas entry (regular, bold, italic, bold-italic keys); no separate italic face | W4-C6 |
+| Faint (SGR 2) | Supported | Text colour mixed toward the cell background after inverse, keeping `font.faintOpacity` (default 0.5) of it; decorations follow the text colour | |
+| Conceal (SGR 8) | Supported | No glyph; background and decorations stay | |
+| Text blink (SGR 5, 6) | Supported | One rate for both, shared with the cursor blink phase (`cursor.blinkIntervalMs`); the glyph is hidden in the off phase, background and decorations stay; steady while the window is unfocused | |
 | Inverse, strikethrough, overline | Supported | | |
 | Underline | Partial | Single underline only. Double, curly, dotted, and dashed (SGR 4:2–4:5) and the SGR 58 underline colour are parsed but drawn as the same single underline | W4-C3 |
-| Cursor shape | Partial | DECSCUSR selects the shape; `cursor.shape` is not applied. `Beam` draws nothing over a drawn cell; empty cells always get a half-transparent block. DECSCUSR blink bit ignored | W4-B2 |
+| Cursor shape | Supported | Block (text drawn in the cell background), beam and underline; DECSCUSR shape and blink bit, else `cursor.shape`/`cursor.blink`; DECTCEM hides it; wide characters get a two-cell cursor; unfocused windows draw `cursor.unfocusedStyle` (hollow outline by default) | |
 | Pane dividers / active-pane border | Supported | `panes.dividerThickness` sets the gap (logical px, rounded to device px); dividers use the chrome border colour; `panes.activeBorder` paints the gap around the active pane in the accent colour when the tab has splits | |
 | Default colour overrides (OSC 10/11, 110/111) | Supported | Per pane; the pane rect is painted with the override background, the window padding keeps the theme background | |
 | Reverse video (DECSCNM, mode 5) | Supported | Swaps the pane's effective default foreground and background; explicit SGR colours are unchanged | |

@@ -291,7 +291,7 @@ public class FontFallbackSubsystemTests
         var primary = SKTypeface.Default;
         var chain = new FontFallbackChain(primary);
 
-        var resolved = chain.ResolveTypefaceForGrapheme("A", bold: false);
+        var resolved = chain.ResolveTypefaceForGrapheme("A");
         Assert.NotNull(resolved);
     }
 }

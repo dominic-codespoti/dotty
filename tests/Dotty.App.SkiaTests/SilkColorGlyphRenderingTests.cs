@@ -69,7 +69,7 @@ public sealed class SilkColorGlyphRenderingTests
             using var typeface = SKTypeface.FromFile(NotoColorEmojiPath);
             Assert.NotNull(typeface);
             using var atlas = new GlyphAtlas(typeface!, 20f, initialSize: 128);
-            Assert.True(atlas.EnsureGlyph(new GlyphKey("😀", typeface!, 20f, bold: false), out GlyphInfo glyph));
+            Assert.True(atlas.EnsureGlyph(new GlyphKey("😀", typeface!, 20f, GlyphStyle.Regular), out GlyphInfo glyph));
             Assert.True(glyph.IsColor);
             Assert.True(glyph.Width < CellWidth && glyph.Height < CellHeight, "Test emoji must fit in the first terminal cell.");
 

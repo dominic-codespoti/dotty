@@ -7,6 +7,16 @@
     <Version>0.3.0</Version>
   </PropertyGroup>
 
+  <!-- GitHub Actions builds: CI-normalized source paths, and NuGet lock files. Restore runs in
+       locked mode (fails when the resolved graph drifts) for every project whose
+       packages.lock.json is committed; projects without one generate it and CI uploads it for
+       review (docs/Releasing.md, "Locked restore"). Local builds are unaffected. -->
+  <PropertyGroup Condition="'$(GITHUB_ACTIONS)' == 'true'">
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="Exists('$(MSBuildProjectDirectory)/packages.lock.json')">true</RestoreLockedMode>
+  </PropertyGroup>
+
   <!-- Release build optimizations -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <DebugType>embedded</DebugType>

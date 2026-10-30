@@ -24,6 +24,9 @@ jobs:
   publish:
     name: AOT publish (${{ matrix.rid }})
     runs-on: ${{ matrix.runner }}
+    # linux-x64 builds inside Debian 11 so the shipped ELF files link against glibc 2.31
+    # (scripts/dist/baseline-targets.json); an empty image runs the job on the runner itself.
+    container: ${{ matrix.container }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -31,40 +34,54 @@ jobs:
         include:
           - rid: linux-x64
             runner: ubuntu-latest
+            container: debian:bullseye
             python: python3
           - rid: win-x64
             runner: windows-latest
+            container: ''
             python: python
           - rid: osx-arm64
             runner: macos-15
+            container: ''
             python: python3
           - rid: osx-x64
             runner: macos-15-intel
+            container: ''
             python: python3
     env:
       RID: ${{ matrix.rid }}
       RELEASE_VERSION: ${{ inputs.version }}
     steps:
+      - name: Install build prerequisites (Debian 11 container)
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git make gcc g++ clang lld zlib1g-dev python3 \
+            libicu67 libssl1.1 libgssapi-krb5-2 \
+            cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
+
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
 
-      - name: Install native build prerequisites (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
-
       - name: Cache NuGet packages
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
-          key: nuget-aot-${{ matrix.rid }}-${{ hashFiles('**/*.csproj', 'Directory.Packages.props') }}
+          key: nuget-aot-${{ matrix.rid }}-${{ hashFiles('**/*.csproj', 'Directory.Packages.props', '**/packages.lock.json') }}
           restore-keys: |
             nuget-aot-${{ matrix.rid }}-
+
+      - name: Apply deployment target
+        shell: bash
+        # osx-*: MACOSX_DEPLOYMENT_TARGET from baseline-targets.json, honoured by clang (pty-helper) and CMake (GLFW).
+        run: ${{ matrix.python }} scripts/dist/check_baseline.py env --rid "$RID" --targets scripts/dist/baseline-targets.json >> "$GITHUB_ENV"
 
       - name: Build native pty-helper
         if: runner.os != 'Windows'
@@ -117,6 +134,10 @@ jobs:
         shell: pwsh
         run: ./scripts/dist/verify-publish.ps1 -Rid $env:RID -PublishDir "publish\$env:RID" -Version "${{ steps.version.outputs.version }}" -VersionMode "${{ steps.version.outputs.mode }}"
 
+      - name: Measure platform baseline
+        shell: bash
+        run: ${{ matrix.python }} scripts/dist/check_baseline.py scan --rid "$RID" --publish-dir "publish/$RID" --targets scripts/dist/baseline-targets.json --output "dist/baselines-$RID.json" --summary "$GITHUB_STEP_SUMMARY"
+
       - name: Create tarball (release)
         if: inputs.version != '' && runner.os != 'Windows'
         shell: bash
@@ -134,24 +155,27 @@ jobs:
         if: inputs.version != '' && runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
           Compress-Archive -Path "publish\$env:RID\*" -DestinationPath "dist\dotty-$env:RELEASE_VERSION-$env:RID.zip" -Force
           Get-ChildItem dist
 
-      - name: Upload release archive
+      - name: Upload release archive and baseline
         if: inputs.version != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dotty-${{ matrix.rid }}
-          path: dist/dotty-*
+          path: |
+            dist/dotty-*
+            dist/baselines-*.json
           retention-days: 7
           if-no-files-found: error
 
-      - name: Upload publish output (CI)
+      - name: Upload publish output and baseline (CI)
         if: inputs.version == ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: aot-publish-${{ matrix.rid }}
-          path: publish/${{ matrix.rid }}/
+          path: |
+            publish/${{ matrix.rid }}/
+            dist/baselines-${{ matrix.rid }}.json
           retention-days: 7
           if-no-files-found: error

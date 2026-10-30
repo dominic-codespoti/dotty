@@ -23,7 +23,7 @@ Linux, macOS, and Windows.
 | `tests/` | Unit, terminal, native PTY, Skia, and performance test projects |
 | `scripts/perf/` | Benchmark harnesses used by the performance skill |
 | `scripts/esctest/` | esctest2 conformance runner and result parser (Python) |
-| `scripts/dist/` | Release/distribution scripts (publish and archive verification, AOT warning gate) and their Python tests |
+| `scripts/dist/` | Release/distribution scripts (publish and archive verification, AOT warning gate, ELF/Mach-O platform baselines, release notes) and their Python tests |
 | `tests/Dotty.Conformance.Host/` | Headless host executable that the esctest run drives (not a test project) |
 | `tests/esctest/` | Pinned esctest2 commit and the expected-failures baseline |
 

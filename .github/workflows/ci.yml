@@ -18,6 +18,10 @@ env:
   PROJECT_PATH: 'src/Dotty/Dotty.csproj'
   SOLUTION_PATH: 'Dotty.slnx'
 
+# Least privilege: no job in CI writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     name: Build & Test (${{ matrix.os }})
@@ -52,12 +56,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
@@ -66,16 +70,27 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev zsh fish
       - name: Cache NuGet packages
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
-          key: nuget-${{ matrix.os }}-${{ hashFiles('**/*.csproj') }}
+          key: nuget-${{ matrix.os }}-${{ hashFiles('**/*.csproj', 'Directory.Packages.props', '**/packages.lock.json') }}
           restore-keys: |
             nuget-${{ matrix.os }}-
             nuget-
 
       - name: Restore dependencies
         run: dotnet restore ${{ env.SOLUTION_PATH }}
+
+      # Directory.Build.props writes packages.lock.json during CI restores and restores in
+      # locked mode for every project whose lock file is committed. Until they are committed,
+      # the generated files are published here for review (see docs/Releasing.md).
+      - name: Upload generated NuGet lock files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nuget-lock-files-${{ matrix.os }}
+          path: '**/packages.lock.json'
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Build native pty-helper (Unix only)
         if: matrix.build-native
@@ -113,7 +128,7 @@ jobs:
         run: dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj -c Release --no-build --report-xunit-trx --report-xunit-trx-filename "native-${{ matrix.rid }}.trx" --results-directory ./TestResults/${{ matrix.rid }}
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: build-${{ matrix.os }}
           path: |
@@ -123,7 +138,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload test results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: test-results-${{ matrix.os }}
@@ -142,10 +157,9 @@ jobs:
     needs: build-and-test
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
@@ -199,9 +213,10 @@ jobs:
           fi
           cat "$smoke_dir/idle-wakeups.log"
 
-  # NativeAOT publish of every release RID through the same reusable workflow release.yml
-  # uses: file asserts, `dotty --version` and `+explain-config` smoke, and a gate that fails
-  # on IL2xxx/IL3xxx warnings in Dotty's own code (third-party warnings are listed).
+  # NativeAOT publish of every release RID through the reusable workflow that release.yml
+  # also calls: file asserts, `dotty --version` and `+explain-config` smoke, a gate that fails
+  # on IL2xxx/IL3xxx warnings in Dotty's own code (third-party warnings are listed), and the
+  # measured platform baseline (glibc / macOS deployment target) against baseline-targets.json.
   aot-publish:
     name: AOT publish
     uses: ./.github/workflows/aot-publish.yml
@@ -212,10 +227,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
@@ -259,8 +273,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Detect captured baseline
         id: baseline
         shell: bash
@@ -274,14 +287,14 @@ jobs:
           fi
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         continue-on-error: ${{ steps.baseline.outputs.captured != 'true' }}
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
           key: nuget-esctest-${{ hashFiles('**/*.csproj') }}
@@ -289,7 +302,7 @@ jobs:
             nuget-esctest-
 
       - name: Cache esctest2 checkout
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .esctest
           key: esctest2-${{ hashFiles('tests/esctest/esctest.json') }}
@@ -314,7 +327,7 @@ jobs:
         run: python3 scripts/esctest/run_esctest.py --jobs 2 --out artifacts/esctest
 
       - name: Upload esctest results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: esctest-results
@@ -330,18 +343,18 @@ jobs:
     if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
           key: nuget-ubuntu-latest-${{ hashFiles('**/*.csproj') }}
@@ -366,7 +379,7 @@ jobs:
           DOTTY_BENCH_MODE: quick
 
       - name: Upload Performance Results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: performance-results

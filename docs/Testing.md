@@ -294,7 +294,7 @@ The authoritative workflow is `.github/workflows/ci.yml`:
 | `build-and-test` | macOS Intel `osx-x64` | POSIX helper and host-native tests |
 | `build-and-test` | macOS arm64 `osx-arm64` | POSIX helper and host-native tests |
 | `build-and-test` | Windows `win-x64` | Host-native tests and ConPTY smoke |
-| `aot-publish` (reusable `aot-publish.yml`) | Ubuntu `linux-x64`, Windows `win-x64`, macOS arm64 `osx-arm64`, macOS Intel `osx-x64` | NativeAOT `dotnet publish` of the shipped configuration; `scripts/dist/verify-publish.sh`/`.ps1` file asserts, `dotty --version` (central version or a `-dev+<rev>` build) and `dotty +explain-config font.size`; fails on IL2xxx/IL3xxx warnings in Dotty's own code and lists third-party ones (`scripts/dist/aot_warnings.py`) |
+| `aot-publish` (reusable `aot-publish.yml`) | `linux-x64` in a Debian 11 (`debian:bullseye`) container on Ubuntu, Windows `win-x64`, macOS arm64 `osx-arm64`, macOS Intel `osx-x64` | NativeAOT `dotnet publish` of the shipped configuration; `scripts/dist/verify-publish.sh`/`.ps1` file asserts, `dotty --version` (central version or a `-dev+<rev>` build) and `dotty +explain-config font.size`; fails on IL2xxx/IL3xxx warnings in Dotty's own code and lists third-party ones (`scripts/dist/aot_warnings.py`); fails when the measured glibc / macOS deployment target exceeds `scripts/dist/baseline-targets.json` (`scripts/dist/check_baseline.py`) |
 | `gui-smoke-linux` | Ubuntu `linux-x64` | X11 desktop startup under Xvfb |
 | `code-quality` | Ubuntu | `dotnet format whitespace` verification, the Python unit tests for the benchmark, esctest and distribution (`scripts/dist/tests`) scripts, and `tools/gen-width-tables.py --check` on Python 3.14 (its `unicodedata` is UCD 16.0.0) |
 | `esctest-linux` | Ubuntu | esctest2 conformance against the headless host; **not gating** until `tests/esctest/expected-failures.txt` carries the `# baseline-captured:` marker (see [Conformance](Conformance.md)) |
@@ -317,10 +317,14 @@ exact release version. Release jobs must:
    RID-specific GLFW/Skia/Lua native libraries, the shell-integration payload,
    `License.md`, `THIRD-PARTY-NOTICES.md` and `licenses/GLFW-LICENSE.md`,
    `dotty --version` equal to the release version, and `+explain-config`;
-3. fail on IL2xxx/IL3xxx warnings in Dotty's own code;
+3. fail on IL2xxx/IL3xxx warnings in Dotty's own code, and on a measured glibc or
+   macOS deployment target above `scripts/dist/baseline-targets.json`;
 4. inspect every tar/zip archive before release creation (`scripts/dist/verify_archive.py`);
-5. extract and start the Linux archive under Xvfb;
-6. generate `MANIFEST.txt` and `SHA256SUMS`.
+5. render frames from the extracted Linux archive under Xvfb with software Mesa,
+   driven through the control interface by `scripts/native/desktop-smoke.py`;
+6. generate `MANIFEST.txt`, `SHA256SUMS`, `baselines.json`, release notes from
+   the measured baselines (`scripts/dist/release_notes.py`), and a build provenance
+   attestation.
 
 See [Platform Support](PlatformSupport.md) for promotion gates and
 [End-to-end Testing](E2ETesting.md) for the command-level smoke contract.

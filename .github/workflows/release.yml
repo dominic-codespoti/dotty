@@ -15,6 +15,10 @@ env:
   PROJECT_PATH: 'src/Dotty/Dotty.csproj'
   SOLUTION_PATH: 'Dotty.slnx'
 
+# Least privilege: read-only by default; only create-release gets write, OIDC and attestation scopes.
+permissions:
+  contents: read
+
 jobs:
   validate-release:
     name: Validate Release Inputs
@@ -25,12 +29,12 @@ jobs:
       prerelease: ${{ steps.validate.outputs.prerelease }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
@@ -109,12 +113,13 @@ jobs:
     name: Smoke release archives
     needs: [validate-release, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ./artifacts
           pattern: dotty-*
@@ -126,121 +131,73 @@ jobs:
           shopt -s nullglob
           python3 scripts/dist/verify_archive.py --expect-count 4 ./artifacts/*/*.tar.gz ./artifacts/*/*.zip
 
-  # Create GitHub Release
+      - name: Install Xvfb and software OpenGL (Mesa llvmpipe)
+        run: sudo apt-get update && sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0
+
+      - name: Render a frame from the extracted Linux archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find ./artifacts -name 'dotty-*-linux-x64.tar.gz' -print -quit)"
+          test -n "$archive"
+          smoke_dir="$RUNNER_TEMP/release-smoke"
+          mkdir -p "$smoke_dir"
+          tar -xzf "$archive" -C "$smoke_dir"
+          package_dir="$smoke_dir/$(basename "$archive" .tar.gz)"
+          # desktop-smoke.py drives the loopback control interface (DOTTY_TEST_PORT): it fails unless
+          # the window presents frames, the child shell's output renders, and resize and split work.
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s '-screen 0 1280x800x24 +extension GLX +render -noreset' \
+            python3 scripts/native/desktop-smoke.py --backend x11 --executable "$package_dir/dotty"
+
   create-release:
     name: Create Release
     needs: [validate-release, build, smoke-release-assets]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # create the release and upload its assets
+      id-token: write # sign the provenance attestation (Sigstore OIDC)
+      attestations: write # store the provenance attestation
+    env:
+      VERSION: ${{ needs.validate-release.outputs.version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: ./artifacts
           pattern: dotty-*
 
-      - name: Collect artifacts
+      - name: Collect archives, baselines, manifest and checksums
         shell: bash
         run: |
           set -euo pipefail
+          shopt -s nullglob
           mkdir -p ./release-assets
-          find ./artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} ./release-assets/ \;
-          ls -la ./release-assets/
-      - name: Smoke extracted Linux artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          archive="$(find ./release-assets -name 'dotty-*-linux-x64.tar.gz' -print -quit)"
-          test -n "$archive"
-          smoke_dir="$(mktemp -d)"
-          mkdir -p "$smoke_dir/home"
-          tar -xzf "$archive" -C "$smoke_dir"
-          package_dir="$(find "$smoke_dir" -mindepth 1 -maxdepth 1 -type d -print -quit)"
-          test -n "$package_dir"
-          test -x "$package_dir/dotty"
-          test -x "$package_dir/pty-helper"
-          test -f "$package_dir/shell-integration/dotty.bash"
-          test -f "$package_dir/shell-integration/inject/zsh/.zshenv"
-          set +e
-          timeout 10s env HOME="$smoke_dir/home" DOTNET_CLI_HOME="$smoke_dir/home" XDG_CONFIG_HOME="$smoke_dir/home/.config" \
-            DOTTY_CONFIG_HOME="$smoke_dir/home/.config/dotty" \
-            xvfb-run -a "$package_dir/dotty" > "$smoke_dir/smoke.log" 2>&1
-          status=$?
-          set -e
-          if [ "$status" -ne 124 ]; then
-            cat "$smoke_dir/smoke.log"
-            exit 1
-          fi
+          cp ./artifacts/*/*.tar.gz ./artifacts/*/*.zip ./release-assets/
+          python3 scripts/dist/check_baseline.py merge --output ./release-assets/baselines.json ./artifacts/*/baselines-*.json
+          cd ./release-assets
+          printf '%s\n' *.tar.gz *.zip | sort > MANIFEST.txt
+          sha256sum *.tar.gz *.zip baselines.json > SHA256SUMS
+          ls -la
 
-      - name: Generate release notes
-        id: release_notes
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION=${{ needs.validate-release.outputs.version }}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          
-          cat > RELEASE_NOTES.md <<EOF
-          ## Dotty Terminal v${VERSION}
+      - name: Generate release notes from measured baselines
+        run: python3 scripts/dist/release_notes.py --version "$VERSION" --repository "${{ github.repository }}" --baselines ./release-assets/baselines.json --checksums ./release-assets/SHA256SUMS --output RELEASE_NOTES.md
 
-          ### Installation
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ./release-assets/*.tar.gz
+            ./release-assets/*.zip
+            ./release-assets/baselines.json
 
-          **Linux (x64):**
-          ```bash
-          tar -xzf dotty-${VERSION}-linux-x64.tar.gz
-          cd dotty-${VERSION}-linux-x64
-          ./dotty
-          ```
-
-          **macOS (Intel x64):**
-          ```bash
-          tar -xzf dotty-${VERSION}-osx-x64.tar.gz
-          cd dotty-${VERSION}-osx-x64
-          ./dotty
-          ```
-
-          **macOS (Apple Silicon):**
-          ```bash
-          tar -xzf dotty-${VERSION}-osx-arm64.tar.gz
-          cd dotty-${VERSION}-osx-arm64
-          ./dotty
-          ```
-
-          **Windows (x64):**
-          1. Extract `dotty-${VERSION}-win-x64.zip`
-          2. Run `dotty.exe`
-
-          ### System Requirements
-          - Linux: kernel 3.10+, glibc 2.17+
-          - macOS: 10.15+ (Catalina or later)
-          - Windows: Windows 10 1809+ or Windows 11
-
-          ### Checksums
-          EOF
-          
-          # Generate a deterministic artifact manifest and checksums.
-          (
-            cd ./release-assets
-            printf '%s\n' *.tar.gz *.zip | sort
-          ) > ARTIFACT_MANIFEST.txt
-          (
-            cd ./release-assets
-            sha256sum *.tar.gz *.zip
-          ) > CHECKSUMS.txt
-          cp ARTIFACT_MANIFEST.txt ./release-assets/MANIFEST.txt
-          cp CHECKSUMS.txt ./release-assets/SHA256SUMS
-          cat CHECKSUMS.txt >> RELEASE_NOTES.md
       - name: Create Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.validate-release.outputs.tag_name }}
-          name: Dotty v${{ steps.release_notes.outputs.version }}
+          name: Dotty v${{ needs.validate-release.outputs.version }}
           body_path: RELEASE_NOTES.md
           files: ./release-assets/*
           draft: false
@@ -250,8 +207,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload checksums as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: checksums
-          path: CHECKSUMS.txt
+          path: ./release-assets/SHA256SUMS
           retention-days: 30

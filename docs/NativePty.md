@@ -53,8 +53,7 @@ var pty = PtyFactory.CreateAndStart(shell: "/bin/bash", columns: 120, rows: 30);
 UnixPty launches the packaged pty-helper and redirects its standard streams.
 The helper allocates a pseudoterminal with posix_openpt/grantpt/unlockpt,
 creates the child session and controlling terminal, proxies terminal I/O, and
-accepts resize JSON over a Unix-domain socket. Published Unix apps resolve the
-helper beside the application before development locations or PATH. See the
+accepts resize JSON over a Unix-domain socket. See the
 [helper README](../src/Dotty.NativePty/Readme.md) for its direct invocation and
 build instructions.
 
@@ -64,6 +63,29 @@ Build the helper and app from the repository root:
 make -C src/Dotty.NativePty
 dotnet build Dotty.slnx -c Release
 ```
+
+### Locating the helper
+
+`PtyHelperLocator.Resolve` (pure; `ResolveForCurrentProcess` supplies the real
+environment, `AppContext.BaseDirectory` and file system) picks the first match:
+
+1. `DOTTY_PTY_HELPER`: the exact helper path. When it is set but names no
+   existing file, resolution stops there and reports that path; it never falls
+   back to another helper.
+2. `<base>/pty-helper` (the flat published layout, for example `/usr/lib/dotty`).
+3. `<base>/../libexec/dotty/pty-helper`.
+4. `<base>/../lib/dotty/pty-helper` (executable in `<prefix>/bin`, helper in
+   `<prefix>/lib/dotty`).
+5. Development builds only: `src/Dotty.NativePty/bin/pty-helper` or
+   `Dotty.NativePty/bin/pty-helper` in the base directory and up to 15 parents,
+   then each `PATH` entry.
+
+"Development builds" are all builds except `dotnet publish -c Release` (the
+`DOTTY_PUBLISHED_LAYOUT` constant in `Dotty.NativePty.csproj`), so Release-
+configuration test and CI builds keep finding the source-tree helper while
+shipped artifacts never execute a `pty-helper` found on `PATH`. A missing helper
+fails with an error that lists every probed path; `PtyFactory.GetCapabilities`
+reports the same list.
 
 ### Environment contract
 

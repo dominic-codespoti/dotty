@@ -210,6 +210,26 @@ public sealed class ShellIntegrationLauncherTests
         Assert.NotNull(d3);
     }
 
+    [Theory]
+    // Application in <prefix>/lib/dotty (flat layout, launcher symlink resolved): <prefix>/share/dotty.
+    [InlineData("/usr/lib/dotty", "/usr/share/dotty/shell-integration", "/usr/share/dotty/shell-integration")]
+    // Executable in <prefix>/bin: the one-level probe.
+    [InlineData("/usr/bin", "/usr/share/dotty/shell-integration", "/usr/share/dotty/shell-integration")]
+    // Both present: the one-level probe wins over the two-level one.
+    [InlineData("/usr/lib/dotty", "/usr/lib/share/dotty/shell-integration;/usr/share/dotty/shell-integration", "/usr/lib/share/dotty/shell-integration")]
+    // Beside the executable wins over both share probes.
+    [InlineData("/usr/lib/dotty", "/usr/lib/dotty/shell-integration;/usr/share/dotty/shell-integration", "/usr/lib/dotty/shell-integration")]
+    public void Locator_ProbesBesideThenOneAndTwoLevelShare(string baseDirectory, string installed, string expected)
+    {
+        var markers = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string directory in installed.Split(';'))
+            markers.Add(Path.GetFullPath(Path.Combine(directory, "dotty.bash")));
+
+        string? resolved = ShellIntegrationLocator.Resolve(null, baseDirectory, p => markers.Contains(Path.GetFullPath(p)), out _);
+
+        Assert.Equal(Path.GetFullPath(expected), Path.GetFullPath(resolved!));
+    }
+
     [Fact]
     public void Config_DefaultsToNoneAndRoundTripsJson()
     {

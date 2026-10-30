@@ -135,8 +135,12 @@ test -x src/Dotty.NativePty/bin/pty-helper
 ```
 
 Published Unix artifacts must contain an executable `pty-helper` beside
-`dotty`. The runtime first checks the published directory, then repository
-build locations, then each directory in `PATH` using the host path separator.
+`dotty`. `DOTTY_PTY_HELPER=/path/to/pty-helper` overrides the search. Otherwise
+the runtime checks the published directory, `../libexec/dotty/` and
+`../lib/dotty/`; development builds (everything except `dotnet publish -c
+Release`) then try the repository build locations and each directory in `PATH`.
+The error message lists every path it probed. See
+[Native PTY](NativePty.md#locating-the-helper).
 
 ### PTY reports an unsupported platform or architecture
 

@@ -18,8 +18,9 @@ public static class ShellIntegrationLocator
 
     /// <summary>
     /// Resolution order: <c>DOTTY_SHELL_INTEGRATION_DIR</c> override (re-read on every call), then
-    /// <c>BaseDirectory/shell-integration</c>, then <c>BaseDirectory/../share/dotty/shell-integration</c>.
-    /// A directory is valid iff it contains <c>dotty.bash</c>. The packaged probe is cached.
+    /// <c>BaseDirectory/shell-integration</c>, then <c>BaseDirectory/../share/dotty/shell-integration</c> (executable in
+    /// <c>&lt;prefix&gt;/bin</c>), then <c>BaseDirectory/../../share/dotty/shell-integration</c> (application in
+    /// <c>&lt;prefix&gt;/lib/dotty</c>). A directory is valid iff it contains <c>dotty.bash</c>. The packaged probe is cached.
     /// </summary>
     public static string? Find()
     {
@@ -72,8 +73,10 @@ public static class ShellIntegrationLocator
         {
             string beside = Path.Combine(baseDirectory, "shell-integration");
             if (IsValid(beside, fileExists)) return beside;
-            string fhs = Path.GetFullPath(Path.Combine(baseDirectory, "..", "share", "dotty", "shell-integration"));
-            if (IsValid(fhs, fileExists)) return fhs;
+            string binPrefix = Path.GetFullPath(Path.Combine(baseDirectory, "..", "share", "dotty", "shell-integration"));
+            if (IsValid(binPrefix, fileExists)) return binPrefix;
+            string libPrefix = Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", "share", "dotty", "shell-integration"));
+            if (IsValid(libPrefix, fileExists)) return libPrefix;
         }
         diagnostic = "shell-integration directory not found beside the executable.";
         return null;

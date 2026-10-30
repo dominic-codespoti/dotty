@@ -47,6 +47,10 @@ child's first `TIOCGWINSZ`; see [Native PTY](NativePty.md#pixel-sizes).)
 Shell-integration scripts skip silently in non-interactive shells; see
 [Shell Integration](ShellIntegration.md).
 
+`DOTTY_PTY_HELPER`, read from Dotty's own environment, names the `pty-helper`
+executable to use instead of searching for it; see
+[Native PTY](NativePty.md#locating-the-helper).
+
 When a tab or pane is created from an existing one, the starting directory is
 resolved at that moment: the shell's OSC 7 directory if it still exists,
 otherwise the session's launch directory if it still exists, otherwise the

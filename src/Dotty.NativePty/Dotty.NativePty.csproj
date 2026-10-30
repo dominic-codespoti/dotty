@@ -14,6 +14,13 @@
     <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
 
+  <!-- `dotnet publish -c Release` (the shipped artifacts) resolves pty-helper only from the install layout; every
+       other build, including Release test and CI builds, may also walk the source tree and PATH (PtyHelperLocator).
+       `dotnet publish` sets _IsPublishing as a global property, so referencing projects pass it down. -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true' And '$(Configuration)' == 'Release'">
+    <DefineConstants>$(DefineConstants);DOTTY_PUBLISHED_LAYOUT</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
   </ItemGroup>

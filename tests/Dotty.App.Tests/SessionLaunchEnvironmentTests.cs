@@ -3,6 +3,7 @@ using Dotty.Runtime;
 using Dotty.Runtime.Panes;
 using Dotty.Runtime.Sessions;
 using Dotty.Runtime.Tabs;
+using Dotty.Terminal.Adapter;
 using Xunit;
 
 namespace Dotty.App.Tests;
@@ -19,23 +20,6 @@ public sealed class SessionLaunchEnvironmentTests
             return pty;
         });
         return (session, ptys);
-    }
-
-    [Theory]
-    [InlineData("0.3.0+abc123", "0.3.0")]
-    [InlineData("0.3.0", "0.3.0")]
-    [InlineData("0.4.0-beta.1", "0.4.0-beta.1")]
-    [InlineData("0.4.0-beta.1+sha.5114f85", "0.4.0-beta.1")]
-    [InlineData("", "")]
-    [InlineData(null, "")]
-    public void StripBuildMetadata_RemovesOnlyBuildMetadata(string? input, string expected) =>
-        Assert.Equal(expected, DottyVersion.StripBuildMetadata(input));
-
-    [Fact]
-    public void Current_HasNoBuildMetadataAndIsNotEmpty()
-    {
-        Assert.False(string.IsNullOrEmpty(DottyVersion.Current));
-        Assert.DoesNotContain('+', DottyVersion.Current);
     }
 
     [Fact]
@@ -62,9 +46,27 @@ public sealed class SessionLaunchEnvironmentTests
 
         IDictionary<string, string> env = Assert.Single(ptys).StartedEnvironment!;
         Assert.Equal("dotty", env["TERM_PROGRAM"]);
-        Assert.Equal(DottyVersion.Current, env["TERM_PROGRAM_VERSION"]);
+        Assert.Equal(DottyVersion.Describe(), env["TERM_PROGRAM_VERSION"]);
         Assert.Equal(leaf.Id, env["DOTTY_SURFACE_ID"]);
         Assert.Matches("^[0-9a-f]{32}$", env["DOTTY_SURFACE_ID"]);
+    }
+
+    [Fact]
+    public void Session_ReportsTheEnvironmentVersionInXtVersionAndDa2()
+    {
+        var (session, ptys) = CreateSession();
+        using var leaf = new LeafPane(session);
+        session.Start();
+        var replies = new List<string>();
+        session.Adapter.ReplyRequested += reply => replies.Add(reply.ToString());
+
+        session.Adapter.OnRequestTerminalVersion();
+        session.Adapter.OnSendDeviceAttributes(2);
+
+        string version = Assert.Single(ptys).StartedEnvironment!["TERM_PROGRAM_VERSION"];
+        Assert.Equal(
+            new[] { "\u001bP>|Dotty " + version + "\u001b\\", $"\u001b[>1;{TerminalAdapter.Da2VersionNumber(version)};0c" },
+            replies);
     }
 
     [Fact]
@@ -83,7 +85,7 @@ public sealed class SessionLaunchEnvironmentTests
         IDictionary<string, string> env = Assert.Single(ptys).StartedEnvironment!;
         Assert.Equal("custom", env["TERM_PROGRAM"]);
         Assert.Equal("bar", env["FOO"]);
-        Assert.Equal(DottyVersion.Current, env["TERM_PROGRAM_VERSION"]);
+        Assert.Equal(DottyVersion.Describe(), env["TERM_PROGRAM_VERSION"]);
         Assert.Equal(leaf.Id, env["DOTTY_SURFACE_ID"]);
         Assert.Equal(2, caller.Count);
         Assert.Equal("custom", caller["TERM_PROGRAM"]);

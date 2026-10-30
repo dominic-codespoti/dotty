@@ -35,7 +35,7 @@ wins):
 | Variable | Value |
 |---|---|
 | `TERM_PROGRAM` | `dotty` |
-| `TERM_PROGRAM_VERSION` | The release version without SemVer build metadata (`0.3.0+sha` becomes `0.3.0`; prerelease labels are kept). |
+| `TERM_PROGRAM_VERSION` | The same string `dotty --version` prints: the release version for release builds (`0.3.0`, `0.4.0-beta.1`), `<version>-dev+<sha7>` for development builds. See [Command line](CommandLine.md). |
 | `DOTTY_SURFACE_ID` | A stable per-session identifier (a GUID in `N` format) that is also the owning pane's `Id`. |
 
 The Unix `pty-helper` protocol variables `DOTTY_CONTROL_SOCKET`,

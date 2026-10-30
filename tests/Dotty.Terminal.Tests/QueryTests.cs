@@ -21,6 +21,9 @@ public sealed class QueryTests
 
     private static void Feed(BasicAnsiParser parser, string text) => parser.Feed(Encoding.UTF8.GetBytes(text));
 
+    // TN answers the TERM the child was given: "xterm-256color" until the session sets another identity.
+    private const string DefaultTnReply = "\u001bP1+r544E=787465726D2D323536636F6C6F72\u001b\\";
+
     [Fact]
     public void Decrqm_ReportsPrivateDecawmAndAnsiSevenAsPermanentlyReset()
     {
@@ -50,7 +53,7 @@ public sealed class QueryTests
         var (_, parser, replies) = Setup();
         Feed(parser, "\u001bP+q544E;436F\u001b\\");
         Feed(parser, "\u001bP+q544E\x18");
-        Assert.Equal(new[] { "\u001bP1+r544E=646F747479\u001b\\", "\u001bP1+r436F=323536\u001b\\" }, replies);
+        Assert.Equal(new[] { DefaultTnReply, "\u001bP1+r436F=323536\u001b\\" }, replies);
     }
 
     [Fact]
@@ -58,7 +61,7 @@ public sealed class QueryTests
     {
         var (_, parser, replies) = Setup();
         Feed(parser, "\u001bP+q544E\u001b\\"); Feed(parser, "\u001bP+q1234\u001b\\");
-        Assert.Equal(new[] { "\u001bP1+r544E=646F747479\u001b\\" }, replies);
+        Assert.Equal(new[] { DefaultTnReply }, replies);
     }
 
     [Fact]
@@ -83,7 +86,7 @@ public sealed class QueryTests
         var (_, parser, replies) = Setup();
         Feed(parser, "\u001bP+q544E" + cancel);
         Feed(parser, "\u001bP+q544E\u001b\\");
-        Assert.Equal(new[] { "\u001bP1+r544E=646F747479\u001b\\" }, replies);
+        Assert.Equal(new[] { DefaultTnReply }, replies);
     }
 
     [Fact]

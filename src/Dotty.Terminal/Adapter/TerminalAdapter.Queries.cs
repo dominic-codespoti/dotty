@@ -86,7 +86,7 @@ public partial class TerminalAdapter
         ReadOnlySpan<char> decoded = key[..(requestHex.Length / 2)];
         ReadOnlySpan<char> value = decoded switch
         {
-            _ when decoded.SequenceEqual("TN") => "dotty",
+            _ when decoded.SequenceEqual("TN") => _termName,
             _ when decoded.SequenceEqual("Co") => "256",
             _ when decoded.SequenceEqual("RGB") => "8/8/8",
             _ => ReadOnlySpan<char>.Empty,

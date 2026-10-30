@@ -141,7 +141,7 @@ public sealed class P0TerminalCompatibilityTests
         parser.Feed("\x1bP+qQuestions\x1b\\"u8); // unknown key, no reply
 
         Assert.Single(replies);
-        Assert.Equal("\x1bP1+r544E=646F747479\x1b\\", replies[0]);
+        Assert.Equal("\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\", replies[0]); // xterm-256color
     }
 
     [Fact]

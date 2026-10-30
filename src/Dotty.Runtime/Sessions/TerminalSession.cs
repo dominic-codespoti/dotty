@@ -197,6 +197,7 @@ public partial class TerminalSession : IDisposable
         // history capacity is recomputed for the new size on every resize.
         ScrollbackPolicy scrollbackPolicy = UserConfigService.Current.Scrollback.ToPolicy();
         Adapter = new TerminalAdapter(rows: rows, columns: columns, scrollbackPolicy: scrollbackPolicy);
+        Adapter.SetTerminalIdentity(DottyVersion.Describe(), TerminalAdapter.DefaultTermName);
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;

@@ -21,7 +21,7 @@ public partial class TerminalSession
         var environment = new Dictionary<string, string>(comparer)
         {
             ["TERM_PROGRAM"] = "dotty",
-            ["TERM_PROGRAM_VERSION"] = DottyVersion.Current,
+            ["TERM_PROGRAM_VERSION"] = DottyVersion.Describe(),
             ["DOTTY_SURFACE_ID"] = SurfaceId,
         };
         if (integration is not null)

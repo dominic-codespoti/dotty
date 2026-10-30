@@ -913,6 +913,8 @@ namespace Dotty.Terminal.Parser
                 return;
             if (final == 'm' && TryHandleModifyOtherKeys(paramBytes))
                 return;
+            if (final == 'q' && TryHandleTerminalVersionRequest(paramBytes))
+                return;
 
             if (final == 'm' && (paramBytes.IsEmpty || paramBytes[0] != '<'))
             {
@@ -1236,6 +1238,17 @@ namespace Dotty.Terminal.Parser
             if (first != 4) return true;
             if (!TryParseAsciiInt(body[(semi + 1)..], out int level) || level is < 0 or > 2) return true;
             Handler?.OnSetModifyOtherKeys(level);
+            return true;
+        }
+
+        private bool TryHandleTerminalVersionRequest(ReadOnlySpan<byte> parameters)
+        {
+            // XTVERSION: CSI > Ps q.  Every CSI > ... q form is consumed so it
+            // never reaches DECSCUSR; only Ps = 0 (or omitted) is answered.
+            if (parameters.IsEmpty || parameters[0] != (byte)'>') return false;
+            ReadOnlySpan<byte> body = parameters[1..];
+            if (body.IsEmpty || (TryParseAsciiInt(body, out int ps) && ps == 0))
+                Handler?.OnRequestTerminalVersion();
             return true;
         }
 

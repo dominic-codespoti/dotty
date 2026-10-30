@@ -48,6 +48,14 @@ public sealed class QueryAllocationTests
         AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001bP+q544E;436F\u001b\\"));
 
     [Fact]
+    public void RepeatedIdentityQueriesDoNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b[>q"),
+            Encoding.UTF8.GetBytes("\u001b[>0q"),
+            Encoding.UTF8.GetBytes("\u001b[>c"));
+
+    [Fact]
     public void RepeatedModifyOtherKeysSetResetDoesNotAllocate() =>
         AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001b[>4;1m"), Encoding.UTF8.GetBytes("\u001b[>4;0m"), Encoding.UTF8.GetBytes("\u001b[>4m"));
 

@@ -16,7 +16,7 @@ internal static class Program
             }
             if (arg == "--version")
             {
-                Console.Out.WriteLine(DottyVersion.Current);
+                Console.Out.WriteLine(DottyVersion.Describe());
                 return 0;
             }
         }

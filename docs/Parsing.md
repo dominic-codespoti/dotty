@@ -102,13 +102,14 @@ The parser handles all standard CSI sequences:
 | `m` | `[attrs]` | SGR (Graphics) | `OnSetGraphicsRendition(attrs)` |
 | `n` | `[code]` | Device Status Report | `OnDeviceStatusReport(code)` |
 | `q` | `[shape]` | Set Cursor Shape | `OnSetCursorShape(shape)` |
+| `q` | `>[0]` | XTVERSION | `OnRequestTerminalVersion()` |
 | `r` | `[top;bottom]` | Set Scroll Region (DECSTBM) | `OnSetScrollRegion(top, bottom)` |
 | | | | Note: DECSTBM now interacts correctly with alternate screen and DECOM (origin mode) |
 | `s` | none | Save Cursor (SCO) | `OnSaveCursor()` |
 | `u` | none | Restore Cursor (SCO) | `OnRestoreCursor()` |
 | `h`/`l` | `?<mode>` | Set/Reset Mode | `OnSetAlternateScreen()`, etc. |
 
-Kitty keyboard protocol CSI commands (`CSI =`, `>`, `<`, and `?` ending in `u`) are handled separately from legacy numeric CSI parameters; DA1, DA2, and unsupported DA3 requests are distinguished by the `CSI c` private introducer. See [Keyboard Protocol and Compatibility](KeyboardProtocol.md) for the negotiation stack, supported flags, screen scoping, and exact replies.
+Kitty keyboard protocol CSI commands (`CSI =`, `>`, `<`, and `?` ending in `u`) are handled separately from legacy numeric CSI parameters; DA1, DA2, and unsupported DA3 requests are distinguished by the `CSI c` private introducer. `CSI > Ps q` is XTVERSION, routed to `OnRequestTerminalVersion()` for `Ps` 0 or omitted and otherwise consumed; it never reaches DECSCUSR. See [Keyboard Protocol and Compatibility](KeyboardProtocol.md) for the negotiation stack, supported flags, screen scoping, and exact replies.
 Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather than `OnEraseDisplay(3)`.
 `CSI Ps n` is the status report family; see [Status reports](#status-reports-dsr-cpr-and-decxcpr). `CSI ? 6 n` (DECXCPR) is routed to `OnCursorPositionReport()`, so shells like PSReadLine receive the private form `ESC[?row;col;pageR`. `CSI ? Ps n` with `Ps` other than 6 is routed to `OnPrivateDeviceStatusReport(Ps)`; only `998` is answered (see [Visibility reports](#visibility-reports-mode-2033-and-csi--998-n)). `CSI > Ps n` is not a status report and is ignored.
 `CSI Ps ; Ps ; Ps t` is routed to `OnWindowOperation(operation, arg1, arg2)`; omitted parameters are 0 and the `?`, `>` and `<` forms are ignored. See [Window operations](#window-operations-csi-ps--ps--ps-t).
@@ -789,6 +790,7 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-30 | XTVERSION (`CSI > q` / `CSI > 0 q`) routed to `OnRequestTerminalVersion()`; every `CSI > … q` form is kept away from DECSCUSR. |
 | 2026-10-28 | Kitty graphics: APC `G` states (`ApcFirst`, `ApcControl`, `ApcPayload`, `ApcEscape`), 512-byte control cap, abort/termination rules, `0x9C` accepted as ST inside an enabled graphics APC, `ESC D` (IND) and `ESC E` (NEL), RIS deletes images. Written from the source; `needs runtime verification`. |
 | 2026-10-28 | Wave 3: bulk OSC scan, whole-OSC in-chunk dispatch and bytes-native OSC 52; zero-capacity scrollback note; reverse index limited to retained history; ED 2 / CSI 3 J / RIS discard history pages (see [Rendering](Rendering.md#lazily-committed-cell-arenas)). |
 | 2026-10-28 | Wave 2: DECSTR/RIS share one reset core; DSR/CPR/DECXCPR with silent unknown codes; DECBKM; window operations 13-19 and gated `CSI 8 t`; mode 2033 and `CSI ? 998 n`; gated DECRQCRA; 64-mark combining cap and a bounded, de-duplicating grapheme store; complete DECRQM table; DECSET 47/1047/1048. |
@@ -799,4 +801,4 @@ Typical performance on modern hardware:
 | 2026-06-05 | Updated DECSTBM/DECOM interaction with alternate screen and origin mode |
 | 2026-06-05 | Documented PromptMark OSC 1337 sequence support |
 *Document version: 1.1*  
-*Last updated: 2026-10-28*
+*Last updated: 2026-10-30*

@@ -66,7 +66,6 @@ become unreadable therefore no longer prevents a new tab from opening.
   "window": {
     "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 },
     "decorations": "custom",
-    "opacity": 1,
     "title": "Dotty"
   },
   "tabBar": {
@@ -135,7 +134,7 @@ trailing commas/comments are accepted by the JSON parser.
 | Property | Type | Default | Notes |
 |---|---|---|---|
 | `family` | string | platform-neutral fallback stack | Comma-separated family names; first installed family wins. |
-| `size` | number | `14` | Font size in points; non-finite or non-positive values are normalized. |
+| `size` | number | `14` | Font size in pixels before display scaling: the host rasterizes at `size × (framebuffer width / window width)`. Values are clamped to 1–512; a non-finite value falls back to the built-in default. Not points. |
 | `lineHeight` | number | `1.25` | Line-height multiplier; values below `0.1` are clamped. |
 | `symbolMap` | string[] | `[]` | Per-range font overrides; use `U+2500-U+257F: Preferred Font, Fallback Font`. For each range, the first installed family that contains the glyph wins; overlapping ranges use the first matching entry. |
 OpenType features and programming ligatures are not supported. The renderer draws
@@ -158,8 +157,8 @@ reports incomplete metrics.
 | Property | Type | Default | Notes |
 |---|---|---|---|
 | `padding.left` / `top` / `right` / `bottom` | number | `14`, `8`, `14`, `8` | Terminal content padding; tab-bar backgrounds remain flush with the client edges. |
-| `opacity` | number | `1` | |
-| `title` | string | `Dotty` | |
+| `opacity` | number | `1` | Accepted but not yet applied: the host never reads this value, so the window is always opaque. |
+| `title` | string | `Dotty` | Accepted but not yet applied: the initial window title is fixed by the host and then follows the active tab title. |
 | `decorations` | string | `custom` | Windows only: `custom` removes the native title bar and draws the tab-bar caption controls; `native` keeps native decorations. Other platforms retain native decorations regardless of this option. The custom caption strip remains visible when `tabBar.show` is false. |
 
 ### `tabBar`
@@ -184,13 +183,21 @@ chrome style; the stored `style` value does not select a different appearance.
 | `blink` | boolean | `true` |
 | `blinkIntervalMs` | integer | `500` |
 
-Supported shapes are `Block`, `Beam`, and `Underline`.
+`shape` accepts `Block`, `Beam`, and `Underline`, but is accepted and not yet
+applied: the drawn shape comes only from the application's DECSCUSR request
+(`CSI Ps SP q`). Over a drawn cell, `Block` is a half-transparent foreground
+block and `Underline` an underline; `Beam` currently draws nothing there. On
+an empty cell every shape draws the half-transparent block. `blink` and
+`blinkIntervalMs` control blinking; the DECSCUSR steady/blink bit is not yet
+honoured.
 
 ### `theme`, `selectionColor`, and `panes`
 
 `theme` names a built-in or user theme. `selectionColor` accepts the color
-syntax understood by the active theme loader. `panes.dividerThickness` controls
-the split-pane divider and `panes.activeBorder` controls the active-pane border.
+syntax understood by the active theme loader. `panes.dividerThickness` and
+`panes.activeBorder` are accepted but not yet applied: splits are separated by
+a fixed 2-pixel gap showing the window background, and no divider or
+active-pane border is drawn.
 
 User theme JSON files are loaded from `<config-directory>/themes`. See
 [Themes](Themes.md) for the schema and validation rules.
@@ -534,10 +541,11 @@ Each tab's search state is independent, and the recorded source pane is used
 for its search. Results cover that pane's scrollback and visible rows. A
 selected scrollback match (reported internally as a negative row) scrolls the
 source pane to reveal it; selecting a visible match returns the pane to the
-bottom. Right Alt (AltGr), including platforms that report it with an implicit
-Ctrl, is treated as text composition rather than shortcut dispatch, so its
-text can be entered into the query (or terminal). Ordinary Ctrl/Alt-modified
-text is not inserted as query text.
+bottom. Right Alt is treated as AltGr (text composition rather than shortcut
+dispatch). This path is known to be incomplete: a static trace of the real GLFW
+event order shows the AltGr key press is consumed and the character that
+follows it is dropped, so AltGr-composed text may not reach the query or the
+terminal. Ordinary Ctrl/Alt-modified text is not inserted as query text.
 
 ## Pointer controls and mouse reporting
 

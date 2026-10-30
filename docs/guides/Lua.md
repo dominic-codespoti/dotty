@@ -69,7 +69,7 @@ dotty.config.font.size = 16
 print(dotty.config.font.size)
 dotty.config.apply_table {
   theme = "TokyoNight",
-  window = { opacity = 0.95 },
+  window = { padding = { left = 10 } },
   cursor = { blink_interval_ms = 600 },
 }
 ```

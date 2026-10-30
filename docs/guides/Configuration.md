@@ -45,9 +45,10 @@ Selecting a scrollback result scrolls its pane to reveal it; selecting a visible
 result returns the pane to the bottom.
 
 Search uses a case-insensitive literal query and does not send text to the PTY.
-Right Alt (AltGr), even when the platform also reports an implicit Ctrl, is text
-composition rather than shortcut dispatch, so AltGr text can be entered.
-Ordinary Ctrl/Alt-modified text is not inserted into the query.
+Right Alt is treated as AltGr (text composition rather than shortcut dispatch),
+but AltGr-composed text is currently known to be dropped in the real key-event
+order, so it may not reach the query. Ordinary Ctrl/Alt-modified text is not
+inserted into the query.
 
 Wheel, scrollbar, and selection handling is pane-targeted: the pane under the
 pointer becomes active. With terminal mouse reporting disabled, the wheel

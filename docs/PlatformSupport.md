@@ -100,13 +100,21 @@ Keep these verification targets separate:
 The configuration file is JSON and is watched for atomic changes:
 
 - Linux: `$XDG_CONFIG_HOME/dotty/config.json`, or `~/.config/dotty/config.json`
-- macOS: `~/Library/Application Support/Dotty/config.json`
+- macOS: `~/.config/dotty/config.json` (or `$XDG_CONFIG_HOME/dotty`) when that
+  directory exists, otherwise `~/Library/Application Support/Dotty/config.json`
 - Windows: `%APPDATA%/Dotty/config.json`
 
 Set `DOTTY_CONFIG_HOME` to override the complete configuration directory. Theme
 files are in `<config-directory>/themes`; Lua startup scripts (`config.lua` or
 `init.lua`) are in the configuration directory. The watcher debounces writes,
 rename/write patterns, and dispatches accepted changes to the desktop UI thread.
+
+Dotty does not write `config.json` itself; `dotty +init-config` creates a
+commented starter file. Files Dotty writes for itself go to the per-user state
+directory: `$XDG_STATE_HOME/dotty` or `~/.local/state/dotty` on Linux,
+`~/Library/Application Support/Dotty` on macOS, and `%LOCALAPPDATA%\Dotty` on
+Windows. `dotty +diagnose` prints both directories (see
+[Configuration](Configuration.md#file-location)).
 
 ## Diagnostics
 
@@ -122,6 +130,34 @@ initialization exception before closing the window so the process does not leave
 an orphaned PTY. Fonts are resolved from the configured comma-separated stack;
 missing families fall back to the platform default while cell metrics clamp
 non-finite or non-positive values to safe dimensions.
+
+### Crash log
+
+The desktop process keeps a local crash log in the state directory (see
+[Configuration](Configuration.md#file-location)): `logs/crash.log`, for example
+`~/.local/state/dotty/logs/crash.log` on Linux. It is never uploaded; Dotty has
+no network reporting. An entry is written for:
+
+- an unhandled exception on any thread (`AppDomain.UnhandledException`) and an
+  exception that ends `Main`, after which Dotty prints
+  `dotty: ... crash report written to <path>` to standard error;
+- an unobserved faulted task (`TaskScheduler.UnobservedTaskException`), which does
+  not end the process;
+- a GLFW error reported through GLFW's error callback, at most 16 per process
+  (the 16th entry says later ones are dropped). Dotty installs this callback
+  after window creation in place of Silk.NET's default, which throws on Windows
+  and collects every error in memory elsewhere.
+
+Each entry has a UTC timestamp, the source, the Dotty version, the .NET runtime
+and identifier, the OS description and architecture, then the exception text
+(type, message, stack trace, inner exceptions), cut after 32768 characters. It
+contains no environment variables, terminal content, or configuration. When an
+append would grow `crash.log` past 256 KiB, the file is rotated to
+`crash.1.log` and `crash.2.log` (the oldest is deleted), so the log stays below
+about 768 KiB. Command-line actions and usage errors never write it. Native
+crashes (for example `SIGSEGV` inside a driver) bypass the managed handlers and
+are not recorded. `dotty +diagnose` prints the log path and whether it has
+entries.
 
 ## Troubleshooting
 

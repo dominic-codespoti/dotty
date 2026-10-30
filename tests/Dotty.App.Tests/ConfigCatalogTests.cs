@@ -349,12 +349,12 @@ public sealed class ConfigCatalogTests
     }
 
     [Fact]
-    public void RunDispatchesTheKnownActionAndRejectsOthers()
+    public void RunDispatchesTheParsedAction()
     {
         var output = new StringWriter();
-        Assert.Equal(0, CliActions.Run("+explain-config", ["theme"], output, new StringWriter()));
+        Assert.Equal(0, CliActions.Run(DottyLaunchOptionsParser.Parse(["+explain-config", "theme"]), output, new StringWriter()));
         Assert.StartsWith("theme\n", output.ToString());
 
-        Assert.Throws<ArgumentException>(() => CliActions.Run("+bogus", [], new StringWriter(), new StringWriter()));
+        Assert.Throws<ArgumentException>(() => CliActions.Run(new DottyLaunchOptions { Action = "+bogus" }, new StringWriter(), new StringWriter()));
     }
 }

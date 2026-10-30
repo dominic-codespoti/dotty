@@ -87,6 +87,19 @@ public sealed partial class LuaScriptHost : IDisposable
         return File.Exists(initLua) ? initLua : configLua;
     }
 
+    /// <summary>
+    /// Compiles <paramref name="source"/> without running it, in a bare Lua state with no libraries.
+    /// Returns null when it compiles, else Lua's message (<c>chunkName:line: text</c> for syntax errors).
+    /// </summary>
+    public static string? CheckSyntax(string source, string chunkName)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(chunkName);
+        using var lua = new Lua(openLibs: false) { Encoding = System.Text.Encoding.UTF8 };
+        LuaStatus status = lua.LoadString(source, chunkName);
+        return status == LuaStatus.OK ? null : lua.ToString(-1) ?? status.ToString();
+    }
+
     /// <summary>Evaluates the configuration script in a fresh Lua state.</summary>
     public bool Evaluate(DottyUserConfig config, string? scriptPath)
     {

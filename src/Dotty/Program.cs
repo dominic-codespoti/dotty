@@ -20,11 +20,14 @@ internal static class Program
                 return 0;
             }
 
-            // Actions print and exit: no config load, console detach, or graphics.
+            // Actions print and exit: no window, config watcher, or console detach.
             if (options.Action is not null)
-                return CliActions.Run(options.Action, options.ActionArguments, Console.Out, Console.Error);
+                return CliActions.Run(options, Console.Out, Console.Error);
 
             options.ValidateForLaunch();
+            // Local crash log for the GUI process only; actions and usage errors never write one.
+            Dotty.Runtime.Diagnostics.CrashReporter.Install(new Dotty.Runtime.Diagnostics.CrashLog(
+                Dotty.Runtime.Diagnostics.CrashLog.DirectoryFor(Dotty.Runtime.Config.PlatformPaths.StateRoot)));
             WindowsConsole.DetachOwnedConsole();
             return DottyWindowHost.Run(options);
         }
@@ -37,6 +40,7 @@ internal static class Program
         catch (Exception ex)
         {
             Console.Error.WriteLine($"dotty: {ex.Message}");
+            Dotty.Runtime.Diagnostics.CrashReporter.ReportFatal(ex, Console.Error);
             return 1;
         }
     }

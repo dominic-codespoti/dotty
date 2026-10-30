@@ -230,9 +230,11 @@ A framebuffer resize recomputes only the scale and the (cached) cell metrics.
 If the scale changes, the host obtains/acquires a new glyph atlas, updates
 renderer and scene-composer resources, then releases the previous atlas.
 Session dimensions are recalculated from the scaled cell geometry. Fallback
-typefaces are normalized to the primary
-font's cell height and constrained to the available one-cell or two-cell width;
-oversized fallback ink is re-rasterized at smaller scales, then replaced by the
+typefaces are normalized to the primary font's cell height and constrained to a
+one-cell or two-cell width; the span is the cluster's `UnicodeWidth`, the same
+measure the buffer used to place it, and the bound is the font size in pixels
+times that span rather than the measured cell width.
+Oversized fallback ink is re-rasterized at smaller scales, then replaced by the
 reserved tofu glyph if it still cannot fit.
 
 ## Glyph atlas limitations
@@ -264,6 +266,7 @@ expected to change the row; it is not a release date or a commitment.
 | Font family list | Partial | First installed family in `font.family` wins; later entries are not used as fallbacks. A built-in fallback chain covers missing glyphs | W4-C6 |
 | `font.symbolMap` per-range overrides | Supported | | |
 | Colour emoji (single code point) | Supported | Intrinsic-colour glyphs use the RGBA atlas page | |
+| Character width and grapheme clusters | Supported | Widths generated from Unicode 16.0.0 (East Asian Width W/F wide; Cc/Cf/Mn/Me and Hangul medial/final jamo zero; ambiguous narrow); RI pairs, VS16/VS15 on the 371 emoji-variation bases; clusters are UAX #29 (.NET `StringInfo`) and re-join across writes, so a late VS16 widens the cell. See [Parsing](Parsing.md#combining-cap-grapheme-clusters-cell-width-and-the-grapheme-store). No `unicode.ambiguousWidth` option | |
 | Text shaping (ZWJ sequences, combining-mark placement) | Not supported | Each grapheme is rasterized through the font's character map, one per cell; `TextShaper` exists but has no callers | W4-C10 |
 | Programming ligatures / OpenType features | Not supported | | W4-C11 |
 | Bidirectional / RTL text | Not supported | Decision: out of scope, as in Ghostty and kitty. Text is laid out left to right in logical order. Per-grapheme shaping (W4-C10) will shape within one cell only; it is not a bidi layout engine | none |

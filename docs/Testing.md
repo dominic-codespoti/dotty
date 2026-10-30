@@ -216,6 +216,9 @@ Deterministic coverage for the behavior in [Parsing](Parsing.md), [Keyboard Prot
 | `VisibilityReportTests` | mode 2033, `CSI ? 998 n`, edge triggering |
 | `ChecksumReportTests` | gated DECRQCRA and the checksum definition |
 | `CombiningCapTests` | the 64-mark cap and surrogate-safe truncation |
+| `UnicodeWidthTests` | scalar widths against the generated golden (`UnicodeWidthGolden.g.cs`), table invariants, cluster width rules |
+| `GraphemeSegmentationTests` | UAX #29 boundaries of .NET `StringInfo` that the buffer relies on (hand-written cases) |
+| `BufferTextWriterClusterTests` | clusters split at every UTF-8 byte boundary or fed one byte at a time give the same screen; late VS16/VS15, cap, placeholder and right-edge cases |
 | `ModeReportTests` | the complete DECRQM table and DECSET 47/1047/1048 |
 
 `tests/Dotty.App.Tests`:
@@ -235,6 +238,8 @@ Deterministic coverage for the behavior in [Parsing](Parsing.md), [Keyboard Prot
 `tests/Dotty.NativePty.Tests`: `ShellIntegrationInjectionTests` (the bash rcfile wrapper for real on Unix when `bash` is present; zsh and fish shims are content checks only; csproj packaging of the injection directory). The Ubuntu `build-and-test` job installs `zsh` and `fish`, but no test launches either of them, so real zsh/fish/PowerShell injection is manual verification only.
 
 The Python unit tests for the esctest scripts run with `python3 -m unittest discover -s scripts/esctest/tests` (CI: `code-quality`).
+
+`python3 tools/gen-width-tables.py --check` (CI: `code-quality`) verifies that the committed width tables and their golden match a fresh generation from Python's `unicodedata` and that the range compression agrees with the per-code-point rules for every code point. It needs a Python whose `unicodedata` is Unicode 16.0.0 (Python 3.14) and refuses any other version; it does not need .NET. Run without `--check` to regenerate both files.
 
 ## Desktop smoke
 

@@ -588,8 +588,11 @@ public sealed class GlyphAtlas : IDisposable
         float scale = _primaryCellHeight / fallbackHeight;
         scale = Math.Clamp(scale, MinFallbackScale, MaxFallbackScale);
         // A fallback's ink can overhang its advance. Reserve the complete
-        // one-cell or wide-cell allocation before rasterizing.
-        float cellWidth = GetCellWidth(key.Grapheme, key.TextSize);
+        // one-cell or wide-cell allocation before rasterizing. The span is the
+        // cell width the buffer assigned to this cluster: BufferTextWriter
+        // measures the same string with UnicodeWidth (a zero-width cluster
+        // still occupies one cell).
+        float cellWidth = key.TextSize * Math.Max(1, Dotty.Terminal.Adapter.UnicodeWidth.GetWidth(key.Grapheme));
         float measuredAdvance = MathF.Max(1f, fallbackFont.MeasureText(key.Grapheme) + 1f);
         scale = MathF.Min(scale, cellWidth / measuredAdvance);
         scale = MathF.Max(0.05f, scale);
@@ -643,30 +646,6 @@ public sealed class GlyphAtlas : IDisposable
                 _primaryBaseline, 0f, 0f);
         }
         return finalRaster;
-    }
-
-    private static float GetCellWidth(string grapheme, float textSize)
-        => textSize * (IsWideGrapheme(grapheme) ? 2f : 1f);
-
-    private static bool IsWideGrapheme(string grapheme)
-    {
-        if (string.IsNullOrEmpty(grapheme) ||
-            !System.Text.Rune.TryGetRuneAt(grapheme, 0, out var rune))
-        {
-            return false;
-        }
-
-        int cp = rune.Value;
-        return (cp >= 0x1100 && cp <= 0x115F) ||
-               cp == 0x2329 || cp == 0x232A ||
-               (cp >= 0x2E80 && cp <= 0xA4CF) ||
-               (cp >= 0xAC00 && cp <= 0xD7A3) ||
-               (cp >= 0xF900 && cp <= 0xFAFF) ||
-               (cp >= 0xFE10 && cp <= 0xFE6F) ||
-               (cp >= 0xFF00 && cp <= 0xFF60) ||
-               (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-               (cp >= 0x1F300 && cp <= 0x1FAFF) ||
-               (cp >= 0x20000 && cp <= 0x3FFFD);
     }
 
     private GlyphRaster RasterizeTight(GlyphKey key)

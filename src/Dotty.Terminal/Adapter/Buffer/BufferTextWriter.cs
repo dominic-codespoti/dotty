@@ -18,8 +18,14 @@ internal sealed class BufferTextWriter
     private readonly TerminalBuffer _ctx;
     private readonly StyleSet _styleSet;
     private const int MaxGraphemeCacheEntries = 4096;
+    // A cell's cluster (at most MaxCellChars) plus at least as many chars of the next write: enough to see every
+    // continuation that still fits under the per-cell scalar cap.
+    private const int JoinWindowChars = GraphemeHelper.MaxCellChars * 2;
     private static readonly ConcurrentDictionary<string, string> _graphemeCache = new();
     private int _lastDirtyRow = -1;
+    // The last print wrote a non-ASCII cluster, which a following ASCII character may still continue (a Prepend
+    // character such as U+0600 joins the next base). ASCII after ASCII never joins, so the ASCII paths test this only.
+    private bool _clusterPending;
 
     public BufferTextWriter(TerminalBuffer ctx, CursorController cursor, BufferEraser eraser, StyleSet styleSet)
     {
@@ -37,6 +43,23 @@ internal sealed class BufferTextWriter
         ushort hyperlinkId = attributes.HyperlinkId;
         int length = text.Length;
         int i = 0;
+        // Clustering is always on (DECRQM 2027 reports "permanently set") and spans writes: a cluster that starts in
+        // an earlier write (or before an ASCII run of this one) is re-joined with the cell it was written to
+        // (TryJoinPrevious). A cluster segmented from this same text is already maximal, so the cluster after it is
+        // not tested again.
+        bool tryJoin = true;
+        bool lastWasCluster = false;
+        if (_clusterPending)
+        {
+            _clusterPending = false;
+            char first = text[0];
+            if (first >= 32 && first < 127 && TryJoinPrevious(text, out int joined))
+            {
+                i = joined;
+                tryJoin = false;
+                lastWasCluster = true;
+            }
+        }
 
         while (i < length)
         {
@@ -52,6 +75,8 @@ internal sealed class BufferTextWriter
             {
                 var run = text.Slice(runStart, i - runStart);
                 WriteAsciiRunBulk(run, styleId, hyperlinkId);
+                tryJoin = true;
+                lastWasCluster = false;
                 if (i >= length) break;
             }
 
@@ -62,6 +87,8 @@ internal sealed class BufferTextWriter
             {
                 _ctx.CarriageReturn();
                 _ctx.LineFeed();
+                tryJoin = true;
+                lastWasCluster = false;
                 i += 2;
                 continue;
             }
@@ -72,13 +99,20 @@ internal sealed class BufferTextWriter
                 {
                     _eraser.ErasePreviousGlyph(_ctx.ActiveBuffer, _cursor, _ctx.Rows, _ctx.Columns);
                     RequestMarkRowDirty(_cursor.Row);
+                    tryJoin = true;
+                    lastWasCluster = false;
                     i++;
                     continue;
                 }
 
-                // Clustering is always on (DECRQM 2027 reports "permanently set"), but the segmentation window is
-                // this text run, not the byte stream: a cluster split across parser runs/Feeds is only re-joined for
-                // trailing width-0 marks (AttachCombiningMark), not for ZWJ/regional-indicator/Hangul continuations.
+                if (tryJoin && TryJoinPrevious(text.Slice(i), out int joined))
+                {
+                    i += joined;
+                    tryJoin = false;
+                    lastWasCluster = true;
+                    continue;
+                }
+
                 int len = StringInfo.GetNextTextElementLength(text.Slice(i));
                 if (len > 0)
                 {
@@ -86,16 +120,9 @@ internal sealed class BufferTextWriter
                     int keep = len <= GraphemeHelper.MaxScalarsPerCell
                         ? len
                         : GraphemeHelper.TruncateToScalars(text.Slice(i, len), GraphemeHelper.MaxScalarsPerCell);
-                    var slice = text.Slice(i, keep);
-                    var lookup = _graphemeCache.GetAlternateLookup<ReadOnlySpan<char>>();
-                    if (!lookup.TryGetValue(slice, out string? element))
-                    {
-                        // The cache is process-wide and keyed by arbitrary program output: keep it bounded.
-                        if (_graphemeCache.Count > MaxGraphemeCacheEntries) _graphemeCache.Clear();
-                        element = slice.ToString();
-                        lookup.TryAdd(slice, element);
-                    }
-                    WriteGrapheme(element, styleId, hyperlinkId);
+                    WriteGrapheme(GetCachedString(text.Slice(i, keep)), styleId, hyperlinkId);
+                    tryJoin = false;
+                    lastWasCluster = true;
                     i += len;
                     continue;
                 }
@@ -113,18 +140,51 @@ internal sealed class BufferTextWriter
                     RequestMarkRowDirty(_cursor.Row);
                     break;
             }
+            tryJoin = true;
+            lastWasCluster = false;
             i++;
         }
+
+        _clusterPending = lastWasCluster;
+    }
+
+    /// <summary>
+    /// Returns the interned string for a cluster. The cache is process-wide and keyed by arbitrary program output,
+    /// so it is bounded.
+    /// </summary>
+    private static string GetCachedString(ReadOnlySpan<char> cluster)
+    {
+        var lookup = _graphemeCache.GetAlternateLookup<ReadOnlySpan<char>>();
+        if (!lookup.TryGetValue(cluster, out string? element))
+        {
+            if (_graphemeCache.Count > MaxGraphemeCacheEntries) _graphemeCache.Clear();
+            element = cluster.ToString();
+            lookup.TryAdd(cluster, element);
+        }
+        return element;
     }
 
     /// <summary>
     /// Writes a pure-ASCII byte span directly to the buffer, skipping all
     /// control-character / non-ASCII / grapheme dispatch that WriteText performs.
-    /// The parser already validated every byte is in [0x20, 0x7E].
+    /// The parser already validated every byte is in [0x20, 0x7E]. Only the
+    /// first byte can continue a cluster left open by the previous write (after
+    /// a Prepend character): ASCII never extends an ASCII base.
     /// </summary>
     internal void WriteAscii(ReadOnlySpan<byte> text, in CellAttributes attributes)
     {
         if (text.IsEmpty) return;
+
+        if (_clusterPending)
+        {
+            _clusterPending = false;
+            char first = (char)text[0];
+            if (TryJoinPrevious(new ReadOnlySpan<char>(in first), out _))
+            {
+                text = text.Slice(1);
+                if (text.IsEmpty) return;
+            }
+        }
 
         ushort styleId = _styleSet.GetOrCreateId(in attributes);
         ushort hyperlinkId = attributes.HyperlinkId;
@@ -553,6 +613,17 @@ internal sealed class BufferTextWriter
             width = 1;
         }
 
+        PlaceCluster(grapheme, placeholder, width, styleId, hyperlinkId);
+    }
+
+    /// <summary>
+    /// Writes one cluster of <paramref name="width"/> cells at the cursor (wrapping first when autowrap is on and
+    /// it does not fit) and advances the cursor past it.
+    /// </summary>
+    private void PlaceCluster(string grapheme, bool placeholder, int width, ushort styleId, ushort hyperlinkId)
+    {
+        int columns = _ctx.Columns;
+        if (width > columns) width = columns;
         bool autoWrap = _ctx._autoWrap;
         bool consumedWrap = false;
         int startCol;
@@ -565,20 +636,28 @@ internal sealed class BufferTextWriter
                 _cursor.SetWrapPending(false);
                 consumedWrap = true;
             }
-            _cursor.EnsureSpace(width, _ctx.Rows, _ctx.Columns);
+            if (_cursor.Col > columns - width)
+            {
+                // A wide cluster that does not fit before the right edge leaves the last column blank and moves to
+                // the next line; LineFeed scrolls at the bottom of the scroll region.
+                _ctx.LineFeed();
+                _ctx.CarriageReturn();
+            }
             startCol = _cursor.Col;
         }
         else
         {
-            int cols = _ctx.Columns;
             startCol = _cursor.Col;
-            if (startCol > cols - width) startCol = Math.Max(0, cols - width);
-            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, cols);
+            if (startCol > columns - width) startCol = Math.Max(0, columns - width);
+            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, columns);
         }
 
         var buf = _ctx.ActiveBuffer;
         int currentRow = _cursor.Row;
-        buf.ClearCell(currentRow, startCol);
+        // Overwriting cells never changes whether this row soft-wraps from the previous one, but clearing does.
+        bool continuesPrevious = consumedWrap || buf.GetRowContinuesPrevious(currentRow);
+        // Clear every covered cell, so a wide glyph partly overwritten here is removed whole.
+        buf.ClearColumns(currentRow, startCol, startCol + width);
 
         uint rune;
         try { rune = (uint)char.ConvertToUtf32(grapheme, 0); }
@@ -624,7 +703,7 @@ internal sealed class BufferTextWriter
 
         buf.UpdateRowMaxCol(currentRow, startCol + width - 1);
         buf.MarkRowEnd(currentRow, startCol + width - 1);
-        if (consumedWrap)
+        if (continuesPrevious)
             buf.SetRowContinuation(currentRow, true);
 
         if (autoWrap)
@@ -651,6 +730,84 @@ internal sealed class BufferTextWriter
         RequestMarkRowDirty(currentRow);
     }
 
+    /// <summary>
+    /// Re-joins a grapheme cluster split across writes. The base is the cell before the cursor on the cursor row (the
+    /// cursor cell itself while a wrap is pending), as in Ghostty; it never reaches into the previous row. When that
+    /// cell's cluster followed by the start of <paramref name="text"/> segments (UAX #29, .NET
+    /// <see cref="StringInfo"/>) as one cluster, the continuation is appended (up to
+    /// <see cref="GraphemeHelper.MaxScalarsPerCell"/> scalars; the rest is consumed and dropped) and the cell is
+    /// re-measured: a late U+FE0F widens it in place, or, at the right edge with autowrap on, moves it to the next
+    /// line; a late U+FE0E narrows it. Returns false, consuming nothing, when <paramref name="text"/> starts a new
+    /// cluster.
+    /// </summary>
+    private bool TryJoinPrevious(ReadOnlySpan<char> text, out int consumed)
+    {
+        consumed = 0;
+        int columns = _ctx.Columns;
+        int row = _cursor.Row;
+        int col = Math.Min(_cursor.Col, columns - 1);
+        if (!_cursor.WrapPending)
+        {
+            if (col == 0) return false;
+            col--;
+        }
+
+        var buf = _ctx.ActiveBuffer;
+        while (col > 0 && buf.GetCellRef(row, col).IsContinuation) col--;
+        ref var cell = ref buf.GetCellRef(row, col);
+        // Unicode-placeholder diacritics are decoded by AttachCombiningMark, not appended as text.
+        if (cell.IsEmpty || cell.IsContinuation || cell.Rune == PlaceholderTable.PlaceholderRune) return false;
+
+        var cold = buf.GetColdCell(row, col);
+        string? previous = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
+        if (string.IsNullOrEmpty(previous) || previous.Length > GraphemeHelper.MaxCellChars) return false;
+
+        Span<char> window = stackalloc char[JoinWindowChars];
+        int take = Math.Min(text.Length, window.Length - previous.Length);
+        if (take < text.Length && char.IsHighSurrogate(text[take - 1])) take--;
+        previous.AsSpan().CopyTo(window);
+        text[..take].CopyTo(window[previous.Length..]);
+        int extension = StringInfo.GetNextTextElementLength(window[..(previous.Length + take)]) - previous.Length;
+        if (extension <= 0) return false;
+        consumed = extension;
+
+        int room = GraphemeHelper.MaxScalarsPerCell - GraphemeHelper.CountScalars(previous);
+        if (room <= 0) return true;
+        int keep = GraphemeHelper.TruncateToScalars(text[..extension], room);
+        ReadOnlySpan<char> joined = window[..(previous.Length + keep)];
+
+        int oldWidth = cell.Width;
+        int newWidth = Math.Clamp(UnicodeWidth.GetWidth(joined), 1, 2);
+        bool fits = newWidth <= columns && (_ctx._autoWrap || col + newWidth <= columns);
+        if (newWidth != oldWidth && (newWidth < oldWidth || fits))
+        {
+            ushort styleId = cell.StyleId;
+            // Rewrite the cluster in place: clear its cells, put the cursor back on it and print it at its new width.
+            bool continuesPrevious = buf.GetRowContinuesPrevious(row);
+            buf.ClearColumns(row, col, col + oldWidth);
+            if (continuesPrevious) buf.SetRowContinuation(row, true);
+            RequestMarkRowDirty(row);
+            _cursor.Set(row, col, _ctx.Rows, columns);
+            _cursor.SetWrapPending(false);
+            PlaceCluster(GetCachedString(joined), placeholder: false, newWidth, styleId, cold.HyperlinkId);
+            return true;
+        }
+
+        // Same width (or a widening that cannot fit): keep the cell and store the longer cluster. A full grapheme
+        // store (index <= 0) keeps the cell as it was.
+        short index = GraphemeHelper.StoreGrapheme(joined);
+        if (index > 0)
+        {
+            buf.SetColdGraphemeIndex(row, col, index);
+            RequestMarkRowDirty(row);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Appends a zero-width cluster that does not continue the previous cluster (a format character such as U+200B,
+    /// or a mark with no base on the cursor row) to the previous non-empty cell, or completes a Unicode placeholder.
+    /// </summary>
     private bool AttachCombiningMark(string mark)
     {
         var (row, col) = GetPreviousBaseCell();

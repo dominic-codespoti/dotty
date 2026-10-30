@@ -12,4 +12,16 @@ public sealed class MouseUserConfig
     /// <summary>Middle-click action: <c>clipboard-paste</c> (default), <c>primary-paste</c> or <c>ignore</c>.</summary>
     [JsonPropertyName("middleClickAction")]
     public string MiddleClickAction { get; set; } = "clipboard-paste";
+
+    /// <summary>Lines per wheel notch for local scrolling and alternate scroll (default 3); clamped to 0.01 through 100.</summary>
+    [JsonPropertyName("scrollMultiplier")]
+    public double ScrollMultiplier { get; set; } = MouseOptions.DefaultScrollMultiplier;
+
+    /// <summary>Wheel to cursor up/down on the alternate screen without mouse reporting (mode 1007): <c>auto</c> (default) or <c>off</c>.</summary>
+    [JsonPropertyName("alternateScroll")]
+    public string AlternateScroll { get; set; } = "auto";
+
+    /// <summary>Modifier that keeps clicks, drags and the wheel local while an application tracks the mouse: <c>shift</c> (default), <c>ctrl</c>, <c>alt</c>, <c>super</c> or <c>none</c>.</summary>
+    [JsonPropertyName("reportBypassModifier")]
+    public string ReportBypassModifier { get; set; } = "shift";
 }

@@ -2473,6 +2473,7 @@ internal static class DottyWindowHost
         public void PasteClipboard() => PasteClipboardToSession();
         public void PasteClipboard(LeafPane targetPane) => PasteClipboardToPane(targetPane);
         public MiddleClickAction MiddleClick => MouseOptions.ParseMiddleClick(UserConfigService.Current.Mouse.MiddleClickAction);
+        public MouseInputSettings MouseInput => MouseOptions.ResolveInput(UserConfigService.Current.Mouse);
         public void PastePrimary(LeafPane targetPane) => PastePrimaryToPane(targetPane);
         public void OnLocalSelectionFinished(LeafPane pane) => CopyFinishedSelection(pane);
         public bool TryExecuteAction(TerminalAction action) =>

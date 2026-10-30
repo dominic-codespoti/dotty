@@ -44,6 +44,9 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `hyperlinks.confirm` | string (`"risky"`, `"always"`, `"never"`) | `"risky"` |
 | `hyperlinks.allowed_schemes` | array of strings | `{"http", "https", "mailto", "file", "ssh", "git"}` |
 | `mouse.copy_on_select` | string (`"none"`, `"primary"`, `"clipboard"`, `"both"`) | `"none"` |
+| `mouse.scroll_multiplier` | number | `3` |
+| `mouse.alternate_scroll` | string (`"auto"`, `"off"`) | `"auto"` |
+| `mouse.report_bypass_modifier` | string (`"shift"`, `"ctrl"`, `"alt"`, `"super"`, `"none"`) | `"shift"` |
 | `mouse.middle_click_action` | string (`"primary-paste"`, `"clipboard-paste"`, `"ignore"`) | `"clipboard-paste"` |
 | `vt.window_resize_allowed` | boolean | `false` |
 | `vt.checksum_report_enabled` | boolean | `false` |

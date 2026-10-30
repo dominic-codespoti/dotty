@@ -52,10 +52,12 @@ inserted into the query.
 
 Wheel, scrollbar, and selection handling is pane-targeted: the pane under the
 pointer becomes active. With terminal mouse reporting disabled, the wheel
-scrolls that pane's scrollback, and the rightmost scrollbar strip can be clicked
+scrolls that pane's scrollback (`mouse.scrollMultiplier` lines per notch, 3 by
+default), or sends cursor up/down keys on the alternate screen so `less` and
+`man` scroll (`mouse.alternateScroll`), and the rightmost scrollbar strip can be clicked
 or dragged to choose a scrollback position. Terminal mouse reporting takes
 precedence over local wheel, scrollbar, selection, middle-paste, and hyperlink
-handling. Holding Shift overrides reporting and restores the local controls.
+handling. Holding Shift (`mouse.reportBypassModifier`) overrides reporting and restores the local controls.
 
 When local handling is active, left-drag selects characters, double-click
 selects a word, triple-click selects a line, and dragging outside the pane

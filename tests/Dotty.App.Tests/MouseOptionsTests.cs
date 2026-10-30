@@ -64,6 +64,60 @@ public sealed class MouseOptionsTests
     public void ParseMiddleClick_IsForgiving(string? value, MiddleClickAction expected) =>
         Assert.Equal(expected, MouseOptions.ParseMiddleClick(value));
 
+    [Fact]
+    public void WheelAndBypassDefaults_MatchDecisionK4()
+    {
+        var mouse = new DottyUserConfig().Mouse;
+
+        Assert.Equal(MouseInputSettings.Default, MouseOptions.ResolveInput(mouse));
+        Assert.Equal(3.0, MouseInputSettings.Default.ScrollMultiplier);
+        Assert.True(MouseInputSettings.Default.AlternateScroll);
+        Assert.Equal(MouseReportBypassModifier.Shift, MouseInputSettings.Default.ReportBypassModifier);
+    }
+
+    [Fact]
+    public void WheelKeys_RoundTripThroughJson()
+    {
+        DottyUserConfig config = JsonSerializer.Deserialize<DottyUserConfig>(
+            "{\"mouse\":{\"scrollMultiplier\":1.5,\"alternateScroll\":\"off\",\"reportBypassModifier\":\"alt\"}}")!;
+
+        Assert.Equal(
+            new MouseInputSettings(1.5, false, MouseReportBypassModifier.Alt),
+            MouseOptions.ResolveInput(config.Mouse));
+    }
+
+    [Theory]
+    [InlineData(3.0, 3.0)]
+    [InlineData(0.5, 0.5)]
+    [InlineData(0.0, 0.01)]
+    [InlineData(-4.0, 0.01)]
+    [InlineData(1000.0, 100.0)]
+    [InlineData(double.NaN, 3.0)]
+    [InlineData(double.PositiveInfinity, 3.0)]
+    public void ClampScrollMultiplier_BoundsAndRejectsNonFinite(double value, double expected) =>
+        Assert.Equal(expected, MouseOptions.ClampScrollMultiplier(value));
+
+    [Theory]
+    [InlineData("auto", true)]
+    [InlineData(" OFF ", false)]
+    [InlineData("off", false)]
+    [InlineData("bogus", true)]
+    [InlineData(null, true)]
+    public void ParseAlternateScroll_IsForgiving(string? value, bool expected) =>
+        Assert.Equal(expected, MouseOptions.ParseAlternateScroll(value));
+
+    [Theory]
+    [InlineData("shift", MouseReportBypassModifier.Shift)]
+    [InlineData("CTRL", MouseReportBypassModifier.Ctrl)]
+    [InlineData("control", MouseReportBypassModifier.Ctrl)]
+    [InlineData(" alt", MouseReportBypassModifier.Alt)]
+    [InlineData("Super", MouseReportBypassModifier.Super)]
+    [InlineData("none", MouseReportBypassModifier.None)]
+    [InlineData("meta", MouseReportBypassModifier.Shift)]
+    [InlineData(null, MouseReportBypassModifier.Shift)]
+    public void ParseReportBypassModifier_IsForgiving(string? value, MouseReportBypassModifier expected) =>
+        Assert.Equal(expected, MouseOptions.ParseReportBypassModifier(value));
+
     private sealed class FakeClipboard : ITerminalClipboard
     {
         public string? Text { get; set; }

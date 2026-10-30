@@ -19,7 +19,7 @@ namespace Dotty.App.Tests;
 [Collection("Allocation-sensitive tests")]
 public sealed class TerminalMouseControllerTests
 {
-    private sealed class FakeMouse : IMouse
+    internal sealed class FakeMouse : IMouse
     {
         public string Name => "FakeMouse";
         public int Index => 0;
@@ -67,7 +67,15 @@ public sealed class TerminalMouseControllerTests
 
     internal sealed class FakeTerminalMouseHost : ITerminalMouseHost, IDisposable
     {
-        public TerminalTabManager TabManager { get; } = new(SilentPty.Create);
+        public FakeTerminalMouseHost()
+            : this(SilentPty.Create)
+        {
+        }
+
+        public FakeTerminalMouseHost(Func<Dotty.Abstractions.Pty.IPty> ptyFactory) =>
+            TabManager = new TerminalTabManager(ptyFactory);
+
+        public TerminalTabManager TabManager { get; }
         public TerminalTab? ActiveTab => TabManager.ActiveTab;
         public ContextMenuModel? ActiveContextMenu { get; set; }
 
@@ -108,6 +116,7 @@ public sealed class TerminalMouseControllerTests
             PasteTarget = targetPane;
         }
         public MiddleClickAction MiddleClick { get; set; } = MiddleClickAction.ClipboardPaste;
+        public MouseInputSettings MouseInput { get; set; } = MouseInputSettings.Default;
         public int PastePrimaryCalls { get; private set; }
         public LeafPane? PrimaryTarget { get; private set; }
         public int SelectionFinishedCalls { get; private set; }
@@ -852,6 +861,209 @@ public sealed class TerminalMouseControllerTests
         Assert.Same(rightPane, tab.ActivePane);
         Assert.True(controller.IsDraggingScrollbar);
         Assert.Equal(0, tab.PaneTree.Leaves[0].ScrollOffset);
+    }
+
+    // Sessions are started on a recorded PTY so the reported bytes can be read back.
+    private static FakeTerminalMouseHost NewStartedHost(out TerminalTab tab, out SilentPty pty)
+    {
+        SilentPty? created = null;
+        var host = new FakeTerminalMouseHost(() => created = new SilentPty());
+        tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        tab.ActivePane.Session.Start();
+        pty = Assert.IsType<SilentPty>(created);
+        return host;
+    }
+
+    // PTY writes are queued in order, so a trailing marker proves everything before it has landed.
+    private static string WrittenText(LeafPane pane, SilentPty pty)
+    {
+        const string marker = "<END>";
+        pane.Session.WriteInput(Encoding.ASCII.GetBytes(marker));
+        string text = string.Empty;
+        Assert.True(SpinWait.SpinUntil(() =>
+        {
+            text = Encoding.Latin1.GetString(pty.WrittenBytes());
+            return text.EndsWith(marker, StringComparison.Ordinal);
+        }, TimeSpan.FromSeconds(5)));
+        return text[..^marker.Length];
+    }
+
+    [Fact]
+    public void ButtonEventDrag_ReportsMotionOnlyWhenTheCellChanges()
+    {
+        using var host = NewStartedHost(out var tab, out var pty);
+        Feed(tab.ActivePane, "\u001b[?1002h\u001b[?1006h");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseMove(mouse, new Vector2(52f, 61f));
+        controller.HandleMouseMove(mouse, new Vector2(58f, 79f));
+        controller.HandleMouseMove(mouse, new Vector2(75f, 60f));
+        controller.HandleMouseMove(mouse, new Vector2(76f, 62f));
+        mouse.Position = new Vector2(76f, 62f);
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+
+        Assert.Equal("\u001b[<0;6;3M\u001b[<32;8;3M\u001b[<0;8;3m", WrittenText(tab.ActivePane, pty));
+    }
+
+    [Fact]
+    public void AnyEventHover_SgrPixels_ReportsPixelChangesOnly()
+    {
+        using var host = NewStartedHost(out var tab, out var pty);
+        Feed(tab.ActivePane, "\u001b[?1003h\u001b[?1016h");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse();
+
+        // Content origin is below the 20 px tab bar: (50, 60) is pane pixel (50, 40), reported 1-based.
+        controller.HandleMouseMove(mouse, new Vector2(50f, 60f));
+        controller.HandleMouseMove(mouse, new Vector2(50f, 60f));
+        controller.HandleMouseMove(mouse, new Vector2(51f, 60f));
+
+        Assert.Equal("\u001b[<35;51;41M\u001b[<35;52;41M", WrittenText(tab.ActivePane, pty));
+    }
+
+    [Fact]
+    public void X10Mode_ReportsPressWithoutModifiersAndNoRelease()
+    {
+        using var host = NewStartedHost(out var tab, out var pty);
+        host.Ctrl = true;
+        Feed(tab.ActivePane, "\u001b[?9h");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+
+        controller.HandleMouseDown(mouse, MouseButton.Left);
+        controller.HandleMouseUp(mouse, MouseButton.Left);
+        controller.HandleMouseScroll(mouse, new ScrollWheel(0f, 1f));
+
+        Assert.Equal("\u001b[M &#", WrittenText(tab.ActivePane, pty));
+        Assert.False(tab.ActivePane.Selection.HasSelection);
+    }
+
+    [Theory]
+    [InlineData(MouseReportBypassModifier.Shift, true, false, true, "")]
+    [InlineData(MouseReportBypassModifier.Ctrl, false, true, true, "")]
+    [InlineData(MouseReportBypassModifier.Ctrl, true, false, false, "\u001b[<4;6;3M")]
+    [InlineData(MouseReportBypassModifier.None, true, false, false, "\u001b[<4;6;3M")]
+    public void ReportBypassModifier_KeepsTheClickLocal(MouseReportBypassModifier bypass, bool shift, bool ctrl,
+        bool expectLocalSelection, string expected)
+    {
+        using var host = NewStartedHost(out var tab, out var pty);
+        host.MouseInput = MouseInputSettings.Default with { ReportBypassModifier = bypass };
+        host.Shift = shift;
+        host.Ctrl = ctrl;
+        Feed(tab.ActivePane, "\u001b[?1000h\u001b[?1006h");
+        var controller = new TerminalMouseController(host);
+
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(50f, 60f) }, MouseButton.Left);
+
+        Assert.Equal(expectLocalSelection, tab.ActivePane.Selection.HasSelection);
+        Assert.Equal(expected, WrittenText(tab.ActivePane, pty));
+    }
+
+    // One report per notch on both axes (66/67 horizontal, positive X = left); fractions carry.
+    [Theory]
+    [InlineData(0f, 1f, 1, "\u001b[<64;6;3M")]
+    [InlineData(0f, -2f, 1, "\u001b[<65;6;3M\u001b[<65;6;3M")]
+    [InlineData(1f, 0f, 1, "\u001b[<66;6;3M")]
+    [InlineData(-1f, 0f, 1, "\u001b[<67;6;3M")]
+    [InlineData(1f, 1f, 1, "\u001b[<64;6;3M\u001b[<66;6;3M")]
+    [InlineData(0f, 0.5f, 2, "\u001b[<64;6;3M")]
+    [InlineData(0f, 0.25f, 3, "")]
+    public void ReportingWheel_ReportsPerNotchWithHorizontalButtons(float x, float y, int repeat, string expected)
+    {
+        using var host = NewStartedHost(out var tab, out var pty);
+        Feed(tab.ActivePane, "\u001b[?1000h\u001b[?1006h");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+
+        for (int i = 0; i < repeat; i++)
+            controller.HandleMouseScroll(mouse, new ScrollWheel(x, y));
+
+        Assert.Equal(expected, WrittenText(tab.ActivePane, pty));
+        Assert.Equal(0, tab.ActivePane.ScrollOffset);
+    }
+
+    [Theory]
+    [InlineData("\u001b[?1049h", true, 1f, "\u001b[A\u001b[A\u001b[A")]
+    [InlineData("\u001b[?1049h", true, -1f, "\u001b[B\u001b[B\u001b[B")]
+    [InlineData("\u001b[?1049h\u001b[?1h", true, 1f, "\u001bOA\u001bOA\u001bOA")]
+    [InlineData("\u001b[?1047h", true, 0.5f, "\u001b[A")]
+    [InlineData("\u001b[?1049h\u001b[?1007l", true, 1f, "")]
+    [InlineData("\u001b[?1049h", false, 1f, "")]
+    [InlineData("\u001b[?1049h\u001b[?1000h\u001b[?1006h", true, 1f, "\u001b[<64;6;3M")]
+    [InlineData("", true, 1f, "")]
+    public void AlternateScroll_WheelBecomesCursorKeysOnlyOnTheAlternateScreenWithoutReporting(
+        string setup, bool alternateScrollSetting, float deltaY, string expected)
+    {
+        using var host = NewStartedHost(out var tab, out var pty);
+        host.MouseInput = MouseInputSettings.Default with { AlternateScroll = alternateScrollSetting };
+        Feed(tab.ActivePane, setup);
+        var controller = new TerminalMouseController(host);
+
+        controller.HandleMouseScroll(new FakeMouse { Position = new Vector2(50f, 60f) }, new ScrollWheel(0f, deltaY));
+
+        Assert.Equal(expected, WrittenText(tab.ActivePane, pty));
+    }
+
+    [Theory]
+    [InlineData(3.0, 1f, 1, 3)]
+    [InlineData(3.0, 1f, 3, 9)]
+    [InlineData(3.0, 0.1f, 30, 9)]
+    [InlineData(3.0, 0.1f, 1, 0)]
+    [InlineData(1.5, 1f, 2, 3)]
+    [InlineData(1.0, 0.4f, 5, 2)]
+    public void LocalWheel_AccumulatesFractionalDeltasWithMultiplier(double multiplier, float deltaY, int events, int expectedOffset)
+    {
+        using var host = new FakeTerminalMouseHost
+        {
+            MouseInput = MouseInputSettings.Default with { ScrollMultiplier = multiplier }
+        };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        for (int i = 0; i < 100; i++)
+            Feed(tab.ActivePane, $"line-{i}\r\n");
+        var controller = new TerminalMouseController(host);
+        var mouse = new FakeMouse { Position = new Vector2(50f, 60f) };
+
+        for (int i = 0; i < events; i++)
+            controller.HandleMouseScroll(mouse, new ScrollWheel(0f, deltaY));
+
+        Assert.Equal(expectedOffset, tab.ActivePane.ScrollOffset);
+    }
+
+    [Fact]
+    public void LocalWheel_RemainderDoesNotCarryAcrossPanes()
+    {
+        using var host = new FakeTerminalMouseHost
+        {
+            MouseInput = MouseInputSettings.Default with { ScrollMultiplier = 1.0 }
+        };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        var rightPane = tab.PaneTree.Split(tab.ActivePane, SplitDirection.Vertical);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        foreach (var pane in tab.PaneTree.Leaves)
+        {
+            for (int i = 0; i < 50; i++)
+                Feed(pane, $"line-{i}\r\n");
+        }
+        var leftPane = tab.PaneTree.Leaves[0];
+        var controller = new TerminalMouseController(host);
+        var left = new FakeMouse { Position = new Vector2(50f, 60f) };
+        var right = new FakeMouse { Position = new Vector2(500f, 60f) };
+
+        controller.HandleMouseScroll(left, new ScrollWheel(0f, 0.5f));
+        controller.HandleMouseScroll(right, new ScrollWheel(0f, 0.5f));
+        controller.HandleMouseScroll(left, new ScrollWheel(0f, 0.5f));
+        Assert.Equal(0, leftPane.ScrollOffset);
+        Assert.Equal(0, rightPane.ScrollOffset);
+
+        controller.HandleMouseScroll(left, new ScrollWheel(0f, 0.5f));
+        Assert.Equal(1, leftPane.ScrollOffset);
     }
 
 }

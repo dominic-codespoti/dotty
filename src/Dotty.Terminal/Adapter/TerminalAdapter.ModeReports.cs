@@ -39,13 +39,16 @@ public partial class TerminalAdapter
                 return ModeFlag(_buffer.IsAlternateScreenActive);
             case 66: return ModeFlag(KeypadApplicationMode); // DECNKM
             case 67: return ModeFlag(BackarrowSendsBackspace); // DECBKM
+            case 9: return ModeFlag(CurrentMouseMode == MouseMode.X10);
             case 1000: return ModeFlag(CurrentMouseMode == MouseMode.Normal);
             case 1002: return ModeFlag(CurrentMouseMode == MouseMode.ButtonEvent);
             case 1003: return ModeFlag(CurrentMouseMode == MouseMode.AnyEvent);
             case 1004: return ModeFlag(FocusReportingEnabled);
             case 1005: return ModeFlag(CurrentMouseEncoding == MouseEncoding.UTF8);
             case 1006: return ModeFlag(CurrentMouseEncoding == MouseEncoding.SGR);
+            case 1007: return ModeFlag(AlternateScrollMode);
             case 1015: return ModeFlag(CurrentMouseEncoding == MouseEncoding.URXVT);
+            case 1016: return ModeFlag(CurrentMouseEncoding == MouseEncoding.SGRPixels);
             case 2004: return ModeFlag(_buffer.BracketedPasteMode);
             case 2026: return ModeFlag(SynchronizedUpdateActive);
             case 2027: return ModePermanentlySet; // grapheme clustering is always on
@@ -56,7 +59,6 @@ public partial class TerminalAdapter
             case 4: // DECSCLM
             case 5: // DECSCNM
             case 8: // DECARM
-            case 9: // X10 mouse: deliberately not routed (no press-only encoding)
             case 12: // AT&T 610 blink
             case 18: // DECPFF
             case 19: // DECPEX
@@ -66,8 +68,6 @@ public partial class TerminalAdapter
             case 69: // DECLRMM
             case 80: // DECSDM
             case 95: // DECNCSM
-            case 1007: // alternate scroll
-            case 1016: // SGR pixel mouse
             case 1048: // save/restore cursor: an action, not a persistent mode
             // xterm "recognized, unimplemented" VT3xx/VT4xx modes:
             case 11:

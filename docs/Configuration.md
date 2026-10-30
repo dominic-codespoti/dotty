@@ -98,6 +98,9 @@ become unreadable therefore no longer prevents a new tab from opening.
   },
   "mouse": {
     "copyOnSelect": "none",
+    "scrollMultiplier": 3,
+    "alternateScroll": "auto",
+    "reportBypassModifier": "shift",
     "middleClickAction": "clipboard-paste"
   },
   "vt": {
@@ -338,6 +341,9 @@ each platform ([Platform Support](PlatformSupport.md#manual-link-opener-checks))
 | Property | Type | Default | Notes |
 |---|---|---|---|
 | `copyOnSelect` | string | `"none"` | Where a finished local selection is copied automatically: `none`, `primary`, `clipboard`, or `both` (case-insensitive). The Ghostty-style boolean spellings are accepted **as strings**: `"true"` (or `"on"`) means `primary` on Linux and `clipboard` on macOS/Windows, `"false"` (or `"off"`) means `none`. Unknown values mean `none`. The property is typed as a string, so an unquoted JSON `true`/`false` is a type mismatch rather than a legacy spelling; quote it. |
+| `scrollMultiplier` | number | `3` | Lines scrolled per wheel notch, for local scrollback and for alternate-scroll cursor keys. Touchpad deltas smaller than a notch accumulate (with the remainder carried to the next event, per pane) instead of each scrolling a full line. Applications that track the mouse always get one wheel report per notch. Clamped to 0.01 through 100. |
+| `alternateScroll` | string | `"auto"` | `auto`: on the alternate screen, with no mouse reporting active and mode 1007 not reset by the application, the wheel sends cursor up/down keys (`SS3 A`/`SS3 B` under DECCKM) so `less`, `man` and similar programs scroll. `off`: never. Unknown values mean `auto`. |
+| `reportBypassModifier` | string | `"shift"` | While held, clicks, drags and the wheel stay local (selection, scrollback, links) even when an application tracks the mouse: `shift`, `ctrl`, `alt`, `super`, or `none` (always report). Unknown values mean `shift`. |
 | `middleClickAction` | string | `"clipboard-paste"` | What a middle click does in a pane that is not reporting mouse events: `primary-paste`, `clipboard-paste`, or `ignore` (`-` and `_` are interchangeable). Unknown values mean `clipboard-paste`. |
 
 Copy-on-select runs when the left button is released after a drag, or after a
@@ -356,7 +362,7 @@ another X11 application left in PRIMARY, or nothing elsewhere. OSC 52 `p`/`s`
 reads and writes use the real PRIMARY selection on X11 only (see
 [`clipboard`](#clipboard)); the in-process buffer is never exposed to OSC 52.
 
-Both options are read live: a change applies to the next selection or click.
+All mouse options are read live: a change applies to the next selection, click or wheel event.
 Interoperation of X11 PRIMARY with other applications is a manual check; see
 [E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click).
 
@@ -551,12 +557,16 @@ terminal. Ordinary Ctrl/Alt-modified text is not inserted as query text.
 
 Pointer operations target the pane under the pointer. A wheel event activates
 that pane and, when terminal mouse reporting is disabled, scrolls its scrollback
-(positive wheel motion moves up; negative motion moves down). A pane's
+by `mouse.scrollMultiplier` lines per notch (positive wheel motion moves up;
+negative motion moves down; touchpad fractions accumulate). On the alternate
+screen the wheel sends cursor up/down keys instead, unless the application reset
+mode 1007 or `mouse.alternateScroll` is `off`. A pane's
 rightmost scrollbar strip can be clicked or dragged to map pointer position to
 scrollback offset, and taking the scrollbar clears that pane's selection.
 
 Terminal mouse reporting takes precedence over local wheel, selection, scrollbar,
-paste, and hyperlink handling for a reporting pane. Holding `Shift` overrides
+paste, and hyperlink handling for a reporting pane. Holding
+`mouse.reportBypassModifier` (`Shift` by default) overrides
 that reporting path, exposing the local controls instead. When local pointer
 handling is active, left-drag selects characters, a double-click selects a word,
 and a triple-click selects a line. Dragging beyond the pane while selecting
@@ -594,6 +604,7 @@ options (the `Scope` line of `dotty +explain-config OPTION` states the same):
 |---|---|
 | `mouse.copyOnSelect` | for selections completed after the reload |
 | `mouse.middleClickAction` | at the next middle click |
+| `mouse.scrollMultiplier`, `mouse.alternateScroll`, `mouse.reportBypassModifier` | at the next pointer or wheel event |
 | `vt.windowResizeAllowed` | at the next resize request |
 | `vt.checksumReportEnabled` | applied to every session on reload and to sessions created later |
 | `shellIntegration` | new tabs and panes only; running shells are never touched |

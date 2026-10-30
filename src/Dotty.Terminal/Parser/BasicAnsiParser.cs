@@ -1318,15 +1318,17 @@ namespace Dotty.Terminal.Parser
                 case 1004:
                     Handler?.OnSetFocusReporting(enabled);
                     break;
-                // Mode 9 (X10 mouse) is deliberately not routed: TerminalInputEncoder
-                // has no press-only/no-modifier X10 encoding and would report releases
-                // and modifiers to an application that asked for neither.
+                // Mouse tracking (9 X10, 1000, 1002, 1003), coordinate encodings
+                // (1005, 1006, 1015, 1016) and alternate scroll (1007).
+                case 9:
                 case 1000:
                 case 1002:
                 case 1003:
                 case 1005:
                 case 1006:
+                case 1007:
                 case 1015:
+                case 1016:
                     Handler?.OnSetMouseMode(code, enabled);
                     break;
                 case 2026:

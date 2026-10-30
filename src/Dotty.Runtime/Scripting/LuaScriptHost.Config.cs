@@ -78,6 +78,9 @@ public sealed partial class LuaScriptHost
         ["graphics.allow_shared_memory"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowSharedMemory, (c, v) => c.Graphics.AllowSharedMemory = (bool)v!),
         ["graphics.windows_passthrough"] = new(ConfigValueKind.Boolean, c => c.Graphics.WindowsPassthrough, (c, v) => c.Graphics.WindowsPassthrough = (bool)v!),
         ["mouse.copy_on_select"] = new(ConfigValueKind.String, c => c.Mouse.CopyOnSelect, (c, v) => c.Mouse.CopyOnSelect = (string)v!),
+        ["mouse.scroll_multiplier"] = new(ConfigValueKind.Number, c => c.Mouse.ScrollMultiplier, (c, v) => c.Mouse.ScrollMultiplier = (double)v!),
+        ["mouse.alternate_scroll"] = new(ConfigValueKind.String, c => c.Mouse.AlternateScroll, (c, v) => c.Mouse.AlternateScroll = (string)v!),
+        ["mouse.report_bypass_modifier"] = new(ConfigValueKind.String, c => c.Mouse.ReportBypassModifier, (c, v) => c.Mouse.ReportBypassModifier = (string)v!),
         ["mouse.middle_click_action"] = new(ConfigValueKind.String, c => c.Mouse.MiddleClickAction, (c, v) => c.Mouse.MiddleClickAction = (string)v!)
     };
 

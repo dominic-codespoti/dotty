@@ -94,12 +94,15 @@ public sealed class ParserRoutingTests
         Assert.Empty(handler.WindowOperationCalls);
     }
 
-    [Fact]
-    public void PrivateModes_X10Mouse_IsNotRoutedWhileEncoderLacksX10Semantics()
+    [Theory]
+    [InlineData(9)]
+    [InlineData(1007)]
+    [InlineData(1016)]
+    public void PrivateModes_MouseModesRouteToSetMouseMode(int mode)
     {
         var (parser, handler) = Setup();
-        Feed(parser, "\u001b[?9h\u001b[?9l");
-        Assert.Empty(handler.PrivateModeCalls);
+        Feed(parser, $"\u001b[?{mode}h\u001b[?{mode}l");
+        Assert.Equal(new[] { (mode, true), (mode, false) }, handler.PrivateModeCalls);
     }
 
     [Fact]

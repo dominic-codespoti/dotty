@@ -1034,6 +1034,10 @@ internal static partial class DottyWindowHost
 
     private static void UpdateWindowTitle(string fallbackTitle)
     {
+        // After a driver reset the title carries the "rendering stopped" notice instead.
+        if (RenderingStopped)
+            return;
+
         int tabCount = _tabManager?.Count ?? 1;
         int activeIndex = _tabManager?.ActiveIndex ?? -1;
         var activeTab = _tabManager?.ActiveTab;
@@ -1803,6 +1807,14 @@ internal static partial class DottyWindowHost
             RefreshLuaStatus();
         // Before the sync-hold and minimized-window early returns: a bell must still request attention then.
         TickBell(now);
+        // A driver reset lost the context for good: input, shells and control commands keep being served above, but
+        // nothing can be drawn until Dotty restarts.
+        if (RenderingStopped)
+        {
+            FailScreenshotRequests("rendering stopped after a GPU reset");
+            WaitWithoutRendering();
+            return;
+        }
         int framebufferWidth = _window.FramebufferSize.X;
         int framebufferHeight = _window.FramebufferSize.Y;
         FrameGate gate = FramePlanner.Gate(
@@ -1919,7 +1931,7 @@ internal static partial class DottyWindowHost
             WaitForWork(includeBlink: true, coalesceRemainingMs: plan.HoldMs, includeImageAnimation: true);
             return;
         }
-        // The driver reset the GPU: the GL objects are gone, rendering with them is pointless.
+        // The driver reset the GPU: the context is lost and rendering stops (see StopRenderingAfterContextLoss).
         if (HandleContextResetIfReported())
             return;
         WindowFrameReason consumedReasons = WindowPresentationGate.Consume();

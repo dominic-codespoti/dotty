@@ -326,8 +326,14 @@ internal static partial class DottyWindowHost
         for (int i = 0; i < _idleWaiters.Count; i++)
             _idleWaiters[i].Completion.TrySetResult("ERROR host is closed");
         _idleWaiters.Clear();
+        FailScreenshotRequests("host is closed");
+    }
+
+    /// <summary>Answers every parked <c>SCREENSHOT:</c> request with <c>ERROR</c> <paramref name="error"/>.</summary>
+    private static void FailScreenshotRequests(string error)
+    {
         for (int i = 0; i < _screenshotRequests.Count; i++)
-            _screenshotRequests[i].Completion.TrySetResult("ERROR host is closed");
+            _screenshotRequests[i].Completion.TrySetResult($"ERROR {error}");
         _screenshotRequests.Clear();
     }
 }

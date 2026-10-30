@@ -316,6 +316,7 @@ expected to change the row; it is not a release date or a commitment.
 | Rounded chrome | Supported | Tab bar, scrollbar, and context menus; window corners belong to the OS | |
 | Bell | Partial | Window attention request while unfocused (`bell.attention`, default on), optional visual flash drawn as a separate overlay pass after the frame (`bell.visual`), tab marker, Lua `bell` event; rate-limited to one effect per 150 ms. No sound: `bell.audible` is accepted but not implemented | |
 | Kitty graphics | Implemented, unverified | Off by default (`graphics.kittyProtocol`); see [Kitty graphics](KittyGraphics.md) | |
+| Render failures and GPU resets | Partial | Exceptions retry, rebuild the renderer, then prompt; a driver reset (lost context) stops rendering with a title and stderr notice until Dotty restarts. See [Render failures and context loss](#render-failures-and-context-loss) | W4-C24 (context recreation) |
 
 ## Memory diagnostics and lifecycle measurements
 
@@ -426,26 +427,33 @@ Windows GUI behavior.
 
 A failure while drawing never closes the window or ends the shells. The pure
 `RenderRecoveryPolicy` (`RenderRecoveryPolicyTests`) decides: the first
-exception requeues the frame and retries it; a second one within 10 s disposes
-the `SilkTerminalRenderer` and creates a new one on the same context and atlas
-(new programs and buffers, a texture manager that re-uploads the whole glyph
-atlas, a fresh image texture cache) and redraws everything; a third shows a host
-prompt ("Try again" rebuilds once more, "Quit Dotty" closes) and stops retrying,
-so a frame that keeps failing waits for new input instead of spinning. A
-failure more than 10 s after the previous one starts over. Each step is logged
-to stderr with a `[render]` prefix; `STATS` reports `renderRecoveryState` and
-`renderFailures`.
+exception requeues the frame and retries it; a second one within 10 s creates a
+new `SilkTerminalRenderer` on the same context and atlas (new programs and
+buffers, a texture manager that re-uploads the whole glyph atlas, a fresh image
+texture cache), disposes the old one only after that succeeded, and redraws
+everything; a third shows a host prompt ("Try again" rebuilds once more, "Quit
+Dotty" closes) and stops retrying, so a frame that keeps failing waits for new
+input instead of spinning. A failure more than 10 s after the previous one
+starts over. Each step is logged to stderr with a `[render]` prefix; `STATS`
+reports `renderRecoveryState` and `renderFailures`.
 
 The window requests a robust context (`GLFW_CONTEXT_ROBUSTNESS` =
 `GLFW_LOSE_CONTEXT_ON_RESET`, ignored by GLFW where the platform lacks the
 robustness extension). When the context offers `glGetGraphicsResetStatus`
 (OpenGL 4.5, `GL_KHR_robustness` or `GL_ARB_robustness`) the host polls it
-before each frame; a reported reset skips the retry and rebuilds at once. A
-context lost on reset stays lost until it is recreated, which needs a new
-window and is not implemented: if the first frame after the rebuild still sees
-`GL_CONTEXT_LOST`, the host goes straight to the prompt. On a lost context the
-prompt itself may not be visible; the stderr message says the shells keep
-running and the window can be closed. The rebuild is exercised by
+before each frame. A context lost on reset stays lost until it is recreated, so
+rebuilding on it or drawing a prompt through it cannot work. A reported reset,
+or `GL_CONTEXT_LOST` seen by the first frame after a rebuild, therefore moves
+the policy to the terminal `ContextLost` state: rendering stops (the host drains
+input and serves the shells and control commands, then waits for new work
+without drawing, so it never spins), the window stays open and the shells keep
+running. The host writes one `[render]` line to stderr and one crash-log entry
+(`CrashReporter.Report`), and sets the window title to `Dotty — GPU reset,
+rendering stopped; restart Dotty` through GLFW, which needs no GL. `STATS`
+reports `"renderRecoveryState":"ContextLost"`; `SCREENSHOT:` answers `ERROR`.
+**Genuine context loss requires restarting Dotty**: recreating the context
+(a new window and context, renderer, atlas, overlay and native callbacks) is
+not implemented (Wave 4 plan item W4-C24). The rebuild is exercised by
 `SilkTerminalRendererRebuildTests` (GL lane, skipped without a context); a real
 driver reset is a manual check.
 

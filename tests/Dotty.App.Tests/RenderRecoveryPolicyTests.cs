@@ -88,25 +88,35 @@ public sealed class RenderRecoveryPolicyTests
     }
 
     [Theory]
-    // failures before the reset -> action for the reset
-    [InlineData(0, RenderRecoveryAction.Rebuild)]
-    [InlineData(1, RenderRecoveryAction.Rebuild)]
-    [InlineData(2, RenderRecoveryAction.Fatal)]
-    public void ContextResetSkipsTheRetry(int priorFailures, RenderRecoveryAction expected)
+    // exception failures before the lost context (0: Healthy, 1: Retrying, 2: Rebuilt, 3: Fatal)
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void ALostContextStopsRenderingFromAnyState(int priorFailures)
     {
         var policy = new RenderRecoveryPolicy();
         for (int i = 0; i < priorFailures; i++)
             policy.OnRenderFailure(i);
 
-        Assert.Equal(expected, policy.OnContextReset(priorFailures));
+        Assert.Equal(RenderRecoveryAction.StopRendering, policy.OnContextLost(priorFailures));
+        Assert.Equal(RenderRecoveryState.ContextLost, policy.State);
+        Assert.Equal(priorFailures + 1, policy.FailureCount);
     }
 
     [Fact]
-    public void ContextStillLostAfterTheRebuildIsFatal()
+    public void ContextLostIsTerminal()
     {
         var policy = new RenderRecoveryPolicy();
+        policy.OnContextLost(0);
 
-        Assert.Equal(RenderRecoveryAction.Rebuild, policy.OnContextReset(0));
-        Assert.Equal(RenderRecoveryAction.Fatal, policy.OnContextReset(Soon));
+        // Neither later failures, a quiet period nor the prompt's reset leave it: only a restart draws again.
+        Assert.Equal(RenderRecoveryAction.StopRendering, policy.OnRenderFailure(Soon));
+        policy.OnFramePresented(Soon + 10 * Quiet);
+        Assert.Equal(RenderRecoveryAction.StopRendering, policy.OnRenderFailure(Soon + 10 * Quiet));
+        policy.Reset();
+        Assert.Equal(RenderRecoveryState.ContextLost, policy.State);
+        Assert.Equal(RenderRecoveryAction.StopRendering, policy.OnContextLost(2 * Soon + 10 * Quiet));
+        Assert.Equal(4, policy.FailureCount);
     }
 }

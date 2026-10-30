@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # Workflow actions are pinned to full commit SHAs with a "# vX.Y.Z" comment;
+  # Dependabot bumps both the SHA and the comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+
+  # Central package management: versions live in Directory.Packages.props.
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      silk-net:
+        patterns:
+          - 'Silk.NET.*'
+      skiasharp-harfbuzzsharp:
+        patterns:
+          - 'SkiaSharp*'
+          - 'HarfBuzzSharp*'
+      dotnet-runtime-packages:
+        patterns:
+          - 'Microsoft.Extensions.*'
+          - 'System.*'
+      test-and-benchmark:
+        patterns:
+          - 'xunit*'
+          - 'Microsoft.NET.Test.Sdk'
+          - 'FluentAssertions'
+          - 'Moq'
+          - 'BenchmarkDotNet*'

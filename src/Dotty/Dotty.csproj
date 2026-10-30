@@ -55,6 +55,19 @@
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- License payload of every published archive: Dotty's MIT license, the third-party
+         notices, and the pinned GLFW fork's zlib/libpng license (scripts/dist/verify-publish.* assert them). -->
+    <Content Include="../../License.md"
+             Link="License.md"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../THIRD-PARTY-NOTICES.md"
+             Link="THIRD-PARTY-NOTICES.md"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../vendor/glfw/source/LICENSE.md"
+             Link="licenses/GLFW-LICENSE.md"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <PropertyGroup>
     <GlfwRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</GlfwRid>
     <GlfwRid Condition="'$(GlfwRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</GlfwRid>

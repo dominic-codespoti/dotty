@@ -46,12 +46,14 @@ Versioned self-contained archives are published on
 [GitHub Releases](https://github.com/dominic-codespoti/dotty/releases) only when a
 release is explicitly requested. See the [release policy](docs/Releasing.md) for
 versioning and publication. Release signing and a graphical installer are not
-currently provided.
+currently provided. Every archive contains `License.md`, the third-party
+notices (`THIRD-PARTY-NOTICES.md`) and `licenses/GLFW-LICENSE.md`.
 
 Linux x64:
 
 ```bash
 tar -xzf dotty-<version>-linux-x64.tar.gz
+cd dotty-<version>-linux-x64
 ./dotty
 ```
 
@@ -59,6 +61,7 @@ macOS x64:
 
 ```bash
 tar -xzf dotty-<version>-osx-x64.tar.gz
+cd dotty-<version>-osx-x64
 ./dotty
 ```
 
@@ -66,13 +69,17 @@ macOS arm64:
 
 ```bash
 tar -xzf dotty-<version>-osx-arm64.tar.gz
+cd dotty-<version>-osx-arm64
 ./dotty
 ```
 
 Windows x64: extract `dotty-<version>-win-x64.zip` and run `dotty.exe`,
 keeping it beside the DLLs included in the archive. The archives are
 self-contained; no .NET installation is needed. Windows requires build 17763+
-(or Windows 11) and an OpenGL 3.3 driver.
+(or Windows 11) and an OpenGL 3.3 driver. The minimum glibc (Linux) and macOS
+versions of each release are measured from its binaries and listed in its
+release notes and `baselines.json`; the builds target glibc 2.31 and macOS 13.0
+(see [Platform Support](docs/PlatformSupport.md#requirements)).
 
 ## Quick Start
 

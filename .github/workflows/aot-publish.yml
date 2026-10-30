@@ -1,0 +1,224 @@
+name: AOT publish
+
+# Reusable NativeAOT publish for every release RID. ci.yml calls it on every push and
+# pull request (no version input: the central MSBuild Version, dev build); release.yml
+# calls it with the release version and uploads the archives it produces. One definition,
+# so CI exercises exactly the publish path a release uses.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Exact release version without the leading v (for example 0.4.0-beta.1). Empty for CI builds.
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_VERSION: '11.0.x'
+  PROJECT_PATH: 'src/Dotty/Dotty.csproj'
+
+jobs:
+  # Compile terminfo/xterm-dotty.src once with ncurses tic (extended capabilities, -x) and
+  # round-trip it through infocmp. The database ships in the Linux and macOS archives as
+  # terminfo/ with both directory layouts: first-letter (x/, Linux ncurses) and hex (78/,
+  # macOS ncurses on case-insensitive file systems), so macOS's older tic is never needed.
+  terminfo:
+    name: Compile xterm-dotty terminfo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compile and round-trip with tic/infocmp
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/terminfo"
+          tic -x -o "$out" terminfo/xterm-dotty.src
+          infocmp -x -A "$out" xterm-dotty
+          for letter_dir in "$out"/?; do
+            letter="$(basename "$letter_dir")"
+            cp -R "$letter_dir" "$out/$(printf '%02x' "'$letter")"
+          done
+          test -f "$out/x/xterm-dotty"
+          test -f "$out/78/xterm-dotty"
+          find "$out" -type f | sort
+
+      - name: Upload compiled terminfo
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: terminfo-db
+          path: ${{ runner.temp }}/terminfo/
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: AOT publish (${{ matrix.rid }})
+    runs-on: ${{ matrix.runner }}
+    needs: terminfo
+    # linux-x64 builds inside Debian 11 so the shipped ELF files link against glibc 2.31
+    # (scripts/dist/baseline-targets.json); an empty image runs the job on the runner itself.
+    container: ${{ matrix.container }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-latest
+            container: debian:bullseye
+            python: python3
+          - rid: win-x64
+            runner: windows-latest
+            container: ''
+            python: python
+          - rid: osx-arm64
+            runner: macos-15
+            container: ''
+            python: python3
+          - rid: osx-x64
+            runner: macos-15-intel
+            container: ''
+            python: python3
+    env:
+      RID: ${{ matrix.rid }}
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Install build prerequisites (Debian 11 container)
+        if: matrix.container != ''
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git make gcc g++ clang lld zlib1g-dev python3 \
+            libicu67 libssl1.1 libgssapi-krb5-2 \
+            cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: nuget-aot-${{ matrix.rid }}-${{ hashFiles('**/*.csproj', 'Directory.Packages.props', '**/packages.lock.json') }}
+          restore-keys: |
+            nuget-aot-${{ matrix.rid }}-
+
+      - name: Apply deployment target
+        shell: bash
+        # osx-*: MACOSX_DEPLOYMENT_TARGET from baseline-targets.json, honoured by clang (pty-helper) and CMake (GLFW).
+        run: ${{ matrix.python }} scripts/dist/check_baseline.py env --rid "$RID" --targets scripts/dist/baseline-targets.json >> "$GITHUB_ENV"
+
+      - name: Build native pty-helper
+        if: runner.os != 'Windows'
+        run: make -C src/Dotty.NativePty
+
+      - name: Resolve expected version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$RELEASE_VERSION" ]; then
+            echo "version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+            echo "mode=exact" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(dotnet msbuild "$PROJECT_PATH" -getProperty:Version -nologo)" >> "$GITHUB_OUTPUT"
+            echo "mode=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish NativeAOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_args=()
+          if [ -n "$RELEASE_VERSION" ]; then
+            # Release builds report the exact SemVer: no source-revision suffix.
+            version_args=(-p:Version="$RELEASE_VERSION" -p:IncludeSourceRevisionInInformationalVersion=false)
+          fi
+          # PublishAot=true comes from Dotty.csproj. Warnings go to a separate log for the gate below.
+          dotnet publish "$PROJECT_PATH" \
+            -c Release \
+            -r "$RID" \
+            --self-contained true \
+            -tl:off \
+            "-flp:LogFile=$RUNNER_TEMP/publish-warnings.log;WarningsOnly" \
+            -p:RequireUnixPtyHelper=true \
+            ${version_args[@]+"${version_args[@]}"} \
+            -o "publish/$RID"
+
+      - name: Gate NativeAOT warnings (own code fails, third-party listed)
+        shell: bash
+        run: ${{ matrix.python }} scripts/dist/aot_warnings.py --log "$RUNNER_TEMP/publish-warnings.log" --repo-root "$GITHUB_WORKSPACE" --label "$RID" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Add compiled terminfo (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: terminfo-db
+          path: publish/${{ matrix.rid }}/terminfo
+
+      - name: Verify publish output (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: scripts/dist/verify-publish.sh --rid "$RID" --dir "publish/$RID" --version "${{ steps.version.outputs.version }}" --version-mode "${{ steps.version.outputs.mode }}"
+
+      - name: Verify publish output (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/dist/verify-publish.ps1 -Rid $env:RID -PublishDir "publish\$env:RID" -Version "${{ steps.version.outputs.version }}" -VersionMode "${{ steps.version.outputs.mode }}"
+
+      - name: Measure platform baseline
+        shell: bash
+        run: ${{ matrix.python }} scripts/dist/check_baseline.py scan --rid "$RID" --publish-dir "publish/$RID" --targets scripts/dist/baseline-targets.json --output "dist/baselines-$RID.json" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Create tarball (release)
+        if: inputs.version != '' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_dir="dotty-${RELEASE_VERSION}-${RID}"
+          mkdir -p "dist/$package_dir"
+          # cp -R dir/. keeps dotfiles such as shell-integration/inject/zsh/.zshenv.
+          cp -R "publish/$RID/." "dist/$package_dir/"
+          tar -czf "dist/${package_dir}.tar.gz" -C dist "$package_dir"
+          rm -rf "dist/$package_dir"
+          ls -la dist
+
+      - name: Create zip archive (release)
+        if: inputs.version != '' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "publish\$env:RID\*" -DestinationPath "dist\dotty-$env:RELEASE_VERSION-$env:RID.zip" -Force
+          Get-ChildItem dist
+
+      - name: Upload release archive and baseline
+        if: inputs.version != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dotty-${{ matrix.rid }}
+          path: |
+            dist/dotty-*
+            dist/baselines-*.json
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload publish output and baseline (CI)
+        if: inputs.version == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: aot-publish-${{ matrix.rid }}
+          path: |
+            publish/${{ matrix.rid }}/
+            dist/baselines-${{ matrix.rid }}.json
+          retention-days: 7
+          if-no-files-found: error

@@ -25,6 +25,17 @@ Linux and macOS source builds also require a C compiler and `make` for the POSIX
 helper. Windows uses the operating system ConPTY API and does not need a helper
 compiler. Windows ConPTY requires build 17763 or newer.
 
+Minimum OS versions of the release archives are build targets checked against
+the shipped binaries, not promises: the Linux x64 build runs in a Debian 11
+container and targets glibc 2.31, the macOS builds target macOS 13.0, and
+Windows needs build 17763 for ConPTY (declared, not measured). CI fails when a
+shipped binary needs more than its target (`scripts/dist/check_baseline.py`,
+`scripts/dist/baseline-targets.json`), and each release's notes and attached
+`baselines.json` state the measured values and the system libraries the Linux
+and macOS binaries load. None of these minimums has been verified by running
+the archives on that oldest OS version. See
+[Release policy](Releasing.md#platform-baselines).
+
 ## Build and run
 
 From the repository root:
@@ -48,9 +59,12 @@ Run the host-native tests on the machine that will run the host:
 dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj -c Release
 ```
 
-The CI matrix builds Linux x64, macOS Intel, macOS arm64, and Windows x64 on
-native runners. Linux arm64 and Windows arm64 have no automated nightly or
-release-publishing validation lane; work for those candidates is local/manual.
+The CI matrix builds and tests Linux x64, macOS Intel, macOS arm64, and Windows x64
+on native runners, and NativeAOT-publishes the same four RIDs with the release
+configuration (`aot-publish`): file asserts, `dotty --version` and
+`dotty +explain-config font.size` run on each, and IL2xxx/IL3xxx warnings in
+Dotty's own code fail the job. Linux arm64 and Windows arm64 have no automated
+nightly or release-publishing validation lane; work for those candidates is local/manual.
 
 ## Desktop presentation and native verification
 
@@ -299,10 +313,12 @@ See [Native PTY](NativePty.md#pixel-sizes) and [Windows ConPTY](WindowsConPty.md
 Support promotion is staged:
 
 1. **Release tier:** Linux x64, macOS x64/arm64, and Windows x64 pass native
-   PTY tests, publish native-asset validation, extracted artifact checks, and
-   checksum/manifest generation. Release CI also starts the extracted Linux
-   archive under Xvfb; macOS and Windows desktop startup is verified
-   manually/local.
+   PTY tests, NativeAOT publish with native-asset validation and a windowless
+   `--version`/`+explain-config` run, extracted artifact checks,
+   checksum/manifest generation, and the measured glibc/macOS baseline within
+   its target. Release CI also renders frames from the extracted Linux archive
+   under Xvfb with software Mesa through the control interface; macOS and
+   Windows desktop startup is verified manually/local.
 2. **Architecture candidate tier:** Linux arm64 and Windows arm64 remain
    unpromoted local/manual candidates. There is no automated nightly or release
    validation lane for these targets. Promotion requires native arm64 PTY,
@@ -317,9 +333,11 @@ Support promotion is staged:
 - [ ] Restore and build `Dotty.slnx` on every release runner.
 - [ ] Build and package `pty-helper` for Unix artifacts.
 - [ ] Run native PTY tests without filtering the host backend.
-- [ ] Verify `dotty`/`dotty.exe`, native Skia/Lua assets, and helper placement.
-- [ ] Smoke Linux X11 startup under Xvfb (the automated GUI coverage).
+- [ ] Verify `dotty`/`dotty.exe`, native GLFW/Skia/Lua assets, and helper placement (`scripts/dist/verify-publish.*`).
+- [ ] Confirm every archive carries `License.md`, `THIRD-PARTY-NOTICES.md` and `licenses/GLFW-LICENSE.md` (`scripts/dist/verify_archive.py`), and that `THIRD-PARTY-NOTICES.md` lists every shipped dependency.
+- [ ] Render a frame from the extracted Linux archive under Xvfb with software Mesa (`desktop-smoke.py`, the automated GUI coverage).
+- [ ] Check the measured baselines in `baselines.json` and the generated "System requirements" notes.
 - [ ] Manually verify Wayland, macOS, and Windows desktop startup on native sessions.
 - [ ] Extract every archive into a clean directory and run the host.
-- [ ] Generate `MANIFEST.txt` and `SHA256SUMS`; verify checksums.
+- [ ] Generate `MANIFEST.txt`, `SHA256SUMS` and the provenance attestation; verify checksums (`sha256sum -c SHA256SUMS`) and `gh attestation verify`.
 - [ ] Record unsupported architecture candidates separately from release assets.

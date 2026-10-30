@@ -29,6 +29,10 @@ on:
 env:
   DOTNET_VERSION: '11.0.x'
 
+# Least privilege: read-only by default; the capture job alone may push (opt-in input 'commit').
+permissions:
+  contents: read
+
 jobs:
   capture:
     name: Capture esctest baseline (${{ inputs.os }})
@@ -38,10 +42,9 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
-
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
           dotnet-quality: 'preview'
@@ -68,7 +71,7 @@ jobs:
           python3 scripts/esctest/run_esctest.py --update-expectations --jobs 2 --out artifacts/esctest ${extra[@]+"${extra[@]}"}
 
       - name: Upload expectations
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: esctest-expectations
@@ -77,7 +80,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload esctest results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: esctest-baseline-results

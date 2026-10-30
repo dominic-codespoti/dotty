@@ -287,9 +287,11 @@ public sealed class TerminalTabManager : IDisposable
                 continue;
             }
 
+            // Runs on the session's PTY consumer thread (buffer lock held). Read the tab's own IsActive flag
+            // instead of ActiveTab, which indexes _tabs while the UI thread may be removing a tab.
             Action handler = () =>
             {
-                if (ActiveTab != tab)
+                if (!tab.IsActive)
                 {
                     tab.HasBellAlert = true;
                 }

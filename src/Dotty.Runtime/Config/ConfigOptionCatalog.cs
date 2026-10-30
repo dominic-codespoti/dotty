@@ -273,6 +273,15 @@ public static class ConfigOptionCatalog
         Opt("panes.activeBorder", "panes.active_border", "boolean", null, c => c.Panes.ActiveBorder,
             "Draw a border around the active pane. Accepted but not yet applied: no active-pane border is drawn."),
 
+        Opt("bell.attention", "bell.attention", "boolean", null, c => c.Bell.Attention,
+            "On a terminal bell, request window attention (taskbar flash, dock bounce, urgency hint) while the window is not focused.",
+            "Read live; takes effect at the next bell."),
+        Opt("bell.visual", "bell.visual", "boolean", null, c => c.Bell.Visual,
+            "On a terminal bell, briefly flash the window contents (about 150 ms fade).",
+            "Read live; takes effect at the next bell."),
+        Opt("bell.audible", "bell.audible", "boolean", null, c => c.Bell.Audible,
+            "Play a sound on a terminal bell. Accepted but not yet implemented on any platform: no sound is played."),
+
         Opt("keybindings", "keybindings", "map", null, c => c.Keybindings,
             "Map of chord (ctrl/shift/alt/super plus a key, e.g. 'ctrl+shift+t') to a TerminalAction name such as NewTab or Copy; 'None' unbinds a chord. Entries are added to the built-in bindings, which are not part of this default."),
 

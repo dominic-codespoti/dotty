@@ -32,7 +32,7 @@ using SkiaSharp;
 using InputKey = Silk.NET.Input.Key;
 namespace Dotty.Silk;
 
-internal static class DottyWindowHost
+internal static partial class DottyWindowHost
 {
     private static IWindow _window = null!;
     private static GL _gl = null!;
@@ -372,6 +372,7 @@ internal static class DottyWindowHost
         _tabManager.TabAdded += OnTabAdded;
         _tabManager.TabClosed += OnTabClosed;
         _tabManager.TabTitleChanged += OnTabTitleChanged;
+        AttachBellNotifications(_tabManager);
         var luaServices = new DottyLuaServices(
             action => { _lifecycle.TryEnqueue(action); },
             CreateLuaTab,
@@ -1716,6 +1717,8 @@ internal static class DottyWindowHost
         long now = GetClockMilliseconds();
         if (now - _lastLuaStatusRefreshTimestampMs >= LuaStatusRefreshIntervalMs)
             RefreshLuaStatus();
+        // Before the sync-hold and minimized-window early returns: a bell must still request attention then.
+        TickBell(now);
         // While a synchronized update (CSI 2026, used by nvim for every
         // redraw) is held, presents are withheld by design. Sleep instead of
         // spinning: the gate below used to burn 100% of a core here, starving
@@ -1962,6 +1965,7 @@ internal static class DottyWindowHost
             frame.ReleaseImageLeases();
             if (_renderer.ImageUploadsDeferred)
                 WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload);
+            DrawBellFlash(framebufferWidth, framebufferHeight);
             _window.SwapBuffers();
             _lastPresentTimestampMs = GetClockMilliseconds();
             _presentCount++;
@@ -2286,6 +2290,7 @@ internal static class DottyWindowHost
             _tabManager.TabAdded -= OnTabAdded;
             _tabManager.TabClosed -= OnTabClosed;
             _tabManager.TabTitleChanged -= OnTabTitleChanged;
+            DetachBellNotifications(_tabManager);
             var tabs = _tabManager.Tabs;
             for (int i = 0; i < tabs.Count; i++)
                 UnsubscribePaneTree(tabs[i]);
@@ -2342,6 +2347,7 @@ internal static class DottyWindowHost
         _clipboard = null;
         _pasteRouter = null;
         _sceneComposer?.Dispose();
+        DisposeBellOverlay();
         _renderer?.Dispose();
         if (_atlas != null)
         {

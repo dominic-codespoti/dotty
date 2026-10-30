@@ -66,6 +66,10 @@ public sealed class DottyUserConfig
 
     [JsonPropertyName("keybindings")]
     public System.Collections.Generic.Dictionary<string, string> Keybindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Alt/Option roles (decision K1); read live at each key event.</summary>
+    [JsonPropertyName("keyboard")]
+    public KeyboardUserConfig Keyboard { get; set; } = new();
     [JsonPropertyName("clipboard")]
     public ClipboardUserConfig Clipboard { get; set; } = new();
 
@@ -413,6 +417,7 @@ public static class UserConfigService
             config.Scrollback ??= new ScrollbackUserConfig();
             config.Graphics ??= new GraphicsUserConfig();
             config.Bell ??= new BellUserConfig();
+            config.Keyboard ??= new KeyboardUserConfig();
         }
         return config;
     }

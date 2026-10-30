@@ -31,44 +31,28 @@ public sealed class TerminalKeyboardController
     private int _activeTextIndex = -1;
     private long _pressSequence;
 
-    private bool _leftCtrl;
-    private bool _rightCtrl;
-    private bool _leftShift;
-    private bool _rightShift;
-    private bool _leftAlt;
-    private bool _rightAlt;
-    private bool _leftSuper;
-    private bool _rightSuper;
+    private readonly KeyboardModifierState _modifiers;
 
-    public bool LeftCtrl => _leftCtrl;
-    public bool RightCtrl => _rightCtrl;
-    public bool Ctrl => _leftCtrl || _rightCtrl;
-    public bool LeftShift => _leftShift;
-    public bool RightShift => _rightShift;
-    public bool Shift => _leftShift || _rightShift;
-    public bool LeftAlt => _leftAlt;
-    public bool RightAlt => _rightAlt;
-    public bool AltGr => _rightAlt;
-    public bool Alt => _leftAlt || _rightAlt;
-    public bool LeftSuper => _leftSuper;
-    public bool RightSuper => _rightSuper;
-    public bool Super => _leftSuper || _rightSuper;
+    /// <summary>Held modifier keys merged with the native modifier bits of the latest event.</summary>
+    public KeyboardModifierState Modifiers => _modifiers;
 
     public TerminalKeyboardController(
         TerminalKeyboardEventReceived? keyEventReceived = null,
         Action? activity = null,
         TerminalTextReceived? textReceived = null,
-        Func<Key, int, int>? primaryCodepointProvider = null)
+        Func<Key, int, int>? primaryCodepointProvider = null,
+        KeyboardModifierState? modifiers = null)
     {
         _keyEventReceived = keyEventReceived;
         _textReceived = textReceived;
         _activity = activity;
         _primaryCodepointProvider = primaryCodepointProvider;
+        _modifiers = modifiers ?? new KeyboardModifierState();
     }
 
     public void HandleKeyDown(Key key, int scancode)
     {
-        UpdateModifierState(key, pressed: true);
+        _modifiers.Update(key, pressed: true);
         StartOrUpdateHeldKey(key, scancode, TerminalKeyEventType.Press);
         int index = FindHeldKey(key, scancode);
         ref HeldKeyState state = ref _heldKeys[index];
@@ -93,7 +77,7 @@ public sealed class TerminalKeyboardController
 
     public void HandleKeyUp(Key key, int scancode)
     {
-        UpdateModifierState(key, pressed: false);
+        _modifiers.Update(key, pressed: false);
         int index = FindHeldKey(key, scancode);
         if (index < 0)
             return;
@@ -114,7 +98,11 @@ public sealed class TerminalKeyboardController
     {
         if (codepoint == 0 || codepoint > 0x10FFFF || codepoint is >= 0xD800 and <= 0xDFFF)
             return;
-        if (_leftAlt || Ctrl && !_rightAlt)
+        // Super chords are shortcuts (D26); Ctrl chords are encoded from the key, not from the character; on
+        // macOS the character of a Meta-role Option chord is the composed one, so the key name is used instead.
+        // Every other character, including one produced while a Meta-role Alt is held, goes to the held key.
+        if (_modifiers.Super || _modifiers.Ctrl && !_modifiers.AltGr ||
+            _modifiers.Alt && !_modifiers.MetaUsesCommittedText)
             return;
 
         Span<char> text = stackalloc char[2];
@@ -170,21 +158,6 @@ public sealed class TerminalKeyboardController
         _activeTextIndex = index;
     }
 
-    private void UpdateModifierState(Key key, bool pressed)
-    {
-        switch (key)
-        {
-            case Key.ControlLeft: _leftCtrl = pressed; break;
-            case Key.ControlRight: _rightCtrl = pressed; break;
-            case Key.ShiftLeft: _leftShift = pressed; break;
-            case Key.ShiftRight: _rightShift = pressed; break;
-            case Key.AltLeft: _leftAlt = pressed; break;
-            case Key.AltRight: _rightAlt = pressed; break;
-            case Key.SuperLeft: _leftSuper = pressed; break;
-            case Key.SuperRight: _rightSuper = pressed; break;
-        }
-    }
-
     private int FindHeldKey(Key key, int scancode)
     {
         for (int i = 0; i < _heldKeys.Length; i++)
@@ -226,14 +199,7 @@ public sealed class TerminalKeyboardController
 
     public void ResetState()
     {
-        _leftCtrl = false;
-        _rightCtrl = false;
-        _leftShift = false;
-        _rightShift = false;
-        _leftAlt = false;
-        _rightAlt = false;
-        _leftSuper = false;
-        _rightSuper = false;
+        _modifiers.Reset();
         for (int i = 0; i < _heldKeys.Length; i++)
         {
             _heldKeys[i].Active = false;

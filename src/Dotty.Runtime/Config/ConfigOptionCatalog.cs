@@ -290,6 +290,12 @@ public static class ConfigOptionCatalog
 
         Opt("keybindings", "keybindings", "map", null, c => c.Keybindings,
             "Map of chord (ctrl/shift/alt/super plus a key, e.g. 'ctrl+shift+t') to a TerminalAction name such as NewTab or Copy; 'None' unbinds a chord. Entries are added to the built-in bindings, which are not part of this default."),
+        Opt("keyboard.leftAlt", "keyboard.left_alt", "string", ["auto", "meta", "compose"], c => c.Keyboard.LeftAlt,
+            "Left Alt/Option: 'meta' sends Alt chords as ESC-prefixed input and matches alt+ bindings, 'compose' types the character the layout composes (Option on macOS), 'auto' is meta on Linux/Windows and compose on macOS. Case-insensitive; unknown values mean auto.",
+            "Read live; takes effect at the next key press."),
+        Opt("keyboard.rightAlt", "keyboard.right_alt", "string", ["auto", "meta", "compose"], c => c.Keyboard.RightAlt,
+            "Right Alt/Option (AltGr): 'auto' is compose on Linux/Windows when the layout has AltGr and meta when it does not, and compose on macOS; 'meta' and 'compose' force one behavior. Case-insensitive; unknown values mean auto.",
+            "Read live; takes effect at the next key press."),
 
         Opt("clipboard.allowOsc52Write", "clipboard.allow_osc52_write", "boolean", null, c => c.Clipboard.AllowOsc52Write,
             "Let terminal applications write to the system clipboard with OSC 52; a Lua clipboard_write hook can veto but never grant.",

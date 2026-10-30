@@ -135,9 +135,37 @@ public sealed class TerminalActionExecutor
                     return false;
                 _host.CopySelection();
                 return true;
+            case TerminalAction.ScrollPageUp:
+            case TerminalAction.ScrollPageDown:
+            case TerminalAction.ScrollLineUp:
+            case TerminalAction.ScrollLineDown:
+            case TerminalAction.ScrollToTop:
+            case TerminalAction.ScrollToBottom:
+                return ScrollScrollback(activeTab, action);
             default:
                 return false;
         }
+    }
+
+    // Not performable (so the key reaches the application) on the alternate screen or without scrollback.
+    private static bool ScrollScrollback(TerminalTab tab, TerminalAction action)
+    {
+        var pane = tab.ActivePane;
+        var buffer = pane.Session.Adapter.Buffer;
+        int scrollback = buffer.ScrollbackCount;
+        if (buffer.IsAlternateScreenActive || scrollback == 0)
+            return false;
+        int pageStep = Math.Max(1, pane.Rows / 2);
+        switch (action)
+        {
+            case TerminalAction.ScrollPageUp: pane.ScrollUp(pageStep, scrollback); break;
+            case TerminalAction.ScrollPageDown: pane.ScrollDown(pageStep); break;
+            case TerminalAction.ScrollLineUp: pane.ScrollUp(1, scrollback); break;
+            case TerminalAction.ScrollLineDown: pane.ScrollDown(1); break;
+            case TerminalAction.ScrollToTop: pane.ScrollUp(scrollback, scrollback); break;
+            default: pane.ScrollToBottom(); break;
+        }
+        return true;
     }
 
     private static bool NavigatePrompt(TerminalTab tab, bool previous)

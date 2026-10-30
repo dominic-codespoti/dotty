@@ -46,6 +46,8 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `hyperlinks.osc8` | boolean | `true` |
 | `hyperlinks.confirm` | string (`"risky"`, `"always"`, `"never"`) | `"risky"` |
 | `hyperlinks.allowed_schemes` | array of strings | `{"http", "https", "mailto", "file", "ssh", "git"}` |
+| `keyboard.left_alt` | string (`"auto"`, `"meta"`, `"compose"`) | `"auto"` |
+| `keyboard.right_alt` | string (`"auto"`, `"meta"`, `"compose"`) | `"auto"` |
 | `mouse.copy_on_select` | string (`"none"`, `"primary"`, `"clipboard"`, `"both"`) | `"none"` |
 | `mouse.scroll_multiplier` | number | `3` |
 | `mouse.alternate_scroll` | string (`"auto"`, `"off"`) | `"auto"` |
@@ -68,6 +70,7 @@ The configuration table is readable and writable at any depth. Fields exposed to
 The `graphics.*` keys behave exactly like the JSON [`graphics`](../Configuration.md#graphics) options and control the [Kitty graphics protocol](../KittyGraphics.md), which is off by default. For example `dotty.config.graphics.kitty_protocol = true` turns it on. The settings are re-applied to running panes on reload except `graphics.windows_passthrough`, which is read when a PTY is created (`needs runtime verification`).
 The clipboard and hyperlink keys behave exactly like the JSON `clipboard` and `hyperlinks` options in the [configuration reference](../Configuration.md#clipboard). In particular `clipboard.osc52_read = "allow"` lets any program that can write to the terminal read the clipboard without a prompt; prefer `"ask"`.
 The `bell.*` keys behave exactly like the JSON [`bell`](../Configuration.md#bell) options and are read at each bell; the `bell` event below fires for every bell regardless of them.
+The `keyboard.*` keys behave exactly like the JSON [`keyboard`](../Configuration.md#keyboard) options and are read at the next key press; for example `dotty.config.keyboard.left_alt = "meta"` makes the left Option key Meta on macOS.
 The `mouse`, `vt`, and `shell_integration` keys behave exactly like the JSON [`mouse`](../Configuration.md#mouse), [`vt`](../Configuration.md#vt), and [`shellIntegration`](../Configuration.md#shellintegration) options. `mouse.copy_on_select` takes a string, so the Ghostty-style `"true"`/`"false"` spellings are strings here too. The two `vt` switches are off by default because they let a program resize the window or read the screen back; see the configuration reference for the security rationale. Reload behavior: `mouse.*` and `vt.window_resize_allowed` are read live, `vt.checksum_report_enabled` is applied to sessions on reload, and `shell_integration` applies to tabs and panes created after the reload. Run `dotty +explain-config OPTION` (JSON path or Lua key) for the type, default, and scope of any key.
 `font.symbol_map` entries use `U+START-END: Preferred Font, Fallback Font`; the first installed family that contains the glyph wins. OpenType features and ligatures are not supported: rendering is one grapheme per terminal cell.
 Nested reads and writes work directly. `dotty.config.apply_table(table)` and its alias `dotty.config.apply(table)` apply recognized values recursively. Assigning a table to a nested section applies its fields; assigning a table to `keybindings` replaces the map. Reads of `keybindings` return a copy. Unknown fields are ignored.

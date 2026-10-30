@@ -106,14 +106,17 @@ internal static class FramePlanner
     /// (rounded down, so no refresh is skipped) of <paramref name="refreshHz"/> clamped to
     /// [<see cref="MinRefreshHz"/>, <see cref="MaxRefreshHz"/>]; unknown, non-positive or implausible rates use
     /// <see cref="FallbackRefreshHz"/>; backlogged frames stay at least <see cref="BackloggedFrameIntervalMs"/> apart.
+    /// On a <paramref name="softwareRenderer"/> (every present is a CPU raster of the whole window) content frames
+    /// are additionally held to at least two refresh periods, i.e. at most refresh/2 frames per second
+    /// (plan-11 WI-5b); that cap applies whether or not <paramref name="refreshAware"/> is on.
     /// </summary>
-    internal static int MinContentFrameIntervalMs(int refreshHz, bool backlogged, bool refreshAware)
+    internal static int MinContentFrameIntervalMs(int refreshHz, bool backlogged, bool refreshAware, bool softwareRenderer)
     {
-        if (!refreshAware)
-            return backlogged ? BackloggedFrameIntervalMs : FixedContentFrameMinIntervalMs;
-
         int periodMs = 1000 / EffectiveRefreshHz(refreshHz);
-        return backlogged ? Math.Max(BackloggedFrameIntervalMs, periodMs) : periodMs;
+        int interval = refreshAware
+            ? backlogged ? Math.Max(BackloggedFrameIntervalMs, periodMs) : periodMs
+            : backlogged ? BackloggedFrameIntervalMs : FixedContentFrameMinIntervalMs;
+        return softwareRenderer ? Math.Max(interval, 2 * periodMs) : interval;
     }
 
     internal static int EffectiveRefreshHz(int refreshHz) =>

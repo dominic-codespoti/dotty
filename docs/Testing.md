@@ -272,9 +272,13 @@ Frame scheduling is covered by `FramePlannerTests` (gate, idle/hold/render
 table, refresh-rate interval table), `IdleWaitTests` (absolute blink and Lua
 deadlines, bell and control deadlines, safety cap) and `HostWakeCoverageTests`
 (cross-thread enqueue APIs post a wake; a source scan of `src/Dotty/Host`
-requires `HostWake.Request()` after every queue producer). None of these has
-been run by the author of this change (no SDK available);
-`needs runtime verification`.
+requires `HostWake.Request()` after every queue producer). Render recovery is
+covered by `RenderRecoveryPolicyTests` (retry, rebuild, fatal, quiet-period
+reset, context resets) and, in the GL lane of `Dotty.App.SkiaTests`,
+`SilkTerminalRendererRebuildTests` (a disposed renderer is replaced on the same
+context and draws again; also the `ReadBackBuffer` capture hook), which skips
+without an OpenGL 3.3 context. None of these has been run by the author of this
+change (no SDK available); `needs runtime verification`.
 
 ## Native Dotty output benchmark
 

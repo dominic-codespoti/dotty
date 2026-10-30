@@ -139,8 +139,11 @@ side works like this (written from the source, never run or measured):
   textures idle for more than 300 frames, then least recently used (larger first
   on ties) while over budget, never one used by the current frame; clamps uploads
   to `GL_MAX_TEXTURE_SIZE` with a box downscale; and deletes the textures of freed
-  pixels through `ImageRetirementQueue`. A context loss resets it
-  (`ResetImagesAfterContextLoss`). Hidden tabs are not captured, so their textures
+  pixels through `ImageRetirementQueue`. The host's render recovery (see
+  [Render failures and context loss](#render-failures-and-context-loss)) replaces
+  the whole renderer, so a new cache starts empty and textures re-upload on
+  demand; `ResetImagesAfterContextLoss` resets the image pass in place and is only
+  exercised by tests. Hidden tabs are not captured, so their textures
   go idle and age out like any other.
 
 These numbers are constants in the source, not measurements.
@@ -337,16 +340,58 @@ performance gate.
 ## Graphics contract
 
 The host requests an OpenGL 3.3 core context and validates the active driver
-version with `GraphicsCapabilities`. If context creation, version validation,
-shader compilation, or frame submission fails, the host reports a diagnostic and
-closes through the normal lifecycle path rather than leaving PTY processes
-running. There is no silent software-renderer fallback.
+version with `GraphicsCapabilities`. If context creation, version validation or
+startup shader compilation fails, the host reports a diagnostic and closes
+through the normal lifecycle path rather than leaving PTY processes running.
+There is no silent software-renderer fallback.
 
 CI exercises only Linux X11 startup under Xvfb; it does not run Wayland/Weston,
 macOS desktop, or Windows desktop smoke because those hosted GUI sessions do
 not provide a usable OpenGL context. Those paths are verified manually or on
 local native sessions. X11/Xvfb startup does not prove Wayland, macOS, or
 Windows GUI behavior.
+
+### Render failures and context loss
+
+A failure while drawing never closes the window or ends the shells. The pure
+`RenderRecoveryPolicy` (`RenderRecoveryPolicyTests`) decides: the first
+exception requeues the frame and retries it; a second one within 10 s disposes
+the `SilkTerminalRenderer` and creates a new one on the same context and atlas
+(new programs and buffers, a texture manager that re-uploads the whole glyph
+atlas, a fresh image texture cache) and redraws everything; a third shows a host
+prompt ("Try again" rebuilds once more, "Quit Dotty" closes) and stops retrying,
+so a frame that keeps failing waits for new input instead of spinning. A
+failure more than 10 s after the previous one starts over. Each step is logged
+to stderr with a `[render]` prefix; `STATS` reports `renderRecoveryState` and
+`renderFailures`.
+
+The window requests a robust context (`GLFW_CONTEXT_ROBUSTNESS` =
+`GLFW_LOSE_CONTEXT_ON_RESET`, ignored by GLFW where the platform lacks the
+robustness extension). When the context offers `glGetGraphicsResetStatus`
+(OpenGL 4.5, `GL_KHR_robustness` or `GL_ARB_robustness`) the host polls it
+before each frame; a reported reset skips the retry and rebuilds at once. A
+context lost on reset stays lost until it is recreated, which needs a new
+window and is not implemented: if the first frame after the rebuild still sees
+`GL_CONTEXT_LOST`, the host goes straight to the prompt. On a lost context the
+prompt itself may not be visible; the stderr message says the shells keep
+running and the window can be closed. The rebuild is exercised by
+`SilkTerminalRendererRebuildTests` (GL lane, skipped without a context); a real
+driver reset is a manual check.
+
+### Software renderers
+
+When `GraphicsCapabilities.Classify` reports a software rasterizer, the host
+prints a one-time notice to stderr and holds content-only frames to at least
+two refresh periods (at most refresh/2 frames per second; 60 Hz is assumed when
+the monitor reports no rate). On Linux, Mesa's llvmpipe is what
+`LIBGL_ALWAYS_SOFTWARE=1` or `GALLIUM_DRIVER=llvmpipe` select; both are useful
+to reproduce software-renderer behaviour and should be unset on a machine with
+a working GPU driver. Windows RDP sessions and VMs without a GPU driver offer
+only the "GDI Generic" OpenGL 1.1 implementation, which fails the 3.3 check;
+shipping Mesa's `opengl32sw.dll` next to the executable would cover them, but
+its size and licensing have not been evaluated with the distribution lane, so
+Dotty does not ship it. Menu shadows are drawn as before (the chrome blur is
+not yet skipped on software renderers).
 
 ### GL diagnostics
 

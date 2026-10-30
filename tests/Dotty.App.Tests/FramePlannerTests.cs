@@ -98,7 +98,21 @@ public sealed class FramePlannerTests
     [InlineData(30, false, false, 8)]
     [InlineData(0, true, false, 30)]
     public void MinContentFrameIntervalFollowsTheRefreshRateOnlyWhenEnabled(int hz, bool backlogged, bool refreshAware, int expected) =>
-        Assert.Equal(expected, FramePlanner.MinContentFrameIntervalMs(hz, backlogged, refreshAware));
+        Assert.Equal(expected, FramePlanner.MinContentFrameIntervalMs(hz, backlogged, refreshAware, softwareRenderer: false));
+
+    [Theory]
+    // software renderer: at most refresh/2 content frames per second, refresh-aware or not
+    [InlineData(60, false, false, 32)]
+    [InlineData(60, false, true, 32)]
+    [InlineData(0, false, false, 32)]        // unknown rate: 60 Hz
+    [InlineData(144, false, false, 12)]      // 2 x 6 ms beats the fixed 8 ms
+    [InlineData(144, false, true, 12)]
+    [InlineData(240, false, false, 8)]       // 2 x 4 ms: the fixed 8 ms already caps it
+    [InlineData(60, true, false, 32)]        // backlogged 30 ms < 2 periods
+    [InlineData(144, true, true, 30)]        // backlogged 30 ms > 2 periods
+    [InlineData(30, false, false, 66)]
+    public void SoftwareRendererHoldsContentFramesForTwoRefreshPeriods(int hz, bool backlogged, bool refreshAware, int expected) =>
+        Assert.Equal(expected, FramePlanner.MinContentFrameIntervalMs(hz, backlogged, refreshAware, softwareRenderer: true));
 
     [Theory]
     [InlineData(2L, 6L)]

@@ -252,6 +252,7 @@ internal static partial class DottyWindowHost
         _window.Closing += OnClosing;
         _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
         HostWake.Initialize(static () => _glfwApi!.PostEmptyEvent(), Environment.CurrentManagedThreadId);
+        RequestRobustContext();
         try
         {
             _window.Initialize();
@@ -395,6 +396,7 @@ internal static partial class DottyWindowHost
             throw new PlatformNotSupportedException(GraphicsCapabilities.DescribeUnsupportedVersion(_glVersion));
         ConfigureGlDebug(_gl);
         ConfigureFramePacing();
+        ConfigureRenderRecovery();
 
         ResolveFontAndMetrics();
         _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
@@ -1345,6 +1347,7 @@ internal static partial class DottyWindowHost
             json.Append($"{{\"windowBackend\":{QuoteJson(_windowBackend)},\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount},\"frameTimings\":");
             AppendFrameTimingsJson(json);
             AppendFramePacingJson(json);
+            AppendRenderRecoveryJson(json);
             return json.Append('}').ToString();
         }
         if (string.Equals(command, "SHUTDOWN", StringComparison.OrdinalIgnoreCase))
@@ -1649,11 +1652,9 @@ internal static partial class DottyWindowHost
         }
         catch (Exception exception)
         {
+            // Never close the window or end the shells on a render failure: retry, rebuild, then ask.
             if (!_closed)
-            {
-                Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));
-                _window.Close();
-            }
+                HandleRenderFailure(exception);
         }
     }
 
@@ -1842,6 +1843,9 @@ internal static partial class DottyWindowHost
             WaitForWork(includeBlink: true, coalesceRemainingMs: plan.HoldMs, includeImageAnimation: true);
             return;
         }
+        // The driver reset the GPU: the GL objects are gone, rendering with them is pointless.
+        if (HandleContextResetIfReported())
+            return;
         WindowFrameReason consumedReasons = WindowPresentationGate.Consume();
         try
         {
@@ -1869,6 +1873,7 @@ internal static partial class DottyWindowHost
                 SwapBuffersTimed();
                 _lastPresentTimestampMs = GetClockMilliseconds();
                 CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
+                OnFramePresented();
                 return;
             }
 
@@ -1983,6 +1988,7 @@ internal static partial class DottyWindowHost
             _lastPresentTimestampMs = GetClockMilliseconds();
             _presentCount++;
             CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
+            OnFramePresented();
         }
         catch
         {

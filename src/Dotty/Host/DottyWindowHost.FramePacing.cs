@@ -91,7 +91,7 @@ internal static partial class DottyWindowHost
     }
 
     private static int ContentFrameIntervalMs(bool anyBacklogged) =>
-        FramePlanner.MinContentFrameIntervalMs(_monitorRefreshHz, anyBacklogged, _refreshAwarePacing);
+        FramePlanner.MinContentFrameIntervalMs(_monitorRefreshHz, anyBacklogged, _refreshAwarePacing, _graphicsClassification.IsSoftware);
 
     private static bool AnyVisibleLeafBacklogged()
     {

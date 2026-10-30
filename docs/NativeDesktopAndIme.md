@@ -118,8 +118,8 @@ item expected to change the row; it is not a release date.
 |---|---|---|---|---|---|
 | Committed Unicode text, Kitty keyboard protocol, legacy encoding | Implemented; qualified (IME commit under Kitty flags 0 and 31) | Implemented; not qualified | Implemented; not qualified | Implemented; not qualified | W4-B13 to W4-B16, W4-D1 |
 | IME preedit and candidate placement | Implemented (text-input-v3); qualified with Fcitx/Rime | Implemented (XIM); not qualified | Implemented (IMM32); not qualified | Implemented (Cocoa marked text); not qualified | W4-C17, W4-D1 |
-| AltGr (Right Alt) text | Not working: Right Alt is always treated as AltGr, its press is consumed, and the following character is dropped (static trace, not run) | Same | Same | Same; Right Option behaves as AltGr | W4-B14 |
-| Left Alt / Option composing text | No: characters typed with Left Alt held are discarded and Left Alt acts as Meta | No | No | No: Option cannot compose characters such as `é` or `@` | W4-B14 |
+| AltGr (Right Alt) text | Implemented (`keyboard.rightAlt` `auto`: AltGr/ISO Level 3 composes, Right Alt on a layout without AltGr is Meta); headless replay only, not qualified | Same | Same (AltGr = Ctrl+Alt) | Right Option composes by default; headless replay only, not qualified | W4-D1 |
+| Left Alt / Option composing text | Left Alt is Meta by default (`ESC` + the layout character, Shift kept); `keyboard.leftAlt` `compose` makes it type text; not qualified | Same | Same | Left Option composes by default (`@`, `é`); `keyboard.leftAlt` `meta` makes it Meta; not qualified | W4-D1 |
 | PRIMARY selection | In-process only | System PRIMARY | In-process only | In-process only | |
 | File drag and drop | Not supported | Not supported | Not supported | Not supported | W4-C18 |
 | Screen-reader accessibility | Not supported | Not supported | Not supported | Not supported | W4-C22 (portable model), W4-D4 (Windows UIA, then macOS); Linux AT-SPI is not planned |

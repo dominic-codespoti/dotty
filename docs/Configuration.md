@@ -522,6 +522,31 @@ The configurable actions with no built-in chord are `CloseTab`, `Clear`,
 unbinds it. A custom binding replaces the built-in action for that chord;
 unknown action names are ignored and leave the built-in binding unchanged.
 
+### `keyboard`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `leftAlt` | string | `"auto"` | Left Alt (Option on macOS): `meta`, `compose`, or `auto`. Case-insensitive; unknown values mean `auto`. |
+| `rightAlt` | string | `"auto"` | Right Alt (AltGr; right Option on macOS): `meta`, `compose`, or `auto`. Case-insensitive; unknown values mean `auto`. |
+
+- `meta`: the key is the terminal's Meta modifier. Alt+key sends `ESC` followed
+  by the character the layout produces for that key, Shift included (Alt+Shift+,
+  sends `ESC <`); when the platform delivers no character, or the delivered one
+  was composed by the layout (macOS Option, an AltGr layout), the key's
+  unshifted name is used (`ESC l`, `ESC L` with Shift). `alt+…` keybindings match.
+- `compose`: the key belongs to the keyboard layout. The character it composes
+  (AltGr+Q = `@` on a German layout, Option+L = `@` on a German Mac) is typed as
+  text, into the terminal or the search query; `alt+…` keybindings do not match.
+- `auto` (decision K1): on Linux and Windows the left key is `meta` and the right
+  key is `compose` when the layout uses it as AltGr (X11/Wayland ISO Level 3,
+  Windows Ctrl+Alt) and `meta` otherwise, so Right Alt on a US layout sends
+  `ESC`-prefixed input. On macOS both keys are `compose`; set `leftAlt` to `meta`
+  for Option-as-Meta.
+
+Ctrl+letter on a non-Latin layout (for example Russian) sends the control code
+of the physical key (Ctrl+С = `0x03`). Characters typed while Super/Command is
+held are not sent. Both options are read live at the next key press.
+
 ## Search
 
 Search is per tab and starts with `Search` (by default, `ctrl+shift+f`).
@@ -541,11 +566,8 @@ Each tab's search state is independent, and the recorded source pane is used
 for its search. Results cover that pane's scrollback and visible rows. A
 selected scrollback match (reported internally as a negative row) scrolls the
 source pane to reveal it; selecting a visible match returns the pane to the
-bottom. Right Alt is treated as AltGr (text composition rather than shortcut
-dispatch). This path is known to be incomplete: a static trace of the real GLFW
-event order shows the AltGr key press is consumed and the character that
-follows it is dropped, so AltGr-composed text may not reach the query or the
-terminal. Ordinary Ctrl/Alt-modified text is not inserted as query text.
+bottom. Text composed with a `compose` Alt key (AltGr, Option) is inserted into
+the query (see [`keyboard`](#keyboard)); ordinary Ctrl/Meta-modified text is not.
 
 ## Pointer controls and mouse reporting
 

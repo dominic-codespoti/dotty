@@ -28,6 +28,7 @@ public sealed class TerminalKeyboardDispatcherTests
         public bool AltGr { get; set; }
         public bool Super { get; set; }
         public TerminalKeyModifiers LockModifiers { get; set; }
+        public bool MetaUsesCommittedText { get; set; } = true;
         public int CopyCount { get; private set; }
         public int PasteCount { get; private set; }
         public int CreateTabCount { get; private set; }
@@ -559,5 +560,42 @@ public sealed class TerminalKeyboardDispatcherTests
         dispatcher.HandleKeyEvent(SilkKey.Up, 0, 0, TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
 
         Assert.Equal("\x1b[1;9A", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Theory]
+    [InlineData(false, true, "\x1bq")]
+    [InlineData(true, true, "\x1bQ")]
+    [InlineData(false, false, "\x1bq")]
+    public void LegacyMetaChordWithoutCharacter_IsEncodedFromTheKeyAtBatchEnd(bool shift, bool metaUsesText, string expected)
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.Alt = true;
+        host.Shift = shift;
+        host.MetaUsesCommittedText = metaUsesText;
+
+        dispatcher.HandleKeyEvent(SilkKey.Q, 16, 'q', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        if (metaUsesText)
+            Assert.Empty(host.InputBytes);
+        dispatcher.FlushDeferredKeys();
+        dispatcher.HandleKeyEvent(SilkKey.Q, 16, 'q', TerminalKeyEventType.Release, ReadOnlySpan<char>.Empty);
+
+        Assert.Equal(expected, Encoding.ASCII.GetString(host.InputBytes.ToArray()));
+    }
+
+    [Fact]
+    public void LegacyMetaChordUsesTheDeliveredCharacter()
+    {
+        using var host = CreateHost();
+        using var dispatcher = new TerminalKeyboardDispatcher(host);
+        host.Alt = true;
+        host.Shift = true;
+
+        dispatcher.HandleKeyEvent(SilkKey.Comma, 51, ',', TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty);
+        dispatcher.HandleKeyEvent(SilkKey.Comma, 51, ',', TerminalKeyEventType.Press, "<".AsSpan());
+        dispatcher.FlushDeferredKeys();
+        dispatcher.HandleKeyEvent(SilkKey.Comma, 51, ',', TerminalKeyEventType.Release, "<".AsSpan());
+
+        Assert.Equal("\x1b<", Encoding.ASCII.GetString(host.InputBytes.ToArray()));
     }
 }

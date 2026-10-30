@@ -98,7 +98,11 @@ public sealed class TerminalKeyboardController
     {
         if (codepoint == 0 || codepoint > 0x10FFFF || codepoint is >= 0xD800 and <= 0xDFFF)
             return;
-        if (_modifiers.LeftAlt || _modifiers.PhysicalCtrl && !_modifiers.RightAlt)
+        // Super chords are shortcuts (D26); Ctrl chords are encoded from the key, not from the character; on
+        // macOS the character of a Meta-role Option chord is the composed one, so the key name is used instead.
+        // Every other character, including one produced while a Meta-role Alt is held, goes to the held key.
+        if (_modifiers.Super || _modifiers.Ctrl && !_modifiers.AltGr ||
+            _modifiers.Alt && !_modifiers.MetaUsesCommittedText)
             return;
 
         Span<char> text = stackalloc char[2];

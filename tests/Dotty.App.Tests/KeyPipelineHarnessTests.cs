@@ -113,13 +113,13 @@ public sealed class KeyPipelineHarnessTests
 
         harness.Chord(Key.A, Key.AltRight);
 
-        Assert.Equal("\x1ba", harness.Output);
+        Assert.Equal("\u001ba", harness.Output);
     }
 
     // D3: legacy Alt chords were built from the unshifted key name and lost Shift.
     [Theory]
     [InlineData(KeyPlatform.X11, Key.Comma, "\x1b<")]
-    [InlineData(KeyPlatform.X11, Key.A, "\x1bA")]
+    [InlineData(KeyPlatform.X11, Key.A, "\u001bA")]
     [InlineData(KeyPlatform.X11, Key.Number5, "\x1b%")]
     [InlineData(KeyPlatform.Wayland, Key.Period, "\x1b>")]
     [InlineData(KeyPlatform.Win32, Key.Comma, "\x1b<")]
@@ -178,6 +178,96 @@ public sealed class KeyPipelineHarnessTests
         harness.Chord(Key.C, Key.SuperLeft);
 
         Assert.Equal(string.Empty, harness.Output);
+    }
+
+    [Theory]
+    [InlineData(null, null, false, AltKeyRole.Meta, AltKeyRole.ComposeOrMeta, true)]
+    [InlineData("auto", "auto", false, AltKeyRole.Meta, AltKeyRole.ComposeOrMeta, true)]
+    [InlineData(null, null, true, AltKeyRole.Compose, AltKeyRole.Compose, false)]
+    [InlineData("meta", "auto", true, AltKeyRole.Meta, AltKeyRole.Compose, false)]
+    [InlineData("COMPOSE", " Meta ", false, AltKeyRole.Compose, AltKeyRole.Meta, true)]
+    [InlineData("bogus", "", false, AltKeyRole.Meta, AltKeyRole.ComposeOrMeta, true)]
+    [InlineData("compose", "compose", true, AltKeyRole.Compose, AltKeyRole.Compose, false)]
+    public void KeyboardPolicyResolvesConfigPerPlatform(string? left, string? right, bool macOS,
+        AltKeyRole expectedLeft, AltKeyRole expectedRight, bool metaUsesCommittedText)
+    {
+        Assert.Equal(new KeyboardPolicy(expectedLeft, expectedRight, metaUsesCommittedText),
+            KeyboardPolicy.Resolve(left, right, macOS));
+    }
+
+    [Theory]
+    [InlineData(KeyPlatform.X11)]
+    [InlineData(KeyPlatform.Win32)]
+    public void QwertzRightAltAsMeta_SendsEscAndKeyName(KeyPlatform platform)
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.QwertzAltGr, platform) { RightAlt = "meta" };
+
+        harness.Chord(Key.Q, Key.AltRight);
+
+        Assert.Equal("\x1bq", harness.Output);
+    }
+
+    [Theory]
+    [InlineData(false, "\x1bl")]
+    [InlineData(true, "\x1bL")]
+    public void MacOptionAsMeta_SendsEscAndKeyName(bool shift, string expected)
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.QwertzAltGr, KeyPlatform.Cocoa) { LeftAlt = "meta" };
+
+        if (shift)
+            harness.Chord(Key.L, Key.AltLeft, Key.ShiftLeft);
+        else
+            harness.Chord(Key.L, Key.AltLeft);
+
+        Assert.Equal(expected, harness.Output);
+    }
+
+    [Fact]
+    public void MacRightOptionComposesByDefault()
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.MacAbc, KeyPlatform.Cocoa);
+
+        harness.Chord(Key.C, Key.AltRight);
+
+        Assert.Equal("ç", harness.Output);
+    }
+
+    [Fact]
+    public void LinuxLeftAltAsCompose_TypesTheCharacter()
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11) { LeftAlt = "compose" };
+
+        harness.Chord(Key.A, Key.AltLeft);
+
+        Assert.Equal("a", harness.Output);
+    }
+
+    [Fact]
+    public void MetaChordRepeat_SendsEscAndCharacterPerRepeat()
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11);
+
+        harness.Press(Key.AltLeft);
+        harness.Press(Key.B);
+        harness.Repeat(Key.B);
+        harness.Release(Key.B);
+        harness.Release(Key.AltLeft);
+
+        Assert.Equal("\u001bb\u001bb", harness.Output);
+    }
+
+    [Fact]
+    public void AltDigitBinding_MatchesMetaSideOnly()
+    {
+        // alt+2 is the built-in SwitchTab2 binding: it consumes the Meta chord, while AltGr+2 on a German
+        // layout is Compose and types its character.
+        using var meta = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11);
+        meta.Chord(Key.Number2, Key.AltLeft);
+        Assert.Equal(string.Empty, meta.Output);
+
+        using var compose = new KeyPipelineHarness(KeyboardLayoutFixtures.QwertzAltGr, KeyPlatform.X11);
+        compose.Chord(Key.Number2, Key.AltRight);
+        Assert.Equal("²", compose.Output);
     }
 
     // D5: a bare modifier press snapped the scrolled pane to the bottom and Shift cleared the selection.

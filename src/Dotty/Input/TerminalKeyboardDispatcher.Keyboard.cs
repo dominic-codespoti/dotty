@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 using Dotty.Runtime.Input;
 using Dotty.Runtime.Tabs;
 using Dotty.Silk;
@@ -47,6 +48,12 @@ public sealed partial class TerminalKeyboardDispatcher
         {
             if (kittyFlags == 0)
             {
+                if (correlated && _lastPhysicalPressDeferred)
+                {
+                    _lastPhysicalPressDeferred = false;
+                    WriteMetaText(activeTab, associatedText);
+                    return;
+                }
                 HandleText(associatedText);
                 return;
             }
@@ -71,9 +78,27 @@ public sealed partial class TerminalKeyboardDispatcher
             if (kittyFlags == 0)
             {
                 if (!associatedText.IsEmpty)
-                    HandleText(associatedText);
-                else
-                    WriteLegacyKey(activeTab, key, primaryCodepoint);
+                {
+                    if (correlated && _lastPhysicalPressDeferred)
+                    {
+                        _lastPhysicalPressDeferred = false;
+                        WriteMetaText(activeTab, associatedText);
+                    }
+                    else
+                    {
+                        HandleText(associatedText);
+                    }
+                    return;
+                }
+                if (correlated)
+                    FlushDeferred(activeTab, _currentPhysicalKeyIndex, kittyFlags);
+                TerminalKeyModifiers repeatModifiers = CurrentModifiers(key);
+                if (correlated && DefersLegacyMetaChord(primaryCodepoint))
+                {
+                    Defer(TerminalKeyEventType.Repeat, primaryCodepoint, repeatModifiers);
+                    return;
+                }
+                WriteLegacyKey(activeTab, key, primaryCodepoint, repeatModifiers);
                 return;
             }
 
@@ -123,13 +148,8 @@ public sealed partial class TerminalKeyboardDispatcher
 
         if (eventType == TerminalKeyEventType.Release)
         {
-            if (_lastPhysicalPressDeferred && correlated)
-            {
-                PhysicalKeyState deferred = _physicalKeyStates[_currentPhysicalKeyIndex];
-                _lastPhysicalPressDeferred = false;
-                _lastPhysicalPressEncoded = WriteKeyEvent(activeTab, key, deferred.DeferredCodepoint,
-                    deferred.DeferredPhase, ReadOnlySpan<char>.Empty, kittyFlags);
-            }
+            if (correlated)
+                FlushDeferred(activeTab, _currentPhysicalKeyIndex, kittyFlags);
             if ((kittyFlags & 2) != 0 && (kittyFlags & (1 | 8)) != 0)
                 WriteKeyEvent(activeTab, key, primaryCodepoint, eventType, ReadOnlySpan<char>.Empty, kittyFlags);
             if (correlated)
@@ -140,6 +160,71 @@ public sealed partial class TerminalKeyboardDispatcher
                 _physicalKeyStates[_currentPhysicalKeyIndex].Active = false;
             }
         }
+    }
+
+    /// <summary>
+    /// Sends every key event still waiting for its character. GLFW delivers a key event and the character it
+    /// produces in the same event batch, so the host calls this once the batch has been drained; a deferred key
+    /// that got no character (for example Alt+key on a layout position without one) is then encoded from the key.
+    /// </summary>
+    public void FlushDeferredKeys()
+    {
+        var activeTab = _host.ActiveTab;
+        if (activeTab == null)
+            return;
+        int kittyFlags = activeTab.Session.Adapter.KittyKeyboardFlags;
+        for (int i = 0; i < _physicalKeyStates.Length; i++)
+        {
+            if (_physicalKeyStates[i].Active && _physicalKeyStates[i].Deferred)
+                FlushDeferred(activeTab, i, kittyFlags);
+        }
+    }
+
+    private void FlushDeferred(TerminalTab tab, int index, int kittyFlags)
+    {
+        ref PhysicalKeyState state = ref _physicalKeyStates[index];
+        if (!state.Deferred)
+            return;
+        state.Deferred = false;
+        int current = _currentPhysicalKeyIndex;
+        _currentPhysicalKeyIndex = index;
+        if (kittyFlags == 0)
+        {
+            WriteLegacyKey(tab, state.Key, state.DeferredCodepoint, state.DeferredModifiers);
+        }
+        else
+        {
+            _physicalKeyStates[index].Encoded = WriteKeyEvent(tab, state.Key, state.DeferredCodepoint,
+                state.DeferredPhase, ReadOnlySpan<char>.Empty, kittyFlags);
+        }
+        _currentPhysicalKeyIndex = current;
+    }
+
+    private void Defer(TerminalKeyEventType phase, int primaryCodepoint, TerminalKeyModifiers modifiers)
+    {
+        ref PhysicalKeyState state = ref _physicalKeyStates[_currentPhysicalKeyIndex];
+        state.Deferred = true;
+        state.DeferredPhase = phase;
+        state.DeferredCodepoint = primaryCodepoint;
+        state.DeferredModifiers = modifiers;
+    }
+
+    // A legacy Meta chord on a text key waits for the character the layout produces (Shift included), so
+    // Alt+Shift+, sends ESC < rather than ESC , (plan-12 D3). Ctrl chords are encoded from the key at once.
+    private bool DefersLegacyMetaChord(int primaryCodepoint) =>
+        primaryCodepoint > 0 && _host.Alt && !_host.Ctrl && !_host.Super && _host.MetaUsesCommittedText;
+
+    private TerminalKeyModifiers CurrentModifiers(Key key) =>
+        SilkKeyMapper.Map(key, _host.Ctrl, _host.Shift, _host.Alt, _host.Super).Modifiers | _host.LockModifiers;
+
+    private void WriteMetaText(TerminalTab tab, ReadOnlySpan<char> text)
+    {
+        Span<byte> bytes = stackalloc byte[64];
+        if (text.IsEmpty || Encoding.UTF8.GetMaxByteCount(text.Length) > bytes.Length - 1)
+            return;
+        bytes[0] = 0x1b;
+        int length = 1 + Encoding.UTF8.GetBytes(text, bytes[1..]);
+        _host.WriteInput(tab, bytes[..length]);
     }
 
     private bool WriteKeyEvent(TerminalTab tab, Key key, int primaryCodepoint, TerminalKeyEventType eventType,
@@ -203,25 +288,47 @@ public sealed partial class TerminalKeyboardDispatcher
         _ => 0
     };
 
-    private void WriteLegacyKey(TerminalTab tab, Key key, int primaryCodepoint)
+    private void WriteLegacyKey(TerminalTab tab, Key key, int primaryCodepoint, TerminalKeyModifiers modifiers)
     {
+        bool ctrl = (modifiers & TerminalKeyModifiers.Control) != 0;
+        bool shift = (modifiers & TerminalKeyModifiers.Shift) != 0;
+        bool alt = (modifiers & TerminalKeyModifiers.Alt) != 0;
+        bool super = (modifiers & TerminalKeyModifiers.Meta) != 0;
         Span<byte> bytes = stackalloc byte[64];
         if (primaryCodepoint > 0)
         {
-            if (!_host.Ctrl && !_host.Alt)
+            if (!ctrl && !alt)
                 return;
-            int textLength = EncodeLegacyTextCodepoint(primaryCodepoint, _host.Ctrl, _host.Alt, bytes);
+            int codepoint = primaryCodepoint;
+            if (ctrl)
+            {
+                // Non-Latin layouts: Ctrl+С on a Russian layout is Ctrl+C of the physical key (plan-12 D4).
+                int physical = GetBaseLayoutCodepoint(key);
+                if (GetControlCodepoint(codepoint) < 0 && physical != 0)
+                    codepoint = physical;
+            }
+            else if (shift)
+            {
+                // A Meta chord built from the key name (macOS Meta, or no character arrived) still honours Shift.
+                codepoint = ToUpperScalar(codepoint);
+            }
+            int textLength = EncodeLegacyTextCodepoint(codepoint, ctrl, alt, bytes);
             if (textLength != 0)
                 _host.WriteInput(tab, bytes[..textLength]);
             return;
         }
 
-        int length = SilkKeyMapper.Encode(key, _host.Ctrl, _host.Shift, _host.Alt,
-            tab.Session.Adapter.KeypadApplicationMode, bytes, super: _host.Super,
+        int length = SilkKeyMapper.Encode(key, ctrl, shift, alt,
+            tab.Session.Adapter.KeypadApplicationMode, bytes, super: super,
             applicationCursorKeys: tab.Session.Adapter.ApplicationCursorKeysEnabled,
             modifyOtherKeysLevel: tab.Session.Adapter.ModifyOtherKeysLevel,
             backarrowSendsBackspace: tab.Session.Adapter.BackarrowSendsBackspace);
         if (length != 0)
             _host.WriteInput(tab, bytes[..length]);
     }
+
+    private static int ToUpperScalar(int codepoint) =>
+        codepoint <= 0xFFFF && !char.IsSurrogate((char)codepoint)
+            ? char.ToUpperInvariant((char)codepoint)
+            : codepoint;
 }

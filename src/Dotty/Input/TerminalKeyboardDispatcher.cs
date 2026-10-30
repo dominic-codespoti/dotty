@@ -31,6 +31,8 @@ public interface ITerminalKeyboardHost
     bool AltGr { get; }
     bool Super { get; }
     TerminalKeyModifiers LockModifiers { get; }
+    /// <summary>A Meta chord's delivered character is the key's layout character (see <see cref="KeyboardModifierState.MetaUsesCommittedText"/>).</summary>
+    bool MetaUsesCommittedText { get; }
     void CopySelection();
     void PasteClipboard();
     void ToggleFullscreen();
@@ -78,6 +80,7 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         public TerminalKeyModifiers PressModifiers;
         public TerminalKeyEventType DeferredPhase;
         public int DeferredCodepoint;
+        public TerminalKeyModifiers DeferredModifiers;
     }
 
     private PhysicalKeyState[] _physicalKeyStates = new PhysicalKeyState[16];
@@ -190,8 +193,10 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
             return;
         }
 
+        // A Compose-role Alt (AltGr, Option) is not a shortcut modifier: the press runs through bindings with
+        // Alt clear and the character the layout composes arrives as text (decision K1).
         var activeTab = _host.ActiveTab;
-        if (_host.AltGr || activeTab == null)
+        if (activeTab == null)
         {
             _lastPhysicalPressConsumed = true;
             return;
@@ -255,7 +260,12 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         var adapter = activeTab.Session.Adapter;
         if (adapter.KittyKeyboardFlags != 0)
             return;
-        WriteLegacyKey(activeTab, key, primaryCodepoint);
+        if (DefersLegacyMetaChord(primaryCodepoint))
+        {
+            Defer(TerminalKeyEventType.Press, primaryCodepoint, state.PressModifiers);
+            return;
+        }
+        WriteLegacyKey(activeTab, key, primaryCodepoint, state.PressModifiers);
     }
 
     private static int EncodeLegacyTextCodepoint(int codepoint, bool ctrl, bool alt, Span<byte> destination)

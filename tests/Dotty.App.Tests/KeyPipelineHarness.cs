@@ -31,12 +31,15 @@ public enum KeyPlatform
 /// <remarks>
 /// Platform rules mirrored from the vendored GLFW (<c>vendor/glfw/source/src</c>):
 /// <list type="bullet">
-/// <item>Characters below U+0020 and in U+007F–U+009F are never delivered (<c>input.c</c>, <c>_glfwInputChar</c>).</item>
-/// <item>X11/Wayland: a character is "plain" unless Ctrl or Alt (Mod1) is in the state; AltGr is ISO_Level3_Shift
-/// (Mod5) and sets no GLFW modifier bit (<c>x11_window.c</c> translateState, <c>wl_window.c</c>).</item>
+/// <item>Characters below U+0020 and in U+007F–U+009F are never delivered (<c>input.c</c>, <c>_glfwInputChar</c>);
+/// every other character reaches the char-mods callback the host installs, including the non-"plain" ones that
+/// the plain char callback would drop (Ctrl/Alt chords on X11/Wayland, <c>WM_SYSCHAR</c> on Windows).</item>
+/// <item>X11/Wayland: AltGr is ISO_Level3_Shift (Mod5) and sets no GLFW modifier bit; Left/Right Alt without
+/// AltGr is Mod1 = Alt (<c>x11_window.c</c> translateState, <c>wl_window.c</c>). XLookupString applies the Ctrl
+/// transform, so Ctrl+letter yields a C0 code that GLFW drops.</item>
 /// <item>Win32: AltGr reports Ctrl+Alt and GLFW drops the synthetic Left Ctrl key event; Alt chords arrive as
-/// <c>WM_SYSCHAR</c>, which is not plain (<c>win32_window.c</c>).</item>
-/// <item>Cocoa: Option composes characters; a character is plain unless Command (Super) is held (<c>cocoa_window.m</c>).</item>
+/// <c>WM_SYSCHAR</c> (<c>win32_window.c</c>).</item>
+/// <item>Cocoa: Option composes characters; Option reports Alt (<c>cocoa_window.m</c>).</item>
 /// </list>
 /// </remarks>
 internal sealed class KeyPipelineHarness : IDisposable
@@ -80,6 +83,12 @@ internal sealed class KeyPipelineHarness : IDisposable
     /// <summary>Caps Lock toggle state reported in the native modifier bits.</summary>
     public bool CapsLock { get; set; }
 
+    /// <summary><c>keyboard.leftAlt</c>: <c>auto</c>, <c>meta</c> or <c>compose</c>.</summary>
+    public string LeftAlt { get; set; } = KeyboardPolicy.AutoMode;
+
+    /// <summary><c>keyboard.rightAlt</c>: <c>auto</c>, <c>meta</c> or <c>compose</c>.</summary>
+    public string RightAlt { get; set; } = KeyboardPolicy.AutoMode;
+
     /// <summary>Everything written to the PTY, decoded as UTF-8.</summary>
     public string Output => Encoding.UTF8.GetString(_host.InputBytes.ToArray());
 
@@ -88,28 +97,42 @@ internal sealed class KeyPipelineHarness : IDisposable
     /// <summary>Feeds terminal output (e.g. <c>CSI &gt; 1 u</c>) to the active session's parser.</summary>
     public void Feed(string sequence) => Tab.Session.Parser.Feed(Encoding.UTF8.GetBytes(sequence));
 
+    /// <summary>
+    /// One native batch: the key press and the character it produces, then the end-of-batch flush the host
+    /// performs after draining window events.
+    /// </summary>
     public void Press(Key key)
     {
         _held.Add(key);
-        int mods = NativeModifiers();
-        Controller.Modifiers.SetNativeGlfwModifiers(mods);
+        int mods = BeginEvent();
         Controller.HandleKeyDown(key, Scancode(key));
         DeliverText(key, mods);
+        Dispatcher.FlushDeferredKeys();
     }
 
     public void Repeat(Key key)
     {
-        int mods = NativeModifiers();
-        Controller.Modifiers.SetNativeGlfwModifiers(mods);
+        int mods = BeginEvent();
         Controller.HandleKeyRepeat(key, Scancode(key));
         DeliverText(key, mods);
+        Dispatcher.FlushDeferredKeys();
     }
 
     public void Release(Key key)
     {
         _held.Remove(key);
-        Controller.Modifiers.SetNativeGlfwModifiers(NativeModifiers());
+        BeginEvent();
         Controller.HandleKeyUp(key, Scancode(key));
+        Dispatcher.FlushDeferredKeys();
+    }
+
+    // Mirrors DottyWindowHost.OnNativeKeyboardKey: refresh the policy from config, then store the native mods.
+    private int BeginEvent()
+    {
+        Controller.Modifiers.Policy = KeyboardPolicy.Resolve(LeftAlt, RightAlt, macOS: Platform == KeyPlatform.Cocoa);
+        int mods = NativeModifiers();
+        Controller.Modifiers.SetNativeGlfwModifiers(mods);
+        return mods;
     }
 
     /// <summary>Presses and releases <paramref name="key"/>.</summary>
@@ -162,30 +185,22 @@ internal sealed class KeyPipelineHarness : IDisposable
         return mods;
     }
 
+    // The host installs the GLFW char-mods callback, which receives every character _glfwInputChar emits
+    // (plain or not) together with its mods; only C0/C1 codepoints are filtered by GLFW itself.
     private void DeliverText(Key key, int mods)
     {
         string? text = ProduceText(key, mods);
         if (string.IsNullOrEmpty(text))
             return;
-        bool plain = IsPlain(mods);
         for (int i = 0; i < text.Length; i += char.IsSurrogatePair(text, i) ? 2 : 1)
         {
             int codepoint = char.ConvertToUtf32(text, i);
             if (codepoint < 32 || codepoint is > 126 and < 160)
                 continue;
-            if (!plain)
-                continue;
+            Controller.Modifiers.SetNativeGlfwModifiers(mods);
             Controller.HandleUnicodeScalar((uint)codepoint);
         }
     }
-
-    private bool IsPlain(int mods) => Platform switch
-    {
-        KeyPlatform.Cocoa => (mods & GlfwModSuper) == 0,
-        // WM_SYSCHAR: Alt without Ctrl (Ctrl+Alt is AltGr and produces WM_CHAR).
-        KeyPlatform.Win32 => (mods & GlfwModAlt) == 0 || (mods & GlfwModControl) != 0,
-        _ => (mods & (GlfwModControl | GlfwModAlt)) == 0,
-    };
 
     private string? ProduceText(Key key, int mods)
     {
@@ -254,6 +269,7 @@ internal sealed class KeyPipelineHarness : IDisposable
         public bool AltGr => _modifiers.AltGr;
         public bool Super => _modifiers.Super;
         public TerminalKeyModifiers LockModifiers => _modifiers.LockModifiers;
+        public bool MetaUsesCommittedText => _modifiers.MetaUsesCommittedText;
         public List<byte> InputBytes { get; } = new();
         public int CopyCount { get; private set; }
 

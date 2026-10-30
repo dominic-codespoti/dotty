@@ -42,11 +42,46 @@ public sealed class KeyboardModifierState
     /// <summary>The modifier bits GLFW reported with the most recent native event, in Dotty's order.</summary>
     public TerminalKeyModifiers NativeModifiers => _native;
 
-    public bool Ctrl => _leftCtrl || _rightCtrl || (_native & TerminalKeyModifiers.Control) != 0;
+    /// <summary>Alt/Option roles (decision K1). The host refreshes it from <c>keyboard.*</c> before each native key event.</summary>
+    public KeyboardPolicy Policy { get; set; } = KeyboardPolicy.ForCurrentPlatform(null, null);
+
+    /// <summary>
+    /// Ctrl is held. A native Ctrl bit with no Ctrl key event while an Alt key is held is the synthetic Ctrl that
+    /// Windows adds to AltGr, and does not count.
+    /// </summary>
+    public bool Ctrl => PhysicalCtrl || ((_native & TerminalKeyModifiers.Control) != 0 && !_leftAlt && !_rightAlt);
     public bool Shift => _leftShift || _rightShift || (_native & TerminalKeyModifiers.Shift) != 0;
-    public bool Alt => _leftAlt || _rightAlt || (_native & TerminalKeyModifiers.Alt) != 0;
-    public bool AltGr => _rightAlt;
+
+    /// <summary>A Meta-role Alt is held, or the native state reports Alt without a tracked Alt key.</summary>
+    public bool Alt =>
+        (_leftAlt && !Composes(Policy.LeftAlt)) ||
+        (_rightAlt && !Composes(Policy.RightAlt)) ||
+        (!_leftAlt && !_rightAlt && (_native & TerminalKeyModifiers.Alt) != 0);
+
+    /// <summary>A Compose-role Alt (AltGr, Option) is held: characters it produces are text, not shortcuts.</summary>
+    public bool AltGr => (_leftAlt && Composes(Policy.LeftAlt)) || (_rightAlt && Composes(Policy.RightAlt));
+
     public bool Super => _leftSuper || _rightSuper || (_native & TerminalKeyModifiers.Meta) != 0;
+
+    /// <summary>
+    /// The character delivered with a Meta chord is the key's layout character (Shift applied), so the chord can be
+    /// sent as <c>ESC</c> + that character. False on macOS and when the layout consumed Alt as AltGr, where the
+    /// delivered character is a composed one and the key name is used instead.
+    /// </summary>
+    public bool MetaUsesCommittedText => Policy.MetaUsesCommittedText && !AltConsumedByLayout;
+
+    // AltGr / ISO Level 3: no Alt bit (X11/Wayland) or Ctrl+Alt without a physical Ctrl key (Windows).
+    private bool AltConsumedByLayout =>
+        (_native & TerminalKeyModifiers.Alt) == 0 ||
+        ((_native & TerminalKeyModifiers.Control) != 0 && !PhysicalCtrl);
+
+    private bool Composes(AltKeyRole role) => role switch
+    {
+        AltKeyRole.Meta => false,
+        AltKeyRole.Compose => true,
+        _ => AltConsumedByLayout,
+    };
+
     public TerminalKeyModifiers LockModifiers => _native & (TerminalKeyModifiers.CapsLock | TerminalKeyModifiers.NumLock);
 
     /// <summary>Records a physical modifier key transition; non-modifier keys are ignored.</summary>

@@ -1483,6 +1483,9 @@ internal static class DottyWindowHost
 
     private static void DrainWindowEvents()
     {
+        // Key events and the characters they produce arrive in the same GLFW event batch; key events still
+        // waiting for a character after the batch are encoded from the key now.
+        _keyboardDispatcher?.FlushDeferredKeys();
         DrainControlCommands();
         _lifecycle.Drain();
 
@@ -2053,11 +2056,13 @@ internal static class DottyWindowHost
         var context = _glfwApi!.Context;
         var setInputMode = (delegate* unmanaged[Cdecl]<nint, int, int, void>)context.GetProcAddress("glfwSetInputMode");
         var setKeyCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetKeyCallback");
-        var setCharCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetCharCallback");
+        // The char-mods callback also receives the characters of Alt chords (X11/Wayland Mod1, Windows WM_SYSCHAR),
+        // which the plain char callback drops; Meta chords use them to keep Shift (Alt+Shift+, = ESC <).
+        var setCharModsCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetCharModsCallback");
         // GLFW_LOCK_KEY_MODS includes the real Caps Lock/Num Lock state in each key event.
         setInputMode(handle, 0x00033004, 1);
         setKeyCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, int, int, int, int, void>)&OnNativeKeyboardKey);
-        setCharCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, uint, void>)&OnNativeKeyboardScalar);
+        setCharModsCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, uint, int, void>)&OnNativeKeyboardScalar);
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -2066,7 +2071,10 @@ internal static class DottyWindowHost
         if (_closed)
             return;
 
-        // GLFW reports the effective state even when modifiers arrive without physical key events.
+        // keyboard.leftAlt/rightAlt are read live; GLFW reports the effective modifier state even when modifiers
+        // arrive without physical key events.
+        var keyboardConfig = UserConfigService.Current.Keyboard;
+        _keyboardController.Modifiers.Policy = KeyboardPolicy.ForCurrentPlatform(keyboardConfig.LeftAlt, keyboardConfig.RightAlt);
         _keyboardController.Modifiers.SetNativeGlfwModifiers(modifiers);
         if (action == 0)
         {
@@ -2085,12 +2093,13 @@ internal static class DottyWindowHost
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void OnNativeKeyboardScalar(nint window, uint codepoint)
+    private static void OnNativeKeyboardScalar(nint window, uint codepoint, int modifiers)
     {
         if (_closed)
             return;
 
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
+        _keyboardController.Modifiers.SetNativeGlfwModifiers(modifiers);
         _keyboardController.HandleUnicodeScalar(codepoint);
     }
 
@@ -2466,6 +2475,7 @@ internal static class DottyWindowHost
         public bool AltGr => _keyboardController?.Modifiers.AltGr ?? false;
         public bool Super => _keyboardController?.Modifiers.Super ?? false;
         public TerminalKeyModifiers LockModifiers => _keyboardController?.Modifiers.LockModifiers ?? TerminalKeyModifiers.None;
+        public bool MetaUsesCommittedText => _keyboardController?.Modifiers.MetaUsesCommittedText ?? false;
 
         public void CopySelection() => CopySelectionToClipboard();
         public void PasteClipboard() => PasteClipboardToSession();

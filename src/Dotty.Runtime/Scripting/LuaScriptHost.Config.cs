@@ -34,6 +34,7 @@ public sealed partial class LuaScriptHost
     {
         ["theme"] = new(ConfigValueKind.String, c => c.Theme, (c, v) => c.Theme = (string)v!),
         ["shell_integration"] = new(ConfigValueKind.String, c => c.ShellIntegration, (c, v) => c.ShellIntegration = (string)v!),
+        ["term"] = new(ConfigValueKind.String, c => c.Term, (c, v) => c.Term = (string)v!),
         ["theme_light"] = new(ConfigValueKind.String, c => c.ThemeLight, (c, v) => c.ThemeLight = (string?)v),
         ["theme_dark"] = new(ConfigValueKind.String, c => c.ThemeDark, (c, v) => c.ThemeDark = (string?)v),
         ["theme_auto"] = new(ConfigValueKind.Boolean, c => c.ThemeAuto, (c, v) => c.ThemeAuto = (bool)v!),

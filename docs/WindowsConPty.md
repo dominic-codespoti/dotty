@@ -27,9 +27,11 @@ parser. ConPTY supplies the pseudoterminal process and streams.
 
 Child environments preserve inherited variables and apply caller overrides
 case-insensitively, without modifying the caller's dictionary. As on Unix,
-`TERM=xterm-256color` and `COLORTERM=truecolor` are then forced to advertise
-Dotty's terminal capabilities, even when the parent or caller supplies
-`TERM=dumb`. This allows shells and prompts to enable their VT/color support.
+`COLORTERM=truecolor` is then forced, and `TERM` is the caller's value or
+`xterm-256color` when the caller passes none; the parent's own `TERM` (for
+example `dumb`) is never inherited. Sessions always pass the TERM resolved from
+the `term` setting (see [Configuration](Configuration.md#term)), so shells and
+prompts enable their VT/color support.
 
 The Unicode environment block is sorted case-insensitively and double-NUL
 terminated. Its allocation uses `Marshal.StringToHGlobalUni`, paired with

@@ -8,7 +8,7 @@ Dotty accepts options before an optional command:
 ```
 
 - `-h`, `--help`: print usage and exit without loading configuration or initializing graphics.
-- `--version`: print the application version and exit without initializing the UI.
+- `--version`: print the application version and exit without initializing the UI. Release builds print the release version exactly (`0.3.0`, `0.4.0-beta.1`); development builds whose version carries a source revision print `<version>-dev+<sha7>` (`0.3.0-dev+abc1234`, or `0.4.0-beta.1.dev+abc1234` for a prerelease). The same string is exported as `TERM_PROGRAM_VERSION` and answered to XTVERSION (`CSI > q` → `DCS > | Dotty <version> ST`); DA2 (`CSI > c`) reports it as `CSI > 1 ; Pv ; 0 c` with `Pv = major×10000 + minor×100 + patch`.
 - `-d DIR`, `--working-directory DIR`: use DIR as the initial working directory. Relative paths resolve against Dotty's invocation directory.
 - `--shell PATH`: start PATH as an interactive shell. This option is mutually exclusive with COMMAND. New tabs and split panes inherit this selected shell.
 - `-- COMMAND [ARG...]`: launch COMMAND directly. Everything following the separator is passed as individual process arguments unchanged, including empty strings, leading dashes, spaces, and option-looking values. The command's exit status becomes Dotty's exit status. COMMAND and its arguments run only in the initial session; they are not replayed in new tabs or split panes.

@@ -93,12 +93,13 @@ public sealed class UnixPty : IPty
             if (_isStarted)
                 throw new InvalidOperationException("PTY session is already started.");
 
-            string? helperExe = FindHelperExecutableForCurrentProcess();
-            if (string.IsNullOrEmpty(helperExe))
+            PtyHelperResolution helper = PtyHelperLocator.ResolveForCurrentProcess();
+            string? helperExe = helper.Path;
+            if (helperExe is null)
             {
                 throw new PtyException(
                     PtyErrorCode.NativeHelperMissing,
-                    "The pty-helper executable was not found. Place it beside the application or add it to PATH.");
+                    $"The pty-helper executable was not found. Place it beside the application or set {PtyHelperLocator.OverrideVariable}. {helper.Describe()}");
             }
 
             if (!IsExecutable(helperExe))
@@ -182,14 +183,14 @@ public sealed class UnixPty : IPty
             psi.EnvironmentVariables["DOTTY_INITIAL_XPIXEL"] = _startupPixelWidth.ToString();
             psi.EnvironmentVariables["DOTTY_INITIAL_YPIXEL"] = _startupPixelHeight.ToString();
 
-            // Add environment variables before forcing terminal identity.
+            // Add environment variables before setting terminal identity.
             if (environmentVariables != null)
             {
                 foreach (var kvp in environmentVariables)
                     psi.EnvironmentVariables[kvp.Key] = kvp.Value;
             }
 
-            psi.EnvironmentVariables["TERM"] = "xterm-256color";
+            psi.EnvironmentVariables["TERM"] = TerminalEnvironment.Term(environmentVariables);
             psi.EnvironmentVariables["COLORTERM"] = "truecolor";
 
             try
@@ -579,64 +580,6 @@ public sealed class UnixPty : IPty
         throw new PtyException(
             PtyErrorCode.ControlSocketUnavailable,
             "The temporary directory path is too long for a Unix-domain socket.");
-    }
-
-    internal static string? FindHelperExecutableForCurrentProcess()
-    {
-        try
-        {
-            string baseDirectory = AppContext.BaseDirectory;
-            string adjacent = Path.Combine(baseDirectory, "pty-helper");
-            if (File.Exists(adjacent))
-                return Path.GetFullPath(adjacent);
-
-            var current = new DirectoryInfo(baseDirectory);
-            for (int i = 0; i < 16 && current != null; i++)
-            {
-                string repoCandidate = Path.Combine(
-                    current.FullName,
-                    "src",
-                    "Dotty.NativePty",
-                    "bin",
-                    "pty-helper");
-                string projectCandidate = Path.Combine(
-                    current.FullName,
-                    "Dotty.NativePty",
-                    "bin",
-                    "pty-helper");
-
-                if (File.Exists(repoCandidate))
-                    return Path.GetFullPath(repoCandidate);
-                if (File.Exists(projectCandidate))
-                    return Path.GetFullPath(projectCandidate);
-
-                current = current.Parent;
-            }
-        }
-        catch
-        {
-        }
-
-        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var directory in pathEnv.Split(
-                Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries))
-            {
-                try
-                {
-                    string candidate = Path.Combine(directory, "pty-helper");
-                    if (File.Exists(candidate))
-                        return Path.GetFullPath(candidate);
-                }
-                catch
-                {
-                }
-            }
-        }
-
-        return null;
     }
 
     internal static bool IsExecutable(string path)

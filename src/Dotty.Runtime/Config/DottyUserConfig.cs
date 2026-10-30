@@ -82,6 +82,14 @@ public sealed class DottyUserConfig
     [JsonPropertyName("shellIntegration")]
     public string ShellIntegration { get; set; } = "none";
 
+    /// <summary>
+    /// TERM given to new sessions. <c>xterm-256color</c> (default) or a terminfo entry such as <c>xterm-dotty</c>;
+    /// a name whose terminfo entry cannot be found falls back to <c>xterm-256color</c>. Applies to sessions created
+    /// after the change.
+    /// </summary>
+    [JsonPropertyName("term")]
+    public string Term { get; set; } = "xterm-256color";
+
     /// <summary>Kitty graphics protocol settings. Applies to sessions created after a change.</summary>
     [JsonPropertyName("graphics")]
     public GraphicsUserConfig Graphics { get; set; } = new();

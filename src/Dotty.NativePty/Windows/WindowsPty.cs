@@ -439,8 +439,9 @@ public sealed class WindowsPty : IPty
                 foreach (var variable in environmentVariables)
                     currentEnv[variable.Key] = variable.Value;
             }
-            // Match the Unix backend: terminal identity is not inherited or overridden.
-            currentEnv["TERM"] = "xterm-256color";
+            // Match the Unix backend: TERM is the caller's (the session's resolved term) or xterm-256color, never
+            // the inherited value; COLORTERM is always forced.
+            currentEnv["TERM"] = TerminalEnvironment.Term(environmentVariables);
             currentEnv["COLORTERM"] = "truecolor";
             IntPtr environmentPtr = CreateEnvironmentBlock(currentEnv);
 

@@ -63,8 +63,9 @@ wins):
 | Variable | Value |
 |---|---|
 | `TERM_PROGRAM` | `dotty` |
-| `TERM_PROGRAM_VERSION` | The release version without SemVer build metadata (`0.3.0+sha` becomes `0.3.0`; prerelease labels are kept). |
+| `TERM_PROGRAM_VERSION` | The same string `dotty --version` prints: the release version for release builds (`0.3.0`, `0.4.0-beta.1`), `<version>-dev+<sha7>` for development builds. See [Command line](CommandLine.md). |
 | `DOTTY_SURFACE_ID` | A stable per-session identifier (a GUID in `N` format) that is also the owning pane's `Id`. |
+| `TERM` | The resolved [`term`](#term) setting (`xterm-256color` by default). Unlike the rows above it is set after the caller's variables, so it always applies. |
 
 The Unix `pty-helper` protocol variables `DOTTY_CONTROL_SOCKET`,
 `DOTTY_INITIAL_COLS`, `DOTTY_INITIAL_ROWS`, `DOTTY_INITIAL_XPIXEL`, and
@@ -74,6 +75,10 @@ shells. (The pixel pair carries the text-area size in physical pixels for the
 child's first `TIOCGWINSZ`; see [Native PTY](NativePty.md#pixel-sizes).)
 Shell-integration scripts skip silently in non-interactive shells; see
 [Shell Integration](ShellIntegration.md).
+
+`DOTTY_PTY_HELPER`, read from Dotty's own environment, names the `pty-helper`
+executable to use instead of searching for it; see
+[Native PTY](NativePty.md#locating-the-helper).
 
 When a tab or pane is created from an existing one, the starting directory is
 resolved at that moment: the shell's OSC 7 directory if it still exists,
@@ -145,6 +150,7 @@ become unreadable therefore no longer prevents a new tab from opening.
     "windowsPassthrough": false
   },
   "shellIntegration": "none",
+  "term": "xterm-256color",
   "keybindings": {
     "ctrl+shift+t": "NewTab",
     "ctrl+shift+w": "ClosePane",
@@ -531,6 +537,35 @@ directory (it must contain `dotty.bash`). The mechanism per shell, and what is
 not injected, are in [Shell Integration](ShellIntegration.md#automatic-injection).
 The setting is read each time a session starts, so a reload applies to **new tabs
 and panes only**; running shells are unchanged.
+
+### `term`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `term` | string | `"xterm-256color"` | `TERM` for shells and commands Dotty starts. `"xterm-dotty"` opts into Dotty's own terminfo entry. |
+
+Dotty sets `TERM` for every shell or command it starts (it overrides a `TERM`
+inherited from Dotty's own environment or passed by the caller) and reports the
+same value for XTGETTCAP `TN`. A value other than `xterm-256color` is used only
+when its terminfo entry exists in one of the directories ncurses searches:
+`$TERMINFO`, `~/.terminfo`, `$TERMINFO_DIRS` (or, when that is unset,
+`/etc/terminfo`, `/lib/terminfo`, `/usr/share/terminfo`, `/usr/lib/terminfo`,
+`/usr/local/share/terminfo`, `/opt/homebrew/share/terminfo`), or the
+`terminfo` directory shipped beside the executable; both the `x/xterm-dotty`
+and the hexadecimal `78/xterm-dotty` layouts count. Otherwise the session falls
+back to `xterm-256color`. Names containing a path separator or whitespace are
+rejected the same way.
+
+When the entry is found only in the shipped `terminfo` directory, that
+directory is appended to the child's `TERMINFO_DIRS` (an unset variable becomes
+the compiled-in default, the existing system directories above, then the
+shipped one), so programs in the session can load it. `TERMINFO` is never set.
+With the default `xterm-256color` the environment is left as it is. The entry
+source is `terminfo/xterm-dotty.src` in the repository; see
+[Keyboard protocol](KeyboardProtocol.md) for the capabilities it adds and for the
+matching XTGETTCAP replies. Remote hosts reached with `ssh` usually lack the
+entry, so keep the default when you work remotely. The setting is read each time
+a session starts, so a reload applies to **new tabs and panes only**.
 
 ### `keybindings`
 

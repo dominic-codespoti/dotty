@@ -87,6 +87,9 @@ namespace Dotty.Abstractions.Adapter
         void OnSendDeviceAttributes(int daType); // DA - CSI c / CSI > c
         // DA3 (CSI = c) is intentionally silent; no reply is sent.
 
+        // XTVERSION (CSI > q / CSI > 0 q): report the terminal name and version.
+        void OnRequestTerminalVersion() { }
+
         // Mode status (DECRQM - CSI ? Ps $ p / CSI Ps $ p)
         void OnRequestMode(int mode, bool isPrivate) { } // Default no-op for external implementors.
 

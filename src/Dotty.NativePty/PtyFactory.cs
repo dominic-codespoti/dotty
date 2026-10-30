@@ -144,7 +144,8 @@ public static class PtyFactory
 
         if (PtyPlatform.IsUnix)
         {
-            string? helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+            Unix.PtyHelperResolution resolution = Unix.PtyHelperLocator.ResolveForCurrentProcess();
+            string? helper = resolution.Path;
             if (helper == null)
             {
                 return new PtyCapabilities(
@@ -153,7 +154,7 @@ public static class PtyFactory
                     PtyBackend.UnixHelper,
                     PlatformSupported: true,
                     NativeDependencyAvailable: false,
-                    "The packaged pty-helper executable was not found.");
+                    $"The packaged pty-helper executable was not found. {resolution.Describe()}");
             }
 
             bool executable = Unix.UnixPty.IsExecutable(helper);

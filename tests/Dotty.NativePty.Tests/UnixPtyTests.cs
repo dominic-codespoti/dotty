@@ -66,7 +66,7 @@ public class UnixPtyTests : IDisposable
     [ConditionalFacts.UnixOnlyFact]
     public void UnixPty_HelperDiscoveryFindsExecutable()
     {
-        var helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+        var helper = Unix.PtyHelperLocator.ResolveForCurrentProcess().Path;
 
         helper.Should().NotBeNullOrWhiteSpace();
         File.Exists(helper!).Should().BeTrue();
@@ -589,7 +589,7 @@ public class UnixPtyTests : IDisposable
     [ConditionalFacts.UnixOnlyFact]
     public async Task UnixPty_Helper_NaturalExitDrainsOutputAndCleansUp()
     {
-        var helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+        var helper = Unix.PtyHelperLocator.ResolveForCurrentProcess().Path;
         helper.Should().NotBeNullOrWhiteSpace();
 
         var socketPath = Path.Combine(Path.GetTempPath(), $"dotty-pty-test-{Guid.NewGuid():N}.sock");
@@ -852,7 +852,7 @@ public class UnixPtyTests : IDisposable
     #region Helper Tests
 
     /// <summary>
-    /// Verifies that FindHelperExecutable locates the helper.
+    /// Verifies that PtyHelperLocator locates the helper.
     /// This is tested indirectly through successful Start() calls.
     /// </summary>
     [ConditionalFacts.UnixOnlyFact]

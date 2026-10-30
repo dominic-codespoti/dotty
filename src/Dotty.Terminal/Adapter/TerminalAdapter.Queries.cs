@@ -49,7 +49,7 @@ public partial class TerminalAdapter
     {
         var handler = ReplyRequested;
         if (handler is null || requestHex.IsEmpty) return;
-        Span<char> valueHex = stackalloc char[64];
+        Span<char> valueHex = stackalloc char[128];
         int valueLength = GetCapabilityValueHex(requestHex, valueHex);
         if (valueLength < 0) return;
         int total = 5 + requestHex.Length + 1 + valueLength + 2;
@@ -86,13 +86,13 @@ public partial class TerminalAdapter
         ReadOnlySpan<char> decoded = key[..(requestHex.Length / 2)];
         ReadOnlySpan<char> value = decoded switch
         {
-            _ when decoded.SequenceEqual("TN") => "dotty",
+            _ when decoded.SequenceEqual("TN") => _termName,
             _ when decoded.SequenceEqual("Co") => "256",
             _ when decoded.SequenceEqual("RGB") => "8/8/8",
             _ => ReadOnlySpan<char>.Empty,
         };
         bool isKittyKeyboard = decoded.SequenceEqual("kitty-keyboard");
-        if (value.IsEmpty && !isKittyKeyboard)
+        if (value.IsEmpty && !isKittyKeyboard && !TerminfoCapabilities.TryGetString(decoded, out value))
             return -1;
         if (isKittyKeyboard)
         {

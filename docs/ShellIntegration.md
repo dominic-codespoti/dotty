@@ -30,7 +30,7 @@ Shell marker navigation uses the terminal's existing bounded prompt-mark collect
 
 Instead of sourcing a script by hand, set `"shellIntegration": "detect"` (default `"none"`; see [Configuration](Configuration.md#shellintegration)). Dotty then launches recognized shells so that they load the scripts above on their own. It is still opt-in and edits no dotfile: the rewrite is an argument or environment change for that one launch, and it is computed each time a session starts, so it applies to new tabs and panes only. `DOTTY_SHELL_INTEGRATION=0` (also `none`, `false`, `off`) in Dotty's own environment opts out regardless of the config.
 
-**Finding the scripts.** `ShellIntegrationLocator` uses `DOTTY_SHELL_INTEGRATION_DIR` when set (re-read on every launch), otherwise `shell-integration/` beside the executable, otherwise `../share/dotty/shell-integration`. A directory counts only if it contains `dotty.bash`; if none is found nothing is injected.
+**Finding the scripts.** `ShellIntegrationLocator` uses `DOTTY_SHELL_INTEGRATION_DIR` when set (re-read on every launch), otherwise `shell-integration/` beside the executable, otherwise `../share/dotty/shell-integration` (executable in `<prefix>/bin`), otherwise `../../share/dotty/shell-integration` (application in `<prefix>/lib/dotty`). A directory counts only if it contains `dotty.bash`; if none is found nothing is injected.
 
 **Which shell.** The shell is classified by file-name stem, case-insensitively and without `.exe`: `bash`, `zsh`, `fish`, `pwsh`, `powershell`. Everything else (`sh`, `dash`, `nu`, `cmd`, ...) launches unchanged.
 

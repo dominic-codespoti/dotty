@@ -54,6 +54,7 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `vt.window_resize_allowed` | boolean | `false` |
 | `vt.checksum_report_enabled` | boolean | `false` |
 | `shell_integration` | string (`"none"`, `"detect"`) | `"none"` |
+| `term` | string | `"xterm-256color"` (see [`term`](../Configuration.md#term)) |
 | `scrollback.limit_lines` | integer | `5000` (`0` = no history, at most `1000000`) |
 | `scrollback.limit_bytes` | integer | `67108864` (`0` = no byte cap; raw ring bytes `(lines + rows) * columns * 12`) |
 | `graphics.kitty_protocol` | boolean | `false` |

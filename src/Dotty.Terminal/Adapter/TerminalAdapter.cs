@@ -41,6 +41,8 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     private int _defaultBackgroundOverrideArgb;
     private string _defaultBgHex = "#1E1E1E";
     private string _da2Response = "\u001b[>1;0;0c";
+    private string _xtVersionReply = "\u001bP>|Dotty\u001b\\";
+    private string _termName = DefaultTermName;
     private bool _hasSavedAttributes;
     private string? _windowTitle;
     private char _lastPrintedChar;
@@ -185,13 +187,43 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
             NotifyPaletteChanged();
     }
 
+    /// <summary>TERM value assumed until <see cref="SetTerminalIdentity"/> reports the one the child received.</summary>
+    public const string DefaultTermName = "xterm-256color";
+
     /// <summary>
-    /// Sets the DA2 (Secondary Device Attributes) response string, e.g.
-    /// "\x1b[>1;300;0c" for Dotty 0.3.0. Called by the app layer on startup.
+    /// Sets the identity reported to applications: DA2 (<c>CSI &gt; c</c> → <c>CSI &gt; 1 ; Pv ; 0 c</c> with
+    /// Pv = major·10000 + minor·100 + patch), XTVERSION (<c>CSI &gt; q</c> → <c>DCS &gt; | Dotty &lt;version&gt; ST</c>)
+    /// and the XTGETTCAP <c>TN</c> name (the TERM value the child process was given). Called by the session
+    /// before the PTY starts; blank arguments keep the previous value.
     /// </summary>
-    public void SetTerminalIdentity(string da2Response)
+    public void SetTerminalIdentity(string version, string termName)
     {
-        if (!string.IsNullOrWhiteSpace(da2Response)) _da2Response = da2Response;
+        if (!string.IsNullOrWhiteSpace(version))
+        {
+            _da2Response = $"\u001b[>1;{Da2VersionNumber(version)};0c";
+            _xtVersionReply = $"\u001bP>|Dotty {version}\u001b\\";
+        }
+        if (!string.IsNullOrWhiteSpace(termName)) _termName = termName;
+    }
+
+    /// <summary>The TERM name answered for XTGETTCAP <c>TN</c>.</summary>
+    public string TermName => _termName;
+
+    // major.minor.patch from the leading numeric core ("0.4.0-beta.1" → 400); missing parts are 0.
+    internal static int Da2VersionNumber(ReadOnlySpan<char> version)
+    {
+        Span<int> parts = stackalloc int[3];
+        int index = 0;
+        foreach (char c in version)
+        {
+            if (char.IsAsciiDigit(c))
+                parts[index] = Math.Min(parts[index] * 10 + (c - '0'), 99_999);
+            else if (c == '.' && index < 2)
+                index++;
+            else
+                break;
+        }
+        return parts[0] * 10_000 + Math.Min(parts[1], 99) * 100 + Math.Min(parts[2], 99);
     }
 
     public void ResizeBuffer(int rows, int columns)
@@ -700,6 +732,9 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
                 // DA3 (CSI = c) is not implemented; do not claim an identity/capability.
         }
     }
+
+    /// <summary>XTVERSION (<c>CSI &gt; q</c> / <c>CSI &gt; 0 q</c>): replies <c>DCS &gt; | Dotty &lt;version&gt; ST</c>.</summary>
+    public void OnRequestTerminalVersion() => ReplyRequested?.Invoke(_xtVersionReply.AsSpan());
 
     public void OnMouseEvent(int button, int col, int row, bool isPress)
     {

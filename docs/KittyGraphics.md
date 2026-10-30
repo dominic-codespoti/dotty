@@ -509,7 +509,7 @@ checked by the script.
   with an old config you did not reload. `graphics.*` reload behavior is in the
   [reference](Configuration.md#graphics).
 - `kitten icat --detect-support` probes the terminal. Dotty sets
-  `TERM=xterm-256color`, not `xterm-kitty`, so clients must rely on the query
+  `TERM=xterm-256color` by default (or `xterm-dotty`), not `xterm-kitty`, so clients must rely on the query
   rather than the terminfo name; pass `--transfer-mode=stream` to avoid file and
   shared-memory media if they are disabled.
 - Quick query by hand (the reply is `OK` and DA1 follows; nothing must be

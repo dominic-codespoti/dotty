@@ -294,8 +294,9 @@ The authoritative workflow is `.github/workflows/ci.yml`:
 | `build-and-test` | macOS Intel `osx-x64` | POSIX helper and host-native tests |
 | `build-and-test` | macOS arm64 `osx-arm64` | POSIX helper and host-native tests |
 | `build-and-test` | Windows `win-x64` | Host-native tests and ConPTY smoke |
+| `aot-publish` (reusable `aot-publish.yml`) | Ubuntu `linux-x64`, Windows `win-x64`, macOS arm64 `osx-arm64`, macOS Intel `osx-x64` | NativeAOT `dotnet publish` of the shipped configuration; `scripts/dist/verify-publish.sh`/`.ps1` file asserts, `dotty --version` (central version or a `-dev+<rev>` build) and `dotty +explain-config font.size`; fails on IL2xxx/IL3xxx warnings in Dotty's own code and lists third-party ones (`scripts/dist/aot_warnings.py`) |
 | `gui-smoke-linux` | Ubuntu `linux-x64` | X11 desktop startup under Xvfb |
-| `code-quality` | Ubuntu | `dotnet format whitespace` verification, plus the Python unit tests for the benchmark and esctest scripts |
+| `code-quality` | Ubuntu | `dotnet format whitespace` verification, plus the Python unit tests for the benchmark, esctest and distribution (`scripts/dist/tests`) scripts |
 | `esctest-linux` | Ubuntu | esctest2 conformance against the headless host; **not gating** until `tests/esctest/expected-failures.txt` carries the `# baseline-captured:` marker (see [Conformance](Conformance.md)) |
 | `performance-tests` | Ubuntu | Quick BenchmarkDotNet run on pull requests and `main` |
 
@@ -307,13 +308,18 @@ candidates without an automated nightly or release-publishing lane; see the
 
 ## Release verification
 
-Release jobs must:
+Release builds run the same reusable `aot-publish.yml` workflow as CI, with the
+exact release version. Release jobs must:
 
 1. build Unix `pty-helper` and require it in Unix publish output;
-2. verify `dotty`/`dotty.exe` and RID-specific Skia/Lua native libraries;
-3. inspect every tar/zip archive before release creation;
-4. extract and start the Linux archive under Xvfb;
-5. generate `MANIFEST.txt` and `SHA256SUMS`.
+2. NativeAOT-publish each RID and verify it with `scripts/dist/verify-publish.sh`
+   (Linux, macOS) or `scripts/dist/verify-publish.ps1` (Windows): `dotty`/`dotty.exe`,
+   RID-specific GLFW/Skia/Lua native libraries, the shell-integration payload,
+   `dotty --version` equal to the release version, and `+explain-config`;
+3. fail on IL2xxx/IL3xxx warnings in Dotty's own code;
+4. inspect every tar/zip archive before release creation;
+5. extract and start the Linux archive under Xvfb;
+6. generate `MANIFEST.txt` and `SHA256SUMS`.
 
 See [Platform Support](PlatformSupport.md) for promotion gates and
 [End-to-end Testing](E2ETesting.md) for the command-level smoke contract.

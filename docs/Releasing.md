@@ -44,19 +44,25 @@ Use these bump rules:
 
 A recommendation is advice, not authorization. The assistant MUST report the current version, latest tag, reviewed changes, proposed bump, and readiness/gaps, then wait for explicit user authorization before changing the central version, pushing a tag, manually dispatching publication, or otherwise publishing. A request to analyze or recommend a release is not permission to execute one.
 
-## Archive assertions
+## NativeAOT publish and archive assertions
+
+Release archives are built by the reusable workflow `.github/workflows/aot-publish.yml`, the same one `ci.yml` runs on every push and pull request (job `aot-publish`). It NativeAOT-publishes `linux-x64`, `win-x64`, `osx-arm64` and `osx-x64` on native runners (`PublishAot=true` comes from `Dotty.csproj`; there is no single-file or JIT release path), so every push and pull request exercises the publish path a release uses. Per RID it:
+
+1. fails when ILC or the trim/AOT analyzers report an IL2xxx/IL3xxx warning in Dotty's own code (`scripts/dist/aot_warnings.py`: origin under `src/`, or a `Dotty.*` member or assembly). Third-party warnings are tolerated and listed in the job summary. The Silk.NET suppressions in `Dotty.csproj` (`IL2104`, `IL3000`, `IL3002`, ILC only) still apply.
+2. verifies the publish directory with `scripts/dist/verify-publish.sh` (Linux, macOS) or `scripts/dist/verify-publish.ps1` (Windows), which report every failed check before exiting non-zero. In CI the version check accepts the central version or a `<Version>-dev+<rev>`/`<Version>.dev+<rev>` build; a release requires the exact release version.
+3. for a release only, packs `dotty-<version>-<rid>.tar.gz` (Unix, one top-level directory) or `dotty-<version>-win-x64.zip` and uploads it.
 
 `release.yml` fails the build when a published archive lacks the shell-integration payload. The injection files are required in addition to the opt-in scripts because automatic injection (`shellIntegration: "detect"`) silently does nothing without them, and `inject/zsh/.zshenv` is a dotfile that a plain `*` glob would drop (`Dotty.csproj` packages `shell-integration/**/*` recursively for this reason).
 
 | Where | Asserted |
 |---|---|
-| Linux and macOS publish output (`Verify Linux artifact`, `Verify macOS artifact`) | `shell-integration/dotty.bash`, `inject/bash/dotty-rcfile.bash`, `inject/zsh/.zshenv`, `inject/xdg/fish/vendor_conf.d/dotty-shell-integration.fish` |
-| Windows publish output (`Verify Windows artifact`) | `dotty.bash`, `Dotty.ps1`, `inject\bash\dotty-rcfile.bash`, `inject\zsh\.zshenv` |
-| `smoke-release-assets`, every `.tar.gz` | the same four Unix files as above, in addition to the executable and native libraries |
-| `smoke-release-assets`, every `.zip` | `shell-integration/Dotty.ps1` and `shell-integration/inject/bash/dotty-rcfile.bash` |
+| Linux and macOS publish output (`verify-publish.sh`) | executable `dotty` and `pty-helper`; `libglfw.so.3`/`libglfw.3.dylib`, `libSkiaSharp`, `liblua54`; `shell-integration/dotty.bash`, `inject/bash/dotty-rcfile.bash`, `inject/zsh/.zshenv`, `inject/xdg/fish/vendor_conf.d/dotty-shell-integration.fish`; `dotty --version`; `dotty +explain-config font.size` |
+| Windows publish output (`verify-publish.ps1`) | `dotty.exe`, `glfw3.dll`, `libSkiaSharp.dll`, `lua54.dll`; `shell-integration\` `dotty.bash`, `Dotty.ps1`, `inject\bash\dotty-rcfile.bash`, `inject\zsh\.zshenv`; `dotty --version`; `dotty +explain-config font.size` |
+| `smoke-release-assets`, every `.tar.gz` | the same four Unix shell-integration files, the executable, `pty-helper` and the GLFW/Skia/Lua native libraries |
+| `smoke-release-assets`, every `.zip` | `dotty.exe`, `glfw3.dll`, `libSkiaSharp.dll`, `lua54.dll`, `shell-integration/Dotty.ps1` and `shell-integration/inject/bash/dotty-rcfile.bash` |
 | Extracted Linux archive (Xvfb start) | `shell-integration/dotty.bash` and `shell-integration/inject/zsh/.zshenv` exist before the host is started |
 
-These are presence checks only. They do not run any injected shell; see [Shell Integration](ShellIntegration.md#verification-scope). The Linux archive start under Xvfb is the only automated GUI start of a release artifact.
+These are presence checks only. They do not run any injected shell; see [Shell Integration](ShellIntegration.md#verification-scope). The Linux archive start under Xvfb is the only automated GUI start of a release artifact; the `--version`/`+explain-config` runs above start the executable without a window on every RID.
 
 ## Build portability and platform readiness
 

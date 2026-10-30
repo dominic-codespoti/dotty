@@ -85,53 +85,6 @@ jobs:
       - name: Build solution
         run: dotnet build ${{ env.SOLUTION_PATH }} -c Release --no-restore
 
-      - name: Validate host RID
-        shell: bash
-        env:
-          RID: ${{ matrix.rid }}
-        run: |
-          set -euo pipefail
-          dotnet restore "${{ env.PROJECT_PATH }}" -r "$RID"
-          dotnet publish "${{ env.PROJECT_PATH }}" \
-            -c Release \
-            -r "$RID" \
-            --self-contained false \
-            -p:PublishAot=false \
-            -p:PublishTrimmed=false \
-            --no-restore \
-            -o ".ci-publish/$RID"
-      - name: Verify published native assets
-        shell: bash
-        env:
-          RID: ${{ matrix.rid }}
-        run: |
-          set -euo pipefail
-          case "$RID" in
-            linux-*)
-              test -x ".ci-publish/$RID/dotty"
-              test -f ".ci-publish/$RID/libglfw.so.3"
-              test -f ".ci-publish/$RID/libSkiaSharp.so"
-              test -f ".ci-publish/$RID/liblua54.so"
-              test -x ".ci-publish/$RID/pty-helper"
-              ;;
-            osx-*)
-              test -x ".ci-publish/$RID/dotty"
-              test -f ".ci-publish/$RID/libSkiaSharp.dylib"
-              test -f ".ci-publish/$RID/libglfw.3.dylib"
-              test -f ".ci-publish/$RID/liblua54.dylib"
-              test -x ".ci-publish/$RID/pty-helper"
-              ;;
-            win-*)
-              test -f ".ci-publish/$RID/dotty.exe"
-              test -f ".ci-publish/$RID/glfw3.dll"
-              test -f ".ci-publish/$RID/libSkiaSharp.dll"
-              ;;
-            *)
-              echo "Unsupported validation RID: $RID" >&2
-              exit 1
-              ;;
-          esac
-
       - name: Run host-native tests
         shell: bash
         timeout-minutes: 15
@@ -166,7 +119,6 @@ jobs:
           path: |
             src/Dotty/bin/Release/
             src/Dotty.NativePty/bin/
-            .ci-publish/
           retention-days: 5
           if-no-files-found: ignore
 
@@ -182,7 +134,8 @@ jobs:
           if-no-files-found: ignore
 
   # Hosted macOS and Windows runners lack a usable OpenGL session; their host-native
-  # builds and published native assets are validated by build-and-test above.
+  # builds are validated by build-and-test above and their NativeAOT publish output by
+  # aot-publish below.
   gui-smoke-linux:
     name: GUI Smoke (X11)
     runs-on: ubuntu-latest
@@ -246,6 +199,13 @@ jobs:
           fi
           cat "$smoke_dir/idle-wakeups.log"
 
+  # NativeAOT publish of every release RID through the same reusable workflow release.yml
+  # uses: file asserts, `dotty --version` and `+explain-config` smoke, and a gate that fails
+  # on IL2xxx/IL3xxx warnings in Dotty's own code (third-party warnings are listed).
+  aot-publish:
+    name: AOT publish
+    uses: ./.github/workflows/aot-publish.yml
+
   # Job to check code formatting
   code-quality:
     name: Code Quality Checks
@@ -271,6 +231,9 @@ jobs:
 
       - name: Run esctest script tests
         run: python3 -m unittest discover -s scripts/esctest/tests
+
+      - name: Run distribution script tests
+        run: python3 -m unittest discover -s scripts/dist/tests
 
   # esctest2 conformance (Linux only; esctest needs Unix tty/termios, so no Windows).
   # NOT GATING UNTIL A BASELINE EXISTS: while tests/esctest/expected-failures.txt has no
@@ -405,7 +368,7 @@ jobs:
   # Summary job that depends on all others
   ci-summary:
     name: CI Summary
-    needs: [build-and-test, gui-smoke-linux, code-quality, performance-tests, esctest-linux]
+    needs: [build-and-test, aot-publish, gui-smoke-linux, code-quality, performance-tests, esctest-linux]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -415,6 +378,11 @@ jobs:
           set -euo pipefail
           if [ "${{ needs.build-and-test.result }}" = "failure" ]; then
             echo "Build or tests failed!"
+            exit 1
+          fi
+
+          if [ "${{ needs.aot-publish.result }}" = "failure" ]; then
+            echo "NativeAOT publish, its file/version smoke, or the own-code IL warning gate failed!"
             exit 1
           fi
           

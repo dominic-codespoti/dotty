@@ -23,6 +23,7 @@ Linux, macOS, and Windows.
 | `tests/` | Unit, terminal, native PTY, Skia, and performance test projects |
 | `scripts/perf/` | Benchmark harnesses used by the performance skill |
 | `scripts/esctest/` | esctest2 conformance runner and result parser (Python) |
+| `scripts/dist/` | Release/distribution scripts (publish verification, AOT warning gate) and their Python tests |
 | `tests/Dotty.Conformance.Host/` | Headless host executable that the esctest run drives (not a test project) |
 | `tests/esctest/` | Pinned esctest2 commit and the expected-failures baseline |
 
@@ -64,10 +65,11 @@ Read the relevant document before changing a subsystem:
 - Update the affected `docs/*.md` file in the same change as the code.
 - Add newly created documentation categories to the reference list above.
 - Never describe CI coverage that does not exist: CI builds and tests every
-  supported platform, verifies published native assets, smokes GUI startup
-  on Ubuntu under Xvfb only, and runs esctest2 conformance on Linux only (not
-  gating until a baseline is captured). Wayland, macOS, and Windows GUI startup
-  are verified manually.
+  supported platform, NativeAOT-publishes the four release RIDs and verifies
+  their native assets with a windowless `--version`/`+explain-config` run,
+  smokes GUI startup on Ubuntu under Xvfb only, and runs esctest2 conformance
+  on Linux only (not gating until a baseline is captured). Wayland, macOS, and
+  Windows GUI startup are verified manually.
 
 ## Project guardrails
 

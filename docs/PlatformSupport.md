@@ -48,9 +48,12 @@ Run the host-native tests on the machine that will run the host:
 dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj -c Release
 ```
 
-The CI matrix builds Linux x64, macOS Intel, macOS arm64, and Windows x64 on
-native runners. Linux arm64 and Windows arm64 have no automated nightly or
-release-publishing validation lane; work for those candidates is local/manual.
+The CI matrix builds and tests Linux x64, macOS Intel, macOS arm64, and Windows x64
+on native runners, and NativeAOT-publishes the same four RIDs with the release
+configuration (`aot-publish`): file asserts, `dotty --version` and
+`dotty +explain-config font.size` run on each, and IL2xxx/IL3xxx warnings in
+Dotty's own code fail the job. Linux arm64 and Windows arm64 have no automated
+nightly or release-publishing validation lane; work for those candidates is local/manual.
 
 ## Desktop presentation and native verification
 
@@ -259,7 +262,8 @@ See [Native PTY](NativePty.md#pixel-sizes) and [Windows ConPTY](WindowsConPty.md
 Support promotion is staged:
 
 1. **Release tier:** Linux x64, macOS x64/arm64, and Windows x64 pass native
-   PTY tests, publish native-asset validation, extracted artifact checks, and
+   PTY tests, NativeAOT publish with native-asset validation and a windowless
+   `--version`/`+explain-config` run, extracted artifact checks, and
    checksum/manifest generation. Release CI also starts the extracted Linux
    archive under Xvfb; macOS and Windows desktop startup is verified
    manually/local.
@@ -277,7 +281,7 @@ Support promotion is staged:
 - [ ] Restore and build `Dotty.slnx` on every release runner.
 - [ ] Build and package `pty-helper` for Unix artifacts.
 - [ ] Run native PTY tests without filtering the host backend.
-- [ ] Verify `dotty`/`dotty.exe`, native Skia/Lua assets, and helper placement.
+- [ ] Verify `dotty`/`dotty.exe`, native GLFW/Skia/Lua assets, and helper placement (`scripts/dist/verify-publish.*`).
 - [ ] Smoke Linux X11 startup under Xvfb (the automated GUI coverage).
 - [ ] Manually verify Wayland, macOS, and Windows desktop startup on native sessions.
 - [ ] Extract every archive into a clean directory and run the host.

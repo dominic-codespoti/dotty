@@ -96,283 +96,18 @@ jobs:
           dotnet test --project tests/Dotty.NativePty.Tests/Dotty.NativePty.Tests.csproj \
             -c Release --no-build
 
-  # Build for Linux x64
-  build-linux:
-    name: Build Linux x64
+  # NativeAOT publish, verification and archives for every release RID: the same reusable
+  # workflow CI runs on every push and pull request, here with the exact release version.
+  build:
+    name: Build release archives
     needs: validate-release
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-          dotnet-quality: 'preview'
-
-      - name: Install GLFW build prerequisites (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.nuget/packages
-          key: nuget-linux-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            nuget-linux-
-            nuget-
-
-      - name: Restore dependencies
-        run: dotnet restore ${{ env.SOLUTION_PATH }}
-
-      - name: Build native pty-helper
-        working-directory: src/Dotty.NativePty
-        run: make
-
-      - name: Publish self-contained
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet publish ${{ env.PROJECT_PATH }} \
-            -c Release \
-            -r linux-x64 \
-            --self-contained true \
-            -p:PublishSingleFile=true \
-            -p:Version=${{ needs.validate-release.outputs.version }} \
-            -p:IncludeSourceRevisionInInformationalVersion=false \
-            -p:RequireUnixPtyHelper=true \
-            -o ./publish/linux-x64
-
-      - name: Verify Linux artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -x ./publish/linux-x64/dotty
-          test -f ./publish/linux-x64/libglfw.so.3
-          test -f ./publish/linux-x64/libSkiaSharp.so
-          test -f ./publish/linux-x64/liblua54.so
-          test -x ./publish/linux-x64/pty-helper
-          test -f ./publish/linux-x64/shell-integration/dotty.bash
-          test -f ./publish/linux-x64/shell-integration/inject/bash/dotty-rcfile.bash
-          test -f ./publish/linux-x64/shell-integration/inject/zsh/.zshenv
-          test -f ./publish/linux-x64/shell-integration/inject/xdg/fish/vendor_conf.d/dotty-shell-integration.fish
-          expected_version="${{ needs.validate-release.outputs.version }}"
-          actual_version=$(./publish/linux-x64/dotty --version)
-          if [ "$actual_version" != "$expected_version" ]; then
-            echo "Linux binary version '$actual_version' does not match requested '$expected_version'." >&2
-            exit 1
-          fi
-
-      - name: Create tarball
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION=${{ needs.validate-release.outputs.version }}
-          cd ./publish/linux-x64
-          PACKAGE_DIR="dotty-${VERSION}-linux-x64"
-          mkdir -p "../../${PACKAGE_DIR}"
-          cp -R * "../../${PACKAGE_DIR}/"
-          tar -czf "../../${PACKAGE_DIR}.tar.gz" -C ../.. "${PACKAGE_DIR}"
-          rm -rf "../../${PACKAGE_DIR}"
-          cd ../..
-          ls -la *.tar.gz
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: dotty-linux-x64
-          path: dotty-*.tar.gz
-          retention-days: 1
-
-  # Build for macOS (Intel and Apple Silicon)
-  build-macos:
-    name: Build macOS ${{ matrix.arch }}
-    needs: validate-release
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            rid: osx-x64
-            runner: macos-15-intel
-          - arch: arm64
-            rid: osx-arm64
-            runner: macos-15
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-          dotnet-quality: 'preview'
-
-      - name: Install GLFW build prerequisites (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.nuget/packages
-          key: nuget-macos-${{ matrix.arch }}-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            nuget-macos-${{ matrix.arch }}-
-            nuget-macos-
-            nuget-
-
-      - name: Restore dependencies
-        run: dotnet restore ${{ env.SOLUTION_PATH }}
-
-      - name: Build native pty-helper
-        working-directory: src/Dotty.NativePty
-        run: make
-
-      - name: Publish self-contained
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet publish ${{ env.PROJECT_PATH }} \
-            -c Release \
-            -r ${{ matrix.rid }} \
-            --self-contained true \
-            -p:PublishSingleFile=true \
-            -p:Version=${{ needs.validate-release.outputs.version }} \
-            -p:IncludeSourceRevisionInInformationalVersion=false \
-            -p:RequireUnixPtyHelper=true \
-            -o ./publish/${{ matrix.rid }}
-
-      - name: Verify macOS artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -x ./publish/${{ matrix.rid }}/dotty
-          test -f ./publish/${{ matrix.rid }}/libglfw.3.dylib
-          test -f ./publish/${{ matrix.rid }}/libSkiaSharp.dylib
-          test -f ./publish/${{ matrix.rid }}/liblua54.dylib
-          test -x ./publish/${{ matrix.rid }}/pty-helper
-          test -f ./publish/${{ matrix.rid }}/shell-integration/dotty.bash
-          test -f ./publish/${{ matrix.rid }}/shell-integration/inject/bash/dotty-rcfile.bash
-          test -f ./publish/${{ matrix.rid }}/shell-integration/inject/zsh/.zshenv
-          test -f ./publish/${{ matrix.rid }}/shell-integration/inject/xdg/fish/vendor_conf.d/dotty-shell-integration.fish
-          expected_version="${{ needs.validate-release.outputs.version }}"
-          actual_version=$(./publish/${{ matrix.rid }}/dotty --version)
-          if [ "$actual_version" != "$expected_version" ]; then
-            echo "macOS binary version '$actual_version' does not match requested '$expected_version'." >&2
-            exit 1
-          fi
-
-      - name: Create tarball
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION=${{ needs.validate-release.outputs.version }}
-          cd ./publish/${{ matrix.rid }}
-          PACKAGE_DIR="dotty-${VERSION}-${{ matrix.rid }}"
-          mkdir -p "../../${PACKAGE_DIR}"
-          cp -R * "../../${PACKAGE_DIR}/"
-          tar -czf "../../${PACKAGE_DIR}.tar.gz" -C ../.. "${PACKAGE_DIR}"
-          rm -rf "../../${PACKAGE_DIR}"
-          cd ../..
-          ls -la *.tar.gz
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: dotty-${{ matrix.rid }}
-          path: dotty-*.tar.gz
-          retention-days: 1
-
-  # Build for Windows x64
-  build-windows:
-    name: Build Windows x64
-    needs: validate-release
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET ${{ env.DOTNET_VERSION }}
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-          dotnet-quality: 'preview'
-
-      - name: Install GLFW build prerequisites (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
-
-      - name: Cache NuGet packages
-        uses: actions/cache@v6
-        with:
-          path: ~/.nuget/packages
-          key: nuget-windows-${{ hashFiles('**/*.csproj') }}
-          restore-keys: |
-            nuget-windows-
-            nuget-
-
-      - name: Restore dependencies
-        run: dotnet restore ${{ env.SOLUTION_PATH }}
-
-      - name: Publish self-contained
-        run: |
-          dotnet publish ${{ env.PROJECT_PATH }} `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:Version=${{ needs.validate-release.outputs.version }} `
-            -p:IncludeSourceRevisionInInformationalVersion=false `
-            -o .\publish\win-x64
-      - name: Verify Windows artifact
-        shell: pwsh
-        run: |
-          if (!(Test-Path "publish\win-x64\dotty.exe")) {
-            throw "Published executable dotty.exe is missing."
-          }
-          if (!(Test-Path "publish\win-x64\libSkiaSharp.dll")) {
-            throw "Windows SkiaSharp native asset is missing."
-          }
-          if (!(Test-Path "publish\win-x64\glfw3.dll")) {
-            throw "Windows GLFW native asset is missing."
-          }
-          foreach ($asset in @("dotty.bash", "Dotty.ps1", "inject\bash\dotty-rcfile.bash", "inject\zsh\.zshenv")) {
-            if (!(Test-Path -LiteralPath "publish\win-x64\shell-integration\$asset")) {
-              throw "Shell integration asset '$asset' is missing from the Windows publish output."
-            }
-          }
-          $expectedVersion = "${{ needs.validate-release.outputs.version }}"
-          $actualVersion = (& "publish\win-x64\dotty.exe" --version).Trim()
-          if ($actualVersion -ne $expectedVersion) {
-            throw "Windows binary version '$actualVersion' does not match requested '$expectedVersion'."
-          }
-
-      - name: Create zip archive
-        run: |
-          $version = "${{ needs.validate-release.outputs.version }}"
-          Compress-Archive -Path "publish\win-x64\*" -DestinationPath "dotty-$version-win-x64.zip" -Force
-          Get-ChildItem *.zip
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: dotty-win-x64
-          path: dotty-*.zip
-          retention-days: 1
+    uses: ./.github/workflows/aot-publish.yml
+    with:
+      version: ${{ needs.validate-release.outputs.version }}
 
   smoke-release-assets:
     name: Smoke release archives
-    needs: [validate-release, build-linux, build-macos, build-windows]
+    needs: [validate-release, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download release artifacts
@@ -393,6 +128,7 @@ jobs:
             printf '%s\n' "$listing" | grep -Eq '/dotty$'
             printf '%s\n' "$listing" | grep -Eq '/libglfw(\.so\.3|\.3\.dylib)$'
             printf '%s\n' "$listing" | grep -Eq '/libSkiaSharp\.(so|dylib)$'
+            printf '%s\n' "$listing" | grep -Eq '/liblua54\.(so|dylib)$'
             printf '%s\n' "$listing" | grep -Eq '/pty-helper$'
             printf '%s\n' "$listing" | grep -Eq '/shell-integration/dotty\.bash$'
             printf '%s\n' "$listing" | grep -Eq '/shell-integration/inject/bash/dotty-rcfile\.bash$'
@@ -405,13 +141,14 @@ jobs:
             printf '%s\n' "$listing" | grep -Eq '(^|/)dotty\.exe$'
             printf '%s\n' "$listing" | grep -Eq '(^|/)glfw3\.dll$'
             printf '%s\n' "$listing" | grep -Eq '(^|/)libSkiaSharp\.dll$'
+            printf '%s\n' "$listing" | grep -Eq '(^|/)lua54\.dll$'
             printf '%s\n' "$listing" | grep -Eq '(^|[/\\])shell-integration[/\\]Dotty\.ps1$'
             printf '%s\n' "$listing" | grep -Eq '(^|[/\\])shell-integration[/\\]inject[/\\]bash[/\\]dotty-rcfile\.bash$'
           done
   # Create GitHub Release
   create-release:
     name: Create Release
-    needs: [validate-release, build-linux, build-macos, build-windows, smoke-release-assets]
+    needs: [validate-release, build, smoke-release-assets]
     runs-on: ubuntu-latest
     permissions:
       contents: write

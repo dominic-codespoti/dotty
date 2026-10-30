@@ -13,7 +13,7 @@ public sealed class FrameTimingsTests
     [Fact]
     public void EmptyMetricSummarisesToZero()
     {
-        Assert.Equal(default, Create().Summarize(FrameTimingMetric.Compose));
+        Assert.Equal(default(FrameTimingSummary), Create().Summarize(FrameTimingMetric.Compose));
     }
 
     [Theory]

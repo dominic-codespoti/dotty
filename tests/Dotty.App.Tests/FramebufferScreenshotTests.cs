@@ -30,7 +30,7 @@ public sealed class FramebufferScreenshotTests
 
         // Top-down: first row is the readback's last row.
         Assert.Equal(new byte[] { 255, 0, 0, 255 }, rgba[0..4]);
-        Assert.Equal(0, rgba[7]);
+        Assert.Equal((byte)0, rgba[7]);
         Assert.Equal(new byte[] { 0, 0, 255, 255 }, rgba[8..12]);
         // 128/128 premultiplied is straight white at alpha 128.
         Assert.Equal(new byte[] { 255, 255, 255, 128 }, rgba[12..16]);

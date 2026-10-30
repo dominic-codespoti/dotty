@@ -14,8 +14,8 @@ internal static unsafe class GlDebugOutput
 {
     internal const string EnvironmentVariable = "DOTTY_GL_DEBUG";
 
-    private const uint GlDebugOutputSynchronous = 0x8242;
-    private const uint GlDebugOutput = 0x92E0;
+    private const uint DebugOutputSynchronousCap = 0x8242; // GL_DEBUG_OUTPUT_SYNCHRONOUS
+    private const uint DebugOutputCap = 0x92E0;            // GL_DEBUG_OUTPUT
     private const uint GlDebugSeverityNotification = 0x826B;
     private const int MaxErrorsPerCheck = 16;
 
@@ -38,9 +38,9 @@ internal static unsafe class GlDebugOutput
         if (entry == 0)
             return false;
 
-        gl.Enable((EnableCap)GlDebugOutput);
+        gl.Enable((EnableCap)DebugOutputCap);
         // Synchronous: the callback runs inside the offending call, so a stack trace from a debugger points at it.
-        gl.Enable((EnableCap)GlDebugOutputSynchronous);
+        gl.Enable((EnableCap)DebugOutputSynchronousCap);
         var setCallback = (delegate* unmanaged<delegate* unmanaged<uint, uint, uint, uint, int, byte*, void*, void>, void*, void>)entry;
         setCallback(&OnMessage, null);
         return true;

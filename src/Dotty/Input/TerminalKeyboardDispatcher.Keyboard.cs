@@ -24,8 +24,7 @@ public sealed partial class TerminalKeyboardDispatcher
             if (_lastPhysicalPressConsumed || kittyFlags == 0)
                 return;
 
-            _lastPhysicalPressDeferred = (kittyFlags & 16) != 0 && !_host.Ctrl && !_host.Alt &&
-                (primaryCodepoint > 0 || GetBaseLayoutCodepoint(key) != 0 || key == Key.Unknown);
+            _lastPhysicalPressDeferred = DefersKittyKeyEvent(key, primaryCodepoint, kittyFlags);
             if (_lastPhysicalPressDeferred)
             {
                 _physicalKeyStates[_currentPhysicalKeyIndex].DeferredPhase = TerminalKeyEventType.Press;
@@ -135,8 +134,7 @@ public sealed partial class TerminalKeyboardDispatcher
 
             if (correlated && !associatedText.IsEmpty && _lastPhysicalPressEncoded && (kittyFlags & 16) == 0)
                 return;
-            if ((kittyFlags & 16) != 0 && associatedText.IsEmpty && correlated && !_host.Ctrl && !_host.Alt &&
-                (primaryCodepoint > 0 || GetBaseLayoutCodepoint(key) != 0 || key == Key.Unknown))
+            if (associatedText.IsEmpty && correlated && DefersKittyKeyEvent(key, primaryCodepoint, kittyFlags))
             {
                 _lastPhysicalPressDeferred = true;
                 _physicalKeyStates[_currentPhysicalKeyIndex].DeferredPhase = TerminalKeyEventType.Repeat;
@@ -237,15 +235,21 @@ public sealed partial class TerminalKeyboardDispatcher
     {
         var (terminalKey, modifiers) = SilkKeyMapper.Map(key, _host.Ctrl, _host.Shift, _host.Alt, _host.Super,
             _host.KeypadNavigation && SilkKeyMapper.IsNumLockKeypadKey(key));
-        GetAlternateCodepoints(key, primaryCodepoint, associatedText,
-            out int shiftedCodepoint, out int baseCodepoint);
         TerminalKeyModifiers eventModifiers = modifiers | _host.LockModifiers;
         if (eventType == TerminalKeyEventType.Press && _currentPhysicalKeyIndex >= 0)
             eventModifiers = _physicalKeyStates[_currentPhysicalKeyIndex].PressModifiers;
+        GetAlternateCodepoints(key, primaryCodepoint, associatedText, eventModifiers,
+            out int shiftedCodepoint, out int baseCodepoint);
+        // The character of a Ctrl, Meta or Super chord is not text the key produced; it only supplies the
+        // shifted key, so it is not reported as associated text.
+        ReadOnlySpan<char> reportedText =
+            (eventModifiers & (TerminalKeyModifiers.Control | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Meta)) != 0
+                ? ReadOnlySpan<char>.Empty
+                : associatedText;
 
         var adapter = tab.Session.Adapter;
         int length = _inputEncoder.EncodeKeyEvent(terminalKey, eventModifiers, primaryCodepoint, eventType,
-            associatedText, _keyEventScratch, kittyFlags, adapter.KeypadApplicationMode,
+            reportedText, _keyEventScratch, kittyFlags, adapter.KeypadApplicationMode,
             adapter.ApplicationCursorKeysEnabled, shiftedCodepoint, baseCodepoint,
             adapter.BackarrowSendsBackspace);
         if (length == 0)
@@ -254,16 +258,36 @@ public sealed partial class TerminalKeyboardDispatcher
         return true;
     }
 
-    private void GetAlternateCodepoints(Key key, int primaryCodepoint, ReadOnlySpan<char> associatedText,
-        out int shifted, out int baseLayout)
+    // A Kitty key event waits for its character when the character is reported (flag 16, plain or shifted keys)
+    // or supplies the shifted alternate key (flag 4 with Shift, K6(d)) that the key name cannot give: letters
+    // shift by case, other keys need the layout's character (Alt+Shift+, = <).
+    private bool DefersKittyKeyEvent(Key key, int primaryCodepoint, int kittyFlags) =>
+        ((kittyFlags & 16) != 0 && !_host.Ctrl && !_host.Alt &&
+            (primaryCodepoint > 0 || GetBaseLayoutCodepoint(key) != 0 || key == Key.Unknown)) ||
+        ((kittyFlags & 4) != 0 && _host.Shift && !_host.Ctrl && primaryCodepoint > 0 &&
+            ShiftedLetter(primaryCodepoint) == 0);
+
+    // K6(d) (kitty spec "Key codes"): with Shift in the modifiers the shifted key is the delivered character, or
+    // for a cased letter its upper case when no character arrived (Ctrl chords deliver none).
+    private static void GetAlternateCodepoints(Key key, int primaryCodepoint, ReadOnlySpan<char> associatedText,
+        TerminalKeyModifiers modifiers, out int shifted, out int baseLayout)
     {
         baseLayout = GetBaseLayoutCodepoint(key);
         if (primaryCodepoint <= 0 || baseLayout == 0 || baseLayout == primaryCodepoint)
             baseLayout = 0;
 
         shifted = 0;
-        if (_host.Shift && !_host.Ctrl && !_host.Alt && !_host.Super)
-            shifted = GetSingleCodepoint(associatedText);
+        if ((modifiers & TerminalKeyModifiers.Shift) == 0)
+            return;
+        shifted = GetSingleCodepoint(associatedText);
+        if (shifted == 0 && primaryCodepoint > 0)
+            shifted = ShiftedLetter(primaryCodepoint);
+    }
+
+    private static int ShiftedLetter(int codepoint)
+    {
+        int upper = ToUpperScalar(codepoint);
+        return upper != codepoint ? upper : 0;
     }
 
     private static int GetSingleCodepoint(ReadOnlySpan<char> text)

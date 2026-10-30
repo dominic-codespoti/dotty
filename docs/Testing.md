@@ -247,6 +247,8 @@ The Python unit tests for the esctest scripts run with `python3 -m unittest disc
 
 `LegacyKeyEncodingTableTests` is the legacy (no Kitty flags) encoder table: more than 150 rows of key × {none, Shift, Alt, Ctrl, Ctrl+Shift, Alt+Shift, Ctrl+Alt} × {DECCKM, DECKPAM, DECBKM}, built from the xterm and kitty reference tables; it doubles as the encoding reference cited by [Keyboard Protocol](KeyboardProtocol.md#compatibility-behavior).
 
+`KittyKeyboardSpecTests` is the Kitty keyboard conformance table: each row cites the rule of the published specification it asserts (Enter/Tab/Backspace legacy bytes and release events, modifier-key events only with flag 8, lock bits on text keys, the shifted alternate key, the functional key forms), plus golden byte sessions for `CSI > 1/3/11/31 u` replayed through the harness with Num Lock on.
+
 ## Desktop smoke
 
 Linux X11:

@@ -30,6 +30,7 @@ public partial class TerminalAdapter
         {
             case 1: return ModeFlag(ApplicationCursorKeysEnabled); // DECCKM
             case 2: return ModePermanentlySet; // DECANM: there is no VT52 mode
+            case 5: return ModeFlag(ReverseVideo); // DECSCNM
             case 6: return ModeFlag(_buffer.OriginMode); // DECOM
             case 7: return ModeFlag(_buffer.AutoWrap); // DECAWM
             case 25: return ModeFlag(_buffer.CursorVisible); // DECTCEM
@@ -54,7 +55,6 @@ public partial class TerminalAdapter
             // Recognized but ignored (SET/RESET are accepted and have no effect).
             case 3: // DECCOLM
             case 4: // DECSCLM
-            case 5: // DECSCNM
             case 8: // DECARM
             case 9: // X10 mouse: deliberately not routed (no press-only encoding)
             case 12: // AT&T 610 blink

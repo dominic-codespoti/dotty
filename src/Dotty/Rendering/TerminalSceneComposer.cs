@@ -6,6 +6,7 @@ using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Panes;
+using Dotty.Runtime.Rendering;
 using Dotty.Runtime.Tabs;
 using Dotty.Runtime.Selection;
 using Dotty.Runtime.Scrollbar;
@@ -40,6 +41,11 @@ public sealed class TerminalSceneFrame
     public HashSet<int> DirtyAtlasRows { get; private set; } = null!;
     public ChromeQuadInstance[] ChromeQuads { get; private set; } = null!;
     public int ChromeQuadCount { get; private set; }
+    /// <summary>
+    /// Chrome quads <c>[0, UnderlayChromeCount)</c> are drawn below the cell backgrounds (pane backgrounds, pane
+    /// dividers and the active-pane ring); the rest of the base chrome is drawn between the background and glyph passes.
+    /// </summary>
+    public int UnderlayChromeCount { get; private set; }
     public int ScrollbarChromeStart { get; private set; }
     public int MenuInstanceStart { get; private set; }
     public int MenuChromeStart { get; private set; }
@@ -60,12 +66,13 @@ public sealed class TerminalSceneFrame
         bool isIncomplete = false,
         SKRect imeCaretBounds = default,
         bool imeCaretBoundsValid = false,
-        ImageDrawList? imageDraws = null)
+        ImageDrawList? imageDraws = null,
+        int underlayChromeCount = 0)
     {
         ImageDraws = imageDraws ?? new ImageDrawList();
         Update(instances, instanceCount, dirtyAtlasRows, chromeQuads, chromeQuadCount,
             menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete,
-            imeCaretBounds, imeCaretBoundsValid);
+            imeCaretBounds, imeCaretBoundsValid, underlayChromeCount);
     }
 
     internal void Update(
@@ -79,13 +86,15 @@ public sealed class TerminalSceneFrame
         int scrollbarChromeStart,
         bool isIncomplete,
         SKRect imeCaretBounds,
-        bool imeCaretBoundsValid)
+        bool imeCaretBoundsValid,
+        int underlayChromeCount)
     {
         Instances = instances;
         InstanceCount = instanceCount;
         DirtyAtlasRows = dirtyAtlasRows;
         ChromeQuads = chromeQuads;
         ChromeQuadCount = chromeQuadCount;
+        UnderlayChromeCount = underlayChromeCount;
         MenuInstanceStart = menuInstanceStart;
         MenuChromeStart = menuChromeStart;
         ScrollbarChromeStart = scrollbarChromeStart;
@@ -183,6 +192,15 @@ public sealed class TerminalSceneComposer : IDisposable
     /// <summary>Scratch output of <see cref="PlaceholderResolver"/>: filled and drained within one leaf, never holds pixels across frames.</summary>
     private readonly List<KittyRenderPlacement> _placeholderQuads = new();
 
+    /// <summary>Per-cell "has an instance" scratch for the selection overlay; grows, never shrinks.</summary>
+    private bool[] _selectionCoverage = Array.Empty<bool>();
+
+    /// <summary>A leaf's effective default colours for one frame: OSC 10/11 overrides, then the DECSCNM swap.</summary>
+    private readonly record struct LeafColors(SgrColorArgb Foreground, SgrColorArgb Background);
+
+    /// <summary>Per-leaf colours resolved once per frame (index = leaf index); grows, never shrinks.</summary>
+    private LeafColors[] _leafColors = Array.Empty<LeafColors>();
+
     /// <summary>
     /// Test seam: invoked for every captured leaf snapshot (no buffer lock held) before its rows and images are
     /// composed, so tests can attach synthetic graphics (<c>BeginGraphics</c>/<c>AttachGraphics</c>).
@@ -273,7 +291,42 @@ public sealed class TerminalSceneComposer : IDisposable
 
         float terminalWidth = Math.Max(10f, framebufferWidth - padX);
         float terminalHeight = Math.Max(10f, framebufferHeight - topOffset - padY);
-        activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness: 2f);
+        var panes = UserConfigService.Current.Panes;
+        float dividerThickness = PaneDecorationBuilder.ResolveThickness(panes.DividerThickness, scale);
+        activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness);
+
+        // Underlay chrome (drawn below the cell backgrounds): pane backgrounds that differ from the window
+        // background (OSC 11, DECSCNM), then dividers, then the active-pane ring.
+        if (_leafColors.Length < leaves.Count)
+            Array.Resize(ref _leafColors, Math.Max(leaves.Count, Math.Max(2, _leafColors.Length * 2)));
+        EnsureChromeScratchCapacity(leaves.Count + PaneDecorationBuilder.MaxQuadCount(leaves.Count));
+        var themeBackground = new SgrColorArgb(theme.Background);
+        float gridCellWidth = cellWidth * scale;
+        float gridCellHeight = cellHeight * scale;
+        for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
+        {
+            var leaf = leaves[leafIndex];
+            var colors = ResolveLeafColors(leaf.Session.Adapter, themeForeground, themeBackground);
+            _leafColors[leafIndex] = colors;
+            if ((colors.Background.Argb & 0x00FFFFFFu) != (themeBackground.Argb & 0x00FFFFFFu))
+                _chromeScratch[chromeQuadCount++] = MakePaneBackgroundQuad(
+                    leaf, colors.Background, padLeft, padTop + topOffset, gridCellWidth, gridCellHeight);
+        }
+
+        var chromePalette = ChromeStyleUtils.ResolvePalette(theme);
+        chromeQuadCount += PaneDecorationBuilder.Build(
+            activeTab.PaneTree.Root,
+            activePane.Bounds,
+            padLeft,
+            padTop + topOffset,
+            terminalWidth,
+            terminalHeight,
+            dividerThickness,
+            panes.ActiveBorder,
+            chromePalette.Border,
+            chromePalette.Accent,
+            _chromeScratch.AsSpan(chromeQuadCount));
+        int underlayChromeCount = chromeQuadCount;
 
 
         for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
@@ -323,11 +376,8 @@ public sealed class TerminalSceneComposer : IDisposable
                 int paneRows = leafSnapshot.Rows;
                 int paneColumns = leafSnapshot.Columns;
                 EnsureScratchCapacity(instanceCount + checked(paneRows * paneColumns * 2 + 1024));
-                var adapter = leaf.Session.Adapter;
-                var leafForeground = adapter.DefaultForegroundOverrideArgb is uint foregroundOverride
-                    ? new SgrColorArgb(foregroundOverride) : themeForeground;
-                var leafBackground = adapter.DefaultBackgroundOverrideArgb is uint backgroundOverride
-                    ? new SgrColorArgb(backgroundOverride) : new SgrColorArgb(theme.Background);
+                var leafForeground = _leafColors[leafIndex].Foreground;
+                var leafBackground = _leafColors[leafIndex].Background;
                 int written = AppendCachedLeafRows(
                     leafIndex, leaf, leafSnapshot, _frameScratch.AsSpan(startInstanceIndex),
                     paneRows, paneColumns, leafForeground, leafBackground);
@@ -381,71 +431,26 @@ public sealed class TerminalSceneComposer : IDisposable
                 if (leaf.Selection.HasSelection)
                 {
                     byte selectionAlpha = (byte)((selectionColor.A != 0 && selectionColor.A != 255) ? selectionColor.A : 128);
-
-                    for (int i = 0; i < written; i++)
-                    {
-                        ref var instance = ref _frameScratch[startInstanceIndex + i];
-                        int localColumn = instance.Col - startColumnOffset;
-                        int viewRow = instance.Row - startRowOffset;
-                        int logicalRow = viewRow - scrollOffset;
-                        if (leaf.Selection.IsCellSelected(logicalRow, localColumn))
-                        {
-                            instance.BgR = selectionColor.R;
-                            instance.BgG = selectionColor.G;
-                            instance.BgB = selectionColor.B;
-                            instance.BgA = selectionAlpha;
-                        }
-                    }
-
                     var range = leaf.Selection.GetNormalizedRange();
-                    int firstLogicalRow = Math.Max(range.StartRow, -scrollOffset);
-                    int lastLogicalRow = Math.Min(range.EndRow, paneRows - 1 - scrollOffset);
-                    int estimatedRows = Math.Max(0, lastLogicalRow - firstLogicalRow + 1);
-                    EnsureScratchCapacity(instanceCount + checked(estimatedRows * paneColumns));
-                    for (int logicalRow = firstLogicalRow; logicalRow <= lastLogicalRow; logicalRow++)
-                    {
-                        int viewRow = logicalRow + scrollOffset;
-                        int minColumn = logicalRow == range.StartRow ? range.StartColumn : 0;
-                        int maxColumn = logicalRow == range.EndRow ? range.EndColumn : paneColumns - 1;
-                        minColumn = Math.Max(0, minColumn);
-                        maxColumn = Math.Min(paneColumns - 1, maxColumn);
-                        for (int column = minColumn; column <= maxColumn; column++)
-                        {
-                            if (!leaf.Selection.IsCellSelected(logicalRow, column))
-                                continue;
-
-                            int targetColumn = column + startColumnOffset;
-                            int targetRow = viewRow + startRowOffset;
-                            bool covered = false;
-                            for (int i = startInstanceIndex; i < instanceCount; i++)
-                            {
-                                if (_frameScratch[i].Col == targetColumn && _frameScratch[i].Row == targetRow)
-                                {
-                                    covered = true;
-                                    break;
-                                }
-                            }
-
-                            if (!covered)
-                            {
-                                EnsureScratchCapacity(instanceCount + 1);
-                                _frameScratch[instanceCount++] = new CellInstance
-                                {
-                                    Col = (ushort)targetColumn,
-                                    Row = (ushort)targetRow,
-                                    FgR = themeForeground.R,
-                                    FgG = themeForeground.G,
-                                    FgB = themeForeground.B,
-                                    FgA = 255,
-                                    BgR = selectionColor.R,
-                                    BgG = selectionColor.G,
-                                    BgB = selectionColor.B,
-                                    BgA = selectionAlpha,
-                                    Flags = 0
-                                };
-                            }
-                        }
-                    }
+                    bool blockSelection = leaf.Selection.Mode == SelectionMode.Block;
+                    int coverageLength = SelectionQuadBuilder.CoverageLength(range, paneRows, paneColumns, scrollOffset);
+                    EnsureScratchCapacity(instanceCount + coverageLength);
+                    if (_selectionCoverage.Length < coverageLength)
+                        _selectionCoverage = new bool[Math.Max(coverageLength, _selectionCoverage.Length * 2)];
+                    instanceCount += SelectionQuadBuilder.Apply(
+                        _frameScratch.AsSpan(startInstanceIndex),
+                        written,
+                        range,
+                        blockSelection,
+                        paneRows,
+                        paneColumns,
+                        scrollOffset,
+                        startColumnOffset,
+                        startRowOffset,
+                        selectionColor,
+                        selectionAlpha,
+                        leafForeground,
+                        _selectionCoverage);
                 }
 
                 if (cursorVisible && scrollOffset == 0 && ReferenceEquals(leaf, activePane)
@@ -737,16 +742,61 @@ public sealed class TerminalSceneComposer : IDisposable
             _cachedFrame = new TerminalSceneFrame(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, _imageDraws);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, _imageDraws,
+                underlayChromeCount);
         }
         else
         {
             _cachedFrame.Update(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, underlayChromeCount);
         }
         return _cachedFrame;
+    }
+
+    private static LeafColors ResolveLeafColors(TerminalAdapter adapter, SgrColorArgb themeForeground, SgrColorArgb themeBackground)
+    {
+        var foreground = adapter.DefaultForegroundOverrideArgb is uint foregroundOverride
+            ? new SgrColorArgb(foregroundOverride) : themeForeground;
+        var background = adapter.DefaultBackgroundOverrideArgb is uint backgroundOverride
+            ? new SgrColorArgb(backgroundOverride) : themeBackground;
+        return adapter.ReverseVideo ? new LeafColors(background, foreground) : new LeafColors(foreground, background);
+    }
+
+    /// <summary>
+    /// Opaque quad painting a pane's effective default background below its cells (default-background cells have
+    /// no background of their own). Covers the pane rect and its cell grid, which snaps to whole cells and can start
+    /// up to half a cell before the rect; the window padding keeps the theme background.
+    /// </summary>
+    private static ChromeQuadInstance MakePaneBackgroundQuad(
+        LeafPane leaf, SgrColorArgb color, float originX, float originY, float cellWidth, float cellHeight)
+    {
+        var bounds = leaf.Bounds;
+        float gridLeft = originX + (int)Math.Round(bounds.X / cellWidth) * cellWidth;
+        float gridTop = originY + (int)Math.Round(bounds.Y / cellHeight) * cellHeight;
+        float left = MathF.Floor(Math.Min(originX + bounds.X, gridLeft) + 0.5f);
+        float top = MathF.Floor(Math.Min(originY + bounds.Y, gridTop) + 0.5f);
+        float right = MathF.Floor(Math.Max(originX + bounds.Right, gridLeft + leaf.Columns * cellWidth) + 0.5f);
+        float bottom = MathF.Floor(Math.Max(originY + bounds.Bottom, gridTop + leaf.Rows * cellHeight) + 0.5f);
+        float r = color.R / 255f;
+        float g = color.G / 255f;
+        float b = color.B / 255f;
+        return new ChromeQuadInstance
+        {
+            X = left,
+            Y = top,
+            W = Math.Max(0f, right - left),
+            H = Math.Max(0f, bottom - top),
+            TopR = r,
+            TopG = g,
+            TopB = b,
+            TopA = 1f,
+            BottomR = r,
+            BottomG = g,
+            BottomB = b,
+            BottomA = 1f
+        };
     }
     private static ChromeQuadInstance MakeImeCaretQuad(SKRect rect, SgrColorArgb color)
         => new()

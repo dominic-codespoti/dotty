@@ -10,7 +10,7 @@ namespace Dotty.App.SkiaTests;
 
 /// <summary>
 /// Pixel proofs of the image layer order inside <see cref="SilkTerminalRenderer.Render"/>:
-/// Clear, BelowBackground, cell backgrounds, BelowText, base chrome, glyphs, AboveText, scrollbar chrome.
+/// Clear, underlay chrome, BelowBackground, cell backgrounds, BelowText, base chrome, glyphs, AboveText, scrollbar chrome.
 /// Each proof renders into a hidden GL 3.3 window (skipped when none is available) and probes opaque pixels, so no
 /// blending tolerance is involved. Cell size is 40x40 and every image/quad lies inside the first cell(s).
 /// </summary>
@@ -238,6 +238,45 @@ public sealed class SilkTerminalRendererImageLayerTests
         Assert.Equal(Blue, At(frame, host, 16, 16));     // image over base chrome
         Assert.Equal(Magenta, At(frame, host, 30, 30));  // scrollbar chrome over the image
         Assert.Equal(Blue, At(frame, host, 4, 4));       // image over the red background
+    }
+
+    [Fact]
+    public void UnderlayChromeIsBelowEverythingAndBaseChromeKeepsItsLayer()
+    {
+        using ImageGlHost? host = TryHost();
+        if (host is null) return;
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 16f, initialSize: 128);
+        using var renderer = new SilkTerminalRenderer(host.Gl, atlas);
+        using ImagePixels blue = ImageTestData.Rgba(1, 1, (0, 0, 255, 255));
+        ChromeQuadInstance underlay = Chrome(0, 0, 80, 0, 1, 0); // index 0: underlay (green), 80x80
+        ChromeQuadInstance[] chrome =
+        {
+            underlay,
+            Chrome(10, 10, 12, 1, 1, 0),   // index 1: base chrome (yellow), drawn from the offset range
+        };
+
+        renderer.Render(
+            new[] { BackgroundCell(0, 0, 255, 0, 0) },
+            chrome,
+            atlas.Width,
+            atlas.Height,
+            host.Width,
+            host.Height,
+            CellW,
+            CellH,
+            underlineY: 0.85f,
+            strikeY: 0.7f,
+            lineHalf: 0.04f,
+            clearColor: SgrColorArgb.FromRgb(0, 0, 0),
+            frameCaptured: true,
+            images: CellImage(blue, ImageLayer.BelowBackground, width: 2 * CellW),
+            underlayChromeCount: 1);
+
+        byte[] frame = ReadFramebuffer(host);
+        Assert.Equal(Yellow, At(frame, host, 16, 16));  // base chrome over the cell background
+        Assert.Equal(Red, At(frame, host, 30, 30));     // cell background over the underlay and the image
+        Assert.Equal(Blue, At(frame, host, 60, 20));    // below-background image over the underlay
+        Assert.Equal(Green, At(frame, host, 60, 60));   // underlay over the clear colour
     }
 
     [Fact]

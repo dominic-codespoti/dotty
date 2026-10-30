@@ -133,6 +133,7 @@ Note: `CSI 3 J` is handled separately and maps to `OnClearScrollback()` rather t
 | `CSI ? 1048 h/l` | `OnSaveCursor()` / `OnRestoreCursor()` | Save/restore cursor; see the same section. |
 | `CSI ? 2027 h/l` | none | Accepted and ignored: grapheme clustering is always on (see [Grapheme clusters](#combining-cap-grapheme-clusters-and-the-grapheme-store)). |
 | `CSI ? 2033 h/l` | `OnSetVisibilityReports(enabled)` | Implemented: see [Visibility reports](#visibility-reports-mode-2033-and-csi--998-n). |
+| `CSI ? 5 h/l` (DECSCNM) | `OnSetReverseVideo(enabled)` | Implemented: `TerminalAdapter.ReverseVideo`; the renderer swaps the pane's effective default foreground and background (after OSC 10/11 overrides). A change repaints like a palette change. Kept by DECSTR, cleared by RIS. |
 
 Mode 9 (X10 mouse) is deliberately **not** routed because the input encoder has no press-only X10 encoding.
 
@@ -150,6 +151,7 @@ DECSTR (`CSI ! p`, `TerminalAdapter.OnSoftReset`) and RIS (`ESC c`, `TerminalAda
 | DECCKM, DECKPAM/DECNKM (66), modifyOtherKeys level | reset | reset |
 | ANSI palette (OSC 4 overrides) | reset | reset |
 | OSC 10/11 default fg/bg overrides | kept | reset |
+| Reverse video (DECSCNM, mode 5) | kept | reset |
 | Screen contents, scrolled-line count, cursor position | kept | cells cleared, count zeroed, cursor homed |
 | Alternate screen | kept | left (main screen restored, both screens cleared) |
 | Tab stops | kept | back to the defaults |
@@ -229,12 +231,12 @@ DECRQM (`CSI ? Pd $ p`, `CSI Pd $ p`) answers `CSI ? Pd ; Ps $ y` / `CSI Pd ; Ps
 
 | Private mode | Reply |
 |---|---|
-| 1 (DECCKM), 6 (DECOM), 7 (DECAWM), 25 (DECTCEM), 66 (DECNKM), 67 (DECBKM) | 1 or 2, live state |
+| 1 (DECCKM), 5 (DECSCNM), 6 (DECOM), 7 (DECAWM), 25 (DECTCEM), 66 (DECNKM), 67 (DECBKM) | 1 or 2, live state |
 | 47, 1047, 1049 (alternate screen) | 1 or 2, live state |
 | 1000, 1002, 1003 (mouse tracking), 1005, 1006, 1015 (mouse encoding), 1004 (focus) | 1 or 2, live state |
 | 2004 (bracketed paste), 2026 (synchronized update), 2033 (visibility reports) | 1 or 2, live state |
 | 2 (DECANM; there is no VT52 mode), 2027 (grapheme clustering) | 3 |
-| 3, 4, 5, 8, 9, 12, 18, 19, 40, 42, 45, 69, 80, 95, 1007, 1016, 1048 | 4: recognized and ignored (or, for 1048, an action) |
+| 3, 4, 8, 9, 12, 18, 19, 40, 42, 45, 69, 80, 95, 1007, 1016, 1048 | 4: recognized and ignored (or, for 1048, an action) |
 | 11, 16, 53, 59, 60, 61, 64, 68, 73, 81 | 4: xterm "recognized, unimplemented" modes |
 | anything else | 0 |
 
@@ -495,13 +497,13 @@ The parser supports OSC sequences for:
 | 7 | Working directory (shell integration) | `OnOperatingSystemCommand(7, uri)`; strict acceptance rules in [OSC 7](#osc-7-working-directory). |
 | 8 | Hyperlink (OSC 8) | `OnOperatingSystemCommand(8, params)`; validated at ingest, see [OSC 8](#osc-8-hyperlinks) |
 | 9 | iTerm2 notifications | (future) |
-| 10-12 | Query dynamic foreground/background/cursor colors | OSC 10/11 queries return rgb:RRRR/GGGG/BBBB ESC backslash; sets store per-session foreground/background overrides without replying. OSC 12 queries reply in the same format; set/reset are accepted but cursor color is not rendered. |
+| 10-12 | Query dynamic foreground/background/cursor colors | OSC 10/11 queries return rgb:RRRR/GGGG/BBBB ESC backslash; sets store per-session foreground/background overrides without replying, and the renderer paints them for that pane (see [Rendering](Rendering.md#default-colours-osc-1011-and-reverse-video)). OSC 12 queries reply in the same format; set/reset are accepted but cursor color is not rendered. |
 | 13-19 | Set foreground/background/highlight colors | (future) |
 | 52 | Manipulate selection data (clipboard write and read) | `OnOperatingSystemCommand(52, ...)`; see [OSC 52](#osc-52-clipboard) |
 | 777 | rxvt extension notifications | (future) |
 | 1337 | PromptMark (shell integration) | `OnPromptMark(level)` — tracks shell prompt start/end via `OSC 1337 ; A` / `OSC 1337 ; B` |
 | 104 | Reset palette entries | No payload resets all OSC 4 overrides; index ; ... resets listed indices, ignoring invalid and empty tokens. |
-| 110/111 | Reset dynamic foreground/background | Clear the session's OSC 10/11 override; no reply. |
+| 110/111 | Reset dynamic foreground/background | Clear the session's OSC 10/11 override (the pane falls back to the theme colours); no reply. |
 | 112 | Reset cursor color | Accepted without effect; cursor color is not rendered. |
 
 Palette overrides and dynamic-color overrides are scoped to one terminal adapter/session. OSC 4/10/11 set requests never reply; only ? queries do. OSC 104 resets to the current ANSI theme baseline and stock xterm ramp. RIS (ESC c) clears all palette and OSC 10/11 overrides to their baselines. Changing the theme ANSI baseline also clears OSC 4 overrides; reapplying an identical baseline is a no-op and preserves them.
@@ -789,6 +791,7 @@ Typical performance on modern hardware:
 
 | Date | Change |
 |------|--------|
+| 2026-10-30 | W4-B9: DECSCNM (`CSI ? 5 h/l`) routed to `OnSetReverseVideo`, reported live by DECRQM, kept by DECSTR and cleared by RIS; OSC 10/11 overrides and reverse video are drawn per pane. |
 | 2026-10-28 | Kitty graphics: APC `G` states (`ApcFirst`, `ApcControl`, `ApcPayload`, `ApcEscape`), 512-byte control cap, abort/termination rules, `0x9C` accepted as ST inside an enabled graphics APC, `ESC D` (IND) and `ESC E` (NEL), RIS deletes images. Written from the source; `needs runtime verification`. |
 | 2026-10-28 | Wave 3: bulk OSC scan, whole-OSC in-chunk dispatch and bytes-native OSC 52; zero-capacity scrollback note; reverse index limited to retained history; ED 2 / CSI 3 J / RIS discard history pages (see [Rendering](Rendering.md#lazily-committed-cell-arenas)). |
 | 2026-10-28 | Wave 2: DECSTR/RIS share one reset core; DSR/CPR/DECXCPR with silent unknown codes; DECBKM; window operations 13-19 and gated `CSI 8 t`; mode 2033 and `CSI ? 998 n`; gated DECRQCRA; 64-mark combining cap and a bounded, de-duplicating grapheme store; complete DECRQM table; DECSET 47/1047/1048. |
@@ -799,4 +802,4 @@ Typical performance on modern hardware:
 | 2026-06-05 | Updated DECSTBM/DECOM interaction with alternate screen and origin mode |
 | 2026-06-05 | Documented PromptMark OSC 1337 sequence support |
 *Document version: 1.1*  
-*Last updated: 2026-10-28*
+*Last updated: 2026-10-30*

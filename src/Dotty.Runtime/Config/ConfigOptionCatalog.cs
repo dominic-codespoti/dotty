@@ -269,9 +269,9 @@ public static class ConfigOptionCatalog
             "Cursor blink interval in milliseconds; values below 100 are raised to 100."),
 
         Opt("panes.dividerThickness", "panes.divider_thickness", "number", null, c => c.Panes.DividerThickness,
-            "Split-pane divider thickness. Accepted but not yet applied: splits use a fixed 2-pixel gap and no divider is drawn."),
+            "Gap between split panes in logical pixels, scaled and rounded to whole device pixels and filled with the theme's border colour; 0 removes it, values above 32 are clamped. Read every frame."),
         Opt("panes.activeBorder", "panes.active_border", "boolean", null, c => c.Panes.ActiveBorder,
-            "Draw a border around the active pane. Accepted but not yet applied: no active-pane border is drawn."),
+            "Paint the divider gap around the active pane in the theme's accent colour while the tab has splits. Read every frame."),
 
         Opt("bell.attention", "bell.attention", "boolean", null, c => c.Bell.Attention,
             "On a terminal bell, request window attention (taskbar flash, dock bounce, urgency hint) while the window is not focused.",

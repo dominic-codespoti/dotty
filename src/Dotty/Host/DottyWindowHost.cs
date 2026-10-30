@@ -2011,7 +2011,8 @@ internal static partial class DottyWindowHost
                 frame.ScrollbarChromeStart,
                 frame.MenuInstanceStart,
                 frame.MenuChromeStart,
-                frame.ImageDraws);
+                frame.ImageDraws,
+                underlayChromeCount: frame.UnderlayChromeCount);
             frame.ReleaseImageLeases();
             if (_renderer.ImageUploadsDeferred)
                 WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload);

@@ -3,6 +3,7 @@ using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using Dotty.Runtime.Config;
+using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Themes;
 using Dotty.Rendering.Gpu;
 using Dotty.Runtime.ContextMenu;
@@ -724,6 +725,198 @@ public sealed class TerminalSceneComposerTests
         Assert.Contains(secondInstances, instance =>
             instance.Col == secondColumn + 1 && instance.Row == 1
             && instance.BgR == 0x11 && instance.BgG == 0x22 && instance.BgB == 0x33);
+    }
+
+    [Fact]
+    public void Compose_SplitTabEmitsConfiguredDividerAsUnderlayChrome()
+    {
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var panes = UserConfigService.Current.Panes;
+        const float scale = 1.5f;
+        float thickness = Dotty.Runtime.Rendering.PaneDecorationBuilder.ResolveThickness(panes.DividerThickness, scale);
+
+        TerminalSceneFrame Compose() => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            new SgrColorArgb(0x803385DB),
+            framebufferWidth: 480,
+            framebufferHeight: 160,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: scale,
+            rows: 4,
+            columns: 32,
+            padding: NoPadding(),
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
+            activeContextMenu: null);
+
+        Assert.Equal(0, Compose().UnderlayChromeCount);
+
+        var left = tab.ActivePane;
+        var right = tab.PaneTree.Split(left, SplitDirection.Vertical);
+        var frame = Compose();
+
+        var split = (SplitPaneNode)tab.PaneTree.Root;
+        Assert.Equal(thickness, split.DividerBounds.Width);
+        Assert.Equal(thickness, right.Bounds.X - left.Bounds.Right);
+        if (thickness == 0f)
+        {
+            Assert.Equal(0, frame.UnderlayChromeCount);
+            return;
+        }
+
+        int expectedQuads = panes.ActiveBorder ? 2 : 1;
+        Assert.Equal(expectedQuads, frame.UnderlayChromeCount);
+        Assert.InRange(frame.UnderlayChromeCount, 0, frame.ChromeQuadCount);
+        var divider = frame.ChromeQuads[0];
+        Assert.Equal(MathF.Floor(split.DividerBounds.X + 0.5f), divider.X);
+        Assert.Equal(thickness, divider.W);
+        Assert.Equal(160f, divider.H);
+    }
+
+    private static TerminalSceneFrame ComposePlain(
+        TerminalSceneComposer composer, TerminalTab tab, TerminalTabManager manager, IColorScheme theme,
+        int width, int height, int rows, int columns) => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            new SgrColorArgb(0x803385DB),
+            framebufferWidth: width,
+            framebufferHeight: height,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: 1,
+            rows: rows,
+            columns: columns,
+            padding: NoPadding(),
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
+            activeContextMenu: null);
+
+    private static void FeedVt(LeafPane pane, string text) =>
+        pane.Session.Parser.Feed(System.Text.Encoding.UTF8.GetBytes(text));
+
+    private static bool HasRgb(ChromeQuadInstance quad, uint rgb) =>
+        quad.TopR == ((rgb >> 16) & 0xFF) / 255f
+        && quad.TopG == ((rgb >> 8) & 0xFF) / 255f
+        && quad.TopB == (rgb & 0xFF) / 255f
+        && quad.TopA == 1f;
+
+    private static int CountUnderlay(TerminalSceneFrame frame, uint rgb)
+    {
+        int count = 0;
+        for (int i = 0; i < frame.UnderlayChromeCount; i++)
+        {
+            if (HasRgb(frame.ChromeQuads[i], rgb))
+                count++;
+        }
+        return count;
+    }
+
+    [Fact]
+    public void Compose_Osc11PaintsOnlyItsOwnPaneBackgroundUntilOsc111()
+    {
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
+        var first = tab.ActivePane;
+        var second = tab.PaneTree.Split(first, SplitDirection.Vertical);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        const uint paneBackground = 0x204060;
+
+        var plain = ComposePlain(composer, tab, manager, theme, 160, 80, 4, 16);
+        Assert.Equal(0, CountUnderlay(plain, paneBackground));
+        int decorationQuads = plain.UnderlayChromeCount;
+
+        FeedVt(second, "\u001b]11;#204060\u0007");
+        var frame = ComposePlain(composer, tab, manager, theme, 160, 80, 4, 16);
+
+        Assert.Equal(1, CountUnderlay(frame, paneBackground));
+        Assert.Equal(decorationQuads + 1, frame.UnderlayChromeCount);
+        ChromeQuadInstance quad = default;
+        for (int i = 0; i < frame.UnderlayChromeCount; i++)
+        {
+            if (HasRgb(frame.ChromeQuads[i], paneBackground))
+                quad = frame.ChromeQuads[i];
+        }
+        // Covers the second pane (and its cell grid), never a cell of the first pane.
+        Assert.True(quad.X <= second.Bounds.X);
+        Assert.True(quad.X >= first.Bounds.X + first.Columns * 10f);
+        Assert.True(quad.X + quad.W >= second.Bounds.Right - 0.5f);
+        Assert.Equal(0f, quad.Y);
+        Assert.Equal(80f, quad.H);
+        // Pane backgrounds come first so dividers and the active ring stay visible on top of them.
+        Assert.True(HasRgb(frame.ChromeQuads[0], paneBackground));
+
+        FeedVt(second, "\u001b]111\u0007");
+        var reset = ComposePlain(composer, tab, manager, theme, 160, 80, 4, 16);
+        Assert.Equal(0, CountUnderlay(reset, paneBackground));
+        Assert.Equal(decorationQuads, reset.UnderlayChromeCount);
+    }
+
+    [Fact]
+    public void Compose_ReverseVideoSwapsEffectiveDefaultColorsIncludingOscOverrides()
+    {
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 20);
+        var pane = tab.ActivePane;
+        pane.Session.Adapter.Buffer.SetCursor(0, 0);
+        pane.Session.Adapter.Buffer.WriteText("hi".AsSpan(), CellAttributes.Default);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        uint themeForeground = theme.Foreground & 0xFFFFFF;
+        uint themeBackground = theme.Background & 0xFFFFFF;
+        Assert.NotEqual(themeForeground, themeBackground);
+
+        CellInstance GlyphAtOrigin(TerminalSceneFrame frame)
+        {
+            foreach (var instance in frame.AsSpan())
+            {
+                if (instance.Row == 0 && instance.Col == 0)
+                    return instance;
+            }
+            throw new Xunit.Sdk.XunitException("no instance at (0, 0)");
+        }
+
+        static uint Fg(CellInstance instance) => (uint)(instance.FgR << 16 | instance.FgG << 8 | instance.FgB);
+
+        var normal = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.Equal(0, normal.UnderlayChromeCount);
+        Assert.Equal(themeForeground, Fg(GlyphAtOrigin(normal)));
+
+        FeedVt(pane, "\u001b[?5h");
+        var reversed = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.Equal(1, reversed.UnderlayChromeCount);
+        Assert.True(HasRgb(reversed.ChromeQuads[0], themeForeground));
+        Assert.Equal(new[] { 0f, 0f, 200f, 80f },
+            new[] { reversed.ChromeQuads[0].X, reversed.ChromeQuads[0].Y, reversed.ChromeQuads[0].W, reversed.ChromeQuads[0].H });
+        Assert.Equal(themeBackground, Fg(GlyphAtOrigin(reversed)));
+
+        FeedVt(pane, "\u001b]10;#102030\u0007\u001b]11;#405060\u0007");
+        var overridden = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.True(HasRgb(overridden.ChromeQuads[0], 0x102030));
+        Assert.Equal(0x405060u, Fg(GlyphAtOrigin(overridden)));
+
+        FeedVt(pane, "\u001b[?5l");
+        var restored = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.True(HasRgb(restored.ChromeQuads[0], 0x405060));
+        Assert.Equal(0x102030u, Fg(GlyphAtOrigin(restored)));
     }
 
     [Fact]

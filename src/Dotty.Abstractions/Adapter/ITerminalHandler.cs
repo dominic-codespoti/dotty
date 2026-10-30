@@ -125,6 +125,9 @@ namespace Dotty.Abstractions.Adapter
         // Focus reporting (DEC 1004)
         void OnSetFocusReporting(bool enabled);
 
+        // DECSCNM reverse video (CSI ? 5 h/l): swaps the default foreground and background
+        void OnSetReverseVideo(bool enabled) { }
+
         // Window manipulation / report (CSI Ps ; Ps ; Ps t). Omitted parameters are 0.
         void OnWindowOperation(int operation, int arg1, int arg2) { }
 

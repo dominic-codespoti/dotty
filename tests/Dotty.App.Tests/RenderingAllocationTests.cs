@@ -70,6 +70,51 @@ public sealed class RenderingAllocationTests
     }
 
     [Fact]
+    public void Compose_WrappedSelectionAllocatesNothingAfterWarmup()
+    {
+        const int rows = 40;
+        const int columns = 120;
+        using var tab = new TerminalTab(rows: rows, columns: columns);
+        var buffer = tab.Session.Adapter.Buffer;
+        for (int row = 0; row < rows; row += 2)
+        {
+            buffer.SetCursor(row, row % 7);
+            buffer.WriteText("selected text with gaps".AsSpan(), CellAttributes.Default);
+        }
+        tab.ActivePane.Selection.StartSelection(1, 17);
+        tab.ActivePane.Selection.UpdateSelection(rows - 2, 9);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 512);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var padding = NoPadding();
+        var overlay = new SearchOverlayRenderState(false, string.Empty, -1, 0, null);
+
+        AllocationAssert.NoAllocations(Compose);
+
+        void Compose() => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            selectionColor: new SgrColorArgb(0x803385DB),
+            framebufferWidth: columns * 10,
+            framebufferHeight: rows * 20,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: 1,
+            rows: rows,
+            columns: columns,
+            padding: padding,
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: overlay,
+            activeContextMenu: null);
+    }
+
+    [Fact]
     public void Compose_OneLineScrollAllocatesNothingAfterWarmup()
     {
         const int rows = 60;

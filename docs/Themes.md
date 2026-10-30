@@ -24,23 +24,12 @@ Available built-in names:
 
 ## Transparency
 
-Window opacity is configured with `window.opacity` in `config.json`:
-
-```json
-{
-  "theme": "DarkPlus",
-  "window": { "opacity": 0.9 }
-}
-```
-
-Opacity affects the whole window. The current host does not expose
-platform-specific transparency or blur APIs; actual compositor behavior can vary
-by platform.
+Window transparency is not supported yet. `window.opacity` in `config.json` is
+accepted, but the host never reads it, so the window is always opaque. There is
+no blur support.
 
 ---
 
-Use values between `0` and `1`; `1` is fully opaque. Lower opacity can reduce
-readability, so test it with the desktop background and font colors you use.
 User-defined color themes are JSON files in `<config-directory>/themes`; see
 [Custom Themes](CustomThemeArchitecture.md) for the schema and loader behavior.
 

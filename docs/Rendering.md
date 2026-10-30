@@ -191,6 +191,31 @@ is not silently uploaded.
 A native Wayland screenshot also confirmed that green ASCII and multicolor emoji
 retain their intended colors in the actual OpenGL window.
 
+## Text and rendering support matrix
+
+Current state of text and display features. "Planned" names the Wave 4 item
+expected to change the row; it is not a release date or a commitment.
+
+| Feature | Status | Notes | Planned |
+|---|---|---|---|
+| Font size unit | Partial | `font.size` is pixels multiplied by the framebuffer scale (default `14`), not points | W4-C2 (points) |
+| Font family list | Partial | First installed family in `font.family` wins; later entries are not used as fallbacks. A built-in fallback chain covers missing glyphs | W4-C6 |
+| `font.symbolMap` per-range overrides | Supported | | |
+| Colour emoji (single code point) | Supported | Intrinsic-colour glyphs use the RGBA atlas page | |
+| Text shaping (ZWJ sequences, combining-mark placement) | Not supported | Each grapheme is rasterized through the font's character map, one per cell; `TextShaper` exists but has no callers | W4-C10 |
+| Programming ligatures / OpenType features | Not supported | | W4-C11 |
+| Bidirectional / RTL text | Not supported | Decision: out of scope, as in Ghostty and kitty. Text is laid out left to right in logical order. Per-grapheme shaping (W4-C10) will shape within one cell only; it is not a bidi layout engine | none |
+| Bold | Partial | Synthetic: the regular face is stroked; no separate bold face | W4-C6 |
+| Italic, faint, conceal, text blink (SGR 3, 2, 8, 5) | Not supported | Parsed and stored, not drawn | W4-B3 |
+| Inverse, strikethrough, overline | Supported | | |
+| Underline | Partial | Single underline only. Double, curly, dotted, and dashed (SGR 4:2–4:5) and the SGR 58 underline colour are parsed but drawn as the same single underline | W4-C3 |
+| Cursor shape | Partial | DECSCUSR selects the shape; `cursor.shape` is not applied. `Beam` draws nothing over a drawn cell; empty cells always get a half-transparent block. DECSCUSR blink bit ignored | W4-B2 |
+| Pane dividers / active-pane border | Not supported | Fixed 2-pixel gap; `panes.dividerThickness` and `panes.activeBorder` are not read | W4-B5 |
+| Window opacity | Not supported | `window.opacity` is not read; the window is opaque | W4-C12 |
+| Configured window title | Not supported | `window.title` is not read; the title follows the active tab | W4-C13 |
+| Rounded chrome | Supported | Tab bar, scrollbar, and context menus; window corners belong to the OS | |
+| Kitty graphics | Implemented, unverified | Off by default (`graphics.kittyProtocol`); see [Kitty graphics](KittyGraphics.md) | |
+
 ## Memory diagnostics and lifecycle measurements
 
 The terminal buffer's live arena and its managed owner arrays are separate

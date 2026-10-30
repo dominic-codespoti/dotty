@@ -108,6 +108,25 @@ Interactive checks that no automated lane covers, to run on each native desktop 
 
 Linux results must not be represented as Windows or macOS passes.
 
+## Input, IME, and accessibility support matrix
+
+"Implemented" means the code path exists; "qualified" means it was exercised on
+that platform with a real session as described below. "Planned" names the Wave 4
+item expected to change the row; it is not a release date.
+
+| Feature | Linux Wayland | Linux X11 | Windows | macOS | Planned |
+|---|---|---|---|---|---|
+| Committed Unicode text, Kitty keyboard protocol, legacy encoding | Implemented; qualified (IME commit under Kitty flags 0 and 31) | Implemented; not qualified | Implemented; not qualified | Implemented; not qualified | W4-B13 to W4-B16, W4-D1 |
+| IME preedit and candidate placement | Implemented (text-input-v3); qualified with Fcitx/Rime | Implemented (XIM); not qualified | Implemented (IMM32); not qualified | Implemented (Cocoa marked text); not qualified | W4-C17, W4-D1 |
+| AltGr (Right Alt) text | Not working: Right Alt is always treated as AltGr, its press is consumed, and the following character is dropped (static trace, not run) | Same | Same | Same; Right Option behaves as AltGr | W4-B14 |
+| Left Alt / Option composing text | No: characters typed with Left Alt held are discarded and Left Alt acts as Meta | No | No | No: Option cannot compose characters such as `é` or `@` | W4-B14 |
+| PRIMARY selection | In-process only | System PRIMARY | In-process only | In-process only | |
+| File drag and drop | Not supported | Not supported | Not supported | Not supported | W4-C18 |
+| Screen-reader accessibility | Not supported | Not supported | Not supported | Not supported | W4-C22 (portable model), W4-D4 (Windows UIA, then macOS); Linux AT-SPI is not planned |
+
+Bidirectional (RTL) text is not supported on any platform; see
+[Rendering](Rendering.md#text-and-rendering-support-matrix).
+
 ## Current qualification status
 
 The final portable-AOT publish and full multi-target test suite completed with

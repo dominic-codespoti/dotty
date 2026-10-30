@@ -18,14 +18,12 @@ Dotty is a modern terminal emulator composed of:
 
 ### Key Features
 
-- Hardware-accelerated OpenGL rendering with SkiaSharp font shaping
+- Hardware-accelerated OpenGL rendering with SkiaSharp glyph rasterization (one grapheme per cell; no OpenType shaping or ligatures yet)
 - Multiple tabs, split panes, per-tab search, and configurable keyboard shortcuts
 - Custom JSON themes and Lua startup configuration, tab titles, and status text
 - Native PTY support on Linux, macOS, and Windows
 - Efficient cell-preserving buffer and scrollback reflow
-- Ligature support via HarfBuzz font shaping
-- Undercurl, dotted, and dashed underline rendering
-- Rounded rectangle clip regions for modern terminal aesthetics
+- Rounded tab-bar, scrollbar, and context-menu chrome
 - Runtime JSON configuration hot-reload with platform-specific paths
 - [Kitty keyboard negotiation](docs/KeyboardProtocol.md), native press/repeat/release, and committed Unicode scalars
 - [Direct command launches](docs/CommandLine.md) with literal arguments, working directories, and child exit status
@@ -208,15 +206,14 @@ created with defaults on first run.
 {
   "font": {
     "family": "JetBrains Mono, Cascadia Code, monospace",
-    "size": 14,
+    "size": 15,
     "lineHeight": 1.25
   },
   "window": {
-    "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 },
-    "opacity": 1
+    "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 }
   },
   "theme": "DarkPlus",
-  "cursor": { "shape": "Block", "blink": true, "blinkIntervalMs": 500 },
+  "cursor": { "blink": true, "blinkIntervalMs": 500 },
   "keybindings": {
     "ctrl+shift+t": "NewTab",
     "ctrl+shift+w": "ClosePane"

@@ -61,6 +61,9 @@ public sealed class DottyUserConfig
     [JsonPropertyName("panes")]
     public PanesUserConfig Panes { get; set; } = new();
 
+    [JsonPropertyName("bell")]
+    public BellUserConfig Bell { get; set; } = new();
+
     [JsonPropertyName("keybindings")]
     public System.Collections.Generic.Dictionary<string, string> Keybindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [JsonPropertyName("clipboard")]
@@ -374,6 +377,7 @@ public static class UserConfigService
             config.Mouse ??= new MouseUserConfig();
             config.Scrollback ??= new ScrollbackUserConfig();
             config.Graphics ??= new GraphicsUserConfig();
+            config.Bell ??= new BellUserConfig();
         }
         return config;
     }

@@ -214,6 +214,7 @@ expected to change the row; it is not a release date or a commitment.
 | Window opacity | Not supported | `window.opacity` is not read; the window is opaque | W4-C12 |
 | Configured window title | Not supported | `window.title` is not read; the title follows the active tab | W4-C13 |
 | Rounded chrome | Supported | Tab bar, scrollbar, and context menus; window corners belong to the OS | |
+| Bell | Partial | Window attention request while unfocused (`bell.attention`, default on), optional visual flash drawn as a separate overlay pass after the frame (`bell.visual`), tab marker, Lua `bell` event; rate-limited to one effect per 150 ms. No sound: `bell.audible` is accepted but not implemented | |
 | Kitty graphics | Implemented, unverified | Off by default (`graphics.kittyProtocol`); see [Kitty graphics](KittyGraphics.md) | |
 
 ## Memory diagnostics and lifecycle measurements

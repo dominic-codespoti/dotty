@@ -202,6 +202,22 @@ active-pane border is drawn.
 User theme JSON files are loaded from `<config-directory>/themes`. See
 [Themes](Themes.md) for the schema and validation rules.
 
+### `bell`
+
+What a terminal bell (BEL, `0x07`) does in addition to the tab-bar marker on a
+background tab and the Lua `bell` event, which are unchanged.
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `attention` | boolean | `true` | Request window attention while the window is not focused: GLFW `glfwRequestWindowAttention`, i.e. a taskbar flash on Windows, a dock bounce on macOS, the urgency hint on X11, and an XDG activation request on Wayland (compositor permitting). Nothing happens while the window is focused. |
+| `visual` | boolean | `false` | Flash the window contents: an overlay in the theme foreground colour that fades from 35 % opacity to nothing over about 150 ms. |
+| `audible` | boolean | `false` | Accepted but not yet implemented on any platform: no sound is played. |
+
+Bells are rate-limited: bells less than 150 ms after the last one that took
+effect produce no attention request and no flash, so a flood of BEL characters
+flashes at most about six times per second. Every bell still reaches the Lua
+`bell` event and the tab marker. All three keys are read live at each bell.
+
 ### `clipboard`
 
 | Property | Type | Default | Notes |

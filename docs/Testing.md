@@ -236,6 +236,15 @@ Deterministic coverage for the behavior in [Parsing](Parsing.md), [Keyboard Prot
 
 The Python unit tests for the esctest scripts run with `python3 -m unittest discover -s scripts/esctest/tests` (CI: `code-quality`).
 
+### Key-event replay harness
+
+`tests/Dotty.App.Tests/KeyPipelineHarness.cs` drives the real `TerminalKeyboardController` and `TerminalKeyboardDispatcher` with the event sequences GLFW produces: key press, then the character, then key release (repeat, then character), each with the native `mods` bit field. The host's Ctrl/Shift/Alt/AltGr/Super and lock state comes from the controller's `KeyboardModifierState`, the same class `DottyWindowHost` uses, so no test sets modifier flags by hand. A harness is created for a layout fixture and a platform profile:
+
+- Layout fixtures (`KeyboardLayoutFixtures.cs`): QWERTY (US), QWERTZ (German, AltGr), AZERTY (French), Dvorak, Russian (JCUKEN), and macOS ABC. Each maps the physical key to its unshifted, shifted, AltGr, and Option text; the unshifted text is the primary codepoint (`glfwGetKeyName`).
+- Platform profiles `X11`, `Wayland`, `Win32`, `Cocoa` reproduce the vendored GLFW rules: C0/C1 characters are never delivered; AltGr is ISO Level 3 with no Alt bit on X11/Wayland and Ctrl+Alt (with the synthetic Left Ctrl event dropped) on Windows; Alt chords are `WM_SYSCHAR` on Windows; Option composes on macOS; Ctrl applies the X11 control transform.
+
+`KeyPipelineHarnessTests` replays AltGr, Right Alt, Alt+Shift, non-Latin Ctrl, Option, Super, and bare-modifier sequences and asserts the PTY bytes, the search query, bindings, scroll offset and selection. The harness proves the managed routing for a given event sequence; whether a real OS delivers that sequence is checked manually (see [Native desktop and IME](NativeDesktopAndIme.md)).
+
 ## Desktop smoke
 
 Linux X11:

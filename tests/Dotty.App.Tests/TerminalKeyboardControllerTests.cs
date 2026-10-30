@@ -133,14 +133,14 @@ public class TerminalKeyboardControllerTests
 
         controller.HandleKeyDown(Key.ControlLeft, 1);
         controller.HandleKeyDown(Key.ShiftRight, 2);
-        Assert.True(controller.Ctrl);
-        Assert.True(controller.Shift);
+        Assert.True(controller.Modifiers.Ctrl);
+        Assert.True(controller.Modifiers.Shift);
         Assert.Equal(new[] { Key.ControlLeft, Key.ShiftRight }, events.ConvertAll(static item => item.Key));
 
         controller.HandleKeyUp(Key.ControlLeft, 1);
         controller.HandleKeyUp(Key.ShiftRight, 2);
-        Assert.False(controller.Ctrl);
-        Assert.False(controller.Shift);
+        Assert.False(controller.Modifiers.Ctrl);
+        Assert.False(controller.Modifiers.Shift);
         Assert.Equal(new[]
         {
             TerminalKeyEventType.Press,
@@ -151,6 +151,6 @@ public class TerminalKeyboardControllerTests
 
         controller.HandleKeyDown(Key.ControlLeft, 1);
         controller.ResetState();
-        Assert.False(controller.Ctrl);
+        Assert.False(controller.Modifiers.Ctrl);
     }
 }

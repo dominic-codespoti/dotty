@@ -173,7 +173,6 @@ internal static class DottyWindowHost
     private static byte[] _windowTitleUtf8 = new byte[128];
     private static global::Silk.NET.GLFW.Glfw? _glfwApi;
     private static string _windowBackend = "unknown";
-    private static TerminalKeyModifiers _nativeModifiers;
     private static nint _glfwSetWindowTitleProc;
     private static bool _glfwTitleProcResolved;
     private const int LuaStatusRefreshIntervalMs = 1000;
@@ -2068,7 +2067,7 @@ internal static class DottyWindowHost
             return;
 
         // GLFW reports the effective state even when modifiers arrive without physical key events.
-        _nativeModifiers = (TerminalKeyModifiers)((modifiers & 0x39) | ((modifiers & 2) << 1) | ((modifiers & 4) >> 1));
+        _keyboardController.Modifiers.SetNativeGlfwModifiers(modifiers);
         if (action == 0)
         {
             WindowPresentationGate.Invalidate(WindowFrameReason.Input);
@@ -2126,7 +2125,6 @@ internal static class DottyWindowHost
         RefreshLuaStatus();
         if (!focused)
         {
-            _nativeModifiers = TerminalKeyModifiers.None;
             _keyboardController?.ResetState();
             _mouseController?.ResetState();
         }
@@ -2462,12 +2460,12 @@ internal static class DottyWindowHost
                     CaptionButtonsWidth: captionButtonsWidth);
             }
         }
-        public bool Ctrl => (_keyboardController?.Ctrl ?? false) || (_nativeModifiers & TerminalKeyModifiers.Control) != 0;
-        public bool Shift => (_keyboardController?.Shift ?? false) || (_nativeModifiers & TerminalKeyModifiers.Shift) != 0;
-        public bool Alt => (_keyboardController?.Alt ?? false) || (_nativeModifiers & TerminalKeyModifiers.Alt) != 0;
-        public bool AltGr => _keyboardController?.AltGr ?? false;
-        public bool Super => (_keyboardController?.Super ?? false) || (_nativeModifiers & TerminalKeyModifiers.Meta) != 0;
-        public TerminalKeyModifiers LockModifiers => _nativeModifiers & (TerminalKeyModifiers.CapsLock | TerminalKeyModifiers.NumLock);
+        public bool Ctrl => _keyboardController?.Modifiers.Ctrl ?? false;
+        public bool Shift => _keyboardController?.Modifiers.Shift ?? false;
+        public bool Alt => _keyboardController?.Modifiers.Alt ?? false;
+        public bool AltGr => _keyboardController?.Modifiers.AltGr ?? false;
+        public bool Super => _keyboardController?.Modifiers.Super ?? false;
+        public TerminalKeyModifiers LockModifiers => _keyboardController?.Modifiers.LockModifiers ?? TerminalKeyModifiers.None;
 
         public void CopySelection() => CopySelectionToClipboard();
         public void PasteClipboard() => PasteClipboardToSession();

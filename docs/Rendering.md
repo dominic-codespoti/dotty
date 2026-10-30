@@ -97,7 +97,8 @@ side works like this (written from the source, never run or measured):
   coordinates with `floor(v + 0.5)`, exactly like the cell background pass, so
   neighbours (a placeholder grid draws one quad per cell row) share edges at
   fractional cell sizes (DPI, zoom); a sub-pixel quad keeps one pixel.
-- **Draw order.** `z < -2^30` below cell backgrounds; `-2^30 <= z < 0` after
+- **Draw order.** Underlay chrome (pane dividers and the active-pane ring) is
+  drawn first; then `z < -2^30` below cell backgrounds; `-2^30 <= z < 0` after
   backgrounds and before glyphs; `z >= 0` after glyphs. Scrollbar and menu chrome
   draw after the above-text layer. Textures hold premultiplied RGBA (or opaque
   RGB) and blend with `One, OneMinusSrcAlpha`.
@@ -135,6 +136,24 @@ gesture instead. Selection autoscroll updates the
 owning pane and invalidates presentation on every changed offset or active
 selection row. The cursor is deliberately suppressed while a pane is scrolled
 away from the bottom; it is drawn only for the active pane at offset zero.
+
+### Dividers and the active pane
+
+`PaneTree.Layout` leaves a gap of `panes.dividerThickness` logical pixels
+between split siblings, multiplied by the framebuffer scale and rounded to whole
+device pixels (`PaneDecorationBuilder.ResolveThickness`: `0`, negative or
+non-finite values give no gap; any positive value gives at least one pixel;
+values above 32 are clamped). `PaneDecorationBuilder` fills every
+`SplitPaneNode.DividerBounds` with the theme's chrome border colour. With
+`panes.activeBorder` on and at least one split, it also paints the part of the
+gap that surrounds the active pane (the pane rect inflated by the thickness and
+clipped to the terminal area) in the theme accent colour; a lone pane gets no
+border. These quads are the frame's underlay chrome
+(`TerminalSceneFrame.UnderlayChromeCount`), drawn before the cell backgrounds:
+pane origins snap to whole cells, so where a pane's cell grid overlaps the gap
+by a fraction of a cell the grid wins and the decoration never covers text.
+Edges are snapped with `floor(v + 0.5)`. A thickness of `0` draws nothing, so
+there is then no active-pane indication either.
 
 ## Tab-strip geometry
 
@@ -210,7 +229,7 @@ expected to change the row; it is not a release date or a commitment.
 | Inverse, strikethrough, overline | Supported | | |
 | Underline | Partial | Single underline only. Double, curly, dotted, and dashed (SGR 4:2–4:5) and the SGR 58 underline colour are parsed but drawn as the same single underline | W4-C3 |
 | Cursor shape | Partial | DECSCUSR selects the shape; `cursor.shape` is not applied. `Beam` draws nothing over a drawn cell; empty cells always get a half-transparent block. DECSCUSR blink bit ignored | W4-B2 |
-| Pane dividers / active-pane border | Not supported | Fixed 2-pixel gap; `panes.dividerThickness` and `panes.activeBorder` are not read | W4-B5 |
+| Pane dividers / active-pane border | Supported | `panes.dividerThickness` sets the gap (logical px, rounded to device px); dividers use the chrome border colour; `panes.activeBorder` paints the gap around the active pane in the accent colour when the tab has splits | |
 | Window opacity | Not supported | `window.opacity` is not read; the window is opaque | W4-C12 |
 | Configured window title | Not supported | `window.title` is not read; the title follows the active tab | W4-C13 |
 | Rounded chrome | Supported | Tab bar, scrollbar, and context menus; window corners belong to the OS | |

@@ -322,7 +322,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         int scrollbarChromeStart = -1,
         int menuInstanceStart = -1,
         int menuChromeStart = -1,
-        ImageDrawList? images = null)
+        ImageDrawList? images = null,
+        int underlayChromeCount = 0)
     {
         EnsureNotDisposed();
         SilkImageRenderer? imageRenderer = BeginImageFrame(images);
@@ -378,7 +379,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
             scrollbarChromeStart,
             menuInstanceStart,
             menuChromeStart,
-            images);
+            images,
+            underlayChromeCount);
         imageRenderer?.EndFrame();
     }
     private void CaptureInstances(
@@ -536,7 +538,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         int scrollbarChromeStart,
         int menuInstanceStart,
         int menuChromeStart,
-        ImageDrawList? images)
+        ImageDrawList? images,
+        int underlayChromeCount)
     {
         int cellCount = _lastInstanceCount;
         if (cellCount > 0 && _instanceBufferDirty)
@@ -692,15 +695,29 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
 
         UploadChrome(chromeQuads, menuChromeStart);
 
-        // Base backgrounds/chrome/glyphs are drawn first. Scrollbar chrome is
-        // a separate overlay so rightmost glyphs can never cover the thumb.
+        int underlayCount = Math.Clamp(underlayChromeCount, 0, scrollbarChromeFirst);
+
+        // Underlay chrome (pane dividers, active-pane ring) sits below everything the panes draw. Base
+        // backgrounds/chrome/glyphs follow. Scrollbar chrome is a separate overlay so rightmost glyphs can never
+        // cover the thumb.
+        if (underlayCount > 0)
+            DrawChromeRange(0, underlayCount, menuVao: false);
         DrawImageLayer(ImageLayer.BelowBackground, images);
         DrawCellRange(0, baseInstanceCount, pass: 0, menuVao: false);
         DrawImageLayer(ImageLayer.BelowText, images);
-        int baseChromeCount = scrollbarChromeFirst;
+        int baseChromeCount = scrollbarChromeFirst - underlayCount;
         if (baseChromeCount > 0)
         {
-            DrawChromeRange(0, baseChromeCount, menuVao: false);
+            if (underlayCount == 0)
+            {
+                DrawChromeRange(0, baseChromeCount, menuVao: false);
+            }
+            else
+            {
+                // The base VAO always starts at instance 0; the offset VAO points past the underlay.
+                EnsureMenuChromeAttribs(underlayCount);
+                DrawChromeRange(underlayCount, baseChromeCount, menuVao: true);
+            }
         }
 
         DrawCellRange(0, baseInstanceCount, pass: 1, menuVao: false);

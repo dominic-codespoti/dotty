@@ -6,6 +6,7 @@ using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Panes;
+using Dotty.Runtime.Rendering;
 using Dotty.Runtime.Tabs;
 using Dotty.Runtime.Selection;
 using Dotty.Runtime.Scrollbar;
@@ -40,6 +41,11 @@ public sealed class TerminalSceneFrame
     public HashSet<int> DirtyAtlasRows { get; private set; } = null!;
     public ChromeQuadInstance[] ChromeQuads { get; private set; } = null!;
     public int ChromeQuadCount { get; private set; }
+    /// <summary>
+    /// Chrome quads <c>[0, UnderlayChromeCount)</c> are drawn below the cell backgrounds (pane dividers and the
+    /// active-pane ring); the rest of the base chrome is drawn between the background and glyph passes.
+    /// </summary>
+    public int UnderlayChromeCount { get; private set; }
     public int ScrollbarChromeStart { get; private set; }
     public int MenuInstanceStart { get; private set; }
     public int MenuChromeStart { get; private set; }
@@ -60,12 +66,13 @@ public sealed class TerminalSceneFrame
         bool isIncomplete = false,
         SKRect imeCaretBounds = default,
         bool imeCaretBoundsValid = false,
-        ImageDrawList? imageDraws = null)
+        ImageDrawList? imageDraws = null,
+        int underlayChromeCount = 0)
     {
         ImageDraws = imageDraws ?? new ImageDrawList();
         Update(instances, instanceCount, dirtyAtlasRows, chromeQuads, chromeQuadCount,
             menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete,
-            imeCaretBounds, imeCaretBoundsValid);
+            imeCaretBounds, imeCaretBoundsValid, underlayChromeCount);
     }
 
     internal void Update(
@@ -79,13 +86,15 @@ public sealed class TerminalSceneFrame
         int scrollbarChromeStart,
         bool isIncomplete,
         SKRect imeCaretBounds,
-        bool imeCaretBoundsValid)
+        bool imeCaretBoundsValid,
+        int underlayChromeCount)
     {
         Instances = instances;
         InstanceCount = instanceCount;
         DirtyAtlasRows = dirtyAtlasRows;
         ChromeQuads = chromeQuads;
         ChromeQuadCount = chromeQuadCount;
+        UnderlayChromeCount = underlayChromeCount;
         MenuInstanceStart = menuInstanceStart;
         MenuChromeStart = menuChromeStart;
         ScrollbarChromeStart = scrollbarChromeStart;
@@ -273,7 +282,26 @@ public sealed class TerminalSceneComposer : IDisposable
 
         float terminalWidth = Math.Max(10f, framebufferWidth - padX);
         float terminalHeight = Math.Max(10f, framebufferHeight - topOffset - padY);
-        activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness: 2f);
+        var panes = UserConfigService.Current.Panes;
+        float dividerThickness = PaneDecorationBuilder.ResolveThickness(panes.DividerThickness, scale);
+        activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness);
+
+        // Underlay chrome (drawn below the cell backgrounds): dividers, then the active-pane ring.
+        EnsureChromeScratchCapacity(PaneDecorationBuilder.MaxQuadCount(leaves.Count));
+        var chromePalette = ChromeStyleUtils.ResolvePalette(theme);
+        chromeQuadCount += PaneDecorationBuilder.Build(
+            activeTab.PaneTree.Root,
+            activePane.Bounds,
+            padLeft,
+            padTop + topOffset,
+            terminalWidth,
+            terminalHeight,
+            dividerThickness,
+            panes.ActiveBorder,
+            chromePalette.Border,
+            chromePalette.Accent,
+            _chromeScratch.AsSpan(chromeQuadCount));
+        int underlayChromeCount = chromeQuadCount;
 
 
         for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
@@ -737,14 +765,15 @@ public sealed class TerminalSceneComposer : IDisposable
             _cachedFrame = new TerminalSceneFrame(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, _imageDraws);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, _imageDraws,
+                underlayChromeCount);
         }
         else
         {
             _cachedFrame.Update(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, underlayChromeCount);
         }
         return _cachedFrame;
     }

@@ -194,10 +194,16 @@ honoured.
 ### `theme`, `selectionColor`, and `panes`
 
 `theme` names a built-in or user theme. `selectionColor` accepts the color
-syntax understood by the active theme loader. `panes.dividerThickness` and
-`panes.activeBorder` are accepted but not yet applied: splits are separated by
-a fixed 2-pixel gap showing the window background, and no divider or
-active-pane border is drawn.
+syntax understood by the active theme loader.
+
+`panes.dividerThickness` is the gap between split panes in logical pixels
+(multiplied by the display scale and rounded to whole device pixels; `0` removes
+the gap, any positive value draws at least one pixel, values above `32` are
+clamped). The gap is filled with the theme's chrome border colour.
+`panes.activeBorder` paints the gap around the active pane in the theme's
+accent colour while the tab has splits; a single pane never gets a border, and
+with a thickness of `0` there is no gap to paint. Both are read every frame, so
+a reload applies immediately.
 
 User theme JSON files are loaded from `<config-directory>/themes`. See
 [Themes](Themes.md) for the schema and validation rules.

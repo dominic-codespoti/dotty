@@ -727,6 +727,63 @@ public sealed class TerminalSceneComposerTests
     }
 
     [Fact]
+    public void Compose_SplitTabEmitsConfiguredDividerAsUnderlayChrome()
+    {
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var panes = UserConfigService.Current.Panes;
+        const float scale = 1.5f;
+        float thickness = Dotty.Runtime.Rendering.PaneDecorationBuilder.ResolveThickness(panes.DividerThickness, scale);
+
+        TerminalSceneFrame Compose() => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            new SgrColorArgb(0x803385DB),
+            framebufferWidth: 480,
+            framebufferHeight: 160,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: scale,
+            rows: 4,
+            columns: 32,
+            padding: NoPadding(),
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
+            activeContextMenu: null);
+
+        Assert.Equal(0, Compose().UnderlayChromeCount);
+
+        var left = tab.ActivePane;
+        var right = tab.PaneTree.Split(left, SplitDirection.Vertical);
+        var frame = Compose();
+
+        var split = (SplitPaneNode)tab.PaneTree.Root;
+        Assert.Equal(thickness, split.DividerBounds.Width);
+        Assert.Equal(thickness, right.Bounds.X - left.Bounds.Right);
+        if (thickness == 0f)
+        {
+            Assert.Equal(0, frame.UnderlayChromeCount);
+            return;
+        }
+
+        int expectedQuads = panes.ActiveBorder ? 2 : 1;
+        Assert.Equal(expectedQuads, frame.UnderlayChromeCount);
+        Assert.InRange(frame.UnderlayChromeCount, 0, frame.ChromeQuadCount);
+        var divider = frame.ChromeQuads[0];
+        Assert.Equal(MathF.Floor(split.DividerBounds.X + 0.5f), divider.X);
+        Assert.Equal(thickness, divider.W);
+        Assert.Equal(160f, divider.H);
+    }
+
+    [Fact]
     public void Compose_HoveredScrollbarAddsTrackAndAccentChrome()
     {
         using var tab = new TerminalTab(rows: 4, columns: 20);

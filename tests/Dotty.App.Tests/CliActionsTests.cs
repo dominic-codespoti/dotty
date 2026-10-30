@@ -225,6 +225,14 @@ public sealed class DiagnoseReportTests
         Assert.Equal(expected, DiagnoseReport.DescribeTerm(configured, resolved, bundled));
     }
 
+    [Theory]
+    [InlineData(false, "/s/logs/crash.log (no crash logged)")]
+    [InlineData(true, "/s/logs/crash.log (has entries; attach it to a bug report)")]
+    public void CrashLogStatus(bool exists, string expected)
+    {
+        Assert.Equal(expected, DiagnoseReport.DescribeCrashLog("/s/logs/crash.log", exists));
+    }
+
     [Fact]
     public void PtyHelperStatusNamesThePathOrTheProbes()
     {

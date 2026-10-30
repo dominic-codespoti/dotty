@@ -46,7 +46,8 @@ read as configuration):
 - Windows: `%LOCALAPPDATA%\Dotty`, or `<profile>\AppData\Local\Dotty`
 
 `DOTTY_CONFIG_HOME` does not move the state directory. `dotty +diagnose` prints
-both directories.
+both directories. The only file Dotty keeps there today is the local crash log
+(`logs/crash.log`, see [Platform Support](PlatformSupport.md#crash-log)).
 
 ## Session launch context
 

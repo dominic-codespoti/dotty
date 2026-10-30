@@ -96,7 +96,7 @@ Each problem goes to standard error as `file:line:column: message` (`file:line: 
 `dotty +diagnose` prints one `label: value` line per fact, for pasting into a bug report:
 
 - Dotty version (with the development marker of non-release builds), .NET version and runtime identifier, OS description and architecture
-- configuration directory, `config.json` and Lua config status (missing, valid, or the number of problems with a hint to run `+validate-config`), and the state directory
+- configuration directory, `config.json` and Lua config status (missing, valid, or the number of problems with a hint to run `+validate-config`), the state directory, and the [crash log](PlatformSupport.md#crash-log) path with whether it has entries
 - the `pty-helper` Dotty would start (Linux and macOS; the source of the match, or every probed path when it is missing) and the shell-integration directory
 - the `TERM` value new sessions get, whether it fell back from the configured `term`, and the bundled terminfo directory
 - on Linux, `WAYLAND_DISPLAY` and `DISPLAY`, or a note that neither is set

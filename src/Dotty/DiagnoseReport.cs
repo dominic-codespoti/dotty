@@ -26,6 +26,9 @@ internal static class DiagnoseReport
         : problems == 0 ? $"{path} (valid)"
         : $"{path} ({problems} problem{(problems == 1 ? "" : "s")}; run 'dotty +validate-config')";
 
+    public static string DescribeCrashLog(string path, bool exists) =>
+        exists ? $"{path} (has entries; attach it to a bug report)" : $"{path} (no crash logged)";
+
     /// <summary>Display variables GLFW uses on Linux; null on other platforms, where no variable is involved.</summary>
     public static string? DescribeDisplay(HostPlatform platform, Func<string, string?> environment)
     {

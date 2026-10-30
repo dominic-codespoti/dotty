@@ -251,6 +251,7 @@ internal static class DottyWindowHost
         _window.FocusChanged += OnWindowFocusChanged;
         _window.Closing += OnClosing;
         _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
+        GlfwErrorLog.Install(_glfwApi);
         HostWake.Initialize(static () => _glfwApi!.PostEmptyEvent(), Environment.CurrentManagedThreadId);
         try
         {

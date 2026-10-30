@@ -4,6 +4,7 @@ using Dotty.NativePty.Unix;
 using Dotty.Rendering.Gpu;
 using Dotty.Runtime;
 using Dotty.Runtime.Config;
+using Dotty.Runtime.Diagnostics;
 using Dotty.Runtime.Scripting;
 using Dotty.Runtime.Sessions;
 using Dotty.Runtime.Themes;
@@ -199,6 +200,7 @@ internal static class CliActions
         PlatformPathSet paths = PlatformPaths.Current;
         string configFile = Path.Combine(paths.ConfigRoot, "config.json");
         string luaFile = LuaScriptHost.GetConfigLuaPath();
+        string crashLog = Path.Combine(CrashLog.DirectoryFor(paths.StateRoot), CrashLog.FileName);
 
         DottyUserConfig config = new();
         int jsonProblems = 0;
@@ -230,6 +232,7 @@ internal static class CliActions
             ("config.json", DiagnoseReport.DescribeConfigFile(configFile, hasJson, jsonProblems)),
             ("Lua config", DiagnoseReport.DescribeConfigFile(luaFile, hasLua, luaProblems)),
             ("State directory", paths.StateRoot),
+            ("Crash log", DiagnoseReport.DescribeCrashLog(crashLog, File.Exists(crashLog))),
             ("PTY helper", OperatingSystem.IsWindows() ? "not used (ConPTY)" : DiagnoseReport.DescribePtyHelper(PtyHelperLocator.ResolveForCurrentProcess())),
             ("Shell integration", ShellIntegrationLocator.Find() ?? "not found"),
             ("TERM", DiagnoseReport.DescribeTerm(

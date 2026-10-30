@@ -105,6 +105,7 @@ public sealed class TerminalSceneComposerCursorAndBlinkTests : IDisposable
     [InlineData(4, 0f, 18f, 10f, 2f)]  // steady underline at the bottom
     public void DecscusrShapesAreDrawnAsBars(int decscusr, float x, float y, float width, float height)
     {
+        _tab.Session.Adapter.Buffer.SetCursor(0, 0);
         _tab.Session.Adapter.OnSetCursorShape(decscusr);
 
         TerminalSceneFrame frame = Compose(blinkPhaseOn: true);
@@ -118,6 +119,8 @@ public sealed class TerminalSceneComposerCursorAndBlinkTests : IDisposable
     [Fact]
     public void UnfocusedWindowDrawsAHollowOutline()
     {
+        _tab.Session.Adapter.Buffer.SetCursor(0, 0);
+
         TerminalSceneFrame frame = Compose(blinkPhaseOn: true, windowFocused: false);
 
         Assert.Equal(

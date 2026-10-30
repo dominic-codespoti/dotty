@@ -39,8 +39,10 @@ internal static partial class DottyWindowHost
 
     private static void DisposeBellOverlay()
     {
-        _bellOverlay?.Dispose();
+        // Cleared first: a dispose that throws on a broken context must not leave a stale overlay behind.
+        SilkOverlayRenderer? overlay = _bellOverlay;
         _bellOverlay = null;
+        overlay?.Dispose();
     }
 
     // PTY consumer thread, buffer lock held: count and wake only.

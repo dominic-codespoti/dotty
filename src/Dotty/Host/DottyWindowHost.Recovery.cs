@@ -147,6 +147,8 @@ internal static partial class DottyWindowHost
         _renderer = rebuilt;
         try
         {
+            // The overlay binds through the old renderer's binding cache; it is recreated lazily against the new one.
+            DisposeBellOverlay();
             previous?.Dispose();
         }
         catch (Exception exception)

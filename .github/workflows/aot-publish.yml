@@ -21,9 +21,45 @@ env:
   PROJECT_PATH: 'src/Dotty/Dotty.csproj'
 
 jobs:
+  # Compile terminfo/xterm-dotty.src once with ncurses tic (extended capabilities, -x) and
+  # round-trip it through infocmp. The database ships in the Linux and macOS archives as
+  # terminfo/ with both directory layouts: first-letter (x/, Linux ncurses) and hex (78/,
+  # macOS ncurses on case-insensitive file systems), so macOS's older tic is never needed.
+  terminfo:
+    name: Compile xterm-dotty terminfo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Compile and round-trip with tic/infocmp
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/terminfo"
+          tic -x -o "$out" terminfo/xterm-dotty.src
+          infocmp -x -A "$out" xterm-dotty
+          for letter_dir in "$out"/?; do
+            letter="$(basename "$letter_dir")"
+            cp -R "$letter_dir" "$out/$(printf '%02x' "'$letter")"
+          done
+          test -f "$out/x/xterm-dotty"
+          test -f "$out/78/xterm-dotty"
+          find "$out" -type f | sort
+
+      - name: Upload compiled terminfo
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: terminfo-db
+          path: ${{ runner.temp }}/terminfo/
+          retention-days: 7
+          if-no-files-found: error
+
   publish:
     name: AOT publish (${{ matrix.rid }})
     runs-on: ${{ matrix.runner }}
+    needs: terminfo
     # linux-x64 builds inside Debian 11 so the shipped ELF files link against glibc 2.31
     # (scripts/dist/baseline-targets.json); an empty image runs the job on the runner itself.
     container: ${{ matrix.container }}
@@ -123,6 +159,13 @@ jobs:
       - name: Gate NativeAOT warnings (own code fails, third-party listed)
         shell: bash
         run: ${{ matrix.python }} scripts/dist/aot_warnings.py --log "$RUNNER_TEMP/publish-warnings.log" --repo-root "$GITHUB_WORKSPACE" --label "$RID" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Add compiled terminfo (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: terminfo-db
+          path: publish/${{ matrix.rid }}/terminfo
 
       - name: Verify publish output (Unix)
         if: runner.os != 'Windows'

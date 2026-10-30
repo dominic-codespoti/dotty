@@ -79,6 +79,9 @@ require_file shell-integration/inject/xdg/fish/vendor_conf.d/dotty-shell-integra
 require_file License.md
 require_file THIRD-PARTY-NOTICES.md
 require_file licenses/GLFW-LICENSE.md
+# Compiled xterm-dotty terminfo in both ncurses layouts: first letter (Linux) and hex (macOS).
+require_file terminfo/x/xterm-dotty
+require_file terminfo/78/xterm-dotty
 
 if [ -x "$dir/dotty" ]; then
   # Isolate the run from the runner's real configuration directories.

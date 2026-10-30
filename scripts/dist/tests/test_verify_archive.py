@@ -70,6 +70,8 @@ class VerifyArchiveTests(unittest.TestCase):
             ("win-x64", "lua54.dll"),
             ("win-x64", "licenses/GLFW-LICENSE.md"),
             ("win-x64", "shell-integration/Dotty.ps1"),
+            ("linux-x64", "terminfo/x/xterm-dotty"),
+            ("osx-arm64", "terminfo/78/xterm-dotty"),
         ]
         for rid, missing in cases:
             with self.subTest(rid=rid, missing=missing), tempfile.TemporaryDirectory() as directory:

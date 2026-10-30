@@ -29,16 +29,18 @@ SHELL_INTEGRATION_WINDOWS = [
     "shell-integration/inject/zsh/.zshenv",
 ]
 LICENSES = ["License.md", "THIRD-PARTY-NOTICES.md", "licenses/GLFW-LICENSE.md"]
+# Compiled xterm-dotty terminfo in both ncurses layouts: first letter (Linux) and hex (macOS).
+TERMINFO = ["terminfo/x/xterm-dotty", "terminfo/78/xterm-dotty"]
 
 
 def required_entries(rid: str) -> tuple[list[str], list[str]]:
     """(required files, files that must also be executable) relative to the package root."""
     if rid.startswith("linux-"):
         natives = ["libglfw.so.3", "libSkiaSharp.so", "liblua54.so"]
-        return ["dotty", "pty-helper", *natives, *SHELL_INTEGRATION_UNIX, *LICENSES], ["dotty", "pty-helper"]
+        return ["dotty", "pty-helper", *natives, *SHELL_INTEGRATION_UNIX, *LICENSES, *TERMINFO], ["dotty", "pty-helper"]
     if rid.startswith("osx-"):
         natives = ["libglfw.3.dylib", "libSkiaSharp.dylib", "liblua54.dylib"]
-        return ["dotty", "pty-helper", *natives, *SHELL_INTEGRATION_UNIX, *LICENSES], ["dotty", "pty-helper"]
+        return ["dotty", "pty-helper", *natives, *SHELL_INTEGRATION_UNIX, *LICENSES, *TERMINFO], ["dotty", "pty-helper"]
     return ["dotty.exe", "glfw3.dll", "libSkiaSharp.dll", "lua54.dll", *SHELL_INTEGRATION_WINDOWS, *LICENSES], []
 
 

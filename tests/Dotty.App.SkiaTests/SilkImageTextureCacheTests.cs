@@ -157,23 +157,4 @@ public sealed class SilkImageTextureCacheTests
         Assert.True(cache.TryGetTexture(a, out _));
         Assert.False(cache.UploadsDeferred);
     }
-
-    [Fact]
-    public void ContextLossResetForgetsTexturesAndAllowsReupload()
-    {
-        using ImageGlHost? host = ImageGlHost.TryCreate();
-        if (host is null) return;
-        using var cache = new SilkImageTextureCache(host.Gl, new DirectGlBindingCache(host.Gl));
-        using ImagePixels px = Image(4, 4, 7);
-        cache.BeginFrame();
-        Assert.True(cache.TryGetTexture(px, out _));
-
-        cache.ResetAfterContextLoss();
-        Assert.Equal(0, cache.TextureCount);
-        Assert.Equal(0, cache.EstimatedTextureBytes);
-
-        cache.BeginFrame();
-        Assert.True(cache.TryGetTexture(px, out uint tex));
-        Assert.NotEqual(0u, tex);
-    }
 }

@@ -407,8 +407,9 @@ Two separate budgets:
    frames are evicted regardless; the oldest-used, then largest, go first when
    over budget; textures used by the current frame are never evicted; images
    larger than `GL_MAX_TEXTURE_SIZE` are box-downscaled for upload. A freed
-   `ImagePixels` queues its serial so the texture is deleted promptly. After a GL
-   context loss the cache is reset and textures re-upload on demand.
+   `ImagePixels` queues its serial so the texture is deleted promptly. A renderer
+   rebuild (render recovery) starts with an empty cache; textures re-upload on
+   demand.
 
 Image memory is **outside** `scrollback.limitBytes` (that limit counts the
 12-byte-per-cell ring only). The `MEMORY` control command reports

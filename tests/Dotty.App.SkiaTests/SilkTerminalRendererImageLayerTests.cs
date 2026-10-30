@@ -300,28 +300,4 @@ public sealed class SilkTerminalRendererImageLayerTests
 
         Assert.Equal(0L, renderer.EstimatedImageTextureBytes);
     }
-
-    [Fact]
-    public void ImagesStillDrawAfterAContextLossReset()
-    {
-        using ImageGlHost? host = TryHost();
-        if (host is null) return;
-        using var atlas = new GlyphAtlas(SKTypeface.Default, 16f, initialSize: 128);
-        using var renderer = new SilkTerminalRenderer(host.Gl, atlas);
-        using ImagePixels green = ImageTestData.Rgba(1, 1, (0, 255, 0, 255));
-        CellInstance[] cells = { BackgroundCell(1, 1, 255, 0, 0) };
-        ImageDrawList images = CellImage(green, ImageLayer.AboveText);
-
-        Draw(host, renderer, atlas, cells, Array.Empty<ChromeQuadInstance>(), -1, images);
-        Assert.Equal(Green, At(ReadFramebuffer(host), host, 20, 20));
-
-        renderer.ResetImagesAfterContextLoss();
-        Assert.Equal(0L, renderer.EstimatedImageTextureBytes);
-        Draw(host, renderer, atlas, cells, Array.Empty<ChromeQuadInstance>(), -1, images);
-
-        byte[] frame = ReadFramebuffer(host);
-        Assert.Equal(Green, At(frame, host, 20, 20));   // re-uploaded and drawn
-        Assert.Equal(Red, At(frame, host, 60, 60));     // cell (1,1) background still drawn with the reset caches
-        Assert.True(renderer.EstimatedImageTextureBytes > 0);
-    }
 }

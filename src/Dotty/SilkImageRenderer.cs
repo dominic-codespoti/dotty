@@ -108,19 +108,6 @@ public sealed unsafe class SilkImageRenderer : IDisposable
         _textures.EndFrame();
     }
 
-    /// <summary>
-    /// The GL context was replaced: texture names and all GL objects are invalid. Recreates the
-    /// renderer's objects and forgets cached textures; the caller must also invalidate its own
-    /// binding cache.
-    /// </summary>
-    public void ResetAfterContextLoss()
-    {
-        _textures.ResetAfterContextLoss();
-        _instanceCapacityBytes = 0;
-        _prepared = false;
-        CreateGlObjects();
-    }
-
     public void Dispose()
     {
         if (_disposed)

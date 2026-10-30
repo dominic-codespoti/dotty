@@ -1,5 +1,7 @@
 using System;
 using Dotty.Rendering.Gpu;
+using Dotty.Runtime.ContextMenu;
+using Dotty.Runtime.Diagnostics;
 using Dotty.Runtime.Prompt;
 using Dotty.Silk.Rendering;
 using Silk.NET.GLFW;
@@ -7,15 +9,24 @@ using Silk.NET.GLFW;
 namespace Dotty.Silk;
 
 /// <summary>
-/// Render-failure and context-loss recovery (plan R4, plan-11 WI-5a/5b): retry once, rebuild the GL objects once,
-/// then ask the user through a host prompt. A render failure never closes the window or ends the shells. UI thread.
+/// Render-failure and context-loss recovery (plan R4, plan-11 WI-5a/5b): an exception is retried once, then the GL
+/// objects are rebuilt once, then the user is asked through a host prompt. A driver reset loses the context for
+/// good, so rendering stops with a notice instead. A render failure never closes the window or ends the shells.
+/// UI thread.
 /// </summary>
 internal static partial class DottyWindowHost
 {
+    private const string ContextLostWindowTitle = "Dotty — GPU reset, rendering stopped; restart Dotty";
+
     private static RenderRecoveryPolicy _renderRecovery = new();
     private static GlContextResetProbe? _contextResetProbe;
     private static bool _verifyContextAfterRebuild;
     private static bool _renderFailurePromptShown;
+    private static ContextMenuModel? _renderFailurePrompt;
+    private static bool _contextLossReported;
+
+    /// <summary>The context is lost for good (<see cref="RenderRecoveryState.ContextLost"/>): nothing is drawn until Dotty restarts.</summary>
+    private static bool RenderingStopped => _renderRecovery.State == RenderRecoveryState.ContextLost;
 
     /// <summary>
     /// Asks GLFW for a robust context that reports driver resets (<c>GLFW_CONTEXT_ROBUSTNESS</c> =
@@ -31,6 +42,8 @@ internal static partial class DottyWindowHost
         _renderRecovery = new RenderRecoveryPolicy();
         _verifyContextAfterRebuild = false;
         _renderFailurePromptShown = false;
+        _renderFailurePrompt = null;
+        _contextLossReported = false;
         _contextResetProbe = GlContextResetProbe.TryCreate(
             _gl, _glMajorVersion, _glMinorVersion, static name => _glfwApi!.GetProcAddress(name));
         if (_graphicsClassification.IsSoftware)
@@ -49,11 +62,11 @@ internal static partial class DottyWindowHost
         if (status == 0)
             return false;
 
-        HandleContextReset(status);
+        HandleContextLost(status);
         return true;
     }
 
-    /// <summary>A presented frame: lets the policy settle, and checks that a reset-triggered rebuild took.</summary>
+    /// <summary>A presented frame: lets the policy settle, and checks that the context survived a rebuild.</summary>
     private static void OnFramePresented()
     {
         _renderRecovery.OnFramePresented(GetClockMilliseconds());
@@ -64,16 +77,13 @@ internal static partial class DottyWindowHost
         // A context lost on reset stays lost until it is recreated, which needs a new window; every command then
         // fails with GL_CONTEXT_LOST and the rebuilt objects are as dead as the old ones.
         if (GlContextResetProbe.ContextStillLost(_gl))
-            HandleContextReset(GlContextResetProbe.GlContextLost);
+            HandleContextLost(GlContextResetProbe.GlContextLost);
     }
 
-    private static void HandleContextReset(uint status)
-    {
-        string reason = "OpenGL " + GlContextResetProbe.DescribeStatus(status);
-        RenderRecoveryAction action = _renderRecovery.OnContextReset(GetClockMilliseconds());
-        Console.Error.WriteLine($"[render] {reason}; recovery: {action}.");
-        ApplyRenderRecovery(action, reason, contextReset: true);
-    }
+    private static void HandleContextLost(uint status) =>
+        ApplyRenderRecovery(
+            _renderRecovery.OnContextLost(GetClockMilliseconds()),
+            "OpenGL " + GlContextResetProbe.DescribeStatus(status));
 
     /// <summary>The frame threw. Replaces the former "print and close the window" path.</summary>
     private static void HandleRenderFailure(Exception exception)
@@ -82,10 +92,10 @@ internal static partial class DottyWindowHost
         Console.Error.WriteLine($"[render] frame failed ({exception.GetType().Name}: {exception.Message}); recovery: {action}.");
         if (action == RenderRecoveryAction.Fatal)
             Console.Error.WriteLine(exception);
-        ApplyRenderRecovery(action, exception.Message, contextReset: false);
+        ApplyRenderRecovery(action, exception.Message);
     }
 
-    private static void ApplyRenderRecovery(RenderRecoveryAction action, string reason, bool contextReset)
+    private static void ApplyRenderRecovery(RenderRecoveryAction action, string reason)
     {
         switch (action)
         {
@@ -96,14 +106,17 @@ internal static partial class DottyWindowHost
             case RenderRecoveryAction.Rebuild:
                 if (TryRebuildRenderer(out string? error))
                 {
-                    _verifyContextAfterRebuild = contextReset;
+                    _verifyContextAfterRebuild = true;
                 }
                 else
                 {
                     Console.Error.WriteLine($"[render] rebuilding the renderer failed: {error}");
                     // Counts as the next failure; after a rebuild that is fatal, so this never recurses twice.
-                    ApplyRenderRecovery(_renderRecovery.OnRenderFailure(GetClockMilliseconds()), error!, contextReset: false);
+                    ApplyRenderRecovery(_renderRecovery.OnRenderFailure(GetClockMilliseconds()), error!);
                 }
+                break;
+            case RenderRecoveryAction.StopRendering:
+                StopRenderingAfterContextLoss(reason);
                 break;
             default:
                 EnterFatalRenderState(reason);
@@ -112,30 +125,36 @@ internal static partial class DottyWindowHost
     }
 
     /// <summary>
-    /// Disposes the renderer and creates a new one on the same context and atlas: new programs, buffers, atlas
-    /// textures (the new texture manager re-uploads the whole atlas) and image textures. Every committed frame
-    /// stamp is dropped so the next frame draws everything.
+    /// Creates a new renderer on the same context and atlas: new programs, buffers, atlas textures (the new texture
+    /// manager re-uploads the whole atlas) and image textures. The old renderer is disposed only once the new one
+    /// exists, so a failed construction leaves the old one in place rather than a disposed instance. Every committed
+    /// frame stamp is dropped so the next frame draws everything.
     /// </summary>
     private static bool TryRebuildRenderer(out string? error)
     {
+        SilkTerminalRenderer rebuilt;
         try
         {
-            _renderer?.Dispose();
-        }
-        catch (Exception exception)
-        {
-            // Deleting objects of a broken or lost context may fail; the new renderer does not depend on them.
-            Console.Error.WriteLine($"[render] disposing the failed renderer: {exception.Message}");
-        }
-
-        try
-        {
-            _renderer = new SilkTerminalRenderer(_gl, _atlas);
+            rebuilt = new SilkTerminalRenderer(_gl, _atlas);
         }
         catch (Exception exception)
         {
             error = exception.Message;
             return false;
+        }
+
+        SilkTerminalRenderer previous = _renderer;
+        _renderer = rebuilt;
+        try
+        {
+            // The overlay binds through the old renderer's binding cache; it is recreated lazily against the new one.
+            DisposeBellOverlay();
+            previous?.Dispose();
+        }
+        catch (Exception exception)
+        {
+            // Deleting objects of a broken context may fail; the new renderer does not depend on them.
+            Console.Error.WriteLine($"[render] disposing the failed renderer: {exception.Message}");
         }
 
         _committedFramebufferWidth = -1;
@@ -164,6 +183,41 @@ internal static partial class DottyWindowHost
             return;
         }
 
+        WaitWithoutRendering();
+    }
+
+    /// <summary>
+    /// The context is lost for good (a driver reset under <c>GLFW_LOSE_CONTEXT_ON_RESET</c>): rebuilding on it or
+    /// drawing a prompt through it cannot work, and recreating the context (a new window) is not implemented. Once,
+    /// say so on stderr, in the crash log and in the window title (no GL needed). Then wait for new work without
+    /// drawing: the window stays open and the shells keep running until the user restarts Dotty.
+    /// </summary>
+    private static void StopRenderingAfterContextLoss(string reason)
+    {
+        if (!_contextLossReported)
+        {
+            _contextLossReported = true;
+            _verifyContextAfterRebuild = false;
+            // A failure prompt shown before the loss can no longer be drawn; it must not keep taking input.
+            if (_renderFailurePrompt is { } prompt && _mouseHost is { } host && ReferenceEquals(host.ActiveContextMenu, prompt))
+                host.ActiveContextMenu = null;
+            string? logPath = CrashReporter.Report(
+                "GPU reset (rendering stopped)",
+                $"{reason}. The OpenGL context is lost; rendering stopped, the window and the shells were kept. " +
+                $"Renderer: {_graphicsClassification.Summary}. Render failures: {_renderRecovery.FailureCount}.");
+            Console.Error.WriteLine(
+                $"[render] {reason}: the GPU driver reset and the OpenGL context is lost. Rendering stopped; the " +
+                "shells keep running. Restart Dotty to draw again." +
+                (logPath is null ? string.Empty : $" Crash log: {logPath}"));
+            AssignWindowTitle(ContextLostWindowTitle);
+        }
+
+        WaitWithoutRendering();
+    }
+
+    /// <summary>Drops the pending frame reasons and blocks until new work, so a window that cannot draw never spins.</summary>
+    private static void WaitWithoutRendering()
+    {
         WindowPresentationGate.Consume();
         HostWake.Reset();
         WaitForWork(includeBlink: false);
@@ -186,18 +240,22 @@ internal static partial class DottyWindowHost
             onDismissed: null);
         var size = _window.FramebufferSize;
         ClipboardReadPromptBuilder.Center(prompt, size.X, size.Y, _cellWidth * _scale, _cellHeight * _scale);
+        _renderFailurePrompt = prompt;
         _mouseHost.ActiveContextMenu = prompt;
         WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
     }
 
     private static void RetryRenderingFromPrompt()
     {
+        if (RenderingStopped)
+            return;
+
         _renderRecovery.Reset();
         _renderFailurePromptShown = false;
-        ApplyRenderRecovery(RenderRecoveryAction.Rebuild, "rebuild requested", contextReset: false);
+        ApplyRenderRecovery(RenderRecoveryAction.Rebuild, "rebuild requested");
     }
 
-    /// <summary><c>STATS</c>: <c>,"renderRecoveryState":"...","renderFailures":n</c>.</summary>
+    /// <summary><c>STATS</c>: <c>,"renderRecoveryState":"...","renderFailures":n</c> (<c>ContextLost</c> once rendering stopped).</summary>
     private static void AppendRenderRecoveryJson(System.Text.StringBuilder json)
     {
         json.Append(",\"renderRecoveryState\":").Append(QuoteJson(_renderRecovery.State.ToString()))

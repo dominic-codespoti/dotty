@@ -390,6 +390,7 @@ public sealed class KittyControllerTests
         baseline.AssertRestored();
         Assert.False(rig.Controller.Enabled);
 
+        rig.Replies.Clear();                   // the OK for i=1 was sent before the dispose
         rig.Apc("i=3,s=1,v=1,f=24", OnePixel); // ignored: no exception, no reply
         Assert.Empty(rig.Replies);
         baseline.AssertRestored();

@@ -449,6 +449,7 @@ public sealed class KittyRelativePlacementTests
     {
         using var rig = RigWithImages(1);
         rig.Apc("a=p,i=1,p=1,C=1");
+        rig.Replies.Clear();                                     // the a=p with an id answers OK
         rig.Apc("a=T,f=24,s=1,v=1,P=1,Q=1,H=1", "AAAA");        // no id: nothing to answer, nothing can address it
         Assert.Empty(rig.Replies);
         Assert.Equal(2, rig.Store.Count);

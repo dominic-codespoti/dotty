@@ -57,7 +57,8 @@ public sealed class PastePromptBuilderTests
     {
         ContextMenuModel menu = PastePromptBuilder.Build("x\x1b[201~", PasteRisk.ControlChars | PasteRisk.EndMarker, () => { });
 
-        Assert.Equal("Paste 1 line, 6 characters?", menu.Items[0].Label);
+        // "x" + ESC + "[201~" is 7 characters (the title counts UTF-16 characters of the clipboard text).
+        Assert.Equal("Paste 1 line, 7 characters?", menu.Items[0].Label);
     }
 
     [Fact]

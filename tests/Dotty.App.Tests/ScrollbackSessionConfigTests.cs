@@ -148,13 +148,14 @@ public sealed class ScrollbackSessionConfigTests : IDisposable
         Assert.Equal(2000, second.Adapter.Buffer.ActiveBuffer.ScrollbackCapacity);
     }
 
+    // Dotty writes no config.json on its own (docs/Configuration.md); the scrollback block is checked in the
+    // serialized defaults, the shape config.json is read in.
     [Fact]
-    public void GeneratedDefaultConfigFile_ContainsScrollbackBlock()
+    public void SerializedDefaultConfig_ContainsScrollbackBlock()
     {
         LoadConfig(null);
-        string path = Path.Combine(_home, "config.json");
-        Assert.True(File.Exists(path));
-        using JsonDocument document = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.False(File.Exists(Path.Combine(_home, "config.json")));
+        using JsonDocument document = JsonDocument.Parse(UserConfigService.Serialize(new DottyUserConfig()));
         JsonElement block = document.RootElement.GetProperty("scrollback");
         Assert.Equal(5000, block.GetProperty("limitLines").GetInt32());
         Assert.Equal(67_108_864L, block.GetProperty("limitBytes").GetInt64());

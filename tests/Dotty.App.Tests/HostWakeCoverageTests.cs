@@ -24,28 +24,39 @@ public sealed partial class HostWakeCoverageTests : IDisposable
 
     public void Dispose() => HostWake.Shutdown();
 
+    // A dedicated thread: the constructor (the "UI thread" for HostWake) runs on a pool thread, so Task.Run may
+    // execute on that very thread, where Request deliberately posts nothing.
+    private static T OnAnotherThread<T>(Func<T> action)
+    {
+        T result = default!;
+        var thread = new Thread(() => result = action());
+        thread.Start();
+        thread.Join();
+        return result;
+    }
+
     [Fact]
-    public async Task LifecycleEnqueueFromAnotherThreadPostsAWake()
+    public void LifecycleEnqueueFromAnotherThreadPostsAWake()
     {
         using var lifecycle = new WindowLifecycleCoordinator();
 
-        bool enqueued = await Task.Run(() => lifecycle.TryEnqueue(static () => { }), TestContext.Current.CancellationToken);
+        bool enqueued = OnAnotherThread(() => lifecycle.TryEnqueue(static () => { }));
 
         Assert.True(enqueued);
         Assert.Equal(1, Volatile.Read(ref _posts));
     }
 
     [Fact]
-    public async Task GateInvalidateAndRequeueFromAnotherThreadPostAWake()
+    public void GateInvalidateAndRequeueFromAnotherThreadPostAWake()
     {
         WindowFrameReason previous = WindowPresentationGate.Consume();
         try
         {
-            await Task.Run(() => WindowPresentationGate.Invalidate(WindowFrameReason.Content), TestContext.Current.CancellationToken);
+            OnAnotherThread(() => { WindowPresentationGate.Invalidate(WindowFrameReason.Content); return 0; });
             Assert.Equal(1, Volatile.Read(ref _posts));
             HostWake.Reset();
 
-            await Task.Run(() => WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload), TestContext.Current.CancellationToken);
+            OnAnotherThread(() => { WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload); return 0; });
             Assert.Equal(2, Volatile.Read(ref _posts));
         }
         finally

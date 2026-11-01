@@ -27,7 +27,8 @@ compiler. Windows ConPTY requires build 17763 or newer.
 
 Minimum OS versions of the release archives are build targets checked against
 the shipped binaries, not promises: the Linux x64 build runs in a Debian 11
-container and targets glibc 2.31, the macOS builds target macOS 13.0, and
+container and targets glibc 2.31, the macOS builds target macOS 15.0 (the bundled Lua library from KeraLua
+is built for macOS 15), and
 Windows needs build 17763 for ConPTY (declared, not measured). CI fails when a
 shipped binary needs more than its target (`scripts/dist/check_baseline.py`,
 `scripts/dist/baseline-targets.json`), and each release's notes and attached

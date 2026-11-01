@@ -78,7 +78,7 @@ keeping it beside the DLLs included in the archive. The archives are
 self-contained; no .NET installation is needed. Windows requires build 17763+
 (or Windows 11) and an OpenGL 3.3 driver. The minimum glibc (Linux) and macOS
 versions of each release are measured from its binaries and listed in its
-release notes and `baselines.json`; the builds target glibc 2.31 and macOS 13.0
+release notes and `baselines.json`; the builds target glibc 2.31 and macOS 15.0
 (see [Platform Support](docs/PlatformSupport.md#requirements)).
 
 ## Quick Start

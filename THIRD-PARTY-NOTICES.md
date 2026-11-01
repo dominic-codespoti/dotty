@@ -15,8 +15,8 @@ shipped as `licenses/GLFW-LICENSE.md` in every archive.
 | Microsoft.DotNet.PlatformAbstractions, Microsoft.Extensions.DependencyModel (Silk.NET dependencies) | 3.1.6, 9.0.9 | Compiled into `dotty` where referenced | MIT |
 | SkiaSharp, SkiaSharp.HarfBuzz | 4.151.1 | Compiled into `dotty`; native `libSkiaSharp` beside it | MIT |
 | Skia (inside `libSkiaSharp`) | as bundled by SkiaSharp 4.151.1 | Native library | BSD-3-Clause |
-| HarfBuzzSharp | 14.2.1.1 | Compiled into `dotty`; native `libHarfBuzzSharp` beside it when present | MIT |
-| HarfBuzz (inside `libHarfBuzzSharp`) | as bundled by HarfBuzzSharp 14.2.1.1 | Native library | "Old MIT" |
+| HarfBuzzSharp | 14.2.1.2 | Compiled into `dotty`; native `libHarfBuzzSharp` beside it | MIT |
+| HarfBuzz (inside `libHarfBuzzSharp`) | as bundled by HarfBuzzSharp 14.2.1.2 | Native library | "Old MIT" |
 | KeraLua | 1.4.9 | Compiled into `dotty` | MIT |
 | Lua 5.4 (`liblua54`/`lua54.dll`, from KeraLua) | as bundled by KeraLua 1.4.9 | Native library | MIT |
 | GLFW (Clear Code 3.6 development fork, commit `068858eece20cd6b6128f6f07a1d61f2dc2cbfaf`, **modified**: local patches listed in `vendor/glfw/SOURCE.json`) | 3.6.0 | Native `libglfw.so.3`/`libglfw.3.dylib`/`glfw3.dll`, built from `vendor/glfw/source`; replaces the GLFW 3.4.0 binary of the `Ultz.Native.GLFW` package that `Silk.NET.Windowing.Glfw` restores | zlib/libpng |
@@ -45,9 +45,10 @@ restore disagree. "Platforms" lists the host OSes whose restore includes the pac
 
 | Package | Version | Platforms | Component above |
 |---|---|---|---|
-| HarfBuzzSharp | 14.2.1.1 | all | HarfBuzzSharp |
-| HarfBuzzSharp.NativeAssets.macOS | 14.2.1.1 | all | HarfBuzzSharp |
-| HarfBuzzSharp.NativeAssets.Win32 | 14.2.1.1 | all | HarfBuzzSharp |
+| HarfBuzzSharp | 14.2.1.2 | all | HarfBuzzSharp |
+| HarfBuzzSharp.NativeAssets.Linux | 14.2.1.2 | linux | HarfBuzzSharp |
+| HarfBuzzSharp.NativeAssets.macOS | 14.2.1.2 | all | HarfBuzzSharp |
+| HarfBuzzSharp.NativeAssets.Win32 | 14.2.1.2 | all | HarfBuzzSharp |
 | KeraLua | 1.4.9 | all | KeraLua |
 | Microsoft.DotNet.PlatformAbstractions | 3.1.6 | all | Microsoft.DotNet.PlatformAbstractions |
 | Microsoft.Extensions.DependencyModel | 9.0.9 | all | Microsoft.Extensions.DependencyModel |

@@ -19,8 +19,10 @@ On Windows `dotty.exe` is a GUI-subsystem program, so desktop and Start-menu
 launches never open a console. Help, version, `+actions` and launch errors
 attach to the console of the launching shell (`AttachConsole(ATTACH_PARENT_PROCESS)`)
 before printing; output redirected to a file or pipe is written there directly.
-`cmd.exe` does not wait for GUI programs, so the output may appear after the next
-prompt; use `start /wait dotty --version` or redirect to a file when that matters.
+`cmd.exe` and PowerShell do not wait for GUI programs, so the output may appear after the next
+prompt and PowerShell leaves `$LASTEXITCODE` unset; use `start /wait dotty --version` (cmd),
+`dotty --version | Out-String` or `Start-Process dotty -ArgumentList '--version' -Wait -NoNewWindow`
+(PowerShell), or redirect to a file when the output or exit status matters.
 
 Examples:
 

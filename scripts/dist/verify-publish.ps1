@@ -54,6 +54,22 @@ Require-File 'License.md'
 Require-File 'THIRD-PARTY-NOTICES.md'
 Require-File 'licenses\GLFW-LICENSE.md'
 
+# dotty.exe is a GUI-subsystem (WinExe) binary: PowerShell's call operator does not wait for those and leaves
+# $LASTEXITCODE unset. Run it with Start-Process -Wait and redirected streams instead; returns @(exit, output).
+function Invoke-Dotty([string[]]$arguments) {
+    $out = [System.IO.Path]::GetTempFileName()
+    $err = [System.IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process -FilePath $exe -ArgumentList $arguments -Wait -PassThru -NoNewWindow `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+        $text = ((Get-Content -LiteralPath $out -Raw) + (Get-Content -LiteralPath $err -Raw))
+        return @($process.ExitCode, $text)
+    }
+    finally {
+        Remove-Item -LiteralPath $out, $err -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $exe = Join-Path $PublishDir 'dotty.exe'
 if (Test-Path -LiteralPath $exe -PathType Leaf) {
     # Isolate the run from the runner's real configuration directories.
@@ -64,8 +80,7 @@ if (Test-Path -LiteralPath $exe -PathType Leaf) {
     $env:APPDATA = Join-Path $sandbox 'appdata'
     $env:DOTTY_CONFIG_HOME = Join-Path $sandbox 'config'
     try {
-        $versionOutput = & $exe --version 2>&1
-        $versionExit = $LASTEXITCODE
+        $versionExit, $versionOutput = Invoke-Dotty @('--version')
         if ($versionExit -ne 0) {
             $failures.Add("dotty --version exited with status ${versionExit}: $versionOutput")
         }
@@ -84,8 +99,7 @@ if (Test-Path -LiteralPath $exe -PathType Leaf) {
             }
         }
 
-        $explainOutput = & $exe '+explain-config' 'font.size' 2>&1
-        $explainExit = $LASTEXITCODE
+        $explainExit, $explainOutput = Invoke-Dotty @('+explain-config', 'font.size')
         if ($explainExit -ne 0) {
             $failures.Add("dotty +explain-config font.size exited with status ${explainExit}: $explainOutput")
         }

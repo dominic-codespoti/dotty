@@ -226,5 +226,6 @@ jobs:
           path: |
             publish/${{ matrix.rid }}/
             dist/baselines-${{ matrix.rid }}.json
+            dist/measure-${{ matrix.rid }}.json
           retention-days: 7
           if-no-files-found: error

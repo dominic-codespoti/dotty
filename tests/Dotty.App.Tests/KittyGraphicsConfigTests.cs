@@ -129,7 +129,10 @@ public sealed class KittyGraphicsConfigTests
     {
         var o = new KittyGraphicsOptions
         {
-            StorageLimitBytes = -1, MaxPayloadBytes = 0, MaxImageDimension = -3, MaxPlacementsPerScreen = 0,
+            StorageLimitBytes = -1,
+            MaxPayloadBytes = 0,
+            MaxImageDimension = -3,
+            MaxPlacementsPerScreen = 0,
             Media = KittyMediaFlags.None,
         }.Normalize();
         Assert.Equal(DottyDefaults.KittyImageStorageLimitBytes, o.StorageLimitBytes);

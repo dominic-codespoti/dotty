@@ -113,35 +113,35 @@ public static class ShellIntegrationLauncher
         switch (kind)
         {
             case ShellKind.Bash:
-            {
-                string rcfile = Path.Combine(integrationDir, Path.Combine(BashRcfileParts));
-                return new ShellLaunch([executable, "--rcfile", rcfile, "-i"], env);
-            }
+                {
+                    string rcfile = Path.Combine(integrationDir, Path.Combine(BashRcfileParts));
+                    return new ShellLaunch([executable, "--rcfile", rcfile, "-i"], env);
+                }
             case ShellKind.Zsh:
-            {
-                if (isWindows) return ShellLaunch.None;
-                env["ZDOTDIR"] = Path.Combine(integrationDir, Path.Combine(ZshDirParts));
-                string? userZdotdir = getenv("ZDOTDIR");
-                if (!string.IsNullOrEmpty(userZdotdir))
-                    env["DOTTY_ZSH_ZDOTDIR"] = userZdotdir;
-                return new ShellLaunch(null, env);
-            }
+                {
+                    if (isWindows) return ShellLaunch.None;
+                    env["ZDOTDIR"] = Path.Combine(integrationDir, Path.Combine(ZshDirParts));
+                    string? userZdotdir = getenv("ZDOTDIR");
+                    if (!string.IsNullOrEmpty(userZdotdir))
+                        env["DOTTY_ZSH_ZDOTDIR"] = userZdotdir;
+                    return new ShellLaunch(null, env);
+                }
             case ShellKind.Fish:
-            {
-                // ':' separates XDG_DATA_DIRS entries; a directory containing one cannot be expressed.
-                if (isWindows || integrationDir.Contains(':')) return ShellLaunch.None;
-                string? existing = getenv("XDG_DATA_DIRS");
-                if (string.IsNullOrEmpty(existing)) existing = DefaultXdgDataDirs;
-                env["XDG_DATA_DIRS"] = Path.Combine(integrationDir, Path.Combine(FishDirParts)) + ":" + existing;
-                return new ShellLaunch(null, env);
-            }
+                {
+                    // ':' separates XDG_DATA_DIRS entries; a directory containing one cannot be expressed.
+                    if (isWindows || integrationDir.Contains(':')) return ShellLaunch.None;
+                    string? existing = getenv("XDG_DATA_DIRS");
+                    if (string.IsNullOrEmpty(existing)) existing = DefaultXdgDataDirs;
+                    env["XDG_DATA_DIRS"] = Path.Combine(integrationDir, Path.Combine(FishDirParts)) + ":" + existing;
+                    return new ShellLaunch(null, env);
+                }
             case ShellKind.PowerShell:
-            {
-                string script = EscapePowerShellSingleQuoted(Path.Combine(integrationDir, "Dotty.ps1"));
-                string expression =
-                    "try { Invoke-Expression ([System.IO.File]::ReadAllText('" + script + "')) } catch { }";
-                return new ShellLaunch([executable, "-NoLogo", "-NoExit", "-Command", expression], env);
-            }
+                {
+                    string script = EscapePowerShellSingleQuoted(Path.Combine(integrationDir, "Dotty.ps1"));
+                    string expression =
+                        "try { Invoke-Expression ([System.IO.File]::ReadAllText('" + script + "')) } catch { }";
+                    return new ShellLaunch([executable, "-NoLogo", "-NoExit", "-Command", expression], env);
+                }
             default:
                 return ShellLaunch.None;
         }

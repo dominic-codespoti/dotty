@@ -187,8 +187,14 @@ public sealed class KittyControlParserTests
     }
 
     [Theory]
-    [InlineData('t')] [InlineData('T')] [InlineData('q')] [InlineData('p')]
-    [InlineData('d')] [InlineData('f')] [InlineData('a')] [InlineData('c')]
+    [InlineData('t')]
+    [InlineData('T')]
+    [InlineData('q')]
+    [InlineData('p')]
+    [InlineData('d')]
+    [InlineData('f')]
+    [InlineData('a')]
+    [InlineData('c')]
     public void AllActionLetters_MapToEnum(char a)
     {
         var c = ParseOk("a=" + a);
@@ -204,11 +210,25 @@ public sealed class KittyControlParserTests
     }
 
     [Theory]
-    [InlineData("i", 'i')] [InlineData("I", 'I')] [InlineData("p", 'p')] [InlineData("S", 'S')]
-    [InlineData("O", 'O')] [InlineData("s", 's')] [InlineData("v", 'v')] [InlineData("x", 'x')]
-    [InlineData("y", 'y')] [InlineData("w", 'w')] [InlineData("h", 'h')] [InlineData("X", 'X')]
-    [InlineData("Y", 'Y')] [InlineData("c", 'c')] [InlineData("r", 'r')] [InlineData("P", 'P')]
-    [InlineData("Q", 'Q')] [InlineData("f", 'f')] [InlineData("N", 'N')]
+    [InlineData("i", 'i')]
+    [InlineData("I", 'I')]
+    [InlineData("p", 'p')]
+    [InlineData("S", 'S')]
+    [InlineData("O", 'O')]
+    [InlineData("s", 's')]
+    [InlineData("v", 'v')]
+    [InlineData("x", 'x')]
+    [InlineData("y", 'y')]
+    [InlineData("w", 'w')]
+    [InlineData("h", 'h')]
+    [InlineData("X", 'X')]
+    [InlineData("Y", 'Y')]
+    [InlineData("c", 'c')]
+    [InlineData("r", 'r')]
+    [InlineData("P", 'P')]
+    [InlineData("Q", 'Q')]
+    [InlineData("f", 'f')]
+    [InlineData("N", 'N')]
     public void UnsignedKeys_AcceptUintMax_AndRejectOneMore(string key, char letter)
     {
         var ok = ParseOk(key + "=4294967295");
@@ -241,7 +261,9 @@ public sealed class KittyControlParserTests
     }
 
     [Theory]
-    [InlineData("z")] [InlineData("H")] [InlineData("V")]
+    [InlineData("z")]
+    [InlineData("H")]
+    [InlineData("V")]
     public void SignedKeys_FullIntRange(string key)
     {
         char l = key[0];
@@ -318,8 +340,14 @@ public sealed class KittyControlParserTests
     }
 
     [Theory]
-    [InlineData("m", 0)] [InlineData("m", 1)] [InlineData("m", 255)] [InlineData("m", 256)]
-    [InlineData("C", 1)] [InlineData("C", 300)] [InlineData("U", 1)] [InlineData("U", 70000)]
+    [InlineData("m", 0)]
+    [InlineData("m", 1)]
+    [InlineData("m", 255)]
+    [InlineData("m", 256)]
+    [InlineData("C", 1)]
+    [InlineData("C", 300)]
+    [InlineData("U", 1)]
+    [InlineData("U", 70000)]
     public void ByteKeys_SaturateAt255(string key, long value)
     {
         var c = ParseOk(key + "=" + value);

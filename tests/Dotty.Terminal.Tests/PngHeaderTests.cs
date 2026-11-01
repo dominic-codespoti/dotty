@@ -36,11 +36,21 @@ public sealed class PngHeaderTests
     }
 
     [Theory]
-    [InlineData(0, 1)] [InlineData(0, 2)] [InlineData(0, 4)] [InlineData(0, 8)] [InlineData(0, 16)]
-    [InlineData(2, 8)] [InlineData(2, 16)]
-    [InlineData(3, 1)] [InlineData(3, 2)] [InlineData(3, 4)] [InlineData(3, 8)]
-    [InlineData(4, 8)] [InlineData(4, 16)]
-    [InlineData(6, 8)] [InlineData(6, 16)]
+    [InlineData(0, 1)]
+    [InlineData(0, 2)]
+    [InlineData(0, 4)]
+    [InlineData(0, 8)]
+    [InlineData(0, 16)]
+    [InlineData(2, 8)]
+    [InlineData(2, 16)]
+    [InlineData(3, 1)]
+    [InlineData(3, 2)]
+    [InlineData(3, 4)]
+    [InlineData(3, 8)]
+    [InlineData(4, 8)]
+    [InlineData(4, 16)]
+    [InlineData(6, 8)]
+    [InlineData(6, 16)]
     public void AcceptsEveryLegalColourTypeDepthPair(int color, int depth)
     {
         var png = Png(Ihdr(640, 480, (byte)depth, (byte)color));
@@ -53,9 +63,18 @@ public sealed class PngHeaderTests
     }
 
     [Theory]
-    [InlineData(1, 8)] [InlineData(5, 8)] [InlineData(7, 8)] [InlineData(255, 8)] // colour types
-    [InlineData(2, 1)] [InlineData(2, 4)] [InlineData(6, 4)] [InlineData(4, 1)]    // depth too small for channels
-    [InlineData(3, 16)] [InlineData(0, 3)] [InlineData(0, 0)] [InlineData(6, 32)]
+    [InlineData(1, 8)]
+    [InlineData(5, 8)]
+    [InlineData(7, 8)]
+    [InlineData(255, 8)] // colour types
+    [InlineData(2, 1)]
+    [InlineData(2, 4)]
+    [InlineData(6, 4)]
+    [InlineData(4, 1)]    // depth too small for channels
+    [InlineData(3, 16)]
+    [InlineData(0, 3)]
+    [InlineData(0, 0)]
+    [InlineData(6, 32)]
     public void RejectsIllegalColourTypeDepthPair(int color, int depth)
     {
         Assert.False(PngHeader.TryRead(Png(Ihdr(4, 4, (byte)depth, (byte)color)), out var info));

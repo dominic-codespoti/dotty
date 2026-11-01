@@ -128,8 +128,15 @@ internal static class ImageTestData
         {
             list.Quads[i] = new ImageQuadInstance
             {
-                X = items[i].x, Y = items[i].y, W = items[i].w, H = items[i].h,
-                U0 = 0, V0 = 0, U1 = 1, V1 = 1, Alpha = 1,
+                X = items[i].x,
+                Y = items[i].y,
+                W = items[i].w,
+                H = items[i].h,
+                U0 = 0,
+                V0 = 0,
+                U1 = 1,
+                V1 = 1,
+                Alpha = 1,
             };
             list.Draws[i] = new ImageDraw(items[i].px, i, 1, items[i].layer);
         }

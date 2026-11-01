@@ -26,9 +26,16 @@ public sealed class SilkTerminalRendererOpacityTests
         using var renderer = new SilkTerminalRenderer(host.Gl, atlas) { BackgroundAlpha = (byte)alpha };
         var cell = new CellInstance
         {
-            Col = 0, Row = 0,
-            FgR = 255, FgG = 255, FgB = 255, FgA = 255,
-            BgR = 255, BgG = 0, BgB = 0, BgA = 255,
+            Col = 0,
+            Row = 0,
+            FgR = 255,
+            FgG = 255,
+            FgB = 255,
+            FgA = 255,
+            BgR = 255,
+            BgG = 0,
+            BgB = 0,
+            BgA = 255,
         };
 
         renderer.Render(new[] { cell }, Array.Empty<ChromeQuadInstance>(), atlas.Width, atlas.Height, host.Width, host.Height,

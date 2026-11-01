@@ -110,7 +110,7 @@ public sealed class PixelOpsTests
     [Fact]
     public void UnpremultiplyKnownValues()
     {
-        byte[] px = [64, 32, 255, 128,   10, 20, 30, 255,   9, 9, 9, 0,   255, 255, 255, 100];
+        byte[] px = [64, 32, 255, 128, 10, 20, 30, 255, 9, 9, 9, 0, 255, 255, 255, 100];
         PixelOps.UnpremultiplyInPlace(px);
         // a=128: (64*255+64)/128 = 128; (32*255+64)/128 = 64; (255*255+64)/128 = 508 -> 255
         Assert.Equal(new byte[] { 128, 64, 255, 128 }, px.AsSpan(0, 4).ToArray());
@@ -323,7 +323,7 @@ public sealed class PixelOpsTests
     public void BlendWithOpaqueSourceReplacesAndTransparentSourceKeepsDestination()
     {
         var dst = Solid(2, 1, 50, 60, 70, 255);
-        byte[] src = [9, 8, 7, 255,   0, 0, 0, 0];
+        byte[] src = [9, 8, 7, 255, 0, 0, 0, 0];
         Assert.True(PixelOps.CompositeRect(dst, 8, 2, 1, 0, 0, src, 8, 2, 1, 0, 0, 2, 1, blend: true));
         Assert.Equal(new byte[] { 9, 8, 7, 255, 50, 60, 70, 255 }, dst);
     }

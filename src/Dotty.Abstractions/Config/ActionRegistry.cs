@@ -209,18 +209,18 @@ public static class ActionRegistry
                     i += 2;
                     break;
                 case 'u':
-                {
-                    if (i + 1 >= text.Length || text[i + 1] != '{')
-                        return Fail("\\u needs braces: \\u{1F600}", out result, out error);
-                    int close = text[(i + 2)..].IndexOf('}');
-                    if (close < 1 || close > 6
-                        || !int.TryParse(text.Slice(i + 2, close), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out int scalar)
-                        || !Rune.IsValid(scalar))
-                        return Fail("\\u{…} needs 1-6 hex digits naming a Unicode scalar value", out result, out error);
-                    builder.Append(new Rune(scalar).ToString());
-                    i += 2 + close;
-                    break;
-                }
+                    {
+                        if (i + 1 >= text.Length || text[i + 1] != '{')
+                            return Fail("\\u needs braces: \\u{1F600}", out result, out error);
+                        int close = text[(i + 2)..].IndexOf('}');
+                        if (close < 1 || close > 6
+                            || !int.TryParse(text.Slice(i + 2, close), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out int scalar)
+                            || !Rune.IsValid(scalar))
+                            return Fail("\\u{…} needs 1-6 hex digits naming a Unicode scalar value", out result, out error);
+                        builder.Append(new Rune(scalar).ToString());
+                        i += 2 + close;
+                        break;
+                    }
                 default:
                     return Fail($"unknown escape '\\{text[i]}'", out result, out error);
             }

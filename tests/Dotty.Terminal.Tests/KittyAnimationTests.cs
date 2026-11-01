@@ -1239,14 +1239,14 @@ public sealed class KittyAnimationTests
                     case 1:
                     case 2:
                     case 3:
-                    {
-                        int s = rnd.Next(1, 4), v = rnd.Next(1, 3);
-                        rig.Apc(
-                            $"a=f,i={id},s={s},v={v},f=32,r={rnd.Next(0, 5)},c={rnd.Next(0, 5)},x={rnd.Next(0, 4)},y={rnd.Next(0, 3)}," +
-                            $"z={rnd.Next(-2, 60)},X={rnd.Next(0, 2)},Y={rnd.Next(0, 2) * 4278190208L},N={rnd.Next(0, 2)}",
-                            B64(RandomBytes(4 * s * v, rnd.Next())));
-                        break;
-                    }
+                        {
+                            int s = rnd.Next(1, 4), v = rnd.Next(1, 3);
+                            rig.Apc(
+                                $"a=f,i={id},s={s},v={v},f=32,r={rnd.Next(0, 5)},c={rnd.Next(0, 5)},x={rnd.Next(0, 4)},y={rnd.Next(0, 3)}," +
+                                $"z={rnd.Next(-2, 60)},X={rnd.Next(0, 2)},Y={rnd.Next(0, 2) * 4278190208L},N={rnd.Next(0, 2)}",
+                                B64(RandomBytes(4 * s * v, rnd.Next())));
+                            break;
+                        }
                     case 4:
                         rig.Apc(
                             $"a=c,i={id},r={rnd.Next(0, 5)},c={rnd.Next(0, 5)},X={rnd.Next(0, 3)},Y={rnd.Next(0, 3)}," +
@@ -1265,12 +1265,12 @@ public sealed class KittyAnimationTests
                         rig.Apc($"a=d,d={(rnd.Next(2) == 0 ? 'i' : 'I')},i={id}");
                         break;
                     case 9:
-                    {
-                        now += rnd.Next(0, 120);
-                        long deadline = store.AdvanceAnimations(now, 24, 0);
-                        Assert.True(deadline == 0 || deadline > now, $"deadline {deadline} at {now}");
-                        break;
-                    }
+                        {
+                            now += rnd.Next(0, 120);
+                            long deadline = store.AdvanceAnimations(now, 24, 0);
+                            Assert.True(deadline == 0 || deadline > now, $"deadline {deadline} at {now}");
+                            break;
+                        }
                     default:
                         store.SetStorageLimit(rnd.Next(40, 400));
                         break;

@@ -34,63 +34,63 @@ internal sealed partial class KittyImageStore
             switch (p.Kind)
             {
                 case PlacementKind.Normal:
-                {
-                    long viewRow = p.AnchorRow - _viewTop + scrollOffset;
-                    if (viewRow + p.Geometry.EffRows <= 0 || viewRow >= rows)
-                        continue;
-                    dst.Add(Render(p, viewRow, p.AnchorCol));
-                    added++;
-                    break;
-                }
-                case PlacementKind.Relative:
-                {
-                    var root = FindRelativeRoot(p, out long dx, out long dy);
-                    if (root == null)
-                        continue;
-                    if (root.Kind == PlacementKind.Virtual)
                     {
-                        if (root.Image.ClientId == 0)
+                        long viewRow = p.AnchorRow - _viewTop + scrollOffset;
+                        if (viewRow + p.Geometry.EffRows <= 0 || viewRow >= rows)
                             continue;
-                        dst.AddVirtualChild(new KittyVirtualChild
-                        {
-                            Placement = Render(p, ClampOffset(dy), ClampOffset(dx)),
-                            VirtualInternalId = root.InternalId,
-                        });
+                        dst.Add(Render(p, viewRow, p.AnchorCol));
+                        added++;
                         break;
                     }
-                    long viewRow = root.AnchorRow - _viewTop + scrollOffset + dy;
-                    if (viewRow + p.Geometry.EffRows <= 0 || viewRow >= rows)
-                        continue;
-                    dst.Add(Render(p, viewRow, ClampOffset(root.AnchorCol + dx)));
-                    added++;
-                    break;
-                }
-                default:
-                {
-                    if (p.Image.ClientId == 0)
-                        continue;
-                    var g = p.Geometry;
-                    var pixels = p.Image.Root;
-                    float iw = pixels.Width, ih = pixels.Height;
-                    dst.AddVirtual(new KittyVirtualPlacement
+                case PlacementKind.Relative:
                     {
-                        Pixels = pixels,
-                        ImageSerial = pixels.Serial,
-                        ImageId = p.Image.ClientId,
-                        PlacementId = p.ClientId,
-                        InternalId = p.InternalId,
-                        Cols = g.EffCols,
-                        Rows = g.EffRows,
-                        SrcW = g.SrcW,
-                        SrcH = g.SrcH,
-                        U0 = g.SrcX / iw,
-                        V0 = g.SrcY / ih,
-                        U1 = (g.SrcX + g.SrcW) / iw,
-                        V1 = (g.SrcY + g.SrcH) / ih,
-                    });
-                    addedVirtual = true;
-                    break;
-                }
+                        var root = FindRelativeRoot(p, out long dx, out long dy);
+                        if (root == null)
+                            continue;
+                        if (root.Kind == PlacementKind.Virtual)
+                        {
+                            if (root.Image.ClientId == 0)
+                                continue;
+                            dst.AddVirtualChild(new KittyVirtualChild
+                            {
+                                Placement = Render(p, ClampOffset(dy), ClampOffset(dx)),
+                                VirtualInternalId = root.InternalId,
+                            });
+                            break;
+                        }
+                        long viewRow = root.AnchorRow - _viewTop + scrollOffset + dy;
+                        if (viewRow + p.Geometry.EffRows <= 0 || viewRow >= rows)
+                            continue;
+                        dst.Add(Render(p, viewRow, ClampOffset(root.AnchorCol + dx)));
+                        added++;
+                        break;
+                    }
+                default:
+                    {
+                        if (p.Image.ClientId == 0)
+                            continue;
+                        var g = p.Geometry;
+                        var pixels = p.Image.Root;
+                        float iw = pixels.Width, ih = pixels.Height;
+                        dst.AddVirtual(new KittyVirtualPlacement
+                        {
+                            Pixels = pixels,
+                            ImageSerial = pixels.Serial,
+                            ImageId = p.Image.ClientId,
+                            PlacementId = p.ClientId,
+                            InternalId = p.InternalId,
+                            Cols = g.EffCols,
+                            Rows = g.EffRows,
+                            SrcW = g.SrcW,
+                            SrcH = g.SrcH,
+                            U0 = g.SrcX / iw,
+                            V0 = g.SrcY / ih,
+                            U1 = (g.SrcX + g.SrcW) / iw,
+                            V1 = (g.SrcY + g.SrcH) / ih,
+                        });
+                        addedVirtual = true;
+                        break;
+                    }
             }
         }
         if (addedVirtual)

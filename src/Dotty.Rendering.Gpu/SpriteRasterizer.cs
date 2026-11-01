@@ -305,11 +305,11 @@ public static class SpriteRasterizer
         {
             case 0x2580: s.FillRect(0, 0, w, midY); return;
             case >= 0x2581 and <= 0x2588:
-            {
-                int top = Edge(h, 8 - (codePoint - 0x2580), 8);
-                s.FillRect(0, top, w, h - top);
-                return;
-            }
+                {
+                    int top = Edge(h, 8 - (codePoint - 0x2580), 8);
+                    s.FillRect(0, top, w, h - top);
+                    return;
+                }
             case >= 0x2589 and <= 0x258F:
                 s.FillRect(0, 0, Edge(w, 8 - (codePoint - 0x2588), 8), h);
                 return;
@@ -319,17 +319,25 @@ public static class SpriteRasterizer
             case 0x2593: s.FillRect(0, 0, w, h, 0xC0); return;
             case 0x2594: s.FillRect(0, 0, w, Edge(h, 1, 8)); return;
             case 0x2595:
-            {
-                int left = Edge(w, 7, 8);
-                s.FillRect(left, 0, w - left, h);
-                return;
-            }
+                {
+                    int left = Edge(w, 7, 8);
+                    s.FillRect(left, 0, w - left, h);
+                    return;
+                }
         }
         // Quadrants U+2596-259F: bit 0 upper left, 1 upper right, 2 lower left, 3 lower right.
         int quadrants = (codePoint - 0x2596) switch
         {
-            0 => 0b0100, 1 => 0b1000, 2 => 0b0001, 3 => 0b1101, 4 => 0b1001,
-            5 => 0b0111, 6 => 0b1011, 7 => 0b0010, 8 => 0b0110, _ => 0b1110,
+            0 => 0b0100,
+            1 => 0b1000,
+            2 => 0b0001,
+            3 => 0b1101,
+            4 => 0b1001,
+            5 => 0b0111,
+            6 => 0b1011,
+            7 => 0b0010,
+            8 => 0b0110,
+            _ => 0b1110,
         };
         if ((quadrants & 1) != 0) s.FillRect(0, 0, midX, midY);
         if ((quadrants & 2) != 0) s.FillRect(midX, 0, w - midX, midY);

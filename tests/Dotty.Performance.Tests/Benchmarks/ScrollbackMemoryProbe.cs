@@ -52,12 +52,12 @@ public static class ScrollbackMemoryProbe
 
         var rows = new List<Row>();
         foreach (int cols in colsList)
-        foreach (int history in historyList)
-        {
-            byte[] stream = BuildStream(history, cols);
-            foreach (int tabs in tabsList)
-                rows.AddRange(RunConfiguration(tabs, history, cols, stream, counterProps, counterBaseline, baseline));
-        }
+            foreach (int history in historyList)
+            {
+                byte[] stream = BuildStream(history, cols);
+                foreach (int tabs in tabsList)
+                    rows.AddRange(RunConfiguration(tabs, history, cols, stream, counterProps, counterBaseline, baseline));
+            }
 
         PrintTable(rows, counterProps);
         var failures = CheckAssertions(rows, tabsList);
@@ -169,13 +169,13 @@ public static class ScrollbackMemoryProbe
         // Reserved capacity is a pure function of (cols, rows, history cap): it must scale linearly with tabs.
         int lo = tabsList.Min();
         foreach (Row one in rows.Where(r => r.Tabs == lo && r.Stage == "fresh"))
-        foreach (Row many in rows.Where(r => r.Tabs != lo && r.Stage == "fresh" && r.History == one.History && r.Cols == one.Cols))
-        {
-            if (!one.Counters.TryGetValue(CapacityCounter, out long a) || !many.Counters.TryGetValue(CapacityCounter, out long b))
-                continue;
-            if (a * many.Tabs != b * lo)
-                failures.Add($"history={one.History} cols={one.Cols}: {CapacityCounter} not linear in tabs ({lo} tabs={a}, {many.Tabs} tabs={b}).");
-        }
+            foreach (Row many in rows.Where(r => r.Tabs != lo && r.Stage == "fresh" && r.History == one.History && r.Cols == one.Cols))
+            {
+                if (!one.Counters.TryGetValue(CapacityCounter, out long a) || !many.Counters.TryGetValue(CapacityCounter, out long b))
+                    continue;
+                if (a * many.Tabs != b * lo)
+                    failures.Add($"history={one.History} cols={one.Cols}: {CapacityCounter} not linear in tabs ({lo} tabs={a}, {many.Tabs} tabs={b}).");
+            }
 
         // If the committed-bound counter exists, a longer history must never commit less than a shorter one
         // for the same population at the fresh stage.

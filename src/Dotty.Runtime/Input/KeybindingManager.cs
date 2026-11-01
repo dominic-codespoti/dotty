@@ -390,9 +390,18 @@ public sealed class KeybindingManager
         {
             string? fromChar = token[0] switch
             {
-                ',' => "comma", '.' => "period", '/' => "slash", ';' => "semicolon", '\'' => "apostrophe",
-                '`' => "graveaccent", '[' => "leftbracket", ']' => "rightbracket", '\\' => "backslash",
-                '-' => "minus", '=' => "equal", '+' => "plus",
+                ',' => "comma",
+                '.' => "period",
+                '/' => "slash",
+                ';' => "semicolon",
+                '\'' => "apostrophe",
+                '`' => "graveaccent",
+                '[' => "leftbracket",
+                ']' => "rightbracket",
+                '\\' => "backslash",
+                '-' => "minus",
+                '=' => "equal",
+                '+' => "plus",
                 _ => null,
             };
             if (fromChar != null)

@@ -104,7 +104,9 @@
   <Target Name="RequireGlfwRid" BeforeTargets="Build;Publish" Condition="'$(GlfwRid)' == ''">
     <Error Text="Could not determine the host or target RID required to build pinned GLFW." />
   </Target>
-  <Target Name="BuildPinnedGlfw" BeforeTargets="Build;Publish;GetCopyToOutputDirectoryItems" Condition="'$(GlfwRid)' != ''">
+  <!-- Also hooked before the publish file computation: newer SDKs copy publish items before the project's Build
+       target has produced GLFW (seen as MSB3030 on CI with 11.0.100-rc.3). A target runs once per build either way. -->
+  <Target Name="BuildPinnedGlfw" BeforeTargets="Build;Publish;PrepareForPublish;ComputeResolvedFilesToPublishList;GetCopyToOutputDirectoryItems" Condition="'$(GlfwRid)' != ''">
     <Exec Command="$(Python3Command) &quot;$(MSBuildProjectDirectory)/../../scripts/native/build-glfw.py&quot; --rid &quot;$(GlfwRid)&quot; --output-dir &quot;$(GlfwOutputDirectory)&quot;" />
   </Target>
   <Target Name="CopyPinnedGlfwToBuildOutput" AfterTargets="Build" Condition="'$(GlfwRid)' != ''">

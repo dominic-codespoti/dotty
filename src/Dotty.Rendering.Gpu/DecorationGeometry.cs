@@ -79,27 +79,27 @@ public static class DecorationGeometry
                 rects.Add(new PixelRect(0, top, width, thickness));
                 break;
             case UnderlineStyle.Double:
-            {
-                var (bandTop, _, stroke, gap) = DoubleStrokes(metrics);
-                rects.Add(new PixelRect(0, bandTop, width, stroke));
-                if (gap >= 0)
-                    rects.Add(new PixelRect(0, bandTop + stroke + gap, width, stroke));
-                break;
-            }
+                {
+                    var (bandTop, _, stroke, gap) = DoubleStrokes(metrics);
+                    rects.Add(new PixelRect(0, bandTop, width, stroke));
+                    if (gap >= 0)
+                        rects.Add(new PixelRect(0, bandTop + stroke + gap, width, stroke));
+                    break;
+                }
             case UnderlineStyle.Dotted:
-            {
-                int dot = thickness;
-                int segments = Math.Clamp(metrics.CellWidth / (2 * dot), 1, Math.Max(1, metrics.CellWidth / 2));
-                AddSegmentMarks(rects, width, metrics.CellWidth, segments, top, thickness, segmentLength => dot);
-                break;
-            }
+                {
+                    int dot = thickness;
+                    int segments = Math.Clamp(metrics.CellWidth / (2 * dot), 1, Math.Max(1, metrics.CellWidth / 2));
+                    AddSegmentMarks(rects, width, metrics.CellWidth, segments, top, thickness, segmentLength => dot);
+                    break;
+                }
             case UnderlineStyle.Dashed:
-            {
-                int segments = Math.Clamp(metrics.CellWidth / (4 * Math.Max(2, thickness)), 1, Math.Max(1, metrics.CellWidth / 2));
-                AddSegmentMarks(rects, width, metrics.CellWidth, segments, top, thickness,
-                    segmentLength => (segmentLength * 3 + 2) / 5);
-                break;
-            }
+                {
+                    int segments = Math.Clamp(metrics.CellWidth / (4 * Math.Max(2, thickness)), 1, Math.Max(1, metrics.CellWidth / 2));
+                    AddSegmentMarks(rects, width, metrics.CellWidth, segments, top, thickness,
+                        segmentLength => (segmentLength * 3 + 2) / 5);
+                    break;
+                }
         }
         return rects;
     }

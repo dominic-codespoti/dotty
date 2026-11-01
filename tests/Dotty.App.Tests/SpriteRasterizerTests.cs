@@ -48,7 +48,10 @@ public sealed class SpriteRasterizerTests
     {
         byte[] Edge(SpriteBitmap s) => arm switch
         {
-            0 => Row(s, 0), 1 => Column(s, s.Width - 1), 2 => Row(s, s.Height - 1), _ => Column(s, 0),
+            0 => Row(s, 0),
+            1 => Column(s, s.Width - 1),
+            2 => Row(s, s.Height - 1),
+            _ => Column(s, 0),
         };
         byte[] edge = Edge(sprite);
         if (edge.All(v => v == 0))
@@ -102,7 +105,9 @@ public sealed class SpriteRasterizerTests
 
     private static int RefCode(int arm, int weight) => weight switch
     {
-        1 => Arms[arm].Light, 2 => Arms[arm].Heavy, _ => Arms[arm].Double,
+        1 => Arms[arm].Light,
+        2 => Arms[arm].Heavy,
+        _ => Arms[arm].Double,
     };
 
     [Theory]

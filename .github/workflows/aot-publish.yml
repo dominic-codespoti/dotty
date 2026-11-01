@@ -90,12 +90,21 @@ jobs:
     steps:
       - name: Install build prerequisites (Debian 11 container)
         if: matrix.container != ''
+        # Debian 11 left the regular mirrors at the end of LTS; fall back to archive.debian.org when the security
+        # pool no longer serves the indexed versions (404s).
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git make gcc g++ clang lld zlib1g-dev python3 \
+          packages="ca-certificates curl git make gcc g++ clang lld zlib1g-dev python3 \
             libicu67 libssl1.1 libgssapi-krb5-2 \
-            cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
+            cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev"
+          install() { DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $packages; }
+          if ! { apt-get update && install; }; then
+            rm -f /etc/apt/sources.list.d/*
+            printf '%s\n' \
+              'deb http://archive.debian.org/debian bullseye main' \
+              'deb http://archive.debian.org/debian-security bullseye-security main' > /etc/apt/sources.list
+            apt-get -o Acquire::Check-Valid-Until=false update
+            install
+          fi
 
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,6 +131,12 @@ jobs:
       - name: Build native pty-helper
         if: runner.os != 'Windows'
         run: make -C src/Dotty.NativePty
+
+      - name: Build pinned GLFW
+        shell: bash
+        # Same script the BuildPinnedGlfw MSBuild target runs; built up front so its output is visible in the log
+        # and present before publish computes its file list.
+        run: ${{ matrix.python }} scripts/native/build-glfw.py --rid "$RID" --output-dir "obj/native/glfw/$RID/output"
 
       - name: Resolve expected version
         id: version

@@ -251,7 +251,7 @@ public sealed class ImageUploadPlannerTests
     public void BoxDownscale_PremultipliedAlphaNeverExceedsColourInvariant()
     {
         // premultiplied pixels (r <= a); averaging keeps r <= a per channel
-        byte[] src = { 10, 0, 0, 10,   0, 0, 0, 0,   50, 50, 50, 100,   20, 5, 5, 30 };
+        byte[] src = { 10, 0, 0, 10, 0, 0, 0, 0, 50, 50, 50, 100, 20, 5, 5, 30 };
         byte[] dst = new byte[4];
         ImageUploadPlanner.BoxDownscale(src, 2, 2, 8, 4, dst, 1, 1);
         Assert.True(dst[0] <= dst[3] && dst[1] <= dst[3] && dst[2] <= dst[3]);

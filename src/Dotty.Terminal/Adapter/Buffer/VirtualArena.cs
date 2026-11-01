@@ -125,28 +125,28 @@ internal static unsafe class VirtualArena
                 return NativeMemory.AllocZeroed(bytes);
 
             case Backend.WindowsVirtual:
-            {
-                void* block = VirtualAlloc(null, RoundUpToPage(bytes), MemReserve | MemCommit, PageReadWrite);
-                if (block == null)
-                    throw new OutOfMemoryException($"VirtualAlloc failed for {bytes} bytes (error {Marshal.GetLastPInvokeError()}).");
-                return block;
-            }
+                {
+                    void* block = VirtualAlloc(null, RoundUpToPage(bytes), MemReserve | MemCommit, PageReadWrite);
+                    if (block == null)
+                        throw new OutOfMemoryException($"VirtualAlloc failed for {bytes} bytes (error {Marshal.GetLastPInvokeError()}).");
+                    return block;
+                }
 
             default:
-            {
-                nuint length = RoundUpToPage(bytes);
-                bool linux = backend == Backend.PosixMadvise;
-                int flags = linux
-                    ? MapPrivate | MapAnonymousLinux | MapNoReserveLinux
-                    : MapPrivate | MapAnonymousDarwin;
-                void* block = mmap(null, length, ProtReadWrite, flags, -1, 0);
-                if (block == null || (nint)block == -1)
-                    throw new OutOfMemoryException($"mmap failed for {bytes} bytes (errno {Marshal.GetLastPInvokeError()}).");
-                // Transparent huge pages would make a lone touched row commit 2 MiB. Best effort; failure is fine.
-                if (linux)
-                    madvise(block, length, MadvNoHugePage);
-                return block;
-            }
+                {
+                    nuint length = RoundUpToPage(bytes);
+                    bool linux = backend == Backend.PosixMadvise;
+                    int flags = linux
+                        ? MapPrivate | MapAnonymousLinux | MapNoReserveLinux
+                        : MapPrivate | MapAnonymousDarwin;
+                    void* block = mmap(null, length, ProtReadWrite, flags, -1, 0);
+                    if (block == null || (nint)block == -1)
+                        throw new OutOfMemoryException($"mmap failed for {bytes} bytes (errno {Marshal.GetLastPInvokeError()}).");
+                    // Transparent huge pages would make a lone touched row commit 2 MiB. Best effort; failure is fine.
+                    if (linux)
+                        madvise(block, length, MadvNoHugePage);
+                    return block;
+                }
         }
     }
 

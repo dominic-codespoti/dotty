@@ -84,15 +84,15 @@ internal sealed partial class KittyImageStore
                     displayed = ShownThroughPlaceholders(p, cells, cellsKnown, ref placeholdersScanned);
                     break;
                 default:
-                {
-                    var root = FindRelativeRoot(p, out _, out long dy);
-                    if (root == null)
-                        continue;
-                    displayed = root.Kind == PlacementKind.Virtual
-                        ? ShownThroughPlaceholders(root, cells, cellsKnown, ref placeholdersScanned)
-                        : RowsOverlap(root.AnchorRow - _viewTop + scrollOffset + dy, p.Geometry.EffRows, rows);
-                    break;
-                }
+                    {
+                        var root = FindRelativeRoot(p, out _, out long dy);
+                        if (root == null)
+                            continue;
+                        displayed = root.Kind == PlacementKind.Virtual
+                            ? ShownThroughPlaceholders(root, cells, cellsKnown, ref placeholdersScanned)
+                            : RowsOverlap(root.AnchorRow - _viewTop + scrollOffset + dy, p.Geometry.EffRows, rows);
+                        break;
+                    }
             }
             if (!displayed)
                 continue;

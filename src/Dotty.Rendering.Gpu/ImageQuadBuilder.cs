@@ -96,8 +96,14 @@ public static class ImageQuadBuilder
                 continue;
             scratch[n++] = new SortEntry
             {
-                Layer = (int)LayerOf(p.Z), Z = p.Z, ImageId = p.ImageId, PlacementId = p.PlacementId,
-                Index = i, Pixels = p.Pixels, Serial = p.ImageSerial, Quad = quad,
+                Layer = (int)LayerOf(p.Z),
+                Z = p.Z,
+                ImageId = p.ImageId,
+                PlacementId = p.PlacementId,
+                Index = i,
+                Pixels = p.Pixels,
+                Serial = p.ImageSerial,
+                Quad = quad,
             };
         }
         if (n == 0) return;
@@ -184,7 +190,10 @@ public static class ImageQuadBuilder
         double du = (double)p.U1 - p.U0, dv = (double)p.V1 - p.V0;
         quad = new ImageQuadInstance
         {
-            X = (float)x0, Y = (float)y0, W = (float)(x1 - x0), H = (float)(y1 - y0),
+            X = (float)x0,
+            Y = (float)y0,
+            W = (float)(x1 - x0),
+            H = (float)(y1 - y0),
             U0 = (float)(p.U0 + du * ((x0 - x) / w)),
             U1 = (float)(p.U0 + du * ((x1 - x) / w)),
             V0 = (float)(p.V0 + dv * ((y0 - y) / h)),

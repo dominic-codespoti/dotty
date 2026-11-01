@@ -135,7 +135,8 @@ public sealed class WindowPresentationGateTests
         WindowFrameReason previous = WindowPresentationGate.Consume();
         int posts = 0;
         HostWake.Shutdown();
-        HostWake.Initialize(() => Interlocked.Increment(ref posts), Environment.CurrentManagedThreadId);
+        // An id no thread has: Task.Run may reuse the test's pool thread, which must not count as the UI thread.
+        HostWake.Initialize(() => Interlocked.Increment(ref posts), -1);
         try
         {
             await Task.Run(() => WindowPresentationGate.Invalidate(WindowFrameReason.Content), TestContext.Current.CancellationToken);

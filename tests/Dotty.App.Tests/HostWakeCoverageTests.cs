@@ -118,6 +118,13 @@ public sealed partial class HostWakeCoverageTests : IDisposable
         return false;
     }
 
-    private static string HostSourceDirectory([CallerFilePath] string testFile = "") =>
-        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(testFile)!, "..", "..", "src", "Dotty", "Host"));
+    // CI builds are deterministic (ContinuousIntegrationBuild maps source paths to /_/), so locate the repository by
+    // walking up from the test binary instead of trusting [CallerFilePath].
+    private static string HostSourceDirectory()
+    {
+        string root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "Dotty.slnx")))
+            root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("repository root not found");
+        return Path.Combine(root, "src", "Dotty", "Host");
+    }
 }

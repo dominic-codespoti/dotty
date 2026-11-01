@@ -115,12 +115,19 @@ internal static class PlacementGeometry
 
         return new ResolvedGeometry
         {
-            SrcX = (int)sx, SrcY = (int)sy, SrcW = (int)sw, SrcH = (int)sh,
-            XOff = ox, YOff = oy,
-            EffCols = (int)cols, EffRows = (int)rows,
+            SrcX = (int)sx,
+            SrcY = (int)sy,
+            SrcW = (int)sw,
+            SrcH = (int)sh,
+            XOff = ox,
+            YOff = oy,
+            EffCols = (int)cols,
+            EffRows = (int)rows,
             NativeSize = native,
-            DestW = (float)destW, DestH = (float)destH,
-            BasisCellW = cw, BasisCellH = ch,
+            DestW = (float)destW,
+            DestH = (float)destH,
+            BasisCellW = cw,
+            BasisCellH = ch,
         };
     }
 
@@ -196,12 +203,19 @@ internal static class PlacementGeometry
     private static ResolvedGeometry With(in ResolvedGeometry g, int srcX, int srcY, int srcH, int yOff, int effRows, float destH)
         => new()
         {
-            SrcX = srcX, SrcY = srcY, SrcW = g.SrcW, SrcH = srcH,
-            XOff = g.XOff, YOff = yOff,
-            EffCols = g.EffCols, EffRows = effRows,
+            SrcX = srcX,
+            SrcY = srcY,
+            SrcW = g.SrcW,
+            SrcH = srcH,
+            XOff = g.XOff,
+            YOff = yOff,
+            EffCols = g.EffCols,
+            EffRows = effRows,
             NativeSize = g.NativeSize,
-            DestW = g.DestW, DestH = destH,
-            BasisCellW = g.BasisCellW, BasisCellH = g.BasisCellH,
+            DestW = g.DestW,
+            DestH = destH,
+            BasisCellW = g.BasisCellW,
+            BasisCellH = g.BasisCellH,
         };
 
     private static ResolvedGeometry With(in ResolvedGeometry g, int srcY, int srcH, int yOff, int effRows, float destH)

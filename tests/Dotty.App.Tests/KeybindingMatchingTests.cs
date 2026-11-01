@@ -165,8 +165,15 @@ public sealed class KeybindingMatchingTests
         string name = KeybindingManager.NormalizeKeyName(SilkKeyMapper.GetKeyName(key));
         return name.Length == 1 ? char.ToLowerInvariant(name[0]) : key switch
         {
-            SilkKey.Semicolon => ';', SilkKey.Apostrophe => '\'', SilkKey.Comma => ',', SilkKey.Period => '.',
-            SilkKey.Slash => '/', SilkKey.LeftBracket => '[', SilkKey.RightBracket => ']', SilkKey.Minus => '-', SilkKey.Equal => '=',
+            SilkKey.Semicolon => ';',
+            SilkKey.Apostrophe => '\'',
+            SilkKey.Comma => ',',
+            SilkKey.Period => '.',
+            SilkKey.Slash => '/',
+            SilkKey.LeftBracket => '[',
+            SilkKey.RightBracket => ']',
+            SilkKey.Minus => '-',
+            SilkKey.Equal => '=',
             _ => '\0',
         };
     }

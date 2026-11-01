@@ -147,11 +147,11 @@ public static class CursorGeometry
                 plan.Add(left, top, MathF.Min(bar, width), height);
                 break;
             case TerminalCursorShape.Underline:
-            {
-                float thickness = MathF.Min(bar, height);
-                plan.Add(left, bottom - thickness, width, thickness);
-                break;
-            }
+                {
+                    float thickness = MathF.Min(bar, height);
+                    plan.Add(left, bottom - thickness, width, thickness);
+                    break;
+                }
             default:
                 plan.Add(left, top, width, height);
                 plan.RecolorsText = true;

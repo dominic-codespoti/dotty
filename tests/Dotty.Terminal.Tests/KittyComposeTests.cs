@@ -223,30 +223,30 @@ public sealed class KittyComposeTests
         var image = store.AddImage(3, 3, 1);
         int checkedCases = 0;
         for (int sx = 0; sx <= 3; sx++)
-        for (int sy = 0; sy <= 3; sy++)
-        for (int dx = 0; dx <= 3; dx++)
-        for (int dy = 0; dy <= 3; dy++)
-        for (int w = 1; w <= 3; w++)
-        for (int h = 1; h <= 3; h++)
-        {
-            bool inBounds = sx + w <= 3 && sy + h <= 3 && dx + w <= 3 && dy + h <= 3;
-            bool overlap = false;
-            if (inBounds)
-            {
-                var cells = new HashSet<(int, int)>();
-                for (int i = 0; i < w; i++)
-                    for (int j = 0; j < h; j++)
-                        cells.Add((sx + i, sy + j));
-                for (int i = 0; i < w && !overlap; i++)
-                    for (int j = 0; j < h && !overlap; j++)
-                        overlap = cells.Contains((dx + i, dy + j));
-            }
-            var expected = !inBounds ? KittyStatus.RectOutOfBounds : overlap ? KittyStatus.FrameOverlap : KittyStatus.Ok;
+            for (int sy = 0; sy <= 3; sy++)
+                for (int dx = 0; dx <= 3; dx++)
+                    for (int dy = 0; dy <= 3; dy++)
+                        for (int w = 1; w <= 3; w++)
+                            for (int h = 1; h <= 3; h++)
+                            {
+                                bool inBounds = sx + w <= 3 && sy + h <= 3 && dx + w <= 3 && dy + h <= 3;
+                                bool overlap = false;
+                                if (inBounds)
+                                {
+                                    var cells = new HashSet<(int, int)>();
+                                    for (int i = 0; i < w; i++)
+                                        for (int j = 0; j < h; j++)
+                                            cells.Add((sx + i, sy + j));
+                                    for (int i = 0; i < w && !overlap; i++)
+                                        for (int j = 0; j < h && !overlap; j++)
+                                            overlap = cells.Contains((dx + i, dy + j));
+                                }
+                                var expected = !inBounds ? KittyStatus.RectOutOfBounds : overlap ? KittyStatus.FrameOverlap : KittyStatus.Ok;
 
-            var cmd = KittyCommands.Parse($"a=c,i=1,r=1,c=1,X={sx},Y={sy},x={dx},y={dy},w={w},h={h},C=1");
-            Assert.Equal(expected, store.ComposeFrames(image, in cmd, 0));
-            checkedCases++;
-        }
+                                var cmd = KittyCommands.Parse($"a=c,i=1,r=1,c=1,X={sx},Y={sy},x={dx},y={dy},w={w},h={h},C=1");
+                                Assert.Equal(expected, store.ComposeFrames(image, in cmd, 0));
+                                checkedCases++;
+                            }
         Assert.Equal(4 * 4 * 4 * 4 * 9, checkedCases);
         store.ValidateInvariants();
     }

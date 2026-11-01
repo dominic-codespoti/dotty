@@ -18,8 +18,21 @@ public sealed class ImageQuadBuilderTests
         float u0 = 0, float v0 = 0, float u1 = 1, float v1 = 1)
         => new()
         {
-            Pixels = px, ImageSerial = px.Serial, Col = col, ViewRow = row, Cols = cols, Rows = rows,
-            OffXCells = ox, OffYCells = oy, U0 = u0, V0 = v0, U1 = u1, V1 = v1, Z = z, ImageId = img, PlacementId = pl,
+            Pixels = px,
+            ImageSerial = px.Serial,
+            Col = col,
+            ViewRow = row,
+            Cols = cols,
+            Rows = rows,
+            OffXCells = ox,
+            OffYCells = oy,
+            U0 = u0,
+            V0 = v0,
+            U1 = u1,
+            V1 = v1,
+            Z = z,
+            ImageId = img,
+            PlacementId = pl,
         };
 
     private static ImagePixels Px() => ImagePixels.Allocate(1, 1, ImagePixelFormat.Rgba8Premultiplied);
@@ -120,8 +133,17 @@ public sealed class ImageQuadBuilderTests
         using var px = Px();
         var native = new KittyRenderPlacement
         {
-            Pixels = px, ImageSerial = px.Serial, Cols = 3, Rows = 4, U1 = 1, V1 = 1,
-            NativeSize = true, NativeW = 30, NativeH = 61, BasisCellW = 10, BasisCellH = 20,
+            Pixels = px,
+            ImageSerial = px.Serial,
+            Cols = 3,
+            Rows = 4,
+            U1 = 1,
+            V1 = 1,
+            NativeSize = true,
+            NativeW = 30,
+            NativeH = 61,
+            BasisCellW = 10,
+            BasisCellH = 20,
         };
         var l = Build(Scene(cw: 7.5f, ch: 15.25f), native);
         var q = l.Quads[0];
@@ -155,8 +177,18 @@ public sealed class ImageQuadBuilderTests
         // 0.2 px wide at x 10.1 (both edges round to 10): kept as one pixel so a thin image does not vanish
         var thin = new KittyRenderPlacement
         {
-            Pixels = px, ImageSerial = px.Serial, Cols = 1, Rows = 1, U1 = 1, V1 = 1, OffXCells = 0.01f,
-            NativeSize = true, NativeW = 2, NativeH = 4096, BasisCellW = 100, BasisCellH = 4096,
+            Pixels = px,
+            ImageSerial = px.Serial,
+            Cols = 1,
+            Rows = 1,
+            U1 = 1,
+            V1 = 1,
+            OffXCells = 0.01f,
+            NativeSize = true,
+            NativeW = 2,
+            NativeH = 4096,
+            BasisCellW = 100,
+            BasisCellH = 4096,
         };
         var l = Build(Scene(), thin);
         var q = Assert.Single(l.Quads.AsSpan(0, l.QuadCount).ToArray());
@@ -231,9 +263,21 @@ public sealed class ImageQuadBuilderTests
     private static KittyRenderPlacement Native(ImagePixels px, int col, int row, uint pl)
         => new()
         {
-            Pixels = px, ImageSerial = px.Serial, Col = col, ViewRow = row, Cols = 1, Rows = 1, U1 = 1, V1 = 1,
-            NativeSize = true, NativeW = 4096, NativeH = 4096, BasisCellW = 4096, BasisCellH = 4096,
-            ImageId = 1, PlacementId = pl,
+            Pixels = px,
+            ImageSerial = px.Serial,
+            Col = col,
+            ViewRow = row,
+            Cols = 1,
+            Rows = 1,
+            U1 = 1,
+            V1 = 1,
+            NativeSize = true,
+            NativeW = 4096,
+            NativeH = 4096,
+            BasisCellW = 4096,
+            BasisCellH = 4096,
+            ImageId = 1,
+            PlacementId = pl,
         };
 
     [Fact]

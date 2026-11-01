@@ -195,6 +195,12 @@ public sealed class ReflowRandomizedEquivalenceTests
         return text.ToString();
     }
 
-    private static string GoldenFile([CallerFilePath] string sourceFile = "") =>
-        Path.Combine(Path.GetDirectoryName(sourceFile)!, "Goldens", "reflow-canonical.txt");
+    // Repository-relative (not [CallerFilePath]): CI maps source paths to /_/ in deterministic builds.
+    private static string GoldenFile()
+    {
+        string root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "Dotty.slnx")))
+            root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("repository root not found");
+        return Path.Combine(root, "tests", "Dotty.App.Tests", "Goldens", "reflow-canonical.txt");
+    }
 }

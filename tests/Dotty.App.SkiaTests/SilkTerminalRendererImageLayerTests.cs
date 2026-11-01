@@ -48,8 +48,14 @@ public sealed class SilkTerminalRendererImageLayerTests
     {
         Col = (ushort)col,
         Row = (ushort)row,
-        FgR = 255, FgG = 255, FgB = 255, FgA = 255,
-        BgR = r, BgG = g, BgB = b, BgA = 255,
+        FgR = 255,
+        FgG = 255,
+        FgB = 255,
+        FgA = 255,
+        BgR = r,
+        BgG = g,
+        BgB = b,
+        BgA = 255,
     };
 
     /// <summary>A cell with a white glyph over a red background.</summary>
@@ -63,15 +69,32 @@ public sealed class SilkTerminalRendererImageLayerTests
         GlyphH = checked((short)glyph.Height),
         OffX = checked((short)glyph.LeftBearing),
         OffY = checked((short)(glyph.BaselineOffset + glyph.TopBearing)),
-        FgR = 255, FgG = 255, FgB = 255, FgA = 255,
-        BgR = 255, BgG = 0, BgB = 0, BgA = 255,
+        FgR = 255,
+        FgG = 255,
+        FgB = 255,
+        FgA = 255,
+        BgR = 255,
+        BgG = 0,
+        BgB = 0,
+        BgA = 255,
     };
 
     private static ChromeQuadInstance Chrome(float x, float y, float size, float r, float g, float b) => new()
     {
-        X = x, Y = y, W = size, H = size, Radius = 0, Blur = 0,
-        TopR = r, TopG = g, TopB = b, TopA = 1,
-        BottomR = r, BottomG = g, BottomB = b, BottomA = 1,
+        X = x,
+        Y = y,
+        W = size,
+        H = size,
+        Radius = 0,
+        Blur = 0,
+        TopR = r,
+        TopG = g,
+        TopB = b,
+        TopA = 1,
+        BottomR = r,
+        BottomG = g,
+        BottomB = b,
+        BottomA = 1,
     };
 
     private static void Draw(

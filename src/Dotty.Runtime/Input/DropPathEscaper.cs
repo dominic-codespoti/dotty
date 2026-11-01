@@ -71,17 +71,17 @@ public static class DropPathEscaper
                     : "'" + path.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("'", "\\'", StringComparison.Ordinal) + "'";
                 return true;
             case ShellQuoteStyle.PowerShell:
-            {
-                var builder = new StringBuilder(path.Length + 2).Append('\'');
-                foreach (char c in path)
                 {
-                    builder.Append(c);
-                    if (c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B')
+                    var builder = new StringBuilder(path.Length + 2).Append('\'');
+                    foreach (char c in path)
+                    {
                         builder.Append(c);
+                        if (c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B')
+                            builder.Append(c);
+                    }
+                    escaped = builder.Append('\'').ToString();
+                    return true;
                 }
-                escaped = builder.Append('\'').ToString();
-                return true;
-            }
             case ShellQuoteStyle.Cmd:
                 if (path.AsSpan().IndexOfAny("\"%!") >= 0)
                     return false;

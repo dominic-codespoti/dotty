@@ -9,6 +9,38 @@ namespace Dotty.Silk.Input;
 
 public sealed partial class TerminalKeyboardDispatcher
 {
+    // The search overlay owns the keyboard: presses run its keys and bindings, text edits the query, and no
+    // press, repeat or release (kitty release events included) is encoded for the application.
+    private void HandleSearchModeKeyEvent(Key key, int scancode, int primaryCodepoint, TerminalKeyEventType eventType,
+        ReadOnlySpan<char> associatedText)
+    {
+        switch (eventType)
+        {
+            case TerminalKeyEventType.Press when associatedText.IsEmpty:
+                ProcessKeyPress(key, scancode, primaryCodepoint);
+                return;
+            case TerminalKeyEventType.Press:
+                HandleText(associatedText);
+                return;
+            case TerminalKeyEventType.Repeat when !associatedText.IsEmpty:
+                HandleText(associatedText);
+                return;
+            case TerminalKeyEventType.Repeat:
+                if (_host.ActiveTab is { } tab)
+                    HandleSearchKey(tab, EnsureState(tab), key, repeat: true);
+                return;
+            default:
+                if (_currentPhysicalKeyIndex >= 0)
+                {
+                    _lastPhysicalPressConsumed = false;
+                    _lastPhysicalPressDeferred = false;
+                    _lastPhysicalPressEncoded = false;
+                    _physicalKeyStates[_currentPhysicalKeyIndex].Active = false;
+                }
+                return;
+        }
+    }
+
     public void HandleKeyEvent(Key key, int scancode, int primaryCodepoint, TerminalKeyEventType eventType, ReadOnlySpan<char> associatedText)
     {
         _currentPhysicalKeyIndex = FindPhysicalKeyState(key, scancode, create: eventType == TerminalKeyEventType.Press);
@@ -17,6 +49,12 @@ public sealed partial class TerminalKeyboardDispatcher
             return;
         var adapter = activeTab.Session.Adapter;
         int kittyFlags = adapter.KittyKeyboardFlags;
+
+        if (SearchActive && _host.ActiveContextMenu is not { IsVisible: true })
+        {
+            HandleSearchModeKeyEvent(key, scancode, primaryCodepoint, eventType, associatedText);
+            return;
+        }
 
         if (eventType == TerminalKeyEventType.Press && associatedText.IsEmpty)
         {

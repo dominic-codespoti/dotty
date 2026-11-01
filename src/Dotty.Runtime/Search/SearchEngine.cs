@@ -24,13 +24,14 @@ public static class SearchEngine
         string query,
         bool regex = false,
         bool matchCase = false,
-        int activeMatchIndex = -1)
+        int activeMatchIndex = -1,
+        bool wholeWord = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (string.IsNullOrEmpty(query)) return Array.Empty<SearchMatch>();
 
         var results = new List<SearchMatch>();
-        var matcher = new LineMatcher(query, regex, matchCase, results);
+        var matcher = new LineMatcher(query, regex, matchCase, wholeWord, results);
         var map = new ColumnMap();
         var text = ZStr.CreateStringBuilder(notNested: false);
         try
@@ -88,6 +89,27 @@ public static class SearchEngine
         }
         return results;
     }
+
+    /// <summary>
+    /// True when <paramref name="pattern"/> compiles as a .NET regular expression. An invalid pattern is searched
+    /// literally by <see cref="FindMatches"/>; the overlay marks it.
+    /// </summary>
+    public static bool IsValidRegex(string pattern)
+    {
+        if (string.IsNullOrEmpty(pattern)) return true;
+        try
+        {
+            _ = new Regex(pattern, RegexOptions.None, RegexTimeout);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_' ||
+        CharUnicodeInfo.GetUnicodeCategory(c) is UnicodeCategory.NonSpacingMark or UnicodeCategory.SpacingCombiningMark;
 
     /// <summary>
     /// Appends the searchable text of the first <paramref name="length"/> cells to <paramref name="text"/> and records, for
@@ -186,12 +208,14 @@ public static class SearchEngine
         private readonly string _query;
         private readonly Regex? _regex;
         private readonly StringComparison _comparison;
+        private readonly bool _wholeWord;
         private readonly List<SearchMatch> _results;
 
-        public LineMatcher(string query, bool regex, bool matchCase, List<SearchMatch> results)
+        public LineMatcher(string query, bool regex, bool matchCase, bool wholeWord, List<SearchMatch> results)
         {
             _query = query;
             _results = results;
+            _wholeWord = wholeWord;
             _comparison = matchCase ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
             if (regex)
             {
@@ -221,7 +245,7 @@ public static class SearchEngine
                 foreach (ValueMatch match in _regex.EnumerateMatches(text))
                 {
                     if (match.Length > 0)
-                        AddMatch(text.Length, map, row, match.Index, match.Length);
+                        AddMatch(text, map, row, match.Index, match.Length);
                 }
             }
             catch (RegexMatchTimeoutException)
@@ -241,16 +265,25 @@ public static class SearchEngine
                 int found = text.Slice(index).IndexOf(query, _comparison);
                 if (found < 0) break;
                 int foundIndex = index + found;
-                AddMatch(text.Length, map, row, foundIndex, query.Length);
+                AddMatch(text, map, row, foundIndex, query.Length);
                 index = foundIndex + 1; // Preserve overlapping literal matches.
             }
         }
 
-        private void AddMatch(int textLength, ColumnMap map, int row, int index, int length)
+        private void AddMatch(ReadOnlySpan<char> text, ColumnMap map, int row, int index, int length)
         {
+            int textLength = text.Length;
+            if (_wholeWord && !IsWholeWord(text, index, length))
+                return;
             int start = Math.Clamp(index, 0, textLength);
             int end = Math.Clamp(index + length, start, textLength);
             _results.Add(new SearchMatch(row, map.StartAt(start), map.EndAt(end), false));
+        }
+
+        private static bool IsWholeWord(ReadOnlySpan<char> text, int index, int length)
+        {
+            int end = index + length;
+            return (index <= 0 || !IsWordChar(text[index - 1])) && (end >= text.Length || !IsWordChar(text[end]));
         }
     }
 

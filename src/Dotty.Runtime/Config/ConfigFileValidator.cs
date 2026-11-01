@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
+using Dotty.Abstractions.Config;
 using Dotty.Runtime.Scripting;
 
 namespace Dotty.Runtime.Config;
@@ -124,7 +125,11 @@ public static class ConfigFileValidator
             long nameStart = reader.TokenStartIndex;
             reader.Read();
 
-            if (KnownPaths.Options.Contains(path))
+            if (path == "keybindings" && reader.TokenType == JsonTokenType.StartObject)
+            {
+                ValidateKeybindings(ref reader, file, utf8, diagnostics);
+            }
+            else if (KnownPaths.Options.Contains(path))
             {
                 reader.Skip();
             }
@@ -147,6 +152,34 @@ public static class ConfigFileValidator
                 AddAt(diagnostics, file, utf8, nameStart, $"unknown option '{path}'{hint}");
                 reader.Skip();
             }
+        }
+    }
+
+    // Each chord and action value is checked with the same parsers the window uses (no silent drops).
+    private static void ValidateKeybindings(ref Utf8JsonReader reader, string file, ReadOnlySpan<byte> utf8, List<ConfigDiagnostic> diagnostics)
+    {
+        var seen = new Dictionary<Dotty.Runtime.Input.TerminalChordKey, string>();
+        while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+        {
+            string chord = reader.GetString() ?? string.Empty;
+            long nameStart = reader.TokenStartIndex;
+            reader.Read();
+            if (reader.TokenType != JsonTokenType.String)
+            {
+                // The serializer reports the wrong value type.
+                reader.Skip();
+                continue;
+            }
+            long valueStart = reader.TokenStartIndex;
+            string? value = reader.GetString();
+            if (!Dotty.Runtime.Input.KeybindingManager.TryParseChord(chord, out var key, out string? chordError))
+                AddAt(diagnostics, file, utf8, nameStart, $"keybindings: invalid chord \"{chord}\": {chordError}");
+            else if (seen.TryGetValue(key, out string? earlier))
+                AddAt(diagnostics, file, utf8, nameStart, $"keybindings: \"{chord}\" is the same chord as \"{earlier}\"; the later entry wins");
+            else
+                seen[key] = chord;
+            if (!ActionRegistry.TryParse(value, out _, out string? actionError))
+                AddAt(diagnostics, file, utf8, valueStart, $"keybindings: \"{chord}\": {actionError}");
         }
     }
 

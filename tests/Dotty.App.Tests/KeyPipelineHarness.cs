@@ -248,6 +248,11 @@ internal sealed class KeyPipelineHarness : IDisposable
 
     private sealed class HarnessHost : ITerminalKeyboardHost, IDisposable
     {
+        public void PastePrimary(Dotty.Runtime.Panes.LeafPane targetPane) { }
+        public string? ReadClipboardText() => null;
+        public void ReloadConfig() { }
+        public SearchUserConfig SearchDefaults { get; } = new();
+        public void ToggleTabBar() { }
         private readonly KeyboardModifierState _modifiers;
 
         public HarnessHost(KeyboardModifierState modifiers)

@@ -112,4 +112,37 @@ public enum TerminalAction
 
     /// <summary>Scroll the active pane back to the live screen.</summary>
     ScrollToBottom,
+
+    /// <summary>Select the active pane's scrollback and screen.</summary>
+    SelectAll,
+
+    /// <summary>Discard the active pane's scrollback; the visible screen stays.</summary>
+    ClearScrollback,
+
+    /// <summary>Re-read the configuration files.</summary>
+    ReloadConfig,
+
+    /// <summary>Paste the primary selection into the active pane.</summary>
+    PasteSelection,
+
+    /// <summary>Select the next search match (only while the search overlay is open).</summary>
+    SearchNext,
+
+    /// <summary>Select the previous search match (only while the search overlay is open).</summary>
+    SearchPrevious,
+
+    /// <summary>Copy the selection when there is one; otherwise the key goes to the application.</summary>
+    CopyOrSend,
+
+    /// <summary>Move the active tab one place to the left.</summary>
+    MoveTabLeft,
+
+    /// <summary>Move the active tab one place to the right.</summary>
+    MoveTabRight,
+
+    /// <summary>Show or hide the tab bar.</summary>
+    ToggleTabBar,
+
+    /// <summary>Write the binding's text argument to the active pane (<c>send_text:&lt;escaped&gt;</c>).</summary>
+    SendText,
 }

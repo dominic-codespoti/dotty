@@ -54,8 +54,8 @@ public sealed class LuaActionsUtilitiesTests : IDisposable
         Assert.True(_host.ExecuteString(@"
             local found_new_tab = false
             for _, name in ipairs(dotty.actions) do
-                assert(name ~= 'None')
-                if name == 'NewTab' then found_new_tab = true end
+                assert(name ~= 'none')
+                if name == 'new_tab' then found_new_tab = true end
             end
             assert(found_new_tab)"));
     }
@@ -173,7 +173,7 @@ public sealed class LuaActionsUtilitiesTests : IDisposable
             return tab.PaneTree.Split(target, direction, workingDirectory, shell);
         }
 
-        public bool TryExecuteAction(TerminalAction action)
+        public bool TryExecuteAction(BoundAction action)
         {
             return true;
         }

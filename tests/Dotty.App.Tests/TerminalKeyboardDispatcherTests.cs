@@ -16,6 +16,15 @@ public sealed class TerminalKeyboardDispatcherTests
 {
     internal sealed class FakeHost : ITerminalKeyboardHost, IDisposable
     {
+        public int PastePrimaryCount { get; private set; }
+        public void PastePrimary(Dotty.Runtime.Panes.LeafPane targetPane) => PastePrimaryCount++;
+        public string? ClipboardText { get; set; }
+        public string? ReadClipboardText() => ClipboardText;
+        public int ReloadConfigCount { get; private set; }
+        public void ReloadConfig() => ReloadConfigCount++;
+        public SearchUserConfig SearchDefaults { get; set; } = new();
+        public int ToggleTabBarCount { get; private set; }
+        public void ToggleTabBar() => ToggleTabBarCount++;
         public TerminalTabManager TabManager { get; } = new(SilentPty.Create);
         public TerminalTab? ActiveTab { get; set; }
         public LuaScriptHost LuaHost { get; }

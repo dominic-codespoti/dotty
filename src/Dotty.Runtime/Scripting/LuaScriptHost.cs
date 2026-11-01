@@ -535,13 +535,12 @@ public sealed partial class LuaScriptHost : IDisposable
         else if (lua.Type(valueIndex) == LuaType.String)
         {
             string? name = lua.ToString(valueIndex);
-            if (!Enum.TryParse(name, true, out Dotty.Abstractions.Config.TerminalAction action)
-                || !Enum.IsDefined(typeof(Dotty.Abstractions.Config.TerminalAction), action))
+            if (!Dotty.Abstractions.Config.ActionRegistry.TryParse(name, out var action, out string? error))
             {
-                throw new InvalidOperationException($"Unknown terminal action '{name}'.");
+                throw new InvalidOperationException($"Invalid action '{name}': {error}.");
             }
 
-            if (action == Dotty.Abstractions.Config.TerminalAction.None)
+            if (action.Action == Dotty.Abstractions.Config.TerminalAction.None)
             {
                 Keybinds.Unbind(chord);
             }
@@ -1071,7 +1070,7 @@ public sealed partial class LuaScriptHost : IDisposable
         }
     }
 
-    internal bool TryExecuteAction(Dotty.Abstractions.Config.TerminalAction action)
+    internal bool TryExecuteAction(Dotty.Abstractions.Config.BoundAction action)
     {
         return _services.TryExecuteAction(action);
     }

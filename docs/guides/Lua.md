@@ -36,6 +36,7 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `font.line_height` | number | `1.25` |
 | `font.adjust_cell_width`, `font.adjust_cell_height` | string | `""` (`"2"` logical px or `"10%"`) |
 | `font.symbol_map` | array of strings | empty |
+| `search.regex`, `search.case_sensitive`, `search.whole_word` | boolean | `false` |
 | `clipboard.allow_osc52_write` | boolean | `false` |
 | `clipboard.osc52_read` | string (`"deny"`, `"ask"`, `"allow"`) | `"deny"` |
 | `clipboard.osc52_read_limit_bytes` | integer | `1048576` (clamped to 1 through 8388608) |
@@ -90,23 +91,22 @@ Wrong value types raise a Lua error naming the configuration path, such as `dott
 
 ## Key bindings
 
-Register a Lua callback or a `TerminalAction` name with `dotty.bind(chord, callback_or_action)`. Chords use the same syntax and normalization as `config.json` keybindings: modifier names `ctrl`, `shift`, `alt`, and `super`, followed by a key name, joined with `+` (for example, `ctrl+shift+t` or `alt+1`). Invalid chords raise a Lua error. A Lua binding takes precedence over the JSON binding for the same chord. A callback that returns exactly `false` declines the key and lets default handling continue; every other return value, including `nil`, handles it.
+Register a Lua callback or an action name with `dotty.bind(chord, callback_or_action)`. Chords use the same syntax, aliases, `physical:` prefix and layout-aware matching as `config.json` keybindings (see [Configuration](../Configuration.md#keybindings)); for example `ctrl+shift+t`, `cmd+k` or `alt+1`. Invalid chords raise a Lua error that says why. A Lua binding takes precedence over the JSON binding for the same chord. A callback that returns exactly `false` declines the key and lets default handling continue; every other return value, including `nil`, handles it.
 
 ```lua
 dotty.bind("ctrl+shift+t", function()
   dotty.tabs.new()
 end)
 
-dotty.bind("alt+1", "SwitchTab1")
+dotty.bind("alt+1", "switch_tab_1")
+dotty.bind("ctrl+alt+u", "send_text:\\x15")
 ```
 
-Action names are case-insensitive. Passing `"None"` removes the Lua binding for that chord. Unknown action names raise a Lua error. The supported names are:
-
-`NewTab`, `CloseTab`, `NextTab`, `PreviousTab`, `SwitchTab1`, `SwitchTab2`, `SwitchTab3`, `SwitchTab4`, `SwitchTab5`, `SwitchTab6`, `SwitchTab7`, `SwitchTab8`, `SwitchTab9`, `Copy`, `Paste`, `Clear`, `ToggleFullscreen`, `ZoomIn`, `ZoomOut`, `ResetZoom`, `Search`, `DuplicateTab`, `CloseOtherTabs`, `Quit`, `SplitVertical`, `SplitHorizontal`, `FocusPaneLeft`, `FocusPaneRight`, `FocusPaneUp`, `FocusPaneDown`, and `ClosePane`.
+Action names are the snake_case names listed in [Configuration](../Configuration.md#keybindings) (`new_tab`, `copy_or_send`, `send_text:<escaped text>`, …); the older enum names such as `SwitchTab1` are accepted too, case-insensitively. Passing `"none"` removes the Lua binding for that chord. Unknown action names and malformed `send_text` arguments raise a Lua error. `dotty.action(name)` accepts the same names.
 
 ## Actions
 
-`dotty.action(name)` runs a supported action by name and returns `true` if the host ran it, otherwise `false`. An unknown name or `"None"` raises a Lua error. `dotty.actions` is an array of supported action names and excludes `"None"`. `dotty.action` is unavailable during config evaluation.
+`dotty.action(name)` runs a supported action by name and returns `true` if the host ran it, otherwise `false`. An unknown name or `"none"` raises a Lua error. `dotty.actions` is an array of the snake_case action names and excludes `"none"`. `dotty.action` is unavailable during config evaluation.
 
 ## Tabs and panes
 
@@ -195,3 +195,4 @@ end)
 | Date | Change |
 |------|--------|
 | 2026-11-01 | W4-C2: `font.size` is in points (default 11.25); added `font.adjust_cell_width`, `font.adjust_cell_height`. |
+| 2026-11-01 | W4-C15/C16: `dotty.bind`/`dotty.action` take snake_case action names and `send_text:`; chords match like `config.json` keybindings; added `search.regex`, `search.case_sensitive`, `search.whole_word`. |

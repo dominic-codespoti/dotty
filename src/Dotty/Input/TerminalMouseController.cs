@@ -68,6 +68,15 @@ public interface ITerminalMouseHost
     HyperlinkScanOptions HyperlinkScan { get; }
     bool TryExecuteAction(TerminalAction action);
     void SetPointerCursor(StandardCursor cursor);
+
+    /// <summary>
+    /// A left click at device pixels on the search overlay (▲ ▼ × buttons, toggles, input box). True when the click
+    /// landed on the overlay and was handled.
+    /// </summary>
+    bool TryClickSearchOverlay(float deviceX, float deviceY) => false;
+
+    /// <summary>Menu label of the chord bound to <paramref name="action"/> in the live binding table; null when unbound.</summary>
+    string? GetShortcutLabel(TerminalAction action) => null;
 }
 
 public sealed class TerminalMouseController
@@ -291,6 +300,9 @@ public sealed class TerminalMouseController
             return;
         }
 
+        if (button == MouseButton.Left && _host.TryClickSearchOverlay(physX, physY))
+            return;
+
         if (geom.ShowTabBar && physY < geom.TopOffset)
         {
             var tabHit = TabBarHitTester.HitTest(physX, physY, geom.FramebufferWidth,
@@ -413,7 +425,8 @@ public sealed class TerminalMouseController
                 onSplitRight: () => _host.TryExecuteAction(TerminalAction.SplitVertical),
                 onSplitDown: () => _host.TryExecuteAction(TerminalAction.SplitHorizontal),
                 onNewTab: () => _host.TryExecuteAction(TerminalAction.NewTab),
-                onClose: () => _host.TabManager.CloseTab(_host.TabManager.Tabs[tabIndex])));
+                onClose: () => _host.TabManager.CloseTab(_host.TabManager.Tabs[tabIndex]),
+                shortcutFor: _host.GetShortcutLabel));
     }
 
     private void OpenTerminalContextMenu(
@@ -428,14 +441,7 @@ public sealed class TerminalMouseController
                 hasSelection: contextPane.Selection.HasSelection,
                 onCopy: () => _host.TryExecuteAction(TerminalAction.Copy),
                 onPaste: () => _host.TryExecuteAction(TerminalAction.Paste),
-                onSelectAll: () =>
-                {
-                    if (contextPane.Rows > 0 && contextPane.Columns > 0)
-                    {
-                        contextPane.Selection.StartSelection(-contextPane.ScrollOffset, 0, SelectionMode.Character);
-                        contextPane.Selection.UpdateSelection(contextPane.Rows - 1 - contextPane.ScrollOffset, contextPane.Columns - 1);
-                    }
-                },
+                onSelectAll: () => contextPane.Selection.SelectAll(contextPane.Session.Adapter.Buffer),
                 onSplitRight: () =>
                 {
                     if (ReferenceEquals(contextPane, activeTab.ActivePane))
@@ -455,7 +461,8 @@ public sealed class TerminalMouseController
                 onCopyCommandOutput: () => _host.TryExecuteAction(TerminalAction.CopyCommandOutput),
                 hasShellPrompts: contextPane.Session.Adapter.Buffer.GetPromptMarks().Count > 0,
                 onPreviousPrompt: () => _host.TryExecuteAction(TerminalAction.PreviousPrompt),
-                onNextPrompt: () => _host.TryExecuteAction(TerminalAction.NextPrompt)));
+                onNextPrompt: () => _host.TryExecuteAction(TerminalAction.NextPrompt),
+                shortcutFor: _host.GetShortcutLabel));
     }
 
     private Vector2 ContentVector(Vector2 position)

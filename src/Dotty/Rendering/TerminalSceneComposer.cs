@@ -464,11 +464,11 @@ public sealed class TerminalSceneComposer : IDisposable
                     }
                 }
 
-                if (leaf.Selection.HasSelection)
+                // Content-anchored: the selection is converted against the rows this snapshot captured.
+                if (leaf.Selection.HasSelection
+                    && leaf.Selection.TryGetRange(leafSnapshot.ViewTopAbsoluteRow, out var range, out bool blockSelection))
                 {
                     byte selectionAlpha = (byte)((selectionColor.A != 0 && selectionColor.A != 255) ? selectionColor.A : 128);
-                    var range = leaf.Selection.GetNormalizedRange();
-                    bool blockSelection = leaf.Selection.Mode == SelectionMode.Block;
                     int coverageLength = SelectionQuadBuilder.CoverageLength(range, paneRows, paneColumns, scrollOffset);
                     EnsureScratchCapacity(instanceCount + coverageLength);
                     if (_selectionCoverage.Length < coverageLength)

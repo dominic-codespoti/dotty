@@ -2398,12 +2398,13 @@ internal static partial class DottyWindowHost
         var activePane = _tabManager?.ActiveTab?.ActivePane;
         if (activePane == null || !activePane.Selection.HasSelection) return;
 
-        var text = activePane.Selection.GetSelectedText(activePane.Session.Adapter.Buffer);
+        var text = activePane.Selection.GetSelectedText();
         if (!string.IsNullOrEmpty(text) && _keyboard != null)
         {
             _clipboard?.SetText(text);
         }
-        activePane.Selection.ClearSelection();
+        if (UserConfigService.Current.Selection.ClearOnCopy)
+            activePane.Selection.ClearSelection();
     }
 
     private static void CopyFinishedSelection(LeafPane pane)
@@ -2412,7 +2413,7 @@ internal static partial class DottyWindowHost
         if (mode == CopyOnSelectMode.None || !pane.Selection.HasSelection)
             return;
 
-        CopyOnSelect.Apply(mode, pane.Selection.GetSelectedText(pane.Session.Adapter.Buffer), _primary, _clipboard);
+        CopyOnSelect.Apply(mode, pane.Selection.GetSelectedText(), _primary, _clipboard);
     }
 
     private static void PastePrimaryToPane(LeafPane targetPane)

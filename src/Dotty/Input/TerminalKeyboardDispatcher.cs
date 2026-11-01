@@ -318,7 +318,7 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         var activePane = activeTab.ActivePane;
         if (!IsInputlessKey(key))
         {
-            if (activePane.Selection.HasSelection && !_host.Ctrl && !_host.Alt)
+            if (!_host.Ctrl && !_host.Alt && ClearsSelectionOnTyping && activePane.Selection.HasSelection)
                 activePane.Selection.ClearSelection();
             if (activePane.ScrollOffset > 0)
                 activePane.ScrollToBottom();
@@ -334,6 +334,9 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         }
         _lastPhysicalPressEncoded = WriteLegacyKey(activeTab, key, primaryCodepoint, state.PressModifiers);
     }
+
+    /// <summary><c>selection.clearOnTyping</c>, read live.</summary>
+    private static bool ClearsSelectionOnTyping => Dotty.Runtime.Config.UserConfigService.Current.Selection.ClearOnTyping;
 
     private static bool IsInputlessKey(Key key) => key is
         Key.ShiftLeft or Key.ShiftRight or Key.ControlLeft or Key.ControlRight or
@@ -435,7 +438,7 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         var activePane = activeTab.ActivePane;
         if (activePane.ScrollOffset > 0)
             activePane.ScrollToBottom();
-        if (activePane.Selection.HasSelection)
+        if (ClearsSelectionOnTyping && activePane.Selection.HasSelection)
             activePane.Selection.ClearSelection();
         _host.WriteInput(activeTab, _keyEventScratch.AsSpan(0, length));
     }
@@ -466,7 +469,7 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         var activePane = activeTab.ActivePane;
         if (activePane.ScrollOffset > 0)
             activePane.ScrollToBottom();
-        if (activePane.Selection.HasSelection)
+        if (ClearsSelectionOnTyping && activePane.Selection.HasSelection)
             activePane.Selection.ClearSelection();
         if (text.Length <= 128)
         {

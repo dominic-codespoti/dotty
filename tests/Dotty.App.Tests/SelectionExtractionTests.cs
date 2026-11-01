@@ -51,10 +51,10 @@ public sealed class SelectionExtractionTests
     private static string Select(
         TerminalBuffer buffer, int startRow, int startCol, int endRow, int endCol, SelectionMode mode = SelectionMode.Character)
     {
-        var service = new TextSelectionService();
+        var service = new TextSelectionService(buffer);
         service.StartSelection(startRow, startCol, mode);
         service.UpdateSelection(endRow, endCol);
-        return service.GetSelectedText(buffer);
+        return service.GetSelectedText();
     }
 
     // ---- visible rows: character mode ----
@@ -128,22 +128,22 @@ public sealed class SelectionExtractionTests
     public void Line_SingleRow()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        service.SelectLine(1, buffer.Columns);
-        Assert.Equal("foo   bar", service.GetSelectedText(buffer));
+        var service = new TextSelectionService(buffer);
+        service.SelectLine(1);
+        Assert.Equal("foo   bar", service.GetSelectedText());
     }
 
     [Fact]
-    public void Line_DraggedAcrossASoftWrapJoinsTheWrappedRows()
+    public void Line_DraggedOntoAWrappedRowTakesTheWholeLogicalLine()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        service.SelectLine(1, buffer.Columns);
-        service.UpdateLineSelection(2, buffer.Columns);
-        Assert.Equal("foo   bar" + NL + "abcdefghijkl", service.GetSelectedText(buffer));
+        var service = new TextSelectionService(buffer);
+        service.SelectLine(1);
+        service.UpdateSelection(2, 0);
+        Assert.Equal("foo   bar" + NL + "abcdefghijklmno", service.GetSelectedText());
 
-        service.UpdateLineSelection(3, buffer.Columns);
-        Assert.Equal("foo   bar" + NL + "abcdefghijklmno", service.GetSelectedText(buffer));
+        service.UpdateSelection(3, 0);
+        Assert.Equal("foo   bar" + NL + "abcdefghijklmno", service.GetSelectedText());
     }
 
     [Fact]
@@ -153,9 +153,9 @@ public sealed class SelectionExtractionTests
     }
 
     [Fact]
-    public void Block_PastTheRowEndPadsWithSpaces()
+    public void Block_PastTheRowEndTrimsTrailingBlanks()
     {
-        Assert.Equal("rld ", Select(BuildVisible(), 0, 8, 0, 11, SelectionMode.Block));
+        Assert.Equal("rld", Select(BuildVisible(), 0, 8, 0, 11, SelectionMode.Block));
     }
 
     // ---- exact (preserve-trailing-space) range selection ----
@@ -164,36 +164,36 @@ public sealed class SelectionExtractionTests
     public void RangeExclusive_RetainsTrailingSpaces()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        Assert.True(service.StartRangeExclusive(buffer, 1, 0, 1, 6));
-        Assert.Equal("foo   ", service.GetSelectedText(buffer));
+        var service = new TextSelectionService(buffer);
+        Assert.True(service.StartRangeExclusive(1, 0, 1, 6));
+        Assert.Equal("foo   ", service.GetSelectedText());
     }
 
     [Fact]
     public void RangeExclusive_EmptyRangeClearsTheSelection()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        Assert.False(service.StartRangeExclusive(buffer, 1, 3, 1, 3));
+        var service = new TextSelectionService(buffer);
+        Assert.False(service.StartRangeExclusive(1, 3, 1, 3));
         Assert.False(service.HasSelection);
-        Assert.Equal(string.Empty, service.GetSelectedText(buffer));
+        Assert.Equal(string.Empty, service.GetSelectedText());
     }
 
     [Fact]
     public void StartSelection_ResetsPreservedTrailingSpaces()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        Assert.True(service.StartRangeExclusive(buffer, 1, 0, 1, 6));
+        var service = new TextSelectionService(buffer);
+        Assert.True(service.StartRangeExclusive(1, 0, 1, 6));
         service.StartSelection(1, 0);
         service.UpdateSelection(1, 5);
-        Assert.Equal("foo", service.GetSelectedText(buffer));
+        Assert.Equal("foo", service.GetSelectedText());
     }
 
     [Fact]
     public void NoSelection_ProducesEmptyText()
     {
-        Assert.Equal(string.Empty, new TextSelectionService().GetSelectedText(BuildVisible()));
+        Assert.Equal(string.Empty, new TextSelectionService(BuildVisible()).GetSelectedText());
     }
 
     // ---- word selection (visible) ----
@@ -202,99 +202,101 @@ public sealed class SelectionExtractionTests
     public void Word_SelectsTheWordUnderTheCell()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        service.SelectWord(buffer, 0, 7);
+        var service = new TextSelectionService(buffer);
+        service.SelectWord(0, 7);
 
         Assert.Equal(SelectionMode.Word, service.Mode);
         var range = service.GetNormalizedRange();
         Assert.Equal((0, 6, 0, 10), (range.StartRow, range.StartColumn, range.EndRow, range.EndColumn));
-        Assert.Equal("world", service.GetSelectedText(buffer));
+        Assert.Equal("world", service.GetSelectedText());
     }
 
     [Fact]
     public void Word_WhitespaceRunSelectsTheRunButCopiesNothing()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        service.SelectWord(buffer, 1, 4);
+        var service = new TextSelectionService(buffer);
+        service.SelectWord(1, 4);
 
         var range = service.GetNormalizedRange();
         Assert.Equal((1, 3, 1, 5), (range.StartRow, range.StartColumn, range.EndRow, range.EndColumn));
-        Assert.Equal(string.Empty, service.GetSelectedText(buffer));
+        Assert.Equal(string.Empty, service.GetSelectedText());
     }
 
     [Fact]
     public void Word_OnAContinuationCellSelectsTheWholeWideRun()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        service.SelectWord(buffer, 4, 1);
+        var service = new TextSelectionService(buffer);
+        service.SelectWord(4, 1);
 
         var range = service.GetNormalizedRange();
         Assert.Equal((4, 0, 4, 5), (range.StartRow, range.StartColumn, range.EndRow, range.EndColumn));
-        Assert.Equal("界x界y", service.GetSelectedText(buffer));
+        Assert.Equal("界x界y", service.GetSelectedText());
     }
 
     [Fact]
-    public void Word_OutsideTheViewportClearsTheSelection()
+    public void Word_BelowTheScreenClampsToTheLastRow()
     {
         var buffer = BuildVisible();
-        var service = new TextSelectionService();
-        service.SelectWord(buffer, 9, 0);
-        Assert.False(service.HasSelection);
+        var service = new TextSelectionService(buffer);
+        service.SelectWord(9, 0);
+        Assert.Equal(4, service.GetNormalizedRange().StartRow);
+        Assert.Equal("界x界y", service.GetSelectedText());
     }
 
-    // ---- scrollback rows (cell index == column; the wide glyph's placeholder is a space cell) ----
+    // ---- scrollback rows: read cell by cell like the screen (a wide glyph is emitted once, no placeholder) ----
 
     [Fact]
-    public void Scrollback_Character_KeepsThePlaceholderSpace()
+    public void Scrollback_Character_EmitsTheWideGlyphOnce()
     {
-        Assert.Equal("界 e\u0301", Select(BuildWithHistory(), -1, 1, -1, 3));
+        Assert.Equal("界e\u0301", Select(BuildWithHistory(), -1, 1, -1, 3));
     }
 
     [Fact]
     public void Scrollback_Character_WholeRow()
     {
-        Assert.Equal("a界 e\u0301b c", Select(BuildWithHistory(), -1, 0, -1, 11));
+        Assert.Equal("a界e\u0301b c", Select(BuildWithHistory(), -1, 0, -1, 11));
     }
 
     [Fact]
-    public void Scrollback_Block_PadsPastTheLineEnd()
+    public void Scrollback_Block_TrimsPastTheLineEnd()
     {
         var buffer = BuildWithHistory();
-        Assert.Equal("a界 e\u0301b c  ", Select(buffer, -1, 0, -1, 8, SelectionMode.Block));
-        Assert.Equal(" c  ", Select(buffer, -1, 5, -1, 8, SelectionMode.Block));
+        Assert.Equal("a界e\u0301b c", Select(buffer, -1, 0, -1, 8, SelectionMode.Block));
+        Assert.Equal(" c", Select(buffer, -1, 5, -1, 8, SelectionMode.Block));
     }
 
     [Fact]
     public void Scrollback_Line()
     {
         var buffer = BuildWithHistory();
-        var service = new TextSelectionService();
-        service.SelectLine(-1, buffer.Columns);
-        Assert.Equal("a界 e\u0301b c", service.GetSelectedText(buffer));
+        var service = new TextSelectionService(buffer);
+        service.SelectLine(-1);
+        Assert.Equal("a界e\u0301b c", service.GetSelectedText());
     }
 
     [Theory]
     [InlineData(6, 6, 6, "c")]
-    [InlineData(3, 3, 4, "e\u0301b")]
-    [InlineData(1, 0, 1, "a界")]
+    [InlineData(3, 0, 4, "a界e\u0301b")]
+    [InlineData(1, 0, 4, "a界e\u0301b")]
+    [InlineData(2, 0, 4, "a界e\u0301b")]
     [InlineData(5, 5, 5, "")]
     public void Scrollback_Word(int column, int expectedStart, int expectedEnd, string expectedText)
     {
         var buffer = BuildWithHistory();
-        var service = new TextSelectionService();
-        service.SelectWord(buffer, -1, column);
+        var service = new TextSelectionService(buffer);
+        service.SelectWord(-1, column);
 
         var range = service.GetNormalizedRange();
         Assert.Equal((-1, expectedStart, -1, expectedEnd), (range.StartRow, range.StartColumn, range.EndRow, range.EndColumn));
-        Assert.Equal(expectedText, service.GetSelectedText(buffer));
+        Assert.Equal(expectedText, service.GetSelectedText());
     }
 
     [Fact]
     public void Scrollback_ThroughVisible_JoinsWithNewline()
     {
-        Assert.Equal("a界 e\u0301b c" + NL + "vis", Select(BuildWithHistory(), -1, 0, 0, 2));
+        Assert.Equal("a界e\u0301b c" + NL + "vis", Select(BuildWithHistory(), -1, 0, 0, 2));
     }
 
     /// <summary>Two history lines, "one" (older) then "two" (newer), above a visible row 0 holding "vis".</summary>
@@ -318,11 +320,12 @@ public sealed class SelectionExtractionTests
         Assert.Equal("two", Select(buffer, -1, 0, -1, 2));
         Assert.Equal("one", Select(buffer, -2, 0, -2, 2));
         Assert.Equal("one" + NL + "two" + NL + "vis", Select(buffer, -2, 0, 0, 2));
-        Assert.Equal(string.Empty, Select(buffer, -3, 0, -3, 2));
+        // Rows above the oldest retained line clamp to it.
+        Assert.Equal("one", Select(buffer, -3, 0, -3, 2));
 
-        var service = new TextSelectionService();
-        service.SelectWord(buffer, -2, 1);
-        Assert.Equal("one", service.GetSelectedText(buffer));
+        var service = new TextSelectionService(buffer);
+        service.SelectWord(-2, 1);
+        Assert.Equal("one", service.GetSelectedText());
         Assert.Equal("two", Select(buffer, -1, 0, -1, 2, SelectionMode.Block));
     }
 }

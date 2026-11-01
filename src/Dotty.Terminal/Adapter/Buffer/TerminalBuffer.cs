@@ -164,6 +164,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (active == _isAlternate)
             return;
 
+        // Selections are per screen: the absolute numbering of the screen being left no longer applies.
+        BumpCoordinateEpoch();
         if (active)
         {
             _hasAlternateSavedCursor = true;
@@ -421,6 +423,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     public void ClearScrollback()
     {
         _totalScrolled = 0;
+        BumpCoordinateEpoch();
         _promptMarks.Clear();
         // Blank the rows that held history and return their pages to the OS; the visible screen stays.
         ActiveBuffer.DiscardHistory();
@@ -443,6 +446,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         _bracketedPaste = false;
         InitializeTabStops();
         _totalScrolled = 0;
+        BumpCoordinateEpoch();
         _savedTotalScrolled = 0;
         ResetFullOnlyState();
         ApplySoftResetCore();
@@ -712,6 +716,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             CursorVisible,
             scrollOffset);
         snapshot.GlobalGeneration = Generation;
+        snapshot.ViewTopAbsoluteRow = _totalScrolled;
         CaptureGraphics(snapshot, scrollOffset);
 
         int count = sbEnd - sbStart + 1;
@@ -1021,7 +1026,10 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             // Screen.Clear wiped the whole ring, history included: nothing a placement could sit on remains.
             DiscardGraphicsHistory(wholeRing: true);
             if (!_isAlternate)
+            {
+                BumpCoordinateEpoch();
                 RaiseHistoryInvalidated(HistoryDiscardReason.Cleared);
+            }
         }
         else if (mode == 0)
         {
@@ -1176,6 +1184,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     public void ClearScreen()
     {
         _screens.ClearAll();
+        BumpCoordinateEpoch();
         DiscardAllGraphicsPlacements();
         _cursor.Reset();
         MarkAllRowsDirty();

@@ -180,7 +180,7 @@ public sealed partial class LuaScriptHost
             return 1;
         }
 
-        host.PushLuaString(lua, pair.Pane.Selection.GetSelectedText(pair.Pane.Session.Adapter.Buffer));
+        host.PushLuaString(lua, pair.Pane.Selection.GetSelectedText());
         return 1;
     }
     private static int PaneIndex(LuaScriptHost host, Lua lua)

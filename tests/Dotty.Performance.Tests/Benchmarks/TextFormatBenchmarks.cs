@@ -35,7 +35,10 @@ public class TextFormatBenchmarks : PerformanceTestBase
     private const int ScrollbackFixtureLines = ScrollbackCapacity + 24;
     private const string RegexQuery = @"(error|warning)\s+\w+";
 
-    private readonly TextSelectionService _selection = new();
+    // One selection service per buffer: a service registers its content anchors with its buffer.
+    private TextSelectionService? _visibleSelection;
+    private TextSelectionService? _scrollbackSelection;
+    private TextSelectionService? _scrollbackCjkSelection;
 
     private RenderSnapshot? _logSnapshot;
     private RenderSnapshot? _cjkSnapshot;
@@ -121,28 +124,28 @@ public class TextFormatBenchmarks : PerformanceTestBase
     [Benchmark(Description = "Copy: select all 60x200 visible")]
     public int Copy_AllVisible()
     {
-        var buffer = VisibleBuffer();
-        _selection.StartSelection(0, 0);
-        _selection.UpdateSelection(GridRows - 1, GridColumns - 1);
-        return _selection.GetSelectedText(buffer).Length;
+        var selection = _visibleSelection ??= new TextSelectionService(VisibleBuffer());
+        selection.StartSelection(0, 0);
+        selection.UpdateSelection(GridRows - 1, GridColumns - 1);
+        return selection.GetSelectedText().Length;
     }
 
     [Benchmark(Description = "Copy: select 10k scrollback lines (80 cols)")]
     public int Copy_Scrollback()
     {
-        var buffer = Scrollback();
-        _selection.StartSelection(-ScrollbackCapacity, 0);
-        _selection.UpdateSelection(-1, 79);
-        return _selection.GetSelectedText(buffer).Length;
+        var selection = _scrollbackSelection ??= new TextSelectionService(Scrollback());
+        selection.StartSelection(-ScrollbackCapacity, 0);
+        selection.UpdateSelection(-1, 79);
+        return selection.GetSelectedText().Length;
     }
 
     [Benchmark(Description = "Copy: select 10k scrollback lines, CJK")]
     public int Copy_Scrollback_Cjk()
     {
-        var buffer = ScrollbackCjk();
-        _selection.StartSelection(-ScrollbackCapacity, 0);
-        _selection.UpdateSelection(-1, 79);
-        return _selection.GetSelectedText(buffer).Length;
+        var selection = _scrollbackCjkSelection ??= new TextSelectionService(ScrollbackCjk());
+        selection.StartSelection(-ScrollbackCapacity, 0);
+        selection.UpdateSelection(-1, 79);
+        return selection.GetSelectedText().Length;
     }
 
     #endregion

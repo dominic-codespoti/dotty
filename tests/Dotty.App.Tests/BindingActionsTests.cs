@@ -60,28 +60,4 @@ public sealed class BindingActionsTests
         Assert.Equal(activeAfter, manager.ActiveIndex);
         Assert.Same(tabs[active], manager.ActiveTab);
     }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(5)]
-    public void SelectAll_CoversScrollbackAndScreen(int scrolledLines)
-    {
-        var buffer = new TerminalBuffer(rows: 3, columns: 4);
-        for (int i = 0; i < 3 + scrolledLines; i++)
-        {
-            buffer.SetCursor(2, 0);
-            buffer.WriteText(i.ToString().AsSpan(), CellAttributes.Default);
-            if (i < 2 + scrolledLines) buffer.LineFeed();
-        }
-        var selection = new TextSelectionService();
-
-        selection.SelectAll(buffer);
-
-        var range = selection.GetNormalizedRange();
-        Assert.True(selection.HasSelection);
-        Assert.Equal(-buffer.ScrollbackCount, range.StartRow);
-        Assert.Equal(0, range.StartColumn);
-        Assert.Equal(2, range.EndRow);
-        Assert.Equal(3, range.EndColumn);
-    }
 }

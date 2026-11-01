@@ -30,6 +30,9 @@ public sealed class DottyUserConfig
     [JsonPropertyName("mouse")]
     public MouseUserConfig Mouse { get; set; } = new();
 
+    [JsonPropertyName("selection")]
+    public SelectionUserConfig Selection { get; set; } = new();
+
     [JsonPropertyName("theme")]
     public string Theme { get; set; } = "DarkPlus";
 
@@ -446,6 +449,7 @@ public static class UserConfigService
             config.Hyperlinks ??= new HyperlinksUserConfig();
             config.Vt ??= new VtUserConfig();
             config.Mouse ??= new MouseUserConfig();
+            config.Selection ??= new SelectionUserConfig();
             config.Scrollback ??= new ScrollbackUserConfig();
             config.Graphics ??= new GraphicsUserConfig();
             config.Bell ??= new BellUserConfig();

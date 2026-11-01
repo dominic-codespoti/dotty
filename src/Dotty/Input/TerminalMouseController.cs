@@ -54,6 +54,9 @@ public interface ITerminalMouseHost
     /// <summary>Wheel multiplier, alternate scroll and reporting bypass modifier (live configuration).</summary>
     MouseInputSettings MouseInput { get; }
 
+    /// <summary>Word characters, block modifier and clear rules (live <c>selection</c> configuration).</summary>
+    SelectionSettings SelectionInput => SelectionOptions.Resolve(UserConfigService.Current.Selection);
+
     /// <summary>Pastes the PRIMARY selection into <paramref name="targetPane"/> through the shared paste router.</summary>
     void PastePrimary(LeafPane targetPane);
 
@@ -410,14 +413,39 @@ public sealed class TerminalMouseController
         _lastClickPosition = pos;
         _lastClickPane = localPane;
 
+        var selection = localPane.Selection;
+        var settings = _host.SelectionInput;
+        selection.WordChars = settings.WordChars;
         if (_clickCount >= 3)
-            localPane.Selection.SelectLine(hit.LogicalRow, localPane.Columns);
+        {
+            if (_host.Ctrl)
+                selection.SelectZone(hit.LogicalRow, hit.ViewColumn);
+            else
+                selection.SelectLine(hit.LogicalRow);
+        }
         else if (_clickCount == 2)
-            localPane.Selection.SelectWord(localPane.Session.Adapter.Buffer, hit.LogicalRow, hit.ViewColumn);
+            selection.SelectWord(hit.LogicalRow, hit.ViewColumn);
+        else if (IsHeld(settings.RectangleModifier))
+            selection.StartSelection(hit.LogicalRow, hit.ViewColumn, SelectionMode.Block);
+        else if (_host.Shift && selection.HasSelection)
+        {
+            selection.ExtendSelection(hit.LogicalRow, hit.ViewColumn);
+            _selectionMoved = true;
+        }
         else
-            localPane.Selection.StartSelection(hit.LogicalRow, hit.ViewColumn, SelectionMode.Character);
+            selection.StartSelection(hit.LogicalRow, hit.ViewColumn, SelectionMode.Character);
         _host.SetPointerCursor(StandardCursor.IBeam);
     }
+
+    private bool IsHeld(RectangleSelectionModifier modifier) => modifier switch
+    {
+        RectangleSelectionModifier.Alt => _host.Alt,
+        RectangleSelectionModifier.Ctrl => _host.Ctrl,
+        RectangleSelectionModifier.Shift => _host.Shift,
+        RectangleSelectionModifier.Super => _host.Super,
+        _ => false,
+    };
+
     private void OpenTabContextMenu(int tabIndex, Vector2 position, TerminalMouseGeometry geometry)
     {
         _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.WindowUnitsToDevice, position.Y * geometry.WindowUnitsToDevice,
@@ -441,7 +469,7 @@ public sealed class TerminalMouseController
                 hasSelection: contextPane.Selection.HasSelection,
                 onCopy: () => _host.TryExecuteAction(TerminalAction.Copy),
                 onPaste: () => _host.TryExecuteAction(TerminalAction.Paste),
-                onSelectAll: () => contextPane.Selection.SelectAll(contextPane.Session.Adapter.Buffer),
+                onSelectAll: () => contextPane.Selection.SelectAll(),
                 onSplitRight: () =>
                 {
                     if (ReferenceEquals(contextPane, activeTab.ActivePane))
@@ -574,11 +602,7 @@ public sealed class TerminalMouseController
         {
             var selectionPane = _selectionPane!;
             var selectionHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, selectionPane);
-            var selection = selectionPane.Selection;
-            if (selection.Mode == SelectionMode.Line)
-                selection.UpdateLineSelection(selectionHit.LogicalRow, selectionPane.Columns);
-            else
-                selection.UpdateSelection(selectionHit.LogicalRow, selectionHit.ViewColumn);
+            selectionPane.Selection.UpdateSelection(selectionHit.LogicalRow, selectionHit.ViewColumn);
             _selectionMoved = true;
 
             // Keep a local drag local even when the pointer crosses a split boundary.
@@ -777,10 +801,7 @@ public sealed class TerminalMouseController
         var selection = pane.Selection;
         int oldRow = selection.ActiveRow;
         int oldColumn = selection.ActiveColumn;
-        if (selection.Mode == SelectionMode.Line)
-            selection.UpdateLineSelection(hit.LogicalRow, pane.Columns);
-        else
-            selection.UpdateSelection(hit.LogicalRow, hit.ViewColumn);
+        selection.UpdateSelection(hit.LogicalRow, hit.ViewColumn);
         return changed || oldRow != selection.ActiveRow || oldColumn != selection.ActiveColumn;
     }
 

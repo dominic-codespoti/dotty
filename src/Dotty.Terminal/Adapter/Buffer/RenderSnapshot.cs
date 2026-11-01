@@ -39,6 +39,8 @@ public sealed partial class RenderSnapshot : IRenderSource, IDisposable
     public int CursorRow { get; set; }
     public int CursorCol { get; set; }
     public ulong GlobalGeneration;
+    /// <summary><see cref="TerminalBuffer.ViewTopAbsoluteRow"/> at capture: converts content-anchored selections to this frame's rows.</summary>
+    public long ViewTopAbsoluteRow;
     public TerminalCursorShape CursorShape { get; set; } = TerminalCursorShape.Block;
     public bool CursorBlinking { get; set; } = true;
     /// <inheritdoc cref="TerminalBuffer.CursorStyleIsDefault"/>

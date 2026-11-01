@@ -143,7 +143,7 @@ public sealed class TerminalActionExecutor
                 var pane = activeTab.ActivePane;
                 var buffer = pane.Session.Adapter.Buffer;
                 if (!buffer.TryGetLatestCommandOutputRange(out int startRow, out int startColumn, out int endRow, out int endColumn)
-                    || !pane.Selection.StartRangeExclusive(buffer, startRow, startColumn, endRow, endColumn))
+                    || !pane.Selection.StartRangeExclusive(startRow, startColumn, endRow, endColumn))
                     return false;
                 _host.CopySelection();
                 return true;
@@ -155,7 +155,7 @@ public sealed class TerminalActionExecutor
             case TerminalAction.ScrollToBottom:
                 return ScrollScrollback(activeTab, action);
             case TerminalAction.SelectAll:
-                activeTab.ActivePane.Selection.SelectAll(activeTab.ActivePane.Session.Adapter.Buffer);
+                activeTab.ActivePane.Selection.SelectAll();
                 return true;
             case TerminalAction.ClearScrollback:
                 ClearScrollback(activeTab.ActivePane);

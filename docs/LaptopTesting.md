@@ -25,6 +25,23 @@ cd dotty
 git switch feat/ghostty-parity   # until it is merged into main
 ```
 
+### Or skip the build: CI binaries
+
+Every push to the branch publishes NativeAOT builds as workflow artifacts (kept 7 days): `aot-publish-linux-x64`,
+`aot-publish-osx-arm64`, `aot-publish-osx-x64`, `aot-publish-win-x64`. With the GitHub CLI:
+
+```bash
+run=$(gh run list -R dominic-codespoti/dotty --branch feat/ghostty-parity --workflow CI --status success \
+      --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run download "$run" -R dominic-codespoti/dotty -n aot-publish-osx-arm64 -D dotty-build   # pick your platform
+```
+
+The binaries land in `dotty-build/publish/<rid>/` (for example `dotty-build/publish/osx-arm64/dotty`). They are
+unsigned: on macOS run `xattr -dr com.apple.quarantine dotty-build` first; on Windows SmartScreen asks once
+("More info" → "Run anyway"). On Linux and macOS restore the execute bits if they were dropped
+(`chmod +x dotty-build/publish/*/dotty dotty-build/publish/*/pty-helper`). Then run the binary and continue with
+section 5. Building from source (below) is still needed for the automated test suites.
+
 ## 3. Build and run every automated check
 
 Linux and macOS:
@@ -116,4 +133,4 @@ report to the crash log path that `+diagnose` prints.
 
 | Date | Change |
 |---|---|
-| 2026-11-01 | Added: laptop build, test and manual verification guide; `scripts/dev/check.sh`. |
+| 2026-11-01 | Added: laptop build, test and manual verification guide; `scripts/dev/check.sh`; CI binary download. |

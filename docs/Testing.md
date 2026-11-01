@@ -3,6 +3,10 @@
 Dotty separates deterministic terminal-core tests from native PTY and desktop
 smoke tests. The desktop executable is `src/Dotty/Dotty.csproj`.
 
+For a one-shot local run of every suite use `scripts/dev/check.sh`; the manual desktop checklist is in
+[Testing on a laptop](LaptopTesting.md). On Linux and macOS the build also builds `pty-helper`
+(`BuildUnixPtyHelper` target in `Dotty.NativePty.csproj`).
+
 ## Test projects
 
 | Project | Scope |

@@ -119,11 +119,9 @@ git clone --branch main https://github.com/dominic-codespoti/dotty.git
 cd dotty
 ```
 
-On Linux or macOS, build the POSIX helper first:
-
-```bash
-make -C src/Dotty.NativePty
-```
+On Linux or macOS the build also builds the POSIX `pty-helper`
+(`src/Dotty.NativePty/bin/pty-helper`) when a C compiler is available; run
+`make -C src/Dotty.NativePty` by hand if it warns that the helper was not built.
 
 On Windows, no separate native helper build is required; ConPTY is provided by
 the OS. All platforms then build the solution:
@@ -193,7 +191,12 @@ The repository uses Microsoft.Testing.Platform. Run the solution tests with the 
 
 ```bash
 dotnet test --solution Dotty.slnx -c Release
+# or build + every suite + packaging checks with one summary (Linux/macOS):
+scripts/dev/check.sh
 ```
+
+Testing on a laptop with a display, including the manual checklist for HiDPI, fonts, IME and graphics: see
+[Testing Dotty on a laptop](docs/LaptopTesting.md).
 
 See the [testing guide](docs/Testing.md) for scope and procedures, and [Contributing](Contributing.md#tests) for setup and a note about diagnosing zero-test results. Test and benchmark results depend on workload and machine; see [Performance](docs/Performance.md) for recorded evidence and its limits.
 

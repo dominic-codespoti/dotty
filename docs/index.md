@@ -35,6 +35,7 @@ Start here: [README and quick start](../Readme.md) for the application, [Contrib
 | Document | Description |
 |----------|-------------|
 | [Testing Guide](Testing.md) | Test architecture, unit/integration/render tests |
+| [Testing on a laptop](LaptopTesting.md) | Build, `scripts/dev/check.sh`, run with a throwaway config, and the manual checklist for HiDPI, fonts, input, IME and graphics |
 | [E2E Testing](E2ETesting.md) | End-to-end testing via TCP command interface; manual OSC 52 read, paste, and link confirmation smoke |
 | [Performance Guide](Performance.md) | Benchmark workloads, recorded machine-specific measurements, and limitations; results are not universal performance guarantees |
 | [GUI Harness Benchmarking](GuiHarnessBenchmarking.md) | Visual benchmark harness for render quality verification |

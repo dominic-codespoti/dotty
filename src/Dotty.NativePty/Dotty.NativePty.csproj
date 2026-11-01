@@ -32,4 +32,15 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+
+  <!-- On Linux/macOS every build also builds the POSIX pty-helper (bin/pty-helper) with the checked-in Makefile, so a
+       fresh clone runs and tests without a manual `make` step. Incremental: skipped while the binary is newer than the
+       source. Without a C compiler the build warns instead of failing; `make -C src/Dotty.NativePty` remains the manual
+       path. Set DottySkipPtyHelperBuild=true to opt out. -->
+  <Target Name="BuildUnixPtyHelper" BeforeTargets="Build"
+          Condition="!$([MSBuild]::IsOSPlatform('Windows')) And '$(DottySkipPtyHelperBuild)' != 'true'"
+          Inputs="$(MSBuildProjectDirectory)/pty-helper.c;$(MSBuildProjectDirectory)/Makefile"
+          Outputs="$(MSBuildProjectDirectory)/bin/pty-helper">
+    <Exec Command="make -C &quot;$(MSBuildProjectDirectory)&quot;" ContinueOnError="WarnAndContinue" />
+  </Target>
 </Project>

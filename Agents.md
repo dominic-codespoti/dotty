@@ -40,6 +40,8 @@ Read the relevant document before changing a subsystem:
   promotion gates.
 - [Testing](./docs/Testing.md) and [E2E Testing](./docs/E2ETesting.md) — test
   layout, smoke contracts, control interface.
+- [Testing on a laptop](./docs/LaptopTesting.md) — local build/test script and
+  the manual desktop checklist.
 - [Configuration](./docs/Configuration.md) — JSON schema and hot reload.
 - [Kitty graphics](./docs/KittyGraphics.md) — image protocol, limits, memory and
   threading model, default-off flag, manual smoke checklist.

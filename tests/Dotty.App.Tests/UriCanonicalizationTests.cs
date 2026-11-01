@@ -9,7 +9,8 @@ namespace Dotty.App.Tests;
 /// Validates the canonical string the hyperlink policy hands to openers: it is ASCII and has no
 /// characters that could break out of a Windows handler command line. The policy percent-encodes
 /// those characters itself, so the first test does not depend on <see cref="Uri"/> escaping details.
-/// The IDN/ASCII tests pin platform <see cref="Uri"/> behavior (needs-runtime-verification).
+/// The IDN/ASCII tests pin platform <see cref="Uri"/> behavior (verified on .NET 11): <see cref="Uri.AbsoluteUri"/>
+/// keeps an internationalized host in Unicode, so the policy builds its canonical form from <see cref="Uri.IdnHost"/>.
 /// </summary>
 public sealed class UriCanonicalizationTests
 {
@@ -39,13 +40,21 @@ public sealed class UriCanonicalizationTests
     }
 
     [Fact]
-    public void AbsoluteUri_CanonicalizesIdnHostToPunycode()
+    public void AbsoluteUri_KeepsIdnHostInUnicodeAndIdnHostIsPunycode()
     {
-        // needs-runtime-verification
         var uri = new Uri("https://b\u00FCcher.de/p");
 
-        Assert.Equal("https://xn--bcher-kva.de/p", uri.AbsoluteUri);
+        Assert.Equal("https://b\u00FCcher.de/p", uri.AbsoluteUri);
         Assert.Equal("xn--bcher-kva.de", uri.IdnHost);
+    }
+
+    [Fact]
+    public void PolicyCanonical_UsesThePunycodeHost()
+    {
+        var policy = new HyperlinkPolicy(HyperlinkOptions.Default, "devbox", isWindows: false);
+
+        Assert.True(policy.TryCanonicalize("https://user@b\u00FCcher.de:8443/a b?q=\u00E9", out string? canonical, out _));
+        Assert.Equal("https://user@xn--bcher-kva.de:8443/a%20b?q=%C3%A9", canonical);
     }
 
     [Fact]

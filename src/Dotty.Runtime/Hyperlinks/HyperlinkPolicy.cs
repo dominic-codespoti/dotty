@@ -234,7 +234,11 @@ public sealed class HyperlinkPolicy
 
     private string? CheckCanonical(Uri uri, out string canonical)
     {
-        canonical = EscapeCommandLineUnsafe(uri.AbsoluteUri);
+        // Uri.AbsoluteUri keeps an internationalized host in Unicode; the canonical form carries its ASCII (punycode) form.
+        string absolute = uri.HostNameType == UriHostNameType.Dns && !IsAscii(uri.Host)
+            ? new UriBuilder(uri) { Host = uri.IdnHost }.Uri.AbsoluteUri
+            : uri.AbsoluteUri;
+        canonical = EscapeCommandLineUnsafe(absolute);
         if (canonical.Length > HyperlinkUri.MaxLength)
             return "link is too long";
         if (_isWindows && canonical.Length > WindowsMaxUrlLength)

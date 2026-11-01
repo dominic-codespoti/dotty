@@ -161,7 +161,9 @@ public sealed class KittyBase64DecoderTests
     {
         var dec = new KittyBase64Decoder();
         var dst = new byte[8];
-        Assert.Equal(KittyBase64Status.Ok, dec.Decode("TWFuTW"u8, dst, out int w, true));
+        // "TQ" is the canonical unpadded encoding of the final "M" ("TW" carries non-zero unused bits, which the BCL
+        // decoder rejects; see the decoder's rules).
+        Assert.Equal(KittyBase64Status.Ok, dec.Decode("TWFuTQ"u8, dst, out int w, true));
         Assert.Equal(3, w);
         Assert.Equal(2, dec.PendingChars);
         Assert.Equal(KittyBase64Status.Ok, dec.Finish(dst.AsSpan(w), out int f));

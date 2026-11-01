@@ -28,7 +28,8 @@ internal enum KittyBase64Status : byte
 /// (<c>xx==</c> / <c>xxx=</c>); nothing may follow it. Padding in a non-final chunk is an error.</item>
 /// <item>Padding is optional at the very end of the final chunk: <see cref="Finish"/> accepts a trailing partial
 /// quartet of 2 or 3 characters (clients commonly omit padding) and rejects a lone character.</item>
-/// <item>Non-zero unused trailing bits in the last character are handled by the BCL decoder (not checked here).</item>
+/// <item>Non-zero unused trailing bits in the last character (e.g. <c>TW</c> instead of <c>TQ</c>) are an error; the
+/// BCL decoder rejects them (not checked here).</item>
 /// <item>Errors and overflows are sticky: once <see cref="Status"/> is not <see cref="KittyBase64Status.Ok"/> all
 /// further input is ignored and the same status is returned.</item>
 /// </list>

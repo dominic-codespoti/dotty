@@ -13,7 +13,11 @@ namespace Dotty.Rendering.Gpu;
 /// Device pixels the cell baseline sits below the atlas baseline (the half-leading split of extra line
 /// height, <c>CellMetrics.BaselineShift</c>); added to every cell glyph's vertical offset.
 /// </param>
-public readonly record struct TextAttributeOptions(float FaintOpacity, bool BlinkVisible, int BaselineShift = 0)
+/// <param name="Sprites">
+/// Cell geometry decoration sprites are built against; <c>default</c> (unmeasured) emits no decorations.
+/// </param>
+public readonly record struct TextAttributeOptions(
+    float FaintOpacity, bool BlinkVisible, int BaselineShift = 0, CellSpriteMetrics Sprites = default)
 {
     /// <summary>Default of <c>font.faintOpacity</c>.</summary>
     public const float DefaultFaintOpacity = 0.5f;

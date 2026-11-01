@@ -17,6 +17,7 @@ internal sealed class ImePreeditQuadBuilder
     private SKTypeface? _cachedTypeface;
     private object? _cachedFallbackChain;
     private float _cachedFontSize;
+    private CellSpriteMetrics _cachedSprites;
     private int _cachedFirstColumn;
     private int _cachedRow;
     private int _cachedVisibleColumns;
@@ -33,6 +34,7 @@ internal sealed class ImePreeditQuadBuilder
         GlyphAtlas atlas,
         SKTypeface typeface,
         float fontSize,
+        in CellSpriteMetrics sprites,
         HashSet<int> dirtyAtlasRows,
         out int caretCellOffset)
     {
@@ -45,6 +47,7 @@ internal sealed class ImePreeditQuadBuilder
             && ReferenceEquals(typeface, _cachedTypeface)
             && ReferenceEquals(atlas.FallbackChain, _cachedFallbackChain)
             && fontSize.Equals(_cachedFontSize)
+            && sprites == _cachedSprites
             && firstColumn == _cachedFirstColumn
             && row == _cachedRow
             && visibleColumns == _cachedVisibleColumns)
@@ -55,7 +58,7 @@ internal sealed class ImePreeditQuadBuilder
         }
 
         int count = BuildGlyphs(in state, firstColumn, row, visibleColumns, destination, atlas,
-            typeface, fontSize, dirtyAtlasRows, out caretCellOffset);
+            typeface, fontSize, in sprites, dirtyAtlasRows, out caretCellOffset);
         if (_cachedInstances.Length < count)
             Array.Resize(ref _cachedInstances, Math.Max(count, _cachedInstances.Length == 0 ? 8 : _cachedInstances.Length * 2));
         destination[..count].CopyTo(_cachedInstances);
@@ -64,6 +67,7 @@ internal sealed class ImePreeditQuadBuilder
         _cachedTypeface = typeface;
         _cachedFallbackChain = atlas.FallbackChain;
         _cachedFontSize = fontSize;
+        _cachedSprites = sprites;
         _cachedFirstColumn = firstColumn;
         _cachedRow = row;
         _cachedVisibleColumns = visibleColumns;
@@ -81,6 +85,7 @@ internal sealed class ImePreeditQuadBuilder
         GlyphAtlas atlas,
         SKTypeface typeface,
         float fontSize,
+        in CellSpriteMetrics sprites,
         HashSet<int> dirtyAtlasRows,
         out int caretCellOffset)
     {
@@ -137,12 +142,36 @@ internal sealed class ImePreeditQuadBuilder
                     FgG = Foreground.G,
                     FgB = Foreground.B,
                     FgA = 255,
-                    Flags = (byte)((width == 2 ? CellFlags.WideCell : 0) | CellFlags.Underline | (glyphOk && glyphInfo.IsColor ? CellFlags.ColorGlyph : 0)),
+                    Flags = (byte)((width == 2 ? CellFlags.WideCell : 0) | (glyphOk && glyphInfo.IsColor ? CellFlags.ColorGlyph : 0)),
                     BgR = SelectionBackground.R,
                     BgG = SelectionBackground.G,
                     BgB = SelectionBackground.B,
                     BgA = selected ? (byte)255 : (byte)0
                 };
+                // The composition is underlined with a single underline sprite in the text colour.
+                if (sprites.IsValid && written < destination.Length
+                    && QuadFrameBuilder.TryEnsureSprite(atlas,
+                        new SpriteKey(DecorationGeometry.UnderlineCode(UnderlineStyle.Single), sprites.CellWidth * width, sprites),
+                        out var underline, out bool underlineAdded))
+                {
+                    if (underlineAdded) dirtyAtlasRows.Add(row);
+                    destination[written++] = new CellInstance
+                    {
+                        Col = (ushort)(firstColumn + cellOffset),
+                        Row = (ushort)row,
+                        OffX = (short)underline.LeftBearing,
+                        OffY = (short)underline.TopBearing,
+                        GlyphX = (short)underline.X,
+                        GlyphY = (short)underline.Y,
+                        GlyphW = (short)underline.Width,
+                        GlyphH = (short)underline.Height,
+                        FgR = Foreground.R,
+                        FgG = Foreground.G,
+                        FgB = Foreground.B,
+                        FgA = 255,
+                        Flags = CellFlags.Decoration,
+                    };
+                }
             }
             if (!caretResolved && caretUtf16 < utf16 + length)
             {

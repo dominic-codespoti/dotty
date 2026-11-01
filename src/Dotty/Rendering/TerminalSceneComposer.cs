@@ -233,10 +233,25 @@ public sealed class TerminalSceneComposer : IDisposable
     }
 
     /// <summary>
-    /// Half-leading baseline offset of cell text in device pixels (<c>CellMetrics.BaselineShift</c>);
-    /// changes only together with the cell height or font, both of which invalidate the row caches.
+    /// Device-pixel cell metrics: the half-leading baseline offset of cell text and the decoration geometry. Change only
+    /// together with the cell height or font, both of which invalidate the row caches.
     /// </summary>
-    public int BaselineShift { get; set; }
+    internal CellMetrics CellMetrics
+    {
+        get => _cellMetrics;
+        set
+        {
+            _cellMetrics = value;
+            _spriteMetrics = value.CellWidth <= 0 || value.CellHeight <= 0
+                ? default
+                : CellSpriteMetrics.Create(value.CellWidth, value.CellHeight, value.Baseline,
+                    value.UnderlinePosition, value.UnderlineThickness, value.StrikethroughPosition,
+                    value.StrikethroughThickness, value.OverlinePosition, value.OverlineThickness);
+        }
+    }
+
+    private CellMetrics _cellMetrics;
+    private CellSpriteMetrics _spriteMetrics;
 
     public void UpdateResources(GlyphAtlas atlas, SKTypeface typeface, float fontSize)
     {
@@ -291,7 +306,7 @@ public sealed class TerminalSceneComposer : IDisposable
         float padY = devicePadding.Vertical;
         int barRows = showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, cellHeight / scale) : 0;
         float topOffset = barRows * cellHeight;
-        int maxInstances = checked(Math.Max(1024, rows * columns * 2 + 1024));
+        int maxInstances = checked(Math.Max(1024, QuadFrameBuilder.InstanceBudget(rows, columns) + 1024));
         EnsureScratchCapacity(maxInstances);
         EnsureScrollbarScratchCapacity(checked(Math.Max(2, leaves.Count * 2)));
         int instanceCount = 0;
@@ -307,7 +322,8 @@ public sealed class TerminalSceneComposer : IDisposable
         BlinkActive = false;
         // cursorVisible is the shared blink phase, so SGR 5/6 text blinks in step with the cursor.
         _textOptions = new TextAttributeOptions(
-            TextAttributeOptions.NormalizeFaintOpacity(UserConfigService.Current.Font.FaintOpacity), cursorVisible, BaselineShift);
+            TextAttributeOptions.NormalizeFaintOpacity(UserConfigService.Current.Font.FaintOpacity), cursorVisible,
+            _cellMetrics.BaselineShift, _spriteMetrics);
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
         // A full atlas is rebuilt here, at the frame boundary, and this frame re-ensures its visible glyphs. When the
@@ -411,7 +427,7 @@ public sealed class TerminalSceneComposer : IDisposable
                 int startInstanceIndex = instanceCount;
                 int paneRows = leafSnapshot.Rows;
                 int paneColumns = leafSnapshot.Columns;
-                EnsureScratchCapacity(instanceCount + checked(paneRows * paneColumns * 2 + 1024));
+                EnsureScratchCapacity(instanceCount + checked(QuadFrameBuilder.InstanceBudget(paneRows, paneColumns) + 1024));
                 var leafForeground = _leafColors[leafIndex].Foreground;
                 var leafBackground = _leafColors[leafIndex].Background;
                 int written = AppendCachedLeafRows(
@@ -536,7 +552,8 @@ public sealed class TerminalSceneComposer : IDisposable
                         for (int i = startInstanceIndex; i < instanceCount; i++)
                         {
                             ref var instance = ref _frameScratch[i];
-                            if (instance.Row != cursorRow || instance.Col != cursorColumn)
+                            if (instance.Row != cursorRow || instance.Col != cursorColumn
+                                || (instance.Flags & CellFlags.Decoration) != 0)
                                 continue;
 
                             var cellForeground = SgrColorArgb.FromRgb(instance.FgR, instance.FgG, instance.FgB);
@@ -577,11 +594,11 @@ public sealed class TerminalSceneComposer : IDisposable
                                 Math.Max(0, columns - cursorGlobalColumn));
                             if (availableColumns > 0)
                             {
-                                EnsureScratchCapacity(checked(instanceCount + composition.Text.Length));
+                                EnsureScratchCapacity(checked(instanceCount + composition.Text.Length * 2));
                                 int preeditCount = _preeditQuadBuilder.Build(
                                     in composition, cursorGlobalColumn, cursorGlobalRow, availableColumns,
                                     _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
-                                    _dirtyAtlasRows, out int caretOffset);
+                                    in _spriteMetrics, _dirtyAtlasRows, out int caretOffset);
                                 instanceCount += preeditCount;
                                 float caretLeft = cursorX + caretOffset * scaledCellWidth;
                                 float caretRight = Math.Min(caretLeft + 2f, paneRight);
@@ -721,11 +738,11 @@ public sealed class TerminalSceneComposer : IDisposable
                     if (imeCaretBoundsValid && preeditState is { IsActive: true } composition && queryCursor < inputColumns)
                     {
                         int visibleColumns = Math.Min(inputColumns - queryCursor, Math.Max(0, columns - caretColumn));
-                        EnsureScratchCapacity(checked(instanceCount + composition.Text.Length));
+                        EnsureScratchCapacity(checked(instanceCount + composition.Text.Length * 2));
                         int preeditCount = _preeditQuadBuilder.Build(
                             in composition, caretColumn, inputRow, visibleColumns,
                             _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
-                            _dirtyAtlasRows, out int caretOffset);
+                            in _spriteMetrics, _dirtyAtlasRows, out int caretOffset);
                         instanceCount += preeditCount;
                         float compositionCaretX = caretX + caretOffset * scaledWidth;
                         float caretRight = Math.Min(compositionCaretX + 2f, inputRight);

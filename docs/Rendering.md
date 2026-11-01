@@ -11,7 +11,7 @@ snapshots so rendering can run without changing parser or PTY code.
    active screen has Kitty image placements, the same hold advances playing
    animations and copies the visible placements, each with a lease on its
    pixels (see [Image layers](#kitty-image-layers)).
-2. `TerminalSceneComposer` classifies cells and builds background, underline,
+2. `TerminalSceneComposer` classifies cells and builds background, decoration,
    scrollbar, tab, pane, selection, cursor, and glyph instances.
 3. `GlyphAtlasService` resolves the configured font stack, shapes glyphs, and
    stores grayscale coverage and intrinsic-color pixels in shared atlas pages.
@@ -339,8 +339,8 @@ expected to change the row; it is not a release date or a commitment.
 | Faint (SGR 2) | Supported | Text colour mixed toward the cell background after inverse, keeping `font.faintOpacity` (default 0.5) of it; decorations follow the text colour | |
 | Conceal (SGR 8) | Supported | No glyph; background and decorations stay | |
 | Text blink (SGR 5, 6) | Supported | One rate for both, shared with the cursor blink phase (`cursor.blinkIntervalMs`); the glyph is hidden in the off phase, background and decorations stay; steady while the window is unfocused | |
-| Inverse, strikethrough, overline | Supported | | |
-| Underline | Partial | Single underline only. Double, curly, dotted, and dashed (SGR 4:2–4:5) and the SGR 58 underline colour are parsed but drawn as the same single underline | W4-C3 |
+| Inverse | Supported | | |
+| Underline, strikethrough, overline | Supported | Single, double, curly, dotted and dashed underlines (SGR 4:1–4:5) at the font's underline row and thickness, strikethrough (SGR 9) and overline (SGR 53) at their `CellMetrics` rows; drawn as A8 sprites in the glyph pass (see [Decoration sprites](#decoration-sprites)). The underline uses the SGR 58 colour when set, else the text colour; strikethrough and overline use the text colour | |
 | Cursor shape | Supported | Block (text drawn in the cell background), beam and underline; DECSCUSR shape and blink bit, else `cursor.shape`/`cursor.blink`; DECTCEM hides it; wide characters get a two-cell cursor; unfocused windows draw `cursor.unfocusedStyle` (hollow outline by default) | |
 | Pane dividers / active-pane border | Supported | `panes.dividerThickness` sets the gap (logical px, rounded to device px); dividers use the chrome border colour; `panes.activeBorder` paints the gap around the active pane in the accent colour when the tab has splits | |
 | Default colour overrides (OSC 10/11, 110/111) | Supported | Per pane; the pane rect is painted with the override background, the window padding keeps the theme background | |
@@ -351,6 +351,21 @@ expected to change the row; it is not a release date or a commitment.
 | Bell | Partial | Window attention request while unfocused (`bell.attention`, default on), optional visual flash drawn as a separate overlay pass after the frame (`bell.visual`), tab marker, Lua `bell` event; rate-limited to one effect per 150 ms. No sound: `bell.audible` is accepted but not implemented | |
 | Kitty graphics | Implemented, unverified | Off by default (`graphics.kittyProtocol`); see [Kitty graphics](KittyGraphics.md) | |
 | Render failures and GPU resets | Partial | Exceptions retry, rebuild the renderer, then prompt; a driver reset (lost context) stops rendering with a title and stderr notice until Dotty restarts. See [Render failures and context loss](#render-failures-and-context-loss) | W4-C24 (context recreation) |
+
+### Decoration sprites
+
+`DecorationGeometry` turns `CellSpriteMetrics` (the GPU-project copy of `CellMetrics`) into whole-pixel A8
+sprites: single and double strokes (gap = thickness, at least 1 px; pushed up to stay in the cell, one stroke
+when the cell is under 3 px tall), dotted and dashed marks centred in equal integer segments of each cell,
+and a curly raised cosine whose period is the cell width, so any span of cells, wide or not, continues
+without a phase step. Strikethrough and overline share one sprite. `QuadFrameBuilder` emits each sprite as
+an ordinary glyph-pass instance after the cell's glyph or background instance, flagged
+`CellFlags.Decoration` so selection and cursor recolouring skip it; the shader has no decoration path and
+no decoration flag bits. A cell emits at most `QuadFrameBuilder.MaxInstancesPerCell` = 3 instances (main,
+underline in its SGR 58 colour, strikethrough/overline in the text colour), so frame, row-cache and
+composer buffers are sized by `QuadFrameBuilder.InstanceBudget(rows, cols)` = 3 × rows × cols and never
+drop a decoration. Sprites live in the A8 atlas page keyed by `SpriteKey` (code, span width, metrics) and
+are cleared by atlas rebuilds.
 
 ## Memory diagnostics and lifecycle measurements
 
@@ -551,5 +566,6 @@ fails the smoke run.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C3: decoration sprites (all SGR 4:n underline styles, SGR 58 colour, strikethrough/overline from `CellMetrics`); removed the `DecorOnly` shader path, the decoration uniforms and the underline/strike/overline flag bits; instance budget 3 × rows × cols. |
 | 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |
 | 2026-11-01 | W4-C1/C2: `DisplayScale`/`GridFit` integer device-pixel layout, content-scale callback, `font.size` in points, `CellMetrics` (baseline, half-leading, decoration strokes) and `font.adjustCellWidth/Height`. |

@@ -28,9 +28,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
     private bool _colorAtlasSamplerSet;
     private int _uPass;
     private int _uAtlas;
-    private int _uUnderlineY;
-    private int _uStrikeY;
-    private int _uLineHalf;
 
     private float[] _staging = Array.Empty<float>();
     private CellInstance[] _lastInstances = Array.Empty<CellInstance>();
@@ -44,11 +41,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
     private int _drawMenuCount;
     private int _instanceBufferCapacityBytes;
     private int _stagedMenuInstanceStart = -1;
-    private int[] _sourceOutputStarts = Array.Empty<int>();
-    private int[] _sourceOutputCounts = Array.Empty<int>();
     private int[] _dirtyInstanceRanges = Array.Empty<int>();
     private int _dirtyInstanceRangeCount;
-    private int _stagedOutputInstanceCount;
     private bool _fullInstanceUpload = true;
     private float _stagedPaddingLeft = float.NaN;
     private float _stagedPaddingTop = float.NaN;
@@ -89,12 +83,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
     private bool _atlasSizeSet;
     private float _cachedAtlasW;
     private float _cachedAtlasH;
-    private bool _underlineSet;
-    private float _cachedUnderline;
-    private bool _strikeSet;
-    private float _cachedStrike;
-    private bool _lineHalfSet;
-    private float _cachedLineHalf;
     private bool _passSet;
     private int _cachedPass;
     private bool _atlasSamplerSet;
@@ -138,9 +126,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         _uColorAtlas = _gl.GetUniformLocation(_program, "uColorAtlas");
         _uPass = _gl.GetUniformLocation(_program, "uPass");
         _uAtlas = _gl.GetUniformLocation(_program, "uAtlas");
-        _uUnderlineY = _gl.GetUniformLocation(_program, "uUnderlineY");
-        _uStrikeY = _gl.GetUniformLocation(_program, "uStrikeY");
-        _uLineHalf = _gl.GetUniformLocation(_program, "uLineHalf");
 
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
@@ -311,9 +296,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         int framebufferHeight,
         float cellW,
         float cellH,
-        float underlineY,
-        float strikeY,
-        float lineHalf,
         SgrColorArgb clearColor,
         bool frameCaptured = false,
         float paddingLeft = 0f,
@@ -358,9 +340,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         Uniform2CellSize(cellW, cellH);
         Uniform2AtlasSize((float)atlasWidth, (float)atlasHeight);
         Uniform2ColorAtlasSize(Math.Max(1, TextureManager.Atlas.ColorWidth), Math.Max(1, TextureManager.Atlas.ColorHeight));
-        Uniform1Underline(underlineY);
-        Uniform1Strike(strikeY);
-        Uniform1LineHalf(lineHalf);
         BindAtlasTexture(texId);
         Uniform1AtlasSampler();
         BindColorAtlasTexture(TextureManager.ColorTextureId);
@@ -412,29 +391,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
             return;
         }
 
-        EnsureOutputMapCapacity(instances.Length);
         _dirtyInstanceRangeCount = 0;
-        int outputInstance = 0;
         int dirtyStart = -1;
-        bool layoutChanged = false;
         for (int i = 0; i < instances.Length; i++)
         {
-            ref readonly var current = ref instances[i];
-            ref readonly var previous = ref _lastInstances[i];
-            bool hasDecoration = (current.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
-            bool hadDecoration = (previous.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
-            if (hasDecoration != hadDecoration)
-            {
-                layoutChanged = true;
-                break;
-            }
-
-            _sourceOutputStarts[i] = outputInstance;
-            int outputCount = hasDecoration ? 2 : 1;
-            _sourceOutputCounts[i] = outputCount;
-            outputInstance += outputCount;
-
-            if (!CellInstancesEqual(current, previous))
+            if (!CellInstancesEqual(instances[i], _lastInstances[i]))
             {
                 if (dirtyStart < 0)
                     dirtyStart = i;
@@ -446,20 +407,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
             }
         }
 
-        if (layoutChanged)
-        {
-            instances.CopyTo(_lastInstances);
-            _lastInstanceCount = instances.Length;
-            _dirtyInstanceRangeCount = 0;
-            _instanceBufferDirty = true;
-            _fullInstanceUpload = true;
-            return;
-        }
-
         if (dirtyStart >= 0)
             AddDirtyInstanceRange(dirtyStart, instances.Length);
 
-        _stagedOutputInstanceCount = outputInstance;
         _lastInstanceCount = instances.Length;
         if (_dirtyInstanceRangeCount == 0)
         {
@@ -484,16 +434,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
             return;
         int capacity = Math.Max(required, _lastInstances.Length == 0 ? 4096 : _lastInstances.Length * 2);
         _lastInstances = new CellInstance[capacity];
-    }
-
-    private void EnsureOutputMapCapacity(int required)
-    {
-        if (_sourceOutputStarts.Length < required)
-        {
-            int capacity = Math.Max(required, _sourceOutputStarts.Length == 0 ? 4096 : _sourceOutputStarts.Length * 2);
-            Array.Resize(ref _sourceOutputStarts, capacity);
-            Array.Resize(ref _sourceOutputCounts, capacity);
-        }
     }
 
     private void AddDirtyInstanceRange(int start, int end)
@@ -544,27 +484,13 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         int cellCount = _lastInstanceCount;
         if (cellCount > 0 && _instanceBufferDirty)
         {
-            int maxInstances = checked(cellCount * 2);
-            int maxFloats = checked(maxInstances * FloatsPerInstance);
+            // One GPU instance per cell instance: decorations are ordinary sprite instances from the frame builder.
+            int outputInstanceCount = cellCount;
+            int maxFloats = checked(cellCount * FloatsPerInstance);
             if (_staging.Length < maxFloats)
             {
                 int capacity = Math.Max(maxFloats, _staging.Length == 0 ? 4096 : _staging.Length * 2);
                 _staging = new float[capacity];
-            }
-
-            int outputInstanceCount = _stagedOutputInstanceCount;
-            if (_fullInstanceUpload)
-            {
-                EnsureOutputMapCapacity(cellCount);
-                outputInstanceCount = 0;
-                for (int i = 0; i < cellCount; i++)
-                {
-                    _sourceOutputStarts[i] = outputInstanceCount;
-                    ref readonly var instance = ref _lastInstances[i];
-                    bool decorated = (instance.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
-                    _sourceOutputCounts[i] = decorated ? 2 : 1;
-                    outputInstanceCount += _sourceOutputCounts[i];
-                }
             }
 
             int uploadBytes = checked(outputInstanceCount * FloatsPerInstance * sizeof(float));
@@ -577,7 +503,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
                 for (int i = 0; i < cellCount; i++)
                 {
                     ref readonly var instance = ref _lastInstances[i];
-                    WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
+                    WriteCellInstance(stagingArr, i, instance,
                         cellW, cellH, paddingLeft, paddingTop, barRows);
                 }
             }
@@ -590,20 +516,16 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
                     for (int i = sourceStart; i < sourceEnd; i++)
                     {
                         ref readonly var instance = ref _lastInstances[i];
-                        WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
+                        WriteCellInstance(stagingArr, i, instance,
                             cellW, cellH, paddingLeft, paddingTop, barRows);
                     }
                 }
             }
 
-            int clampedMenuStart = menuInstanceStart < 0
+
+            int menuOutputStart = menuInstanceStart < 0
                 ? -1
                 : Math.Clamp(menuInstanceStart, 0, cellCount);
-            int menuOutputStart = clampedMenuStart < 0
-                ? -1
-                : clampedMenuStart == cellCount
-                    ? outputInstanceCount
-                    : _sourceOutputStarts[clampedMenuStart];
 
             BindVertexArray(_vao);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instanceVbo);
@@ -631,13 +553,10 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
                 {
                     for (int range = 0; range < _dirtyInstanceRangeCount; range++)
                     {
-                        int sourceStart = _dirtyInstanceRanges[range * 2];
-                        int sourceEnd = _dirtyInstanceRanges[range * 2 + 1];
-                        int outputStart = _sourceOutputStarts[sourceStart];
-                        int outputEnd = _sourceOutputStarts[sourceEnd - 1] + _sourceOutputCounts[sourceEnd - 1];
-                        int outputCount = outputEnd - outputStart;
-                        int floatOffset = checked(outputStart * FloatsPerInstance);
-                        int byteCount = checked(outputCount * FloatsPerInstance * sizeof(float));
+                        int start = _dirtyInstanceRanges[range * 2];
+                        int end = _dirtyInstanceRanges[range * 2 + 1];
+                        int floatOffset = checked(start * FloatsPerInstance);
+                        int byteCount = checked((end - start) * FloatsPerInstance * sizeof(float));
                         _gl.BufferSubData(
                             BufferTargetARB.ArrayBuffer,
                             checked(floatOffset * sizeof(float)),
@@ -647,7 +566,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
                 }
             }
 
-            _stagedOutputInstanceCount = outputInstanceCount;
             _drawInstanceCount = outputInstanceCount;
             _drawMenuStart = menuOutputStart;
             _drawMenuCount = menuOutputStart >= 0 ? outputInstanceCount - menuOutputStart : 0;
@@ -668,7 +586,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
             _drawInstanceCount = 0;
             _drawMenuStart = menuInstanceStart < 0 ? -1 : 0;
             _drawMenuCount = 0;
-            _stagedOutputInstanceCount = 0;
             _stagedMenuInstanceStart = menuInstanceStart;
             _stagedCellW = cellW;
             _stagedCellH = cellH;
@@ -774,31 +691,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         staging[offset + 16] = cell.BgB / 255f;
         staging[offset + 17] = cell.BgA / 255f;
         staging[offset + 18] = BitConverter.UInt32BitsToSingle(cell.Flags);
-
-        if ((cell.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) == 0)
-            return;
-
-        int decoration = (outputIndex + 1) * FloatsPerInstance;
-        float decorationWidth = (cell.Flags & CellFlags.WideCell) != 0 ? cellW * 2f : cellW;
-        staging[decoration] = x;
-        staging[decoration + 1] = y;
-        staging[decoration + 2] = 0f;
-        staging[decoration + 3] = 0f;
-        staging[decoration + 4] = decorationWidth;
-        staging[decoration + 5] = cellH;
-        staging[decoration + 6] = 0f;
-        staging[decoration + 7] = 0f;
-        staging[decoration + 8] = 0f;
-        staging[decoration + 9] = 0f;
-        staging[decoration + 10] = cell.FgR / 255f;
-        staging[decoration + 11] = cell.FgG / 255f;
-        staging[decoration + 12] = cell.FgB / 255f;
-        staging[decoration + 13] = cell.FgA / 255f;
-        staging[decoration + 14] = 0f;
-        staging[decoration + 15] = 0f;
-        staging[decoration + 16] = 0f;
-        staging[decoration + 17] = 0f;
-        staging[decoration + 18] = BitConverter.UInt32BitsToSingle((uint)(cell.Flags | CellFlags.DecorOnly));
     }
 
     private void DrawCellRange(int firstInstance, int instanceCount, int pass, bool menuVao)
@@ -1089,36 +981,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         _cachedColorAtlasH = height;
         _colorAtlasSizeSet = true;
     }
-    private void Uniform1Underline(float value)
-    {
-        if (_underlineSet && _cachedUnderline == value)
-            return;
-
-        _gl.Uniform1(_uUnderlineY, value);
-        _cachedUnderline = value;
-        _underlineSet = true;
-    }
-
-    private void Uniform1Strike(float value)
-    {
-        if (_strikeSet && _cachedStrike == value)
-            return;
-
-        _gl.Uniform1(_uStrikeY, value);
-        _cachedStrike = value;
-        _strikeSet = true;
-    }
-
-    private void Uniform1LineHalf(float value)
-    {
-        if (_lineHalfSet && _cachedLineHalf == value)
-            return;
-
-        _gl.Uniform1(_uLineHalf, value);
-        _cachedLineHalf = value;
-        _lineHalfSet = true;
-    }
-
     private void Uniform1Pass(int pass)
     {
         if (_passSet && _cachedPass == pass)
@@ -1186,9 +1048,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         _cellFramebufferSet = false;
         _cellSizeSet = false;
         _atlasSizeSet = false;
-        _underlineSet = false;
-        _strikeSet = false;
-        _lineHalfSet = false;
         _passSet = false;
         _atlasSamplerSet = false;
         _chromeFramebufferSet = false;

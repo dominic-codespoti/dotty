@@ -88,6 +88,9 @@ public static class SelectionQuadBuilder
         for (int i = 0; i < paneInstanceCount; i++)
         {
             ref var instance = ref instances[i];
+            // Decoration sprites carry no background; tinting them would double the selection colour.
+            if ((instance.Flags & CellFlags.Decoration) != 0)
+                continue;
             int column = instance.Col - columnOffset;
             int viewRow = instance.Row - rowOffset;
             if (!TryGetRowSpan(range, block, viewRow - scrollOffset, out int first, out int last)

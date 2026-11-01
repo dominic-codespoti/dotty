@@ -105,7 +105,6 @@ public sealed class SilkColorGlyphRenderingTests
             using var renderer = new SilkTerminalRenderer(gl!, atlas);
             renderer.Render(new[] { cell, clippedCell }, Array.Empty<ChromeQuadInstance>(),
                 atlas.Width, atlas.Height, clipWidth, height, CellWidth, CellHeight,
-                underlineY: 0.85f, strikeY: 0.7f, lineHalf: 0.04f,
                 clearColor: SgrColorArgb.FromRgb(0, 0, 0), frameCaptured: true);
             Assert.Equal((long)atlas.Width * atlas.Height, renderer.R8TexturePayloadBytes);
             Assert.Equal((long)atlas.ColorWidth * atlas.ColorHeight * 4, renderer.Rgba8TexturePayloadBytes);

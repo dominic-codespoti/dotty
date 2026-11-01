@@ -46,6 +46,15 @@ public static class QuadFrameBuilder
     public static readonly SgrColorArgb DefaultBackground = SgrColorArgb.FromRgb(0, 0, 0);
 
     /// <summary>
+    /// Upper bound of instances one cell emits: its glyph or background instance, an underline sprite and a
+    /// strikethrough/overline sprite (separate because SGR 58 colours only the underline).
+    /// </summary>
+    public const int MaxInstancesPerCell = 3;
+
+    /// <summary>Instance capacity that can never overflow for a <paramref name="rows"/> × <paramref name="cols"/> grid.</summary>
+    public static int InstanceBudget(int rows, int cols) =>
+        checked(Math.Max(0, rows) * Math.Max(0, cols) * MaxInstancesPerCell);
+    /// <summary>
     /// Whole-pixel glyph placement offset, rounded half away from zero. A fallback glyph's baseline offset is
     /// fractional; truncation moved negative offsets down and positive ones up by up to a pixel.
     /// </summary>
@@ -74,7 +83,7 @@ public static class QuadFrameBuilder
         if (rows <= 0 || cols <= 0)
             return new QuadFrameBuildResult(Array.Empty<CellInstance>(), 0, new HashSet<int>());
 
-        var instances = new CellInstance[rows * cols];
+        var instances = new CellInstance[InstanceBudget(rows, cols)];
         var dirtyRows = new HashSet<int>();
         int count = Build(source, atlas, typeface, textSize, instances.AsSpan(), dirtyRows,
             rows, cols, defaultFg ?? DefaultForeground, defaultBg ?? DefaultBackground, textOptions);
@@ -182,9 +191,6 @@ public static class QuadFrameBuilder
                         (emptyFg, emptyBg) = (emptyBg, emptyFg);
                         emptyFlags |= CellFlags.InverseVideo;
                     }
-                    if (emptyStyle.Underline) emptyFlags |= CellFlags.Underline;
-                    if (emptyStyle.Strikethrough) emptyFlags |= CellFlags.Strikethrough;
-                    if (emptyStyle.Overline) emptyFlags |= CellFlags.Overline;
                     destination[written++] = new CellInstance
                     {
                         Col = (ushort)column,
@@ -199,6 +205,8 @@ public static class QuadFrameBuilder
                         BgB = emptyBg.B,
                         BgA = 255,
                     };
+                    written += EmitDecorations(in emptyStyle, column, row, 1, emptyFg, emptyBg, atlas,
+                        in textOptions, destination[written..], dirtyAtlasRows);
                 }
                 column++;
                 continue;
@@ -229,9 +237,7 @@ public static class QuadFrameBuilder
             if (style.Bold) flags |= CellFlags.Bold;
             if (hot.Width == 2) flags |= CellFlags.WideCell;
             if (style.Inverse) flags |= CellFlags.InverseVideo;
-            if (style.Underline) flags |= CellFlags.Underline;
-            if (style.Strikethrough) flags |= CellFlags.Strikethrough;
-            if (style.Overline) flags |= CellFlags.Overline;
+            bool hasDecoration = HasDecoration(in style);
 
             GlyphInfo glyphInfo = default;
             bool glyphOk = false;
@@ -253,10 +259,9 @@ public static class QuadFrameBuilder
 
             if (!glyphOk)
             {
-                // A glyph-less cell still needs an instance for its background, and for its underline / strikethrough /
-                // overline (the renderer draws those from the flags), which also covers placeholder and space cells.
-                bool hasDecoration = (flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
-                if ((bgA != 0 || hasDecoration) && written < destination.Length)
+                // A glyph-less cell still needs an instance for its background, and its decorations still draw,
+                // which also covers placeholder and space cells.
+                if (bgA != 0 && written < destination.Length)
                 {
                     destination[written++] = new CellInstance
                     {
@@ -272,6 +277,11 @@ public static class QuadFrameBuilder
                         BgB = effectiveBg.B,
                         BgA = bgA
                     };
+                }
+                if (hasDecoration)
+                {
+                    written += EmitDecorations(in style, column, row, hot.Width > 1 ? hot.Width : 1, effectiveFg, effectiveBg,
+                        atlas, in textOptions, destination[written..], dirtyAtlasRows);
                 }
 
                 column += hot.Width > 1 ? hot.Width : 1;
@@ -301,10 +311,107 @@ public static class QuadFrameBuilder
                     BgA = bgA
                 };
             }
+            if (hasDecoration)
+            {
+                written += EmitDecorations(in style, column, row, hot.Width > 1 ? hot.Width : 1, effectiveFg, effectiveBg,
+                    atlas, in textOptions, destination[written..], dirtyAtlasRows);
+            }
 
             column += hot.Width > 1 ? hot.Width : 1;
         }
 
         return written;
+    }
+
+    private static bool HasDecoration(in CellAttributes style) =>
+        style.Underline || style.Strikethrough || style.Overline;
+
+    /// <summary>
+    /// Appends the decoration sprites of one cell (spanning <paramref name="span"/> cells) after its main instance:
+    /// the underline in the SGR 58 colour (else the text colour), then strikethrough and overline in the text colour.
+    /// Returns the number written (0-2); nothing is emitted while the cell metrics are unmeasured.
+    /// </summary>
+    private static int EmitDecorations(
+        in CellAttributes style,
+        int column,
+        int row,
+        int span,
+        SgrColorArgb foreground,
+        SgrColorArgb background,
+        GlyphAtlas atlas,
+        in TextAttributeOptions textOptions,
+        Span<CellInstance> destination,
+        HashSet<int>? dirtyAtlasRows)
+    {
+        var metrics = textOptions.Sprites;
+        if (!metrics.IsValid || !HasDecoration(in style))
+            return 0;
+
+        int width = metrics.CellWidth * span;
+        int written = 0;
+        if (style.Underline)
+        {
+            var color = foreground;
+            if (!style.UnderlineColor.IsEmpty)
+            {
+                color = style.UnderlineColor;
+                if (style.Faint)
+                    color = TextAttributeOptions.MixFaint(color, background, textOptions.FaintOpacity);
+            }
+            written += EmitSprite(atlas, DecorationGeometry.UnderlineCode(style.UnderlineStyle), width, in metrics,
+                column, row, color, destination[written..], dirtyAtlasRows);
+        }
+        if (style.Strikethrough || style.Overline)
+        {
+            written += EmitSprite(atlas, DecorationGeometry.LinesCode(style.Strikethrough, style.Overline), width,
+                in metrics, column, row, foreground, destination[written..], dirtyAtlasRows);
+        }
+        return written;
+    }
+
+    private static int EmitSprite(
+        GlyphAtlas atlas,
+        int code,
+        int width,
+        in CellSpriteMetrics metrics,
+        int column,
+        int row,
+        SgrColorArgb color,
+        Span<CellInstance> destination,
+        HashSet<int>? dirtyAtlasRows)
+    {
+        if (destination.IsEmpty || !TryEnsureSprite(atlas, new SpriteKey(code, width, metrics), out var info, out bool added))
+            return 0;
+        if (added)
+            dirtyAtlasRows?.Add(row);
+        destination[0] = new CellInstance
+        {
+            Col = (ushort)column,
+            Row = (ushort)row,
+            OffX = (short)info.LeftBearing,
+            OffY = (short)info.TopBearing,
+            GlyphX = (short)info.X,
+            GlyphY = (short)info.Y,
+            GlyphW = (short)info.Width,
+            GlyphH = (short)info.Height,
+            FgR = color.R,
+            FgG = color.G,
+            FgB = color.B,
+            FgA = color.A,
+            Flags = CellFlags.Decoration,
+        };
+        return 1;
+    }
+
+    /// <summary>Returns the atlas entry of a sprite, rasterising and packing it on the first use.</summary>
+    public static bool TryEnsureSprite(GlyphAtlas atlas, in SpriteKey key, out GlyphInfo info, out bool added)
+    {
+        added = false;
+        if (atlas.TryGetSprite(key, out info))
+            return true;
+        SpriteBitmap? bitmap = DecorationGeometry.IsDecorationCode(key.Code)
+            ? DecorationGeometry.Rasterize(key.Code, key.Width, key.Metrics)
+            : null;
+        return bitmap != null && atlas.AddSprite(key, bitmap, out info, out added);
     }
 }

@@ -94,6 +94,28 @@ public sealed class SelectionQuadBuilderTests
     }
 
     [Fact]
+    public void Apply_LeavesDecorationSpritesUntintedAndStillFillsTheirCell()
+    {
+        // One selected row of 2 cells: col 0 has a glyph + underline sprite, col 1 only an underline sprite.
+        var range = TerminalSelectionRange.From(0, 0, 0, 1);
+        int coverageLength = SelectionQuadBuilder.CoverageLength(range, 1, 2, 0);
+        var instances = new CellInstance[3 + coverageLength];
+        instances[0] = new CellInstance { Col = 0, GlyphW = 5 };
+        instances[1] = new CellInstance { Col = 0, GlyphW = 10, Flags = CellFlags.Decoration };
+        instances[2] = new CellInstance { Col = 1, GlyphW = 10, Flags = CellFlags.Decoration };
+
+        int appended = SelectionQuadBuilder.Apply(instances, 3, range, block: false, paneRows: 1, paneColumns: 2,
+            scrollOffset: 0, columnOffset: 0, rowOffset: 0, SelectionColor, SelectionAlpha, Foreground, new bool[coverageLength]);
+
+        Assert.Equal(SelectionAlpha, instances[0].BgA);
+        Assert.Equal(0, instances[1].BgA);
+        Assert.Equal(0, instances[2].BgA);
+        Assert.Equal(1, appended);
+        Assert.Equal((ushort)1, instances[3].Col);
+        Assert.Equal(SelectionAlpha, instances[3].BgA);
+    }
+
+    [Fact]
     public void Apply_AllocatesNothing()
     {
         var range = TerminalSelectionRange.From(-5, 3, 50, 7);

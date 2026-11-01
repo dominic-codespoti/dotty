@@ -45,7 +45,7 @@ public struct CellInstance
     /// <summary>Foreground alpha (0–255).</summary>
     public byte FgA;
 
-    /// <summary>Flags: bit 0 = bold, bit 1 = wide cell, bit 2 = inverse video, bit 6 = intrinsic-color glyph.</summary>
+    /// <summary>Flags: bit 0 = bold, bit 1 = wide cell, bit 2 = inverse video, bit 3 = decoration sprite, bit 6 = intrinsic-color glyph.</summary>
     public byte Flags;
 
     /// <summary>Background red channel (0–255).</summary>
@@ -67,13 +67,13 @@ public static class CellFlags
     public const byte Bold = 0x01;
     public const byte WideCell = 0x02;
     public const byte InverseVideo = 0x04;
-    public const byte Underline = 0x08;
-    public const byte Strikethrough = 0x10;
+    /// <summary>
+    /// CPU-only marker of a decoration sprite instance (underline, strikethrough, overline) that follows its cell's
+    /// main instance: it never carries a background, and selection / cursor recolouring skip it. The shader ignores it.
+    /// </summary>
+    public const byte Decoration = 0x08;
     /// <summary>Glyph uses premultiplied intrinsic RGBA pixels rather than A8 coverage.</summary>
     public const byte ColorGlyph = 0x40;
-    public const byte Overline = 0x20;
-    /// <summary>Instance draws only the decoration bars (no glyph).</summary>
-    public const byte DecorOnly = 0x80;
 }
 
 /// <summary>

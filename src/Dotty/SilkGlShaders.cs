@@ -22,15 +22,12 @@ public static class SilkGlShaders
         flat out vec4 vBg;
         out vec2 vUv;
         out vec2 vColorUv;
-        out float vCornerY;
         flat out uint vFlags;
         const uint FLAG_WIDE = 2u;      // CellFlags.WideCell
-        const uint FLAG_DECOR = 128u;   // CellFlags.DecorOnly
 
         void main()
         {
             bool wide = (aFlags & FLAG_WIDE) != 0u;
-            vCornerY = aCorner.y;
             vec2 cell = vec2(uCellPx.x * (wide ? 2.0 : 1.0), uCellPx.y);
             vec2 origin = aGridPx;
             vec2 size = cell;
@@ -61,8 +58,8 @@ public static class SilkGlShaders
                              1.0 - 2.0 * p.y / uFramebufferPx.y);
             gl_Position = vec4(clip, 0.0, 1.0);
             // QuadFrameBuilder resolves inverse colors before upload. Keep the
-            // shader pass focused on coverage and decoration, so inverse
-            // video is not applied a second time.
+            // shader pass focused on coverage, so inverse video is not applied
+            // a second time.
             vFg = aFg;
             vBg = aBg;
             vFlags = aFlags;
@@ -74,20 +71,12 @@ public static class SilkGlShaders
         uniform sampler2D uColorAtlas;
         uniform sampler2D uAtlas;
         uniform int uPass;
-        uniform float uUnderlineY;   // fraction of cell height
-        uniform float uStrikeY;
-        uniform float uLineHalf;     // half thickness, fraction
         flat in vec4 vFg;
         flat in vec4 vBg;
         in vec2 vUv;
         in vec2 vColorUv;
-        in float vCornerY;
         flat in uint vFlags;
         out vec4 fragColor;
-        const uint FLAG_DECOR = 128u;   // CellFlags.DecorOnly
-        const uint FLAG_UNDERLINE = 8u;
-        const uint FLAG_STRIKE = 16u;
-        const uint FLAG_OVERLINE = 32u;
         const uint FLAG_COLOR_GLYPH = 64u;
 
         void main()
@@ -96,21 +85,6 @@ public static class SilkGlShaders
                 if (vBg.a <= 0.001) discard;
                 fragColor = vec4(vBg.rgb * vBg.a, vBg.a);
                 return;
-            }
-            if ((vFlags & FLAG_DECOR) != 0u)
-            {
-                // Decoration-only instance: the quad covers the cell; draw
-                // the bars at their metric fractions, discard elsewhere.
-                if ((vFlags & FLAG_UNDERLINE) != 0u &&
-                    abs(vCornerY - uUnderlineY) <= uLineHalf)
-                { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
-                if ((vFlags & FLAG_STRIKE) != 0u &&
-                    abs(vCornerY - uStrikeY) <= uLineHalf)
-                { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
-                if ((vFlags & FLAG_OVERLINE) != 0u &&
-                    abs(vCornerY) <= uLineHalf)
-                { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
-                discard;
             }
             if ((vFlags & FLAG_COLOR_GLYPH) != 0u) {
                 vec4 colorGlyph = texture(uColorAtlas, vColorUv);

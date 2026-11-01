@@ -1017,7 +1017,10 @@ public sealed class TerminalSceneComposerTests
         using var tab = new TerminalTab(rows: 4, columns: 10);
         using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
-        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f)
+        {
+            CellMetrics = new CellMetrics(10, 20, 15, 12, 4, 3, 17, 1, 10, 1, 0, 1),
+        };
         var theme = BuiltInThemes.DarkPlus;
         tab.Session.Adapter.Buffer.SetCursor(0, 2);
 
@@ -1035,12 +1038,16 @@ public sealed class TerminalSceneComposerTests
         Span<ushort> columns = stackalloc ushort[4];
         Span<CellInstance> preeditCells = stackalloc CellInstance[4];
         int count = 0;
-        for (int i = 0; i < instances.Length; i++)
+        // Every preedit cell is followed by its underline sprite (the terminal itself is blank).
+        for (int i = 1; i < instances.Length; i++)
         {
-            if ((instances[i].Flags & CellFlags.Underline) == 0)
+            if ((instances[i].Flags & CellFlags.Decoration) == 0)
                 continue;
+            Assert.Equal(instances[i - 1].Col, instances[i].Col);
+            bool wide = (instances[i - 1].Flags & CellFlags.WideCell) != 0;
+            Assert.Equal(wide ? (short)20 : (short)10, instances[i].GlyphW);
             columns[count] = instances[i].Col;
-            preeditCells[count++] = instances[i];
+            preeditCells[count++] = instances[i - 1];
         }
 
         Assert.Equal(4, count);
@@ -1058,7 +1065,7 @@ public sealed class TerminalSceneComposerTests
         count = 0;
         for (int i = 0; i < instances.Length; i++)
         {
-            if ((instances[i].Flags & CellFlags.Underline) != 0)
+            if ((instances[i].Flags & CellFlags.Decoration) != 0)
             {
                 Assert.Equal((ushort)8, instances[i].Col);
                 count++;
@@ -1068,7 +1075,7 @@ public sealed class TerminalSceneComposerTests
         Assert.Equal(8, tab.Session.Adapter.Buffer.CursorCol);
 
         frame = Compose(null);
-        Assert.DoesNotContain(frame.AsSpan().ToArray(), instance => (instance.Flags & CellFlags.Underline) != 0);
+        Assert.DoesNotContain(frame.AsSpan().ToArray(), instance => (instance.Flags & CellFlags.Decoration) != 0);
         Assert.True(frame.ImeCaretBoundsValid);
         Assert.Equal(80f, frame.ImeCaretBounds.Left);
     }

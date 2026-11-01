@@ -504,8 +504,7 @@ internal static partial class DottyWindowHost
         SilkConfig.ApplyConfigToAdapter(initialTab.Session.Adapter, _activeTheme);
         if (_launchOptions.Command != null)
             _initialCommandSession = initialTab.Session;
-        _keybindings.RegisterDefaults();
-        _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
+        ApplyKeybindings(UserConfigService.Current);
         if (_customFrameActive)
             InstallCustomFrame();
         int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
@@ -1138,6 +1137,15 @@ internal static partial class DottyWindowHost
         pane = null!;
         return false;
     }
+    // Rejected chords and actions are logged, never dropped silently (+validate-config lists them too).
+    private static void ApplyKeybindings(DottyUserConfig config)
+    {
+        _keybindings.RegisterDefaults();
+        _keybindings.ApplyCustomBindings(config.Keybindings);
+        foreach (var diagnostic in _keybindings.Diagnostics)
+            Console.Error.WriteLine("dotty: " + diagnostic);
+    }
+
     private static void ApplyConfigOnly(DottyUserConfig config)
     {
         if (_closed) return;
@@ -1145,8 +1153,7 @@ internal static partial class DottyWindowHost
         SetCustomFrameMode(config.Window.Decorations);
         _showTabBar = config.TabBar.Show;
         WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
-        _keybindings.RegisterDefaults();
-        _keybindings.ApplyCustomBindings(config.Keybindings);
+        ApplyKeybindings(config);
         ResolveFontAndMetrics();
         RefreshFontResources();
         var size = _window.FramebufferSize;
@@ -1431,8 +1438,7 @@ internal static partial class DottyWindowHost
 
     private static string ExecuteControlAction(string name)
     {
-        if (!Enum.TryParse<TerminalAction>(name, ignoreCase: true, out var action) ||
-            !Enum.IsDefined(action) || action == TerminalAction.None)
+        if (!ActionRegistry.TryParse(name, out var action, out _) || action.Action == TerminalAction.None)
             return "ERROR unknown action";
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
         return _keyboardDispatcher.Actions.TryExecute(action) ? "OK" : "ERROR action unavailable";
@@ -2007,7 +2013,8 @@ internal static partial class DottyWindowHost
                     _keyboardDispatcher?.ActiveMatchIndex ?? -1,
                     _keyboardDispatcher?.SearchMatches?.Count ?? 0,
                     _keyboardDispatcher?.SearchMatches,
-                    _keyboardDispatcher?.SearchQueryCursor ?? -1),
+                    _keyboardDispatcher is { SearchActive: true } dispatcher ? dispatcher.SearchQueryCursorColumn : -1,
+                    _keyboardDispatcher?.SearchOverlayFlags ?? Dotty.Runtime.Search.SearchOverlayFlags.None),
                 _activeContextMenu,
                 _mouseController?.HoveredTabIndex ?? -1,
                 _mouseController?.HoveredTabHitType ?? TabBarHitType.None,
@@ -2643,6 +2650,30 @@ internal static partial class DottyWindowHost
         {
             ResolveFontAndMetrics();
             RefreshFontResources();
+            var size = _window.FramebufferSize;
+            if (size.X > 0 && size.Y > 0)
+                ApplyFramebufferLayout(size);
+            WindowPresentationGate.Invalidate(WindowFrameReason.Resize | WindowFrameReason.Input);
+        }
+
+        public void ReloadConfig() => UserConfigService.RequestReload();
+
+        public string? ReadClipboardText() => _clipboard?.GetText();
+
+        public string? GetShortcutLabel(TerminalAction action) => _keybindings.GetShortcutLabel(action);
+
+        public SearchUserConfig SearchDefaults => UserConfigService.Current.Search;
+
+        public bool TryClickSearchOverlay(float deviceX, float deviceY)
+        {
+            var geometry = Geometry;
+            return _keyboardDispatcher?.ClickSearchOverlay(deviceX, deviceY, geometry.FramebufferWidth, geometry.FramebufferHeight,
+                geometry.CellWidth * geometry.Scale) ?? false;
+        }
+
+        public void ToggleTabBar()
+        {
+            _showTabBar = !_showTabBar;
             var size = _window.FramebufferSize;
             if (size.X > 0 && size.Y > 0)
                 ApplyFramebufferLayout(size);

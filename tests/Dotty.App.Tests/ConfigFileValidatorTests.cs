@@ -16,7 +16,7 @@ public sealed class ConfigFileValidatorTests
     [InlineData("{ \"theme\": \"Dracula\", // comment\n  \"font\": { \"size\": 13, }, }")]
     [InlineData("/* leading */ { \"window\": { \"padding\": { \"left\": 2 } } }")]
     [InlineData("{ \"FONT\": { \"Size\": 12 }, \"TabBar\": { \"show\": false } }")]
-    [InlineData("{ \"keybindings\": { \"ctrl+shift+x\": \"Copy\", \"anything.goes\": \"None\" } }")]
+    [InlineData("{ \"keybindings\": { \"ctrl+shift+x\": \"Copy\", \"physical:cmd+k\": \"none\", \"alt+u\": \"send_text:\\\\x15\" } }")]
     [InlineData("{ \"font\": { \"symbolMap\": [\"U+E000-U+F8FF:Symbols Nerd Font\"] } }")]
     [InlineData("{ \"selectionColor\": null }")]
     [InlineData("\uFEFF{ \"theme\": \"DarkPlus\" }")]
@@ -37,6 +37,10 @@ public sealed class ConfigFileValidatorTests
     [InlineData("{ \"theme\": \"x\" }\n{}", 2, 0, "")]
     [InlineData("{ \"font\": { \"size\": \"big\" } }", 1, 0, "invalid value for 'font.size'")]
     [InlineData("{\n\n  \"cursor\": { \"blink\": 3 }\n}", 3, 0, "invalid value for 'cursor.blink'")]
+    [InlineData("{ \"keybindings\": { \"anything.goes\": \"none\" } }", 1, 20, "invalid chord \"anything.goes\": unknown key 'anything.goes'")]
+    [InlineData("{ \"keybindings\": { \"ctrl+x\": \"frobnicate\" } }", 1, 30, "unknown action 'frobnicate'")]
+    [InlineData("{ \"keybindings\": { \"ctrl+x\": \"send_text:\\\\q\" } }", 1, 30, "unknown escape")]
+    [InlineData("{ \"keybindings\": { \"ctrl+x\": \"copy\", \"x+ctrl\": \"paste\" } }", 1, 38, "same chord as \"ctrl+x\"")]
     public void ProblemsAreReportedWithTheirPosition(string json, int line, int column, string fragment)
     {
         IReadOnlyList<ConfigDiagnostic> diagnostics = Validate(json);

@@ -152,7 +152,7 @@ become unreadable therefore no longer prevents a new tab from opening.
   "shellIntegration": "none",
   "term": "xterm-256color",
   "keybindings": {
-    "ctrl+shift+t": "NewTab",
+    "ctrl+shift+t": "new_tab",
     "ctrl+shift+w": "ClosePane",
     "ctrl+shift+c": "Copy",
     "ctrl+shift+v": "Paste",
@@ -579,55 +579,96 @@ a session starts, so a reload applies to **new tabs and panes only**.
 
 ### `keybindings`
 
-Keys are normalized chords containing `ctrl`, `shift`, `alt`, or `super` plus a
-key name. Values are `TerminalAction` names. The following table is the exact
-startup set; an em dash means that the action has no built-in chord.
+Keys are chords: `ctrl`, `shift`, `alt` (`option`, `opt`), `super` (`cmd`,
+`command`, `win`) plus one key, in any order and case (`ctrl+shift+t`,
+`cmd+k`, `ctrl++`). Key aliases: `esc`, `return`, `pgup`, `pgdn`, `del`, `ins`,
+`bs`, `quote`, `grave`/`backtick`, `bracketleft`/`bracketright`, and single
+punctuation characters (`,` `.` `/` `;` `'` `` ` `` `[` `]` `\` `-` `=` `+`).
+`meta`, `hyper`, `mod` and `fn` are rejected.
+
+A key event matches in this order; the first hit wins:
+
+1. a chord written with the `physical:` prefix (`physical:ctrl+shift+c`)
+   compared with the physical (US-position) key;
+2. when the key types a Latin letter or digit on the active layout, the chord
+   for that character (on Dvorak `ctrl+shift+c` is the key labelled C);
+3. otherwise the physical key, so non-Latin layouts (Russian, Greek) keep the
+   US positions. `ctrl+plus` matches the key that types `+`, with or without
+   the Shift it takes.
+
+Values are action names from the table below (the old enum names such as
+`NewTab` are still accepted, case-insensitively). `none` unbinds a chord.
+`send_text:<text>` writes the text to the active pane; it understands `\\`,
+`\n`, `\r`, `\t`, `\e`, `\a`, `\b`, `\f`, `\v`, `\0`, `\xHH` and `\u{H…}`, and
+any other backslash sequence is an error. Entries are added to the built-in
+bindings; a custom chord replaces the built-in action for that chord. A
+rejected entry (bad chord, unknown action, malformed `send_text`, the same
+chord written twice) is logged on stderr when the config loads, listed by
+`dotty +validate-config` with its line and column, and shown by
+`dotty +explain-config keybindings` together with the live binding table.
+
+On macOS the Command set is added to the chords below (they stay bound):
+`cmd+c` copy, `cmd+v` paste, `cmd+a` select all, `cmd+t` new tab, `cmd+w`
+close pane, `cmd+q` quit, `cmd+f` search, `cmd+k` clear scrollback,
+`cmd+equal`/`cmd+plus`/`cmd+minus`/`cmd+0` zoom, `cmd+[`/`cmd+]` and
+`cmd+shift+[`/`cmd+shift+]` previous/next tab, `cmd+1`…`cmd+9` select tab,
+`cmd+enter` fullscreen, `cmd+d`/`cmd+shift+d` split. Context-menu labels show
+the chord that is bound at the time the menu opens.
 
 | Action | Built-in chord(s) | Behavior |
 |---|---|---|
-| `None` | — | Special unbind value; it is not dispatched. |
-| `NewTab` | `ctrl+shift+t` | Create a new tab. |
-| `CloseTab` | — | Close the current tab. |
-| `NextTab` | `ctrl+tab`, `ctrl+pagedown` | Select the next tab. |
-| `PreviousTab` | `ctrl+shift+tab`, `ctrl+pageup` | Select the previous tab. |
-| `SwitchTab1` | `alt+1` | Select tab 1. |
-| `SwitchTab2` | `alt+2` | Select tab 2. |
-| `SwitchTab3` | `alt+3` | Select tab 3. |
-| `SwitchTab4` | `alt+4` | Select tab 4. |
-| `SwitchTab5` | `alt+5` | Select tab 5. |
-| `SwitchTab6` | `alt+6` | Select tab 6. |
-| `SwitchTab7` | `alt+7` | Select tab 7. |
-| `SwitchTab8` | `alt+8` | Select tab 8. |
-| `SwitchTab9` | `alt+9` | Select tab 9. |
-| `Copy` | `ctrl+shift+c` | Copy the current selection. |
-| `Paste` | `ctrl+shift+v` | Paste the clipboard. |
-| `Clear` | — | Clear the active terminal buffer. |
-| `ToggleFullscreen` | `f11` | Toggle fullscreen mode. |
-| `ZoomIn` | `ctrl+equal`, `ctrl+plus` | Increase the font size. |
-| `ZoomOut` | `ctrl+minus` | Decrease the font size. |
-| `ResetZoom` | `ctrl+0` | Restore the default font size. |
-| `Search` | `ctrl+shift+f` | Toggle the search overlay. |
-| `DuplicateTab` | — | Duplicate the current tab. |
-| `CloseOtherTabs` | — | Close every other tab. |
-| `Quit` | `ctrl+shift+q` | Quit the application. |
-| `SplitVertical` | `ctrl+shift+d` | Split the active pane left/right. |
-| `SplitHorizontal` | `ctrl+shift+s` | Split the active pane top/bottom. |
-| `FocusPaneLeft` | `alt+left` | Focus the pane to the left. |
-| `FocusPaneRight` | `alt+right` | Focus the pane to the right. |
-| `FocusPaneUp` | `alt+up` | Focus the pane above. |
-| `FocusPaneDown` | `alt+down` | Focus the pane below. |
-| `ClosePane` | `ctrl+shift+w` | Close the focused pane; if it is the tab's only pane, close the tab. |
-| `ScrollPageUp` | `shift+pageup` | Scroll the active pane's scrollback up by half the pane height (at least one line). |
-| `ScrollPageDown` | `shift+pagedown` | Scroll the scrollback down by half the pane height. |
-| `ScrollLineUp` | `ctrl+shift+up` | Scroll the scrollback up one line. |
-| `ScrollLineDown` | `ctrl+shift+down` | Scroll the scrollback down one line. |
-| `ScrollToTop` | `ctrl+shift+home` | Scroll to the oldest scrollback line. |
-| `ScrollToBottom` | `ctrl+shift+end` | Return to the live screen. |
-
-The configurable actions with no built-in chord are `CloseTab`, `Clear`,
-`DuplicateTab`, and `CloseOtherTabs`. Assigning `None` to a chord explicitly
-unbinds it. A custom binding replaces the built-in action for that chord;
-unknown action names are ignored and leave the built-in binding unchanged.
+| `none` | — | Unbind the chord; never dispatched. |
+| `new_tab` | `ctrl+shift+t` | Create a new tab. |
+| `close_tab` | — | Close the current tab. |
+| `next_tab` | `ctrl+tab`, `ctrl+pagedown` | Select the next tab. |
+| `previous_tab` | `ctrl+shift+tab`, `ctrl+pageup` | Select the previous tab. |
+| `switch_tab_1` | `alt+1` | Select tab 1. |
+| `switch_tab_2` | `alt+2` | Select tab 2. |
+| `switch_tab_3` | `alt+3` | Select tab 3. |
+| `switch_tab_4` | `alt+4` | Select tab 4. |
+| `switch_tab_5` | `alt+5` | Select tab 5. |
+| `switch_tab_6` | `alt+6` | Select tab 6. |
+| `switch_tab_7` | `alt+7` | Select tab 7. |
+| `switch_tab_8` | `alt+8` | Select tab 8. |
+| `switch_tab_9` | `alt+9` | Select tab 9. |
+| `copy` | `ctrl+shift+c` | Copy the current selection. |
+| `paste` | `ctrl+shift+v` | Paste the clipboard. |
+| `clear` | — | Send Ctrl+L (form feed) so the shell clears the screen. |
+| `toggle_fullscreen` | `f11` | Toggle fullscreen mode. |
+| `zoom_in` | `ctrl+equal`, `ctrl+plus` | Increase the font size. |
+| `zoom_out` | `ctrl+minus` | Decrease the font size. |
+| `reset_zoom` | `ctrl+0` | Restore the configured font size. |
+| `search` | `ctrl+shift+f` | Toggle the search overlay. |
+| `duplicate_tab` | — | Duplicate the current tab. |
+| `close_other_tabs` | — | Close every other tab. |
+| `quit` | `ctrl+shift+q` | Quit the application. |
+| `split_vertical` | `ctrl+shift+d` | Split the active pane left/right. |
+| `split_horizontal` | `ctrl+shift+s` | Split the active pane top/bottom. |
+| `focus_pane_left` | `alt+left` | Focus the pane to the left. |
+| `focus_pane_right` | `alt+right` | Focus the pane to the right. |
+| `focus_pane_up` | `alt+up` | Focus the pane above. |
+| `focus_pane_down` | `alt+down` | Focus the pane below. |
+| `close_pane` | `ctrl+shift+w` | Close the focused pane; if it is the tab's only pane, close the tab. |
+| `previous_prompt` | `ctrl+shift+pageup` | Scroll to the previous shell prompt (shell integration). |
+| `next_prompt` | `ctrl+shift+pagedown` | Scroll to the next shell prompt (shell integration). |
+| `copy_command_output` | `ctrl+alt+o` | Select and copy the latest command's output (shell integration). |
+| `scroll_page_up` | `shift+pageup` | Scroll the scrollback up by half the pane height (at least one line). |
+| `scroll_page_down` | `shift+pagedown` | Scroll the scrollback down by half the pane height. |
+| `scroll_line_up` | `ctrl+shift+up` | Scroll the scrollback up one line. |
+| `scroll_line_down` | `ctrl+shift+down` | Scroll the scrollback down one line. |
+| `scroll_to_top` | `ctrl+shift+home` | Scroll to the oldest scrollback line. |
+| `scroll_to_bottom` | `ctrl+shift+end` | Return to the live screen. |
+| `select_all` | `ctrl+shift+a` | Select the active pane's scrollback and screen. |
+| `clear_scrollback` | — | Discard the active pane's scrollback; the screen stays. |
+| `reload_config` | — | Re-read config.json and the Lua config. |
+| `paste_selection` | — | Paste the primary selection. |
+| `search_next` | — | Select the next search match while the overlay is open. |
+| `search_previous` | — | Select the previous search match while the overlay is open. |
+| `copy_or_send` | — | Copy the selection; without one the key goes to the application (useful on `ctrl+c`). |
+| `move_tab_left` | — | Move the active tab one place to the left. |
+| `move_tab_right` | — | Move the active tab one place to the right. |
+| `toggle_tab_bar` | — | Show or hide the tab bar. |
+| `send_text` | — | Write the escaped text after the colon to the active pane (`send_text:\x1bOA`). |
 
 The scroll actions are not performed on the alternate screen or when the pane
 has no scrollback; the key then goes to the application. `Shift+Up/Down/Home/End`
@@ -635,6 +676,13 @@ are not bound, so editors receive them (`CSI 1;2A` and so on). Any key that
 produces terminal input returns a scrolled pane to the live screen and clears
 its selection (unless Ctrl or Alt is held); pressing a modifier, lock key, or
 Menu on its own changes neither.
+
+Changelog: W4-C15 — snake_case action names (enum names still accepted),
+`physical:` chords and layout-aware matching, `cmd`/`option`/`win` aliases,
+macOS Command set, new actions `send_text`, `select_all`, `clear_scrollback`,
+`reload_config`, `paste_selection`, `search_next`, `search_previous`,
+`copy_or_send`, `move_tab_left`, `move_tab_right`, `toggle_tab_bar`; rejected
+entries are reported instead of silently ignored.
 
 ### `keyboard`
 
@@ -663,18 +711,30 @@ held are not sent. Both options are read live at the next key press.
 
 ## Search
 
-Search is per tab and starts with `Search` (by default, `ctrl+shift+f`).
-Opening it records the active pane, starts with an empty query, and resets the
-match state. Invoking `Search` again toggles the overlay closed; `Escape` also
+Search is per tab and starts with `search` (by default, `ctrl+shift+f`).
+Opening it records the active pane, starts with an empty query, takes the
+regex/case/whole-word modes from the `search` config object, and resets the
+match state. Invoking `search` again toggles the overlay closed; `Escape` also
 closes it. Closing removes the matches and active marker. Reopening starts a
 new empty query.
 
-While the overlay is active, printable text is inserted at the query cursor.
-`Left`/`Right` move one character; `Home` and `End` move to the beginning and
-end. `Backspace` and `Delete` remove one character, or one whitespace-delimited
-word when held with `Ctrl`. `Enter` selects the next match and `Shift+Enter`
-selects the previous match. Editing refreshes the matches; search is a
-case-insensitive literal search, not a terminal input operation.
+While the overlay is open it consumes the keyboard. Printable text is inserted
+at the query cursor. `Left`/`Right` move one grapheme cluster (an emoji or a
+letter with combining marks counts as one); `Home` and `End` move to the
+beginning and end. `Backspace` and `Delete` remove one cluster, or one
+whitespace-delimited word when held with `Ctrl`. `Enter`, `Down` and `F3`
+select the next match; `Shift+Enter`, `Up` and `Shift+F3` the previous one.
+`Ctrl+V` pastes the clipboard's first line, neutralised like a terminal paste
+(control characters removed). `Alt+R` toggles regular-expression mode, `Alt+C`
+case-sensitive matching and `Alt+W` whole-word matching. The overlay's ▲ ▼ ×
+buttons and the `.*` `Aa` `W` toggles are clickable. An invalid regular
+expression is searched literally and its `.*` toggle turns red.
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `regex` | boolean | `false` | Start in regular-expression mode (.NET syntax). Lua: `search.regex`. |
+| `caseSensitive` | boolean | `false` | Start case-sensitive. Lua: `search.case_sensitive`. |
+| `wholeWord` | boolean | `false` | Start matching whole words only (neither end touches a letter, digit, or underscore). Lua: `search.whole_word`. |
 
 Each tab's search state is independent, and the recorded source pane is used
 for its search. Results cover that pane's scrollback and visible rows. A
@@ -682,6 +742,10 @@ selected scrollback match (reported internally as a negative row) scrolls the
 source pane to reveal it; selecting a visible match returns the pane to the
 bottom. Text composed with a `compose` Alt key (AltGr, Option) is inserted into
 the query (see [`keyboard`](#keyboard)); ordinary Ctrl/Meta-modified text is not.
+
+Changelog: W4-C16 — keys are consumed while the overlay is open, `Up`/`Down`/`F3`
+navigation, `Ctrl+V` paste, regex/case/whole-word modes (`search.*`, `Alt+R/C/W`),
+clickable buttons, grapheme-aware editing, invalid-regex indicator.
 
 ## Pointer controls and mouse reporting
 

@@ -64,6 +64,9 @@ public sealed partial class LuaScriptHost
         ["bell.attention"] = new(ConfigValueKind.Boolean, c => c.Bell.Attention, (c, v) => c.Bell.Attention = (bool)v!),
         ["bell.visual"] = new(ConfigValueKind.Boolean, c => c.Bell.Visual, (c, v) => c.Bell.Visual = (bool)v!),
         ["bell.audible"] = new(ConfigValueKind.Boolean, c => c.Bell.Audible, (c, v) => c.Bell.Audible = (bool)v!),
+        ["search.regex"] = new(ConfigValueKind.Boolean, c => c.Search.Regex, (c, v) => c.Search.Regex = (bool)v!),
+        ["search.case_sensitive"] = new(ConfigValueKind.Boolean, c => c.Search.CaseSensitive, (c, v) => c.Search.CaseSensitive = (bool)v!),
+        ["search.whole_word"] = new(ConfigValueKind.Boolean, c => c.Search.WholeWord, (c, v) => c.Search.WholeWord = (bool)v!),
         ["keybindings"] = new(ConfigValueKind.Map, c => c.Keybindings, (c, v) => c.Keybindings = (Dictionary<string, string>)v!),
         ["keyboard.left_alt"] = new(ConfigValueKind.String, c => c.Keyboard.LeftAlt, (c, v) => c.Keyboard.LeftAlt = (string)v!),
         ["keyboard.right_alt"] = new(ConfigValueKind.String, c => c.Keyboard.RightAlt, (c, v) => c.Keyboard.RightAlt = (string)v!),
@@ -133,7 +136,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "search" or "keyboard")
         {
             host.PushConfigProxyTable(lua, key);
             return 1;
@@ -168,7 +171,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "search" or "keyboard")
         {
             if (lua.Type(3) != LuaType.Table)
             {
@@ -211,7 +214,7 @@ public sealed partial class LuaScriptHost
         }
 
         string path = NormalizeConfigKey(parent + "." + key);
-        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard")
+        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "search" or "keyboard")
         {
             host.PushConfigProxyTable(lua, path);
             return 1;
@@ -385,7 +388,7 @@ public sealed partial class LuaScriptHost
             {
                 string path = NormalizeConfigKey((prefix.Length == 0 ? "" : prefix + ".") + key);
                 if (lua.Type(-1) == LuaType.Table
-                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard"))
+                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "search" or "keyboard"))
                 {
                     ApplyConfigTable(lua, -1, path);
                 }

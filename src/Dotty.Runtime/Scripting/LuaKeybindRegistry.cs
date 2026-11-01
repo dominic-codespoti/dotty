@@ -22,7 +22,7 @@ public sealed class LuaKeybindRegistry
         Put(chord, new Binding(callback, null));
     }
 
-    internal void Register(string chord, TerminalAction action)
+    internal void Register(string chord, BoundAction action)
     {
         Put(chord, new Binding(null, action));
     }
@@ -34,10 +34,10 @@ public sealed class LuaKeybindRegistry
 
     private void Put(string chord, Binding binding)
     {
-        if (!KeybindingManager.TryParseChord(chord, out var key))
+        if (!KeybindingManager.TryParseChord(chord, out var key, out string? error))
         {
             binding.Callback?.Dispose();
-            throw new ArgumentException("Invalid key chord.", nameof(chord));
+            throw new ArgumentException($"Invalid key chord '{chord}': {error}.", nameof(chord));
         }
 
         Binding old;
@@ -54,14 +54,16 @@ public sealed class LuaKeybindRegistry
         }
     }
 
-    /// <summary>Executes the binding matching the supplied modifiers and key name.</summary>
-    public bool TryExecute(bool ctrl, bool shift, bool alt, bool super, string keyName)
+    /// <summary>
+    /// Executes the binding matching the supplied modifiers, physical key name and unshifted layout character
+    /// (same matching order as <see cref="KeybindingManager.TryMatch{T}"/>).
+    /// </summary>
+    public bool TryExecute(bool ctrl, bool shift, bool alt, bool super, string keyName, int layoutCodepoint = 0)
     {
-        TerminalChordKey chord = KeybindingManager.CreateKey(ctrl, shift, alt, super, keyName);
         Binding binding;
         lock (_sync)
         {
-            if (!_bindings.TryGetValue(chord, out binding))
+            if (!KeybindingManager.TryMatch(_bindings, ctrl, shift, alt, super, keyName, layoutCodepoint, out binding))
             {
                 return false;
             }
@@ -113,5 +115,5 @@ public sealed class LuaKeybindRegistry
         return KeybindingManager.NormalizeChord(chord);
     }
 
-    private readonly record struct Binding(LuaCallbackReference? Callback, TerminalAction? Action, bool SuppressDefault = false);
+    private readonly record struct Binding(LuaCallbackReference? Callback, BoundAction? Action, bool SuppressDefault = false);
 }

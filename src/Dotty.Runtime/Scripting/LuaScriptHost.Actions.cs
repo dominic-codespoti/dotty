@@ -17,14 +17,14 @@ public sealed partial class LuaScriptHost
         lua.NewTable();
         int actions = lua.AbsIndex(-1);
         int index = 0;
-        foreach (TerminalAction action in Enum.GetValues<TerminalAction>())
+        foreach (var info in ActionRegistry.All)
         {
-            if (action == TerminalAction.None)
+            if (info.Action == TerminalAction.None)
             {
                 continue;
             }
 
-            PushLuaString(lua, Enum.GetName(action)!);
+            PushLuaString(lua, info.Name);
             lua.RawSetInteger(actions, ++index);
         }
 
@@ -36,9 +36,8 @@ public sealed partial class LuaScriptHost
         host.RequireRuntime(lua, "dotty.action");
 
         string? name = ReadString(lua, 1);
-        if (name == null || !Enum.TryParse(name, true, out TerminalAction action) ||
-            action == TerminalAction.None ||
-            !string.Equals(Enum.GetName(action), name, StringComparison.OrdinalIgnoreCase))
+        if (name == null || !ActionRegistry.TryParse(name, out BoundAction action, out _) ||
+            action.Action == TerminalAction.None)
         {
             return host.Fail(lua, $"unknown action '{name ?? string.Empty}'");
         }

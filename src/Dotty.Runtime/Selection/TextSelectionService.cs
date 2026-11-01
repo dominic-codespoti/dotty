@@ -127,6 +127,15 @@ public sealed class TextSelectionService
         }
     }
 
+    /// <summary>Selects the whole scrollback plus the screen (logical rows <c>-ScrollbackCount</c> .. <c>Rows - 1</c>).</summary>
+    public void SelectAll(TerminalBuffer buffer)
+    {
+        if (buffer.Rows <= 0 || buffer.Columns <= 0)
+            return;
+        StartSelection(-buffer.ScrollbackCount, 0);
+        UpdateSelection(buffer.Rows - 1, buffer.Columns - 1);
+    }
+
     public void UpdateSelection(int row, int col)
     {
         if (!HasSelection) return;

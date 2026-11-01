@@ -257,6 +257,27 @@ public sealed class TerminalTabManager : IDisposable
         SelectTab(prevIndex);
     }
 
+    /// <summary>
+    /// Moves <paramref name="tab"/> <paramref name="delta"/> places (negative = left), clamped to the ends; the
+    /// active tab stays active. False when the tab is unknown or already at that end.
+    /// </summary>
+    public bool MoveTab(TerminalTab tab, int delta)
+    {
+        ThrowIfDisposed();
+        int from = _tabs.IndexOf(tab);
+        if (from < 0)
+            return false;
+        int to = Math.Clamp(from + delta, 0, _tabs.Count - 1);
+        if (to == from)
+            return false;
+        var active = ActiveTab;
+        _tabs.RemoveAt(from);
+        _tabs.Insert(to, tab);
+        if (active != null)
+            _activeIndex = _tabs.IndexOf(active);
+        return true;
+    }
+
     public void ResizeAll(int cols, int rows, int pixelWidth, int pixelHeight)
     {
         ThrowIfDisposed();

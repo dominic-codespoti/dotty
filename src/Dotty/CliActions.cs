@@ -23,7 +23,7 @@ internal static class CliActions
         string configFile = PlatformPaths.ConfigFile;
         return options.Action switch
         {
-            DottyLaunchOptionsParser.ExplainConfigAction => ExplainConfig(options.ActionArguments, output, error),
+            DottyLaunchOptionsParser.ExplainConfigAction => ExplainConfig(options.ActionArguments, output, error, configFile),
             DottyLaunchOptionsParser.InitConfigAction => InitConfig(configFile, options.HasActionFlag(DottyLaunchOptionsParser.ForceFlag), output, error),
             DottyLaunchOptionsParser.ShowConfigAction => ShowConfig(configFile, LuaScriptHost.GetConfigLuaPath(), options.HasActionFlag(DottyLaunchOptionsParser.DefaultFlag), output, error),
             DottyLaunchOptionsParser.ValidateConfigAction => ValidateConfig(configFile, LuaScriptHost.GetConfigLuaPath(), output, error),
@@ -35,9 +35,10 @@ internal static class CliActions
 
     /// <summary>
     /// Lists every option (no argument), documents one option, or lists a group such as <c>mouse</c>.
-    /// Exit code 1 and a message on <paramref name="error"/> when nothing matches.
+    /// Exit code 1 and a message on <paramref name="error"/> when nothing matches. <c>keybindings</c> also lists the
+    /// actions, the live binding table built from <paramref name="configFile"/>, and its rejected entries.
     /// </summary>
-    public static int ExplainConfig(IReadOnlyList<string> arguments, TextWriter output, TextWriter error)
+    public static int ExplainConfig(IReadOnlyList<string> arguments, TextWriter output, TextWriter error, string? configFile = null)
     {
         if (arguments.Count == 0)
         {
@@ -51,6 +52,8 @@ internal static class CliActions
         {
             output.Write(ConfigOptionCatalog.Render(option));
             output.Write('\n');
+            if (option.JsonPath == "keybindings")
+                output.Write(Dotty.Runtime.Input.KeybindingReport.Render(LoadKeybindings(configFile, error)));
             return 0;
         }
 
@@ -71,6 +74,23 @@ internal static class CliActions
         }
         error.Write("Run 'dotty +explain-config' to list every option.\n");
         return 1;
+    }
+
+    // The built-ins plus config.json's keybindings map; an unreadable file is reported and the built-ins are shown.
+    private static Dotty.Runtime.Input.KeybindingManager LoadKeybindings(string? configFile, TextWriter error)
+    {
+        var manager = new Dotty.Runtime.Input.KeybindingManager();
+        if (configFile is null || !File.Exists(configFile))
+            return manager;
+        try
+        {
+            manager.ApplyCustomBindings(UserConfigService.ReadFile(configFile).Keybindings);
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
+        {
+            error.Write($"dotty: cannot read {configFile}: {ex.Message}; showing the built-in bindings\n");
+        }
+        return manager;
     }
 
     /// <summary>

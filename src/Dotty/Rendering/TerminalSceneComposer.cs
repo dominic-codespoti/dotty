@@ -29,7 +29,8 @@ public readonly record struct SearchOverlayRenderState(
     int ActiveMatchIndex,
     int TotalMatches,
     IReadOnlyList<RuntimeSearchMatch>? Matches,
-    int QueryCursorIndex = -1);
+    int QueryCursorIndex = -1,
+    SearchOverlayFlags Flags = SearchOverlayFlags.None);
 
 /// <summary>
 /// The GPU instances and atlas rows produced by <see cref="TerminalSceneComposer"/>.
@@ -665,7 +666,8 @@ public sealed class TerminalSceneComposer : IDisposable
                 framebufferHeight,
                 searchOverlay.Query,
                 searchOverlay.ActiveMatchIndex,
-                searchOverlay.TotalMatches);
+                searchOverlay.TotalMatches,
+                flags: searchOverlay.Flags);
             EnsureScratchCapacity(instanceCount + 1024);
             int overlayQuads = SearchQuadBuilder.BuildOverlayQuads(
                 in overlayLayout,

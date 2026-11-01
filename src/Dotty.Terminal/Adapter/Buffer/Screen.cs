@@ -609,6 +609,9 @@ public unsafe partial class Screen : IDisposable
                 int phys = (_head + Rows - 1 - i + total) % total;
                 ClearPhysicalRow(phys);
             }
+            // The oldest ring slot (the top visible row when there is no history) now follows the rows just blanked,
+            // so it no longer continues the row before it.
+            RowContinuesPrevious[(_head + Rows) % total] = false;
             return clampedLines;
         }
 
@@ -619,7 +622,9 @@ public unsafe partial class Screen : IDisposable
     /// Moves rows <c>[top+lines..bottom]</c> up by <paramref name="lines"/>,
     /// discarding the rows shifted out (never into scrollback) and blanking the
     /// exposed bottom band. Row memmoves, not per-cell copies: Neovim scrolls its
-    /// window this way (DECSTBM + DL) once per line moved.
+    /// window this way (DECSTBM + DL) once per line moved. A row whose predecessor
+    /// changed (the first moved row, the row below the region) loses its soft-wrap
+    /// flag; rows moved together keep theirs.
     /// </summary>
     internal int ShiftRegionUp(int top, int bottom, int lines)
     {
@@ -628,6 +633,7 @@ public unsafe partial class Screen : IDisposable
         {
             for (int r = top; r <= bottom; r++)
                 ClearPhysicalRow(GetPhysicalRow(r));
+            ClearRowContinuation(bottom + 1);
             return regionHeight;
         }
 
@@ -635,6 +641,8 @@ public unsafe partial class Screen : IDisposable
             CopyPhysicalRow(GetPhysicalRow(r - lines), GetPhysicalRow(r));
         for (int r = bottom - lines + 1; r <= bottom; r++)
             ClearPhysicalRow(GetPhysicalRow(r));
+        RowContinuesPrevious[GetPhysicalRow(top)] = false;
+        ClearRowContinuation(bottom + 1);
         return lines;
     }
 
@@ -664,7 +672,9 @@ public unsafe partial class Screen : IDisposable
     /// Moves rows <c>[top..bottom-lines]</c> down by <paramref name="lines"/>,
     /// discarding rows shifted past <paramref name="bottom"/> and blanking the
     /// exposed top band. Unlike the full-screen scroll path this never reveals
-    /// scrollback, as Insert Line requires.
+    /// scrollback, as Insert Line requires. A row whose predecessor changed (the
+    /// first moved row, the row below the region) loses its soft-wrap flag; rows
+    /// moved together keep theirs.
     /// </summary>
     internal void ShiftRegionDown(int top, int bottom, int lines)
     {
@@ -673,6 +683,7 @@ public unsafe partial class Screen : IDisposable
         {
             for (int r = top; r <= bottom; r++)
                 ClearPhysicalRow(GetPhysicalRow(r));
+            ClearRowContinuation(bottom + 1);
             return;
         }
 
@@ -685,5 +696,7 @@ public unsafe partial class Screen : IDisposable
 
         for (int r = top; r < top + lines; r++)
             ClearPhysicalRow(GetPhysicalRow(r));
+        ClearRowContinuation(top + lines);
+        ClearRowContinuation(bottom + 1);
     }
 }

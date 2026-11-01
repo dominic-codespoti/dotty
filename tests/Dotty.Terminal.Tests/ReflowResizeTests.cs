@@ -177,8 +177,8 @@ public sealed class ReflowResizeTests
 
     // Anchor placement (plan 08, WI-R2): the reflow resolves only the cursor, saved cursors and prompt marks. These pin
     // that each lands on its own character, in the middle of a wrapped line, and where its row was trimmed away.
-    // Cursor movement clears the continuation flag of the row it moves onto, so the 12-character line is written on one
-    // 12-column row and the cursor placed on it before any resize; the first resize is what makes the line wrap.
+    // The 12-character line is written on one 12-column row (it fills the row without wrapping) and the cursor placed
+    // on it before any resize; the first resize is what makes the line wrap.
 
     [Fact]
     public void CursorInsideWrappedLineStaysOnItsCharacterAcrossResizes()

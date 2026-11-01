@@ -214,7 +214,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
         // DECSTBM homes the cursor after setting margins.
         _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
     private int _totalScrolled = 0;
@@ -269,7 +268,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     {
         if (!_hasSavedCursor) return;
         _cursor.RestoreState(_savedCursorState, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
         _hasSavedCursor = false;
         MarkAllRowsDirty();
     }
@@ -525,6 +523,9 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             int blankLines = clampedLines - restoredFromScrollback;
             for (int row = 0; row < blankLines; row++)
                 ActiveBuffer.ClearRow(row);
+            // The first row below the inserted blank rows no longer continues the row before it.
+            if (blankLines > 0)
+                ActiveBuffer.ClearRowContinuation(blankLines);
         }
 
         // Kitty graphics: the full-screen path rotated the ring head back by clampedLines (Screen.ScrollDownRegion);
@@ -558,7 +559,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         {
             _cursor.Set(Math.Clamp(row, 0, Rows - 1), Math.Clamp(col, 0, Columns - 1), Rows, Columns);
         }
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
     public readonly struct ScrollbackLine
@@ -755,14 +755,12 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         {
             _cursor.Set(Math.Clamp(row, 0, Rows - 1), Math.Clamp(col, 0, Columns - 1), Rows, Columns);
         }
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
     public void SetOriginMode(bool enabled)
     {
         _originMode = enabled;
         // DECOM resets the cursor to the current home position.
         _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
         // Changing origin may change visible content; mark all rows dirty.
         MarkAllRowsDirty();
     }
@@ -788,13 +786,11 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
         newCol = Math.Clamp(newCol, 0, Columns - 1);
         _cursor.Set(newRow, newCol, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
     public void CarriageReturn()
     {
         _cursor.CarriageReturn();
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
     }
 
     public void LineFeed()
@@ -818,7 +814,22 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
         // Otherwise behave like a normal line feed (move cursor down).
         _cursor.MoveBy(1, 0, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
+    }
+
+    /// <summary>
+    /// Autowrap: the line feed and carriage return of a pending wrap, which also cancels it. Returns whether the
+    /// cursor's row now soft-wraps from the row it left, i.e. whether the line feed moved down or scrolled. It does
+    /// neither below the bottom margin (see <see cref="LineFeed"/>) or in a one-row region (a resize can clamp the
+    /// margins together), so that wrap starts over on the same row, which continues nothing.
+    /// </summary>
+    internal bool WrapToNextLine()
+    {
+        int row = _cursor.Row;
+        bool advances = row < _scrollBottom || (row == _scrollBottom && _scrollTop < _scrollBottom);
+        LineFeed();
+        CarriageReturn();
+        _cursor.SetWrapPending(false);
+        return advances;
     }
 
     /// <summary>
@@ -834,7 +845,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             if (_cursor.Row < Rows - 1)
             {
                 _cursor.MoveBy(1, 0, Rows, Columns);
-                ActiveBuffer.ClearRowContinuation(_cursor.Row);
             }
             return;
         }
@@ -852,14 +862,12 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (_cursor.Row == _scrollTop)
         {
             ScrollDownLines(1);
-            ActiveBuffer.ClearRowContinuation(_cursor.Row);
             return;
         }
 
         if (_cursor.Row <= _scrollBottom)
         {
             _cursor.MoveBy(-1, 0, Rows, Columns);
-            ActiveBuffer.ClearRowContinuation(_cursor.Row);
         }
     }
 
@@ -969,6 +977,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             // instead of per-cell ClearCell which does 2× row scan per cell.
             for (int r = row; r <= bottom; r++)
                 ActiveBuffer.ClearRow(r);
+            ActiveBuffer.ClearRowContinuation(bottom + 1);
             MarkRowRangeDirty(row, bottom - row + 1);
             return;
         }
@@ -989,6 +998,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             // clear region: every row is exposed; use ClearRow (vectorized)
             for (int r = row; r <= bottom; r++)
                 ActiveBuffer.ClearRow(r);
+            ActiveBuffer.ClearRowContinuation(bottom + 1);
             MarkRowRangeDirty(row, bottom - row + 1);
             return;
         }

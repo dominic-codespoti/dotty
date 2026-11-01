@@ -38,8 +38,8 @@ public partial class TerminalBuffer
     /// call) scrolls with the text and the scroll hooks see it. The whole overshoot is applied: a full-screen
     /// region scrolls in steps of at most <see cref="Rows"/> (one ring rotation is capped at the screen height), so
     /// the last row of an image taller than the screen ends on the bottom row; a margin region is emptied by its own
-    /// height and scrolling it further changes nothing. Clears the wrap-pending state and the row's continuation
-    /// flag like any explicit cursor move.
+    /// height and scrolling it further changes nothing. Clears the wrap-pending state like any explicit cursor move; as
+    /// with every cursor move, the soft-wrap (continuation) flags of the rows are left alone.
     /// </summary>
     internal void MoveCursorAfterImage(int effCols, int effRows)
     {
@@ -59,7 +59,6 @@ public partial class TerminalBuffer
             }
         }
         _cursor.Set(advance.Row, advance.Col, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
         BumpGraphicsGeneration();
     }
 

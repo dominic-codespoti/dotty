@@ -213,10 +213,7 @@ internal sealed class BufferTextWriter
 
             if (_ctx._autoWrap && _cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
                 row = _cursor.Row;
                 col = 0;
             }
@@ -372,10 +369,7 @@ internal sealed class BufferTextWriter
 
             if (_ctx._autoWrap && _cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
                 row = _cursor.Row;
                 col = 0;
             }
@@ -532,10 +526,7 @@ internal sealed class BufferTextWriter
         {
             if (_cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
             }
             _cursor.EnsureSpace(1, _ctx.Rows, _ctx.Columns);
             startCol = _cursor.Col;
@@ -631,10 +622,7 @@ internal sealed class BufferTextWriter
         {
             if (_cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
             }
             if (_cursor.Col > columns - width)
             {

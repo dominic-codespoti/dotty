@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using Dotty.Runtime.ContextMenu;
+using Dotty.Runtime.Localization;
 
 namespace Dotty.Runtime.Prompt;
 
@@ -80,7 +81,7 @@ public static class HostPrompt
         AddHeader(items, title, lines);
         items.Add(ContextMenuItem.Separator("prompt-sep-actions"));
         int focusRow = items.Count;
-        items.Add(new ContextMenuItem(DismissId, "Dismiss", action: static () => { }));
+        items.Add(new ContextMenuItem(DismissId, UiStrings.Dismiss, action: static () => { }));
         return Finish(items, focusRow, onDismissed);
     }
 

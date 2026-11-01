@@ -266,6 +266,7 @@ internal static partial class DottyWindowHost
         _window.Render += OnRender;
         _window.FramebufferResize += OnFramebufferResize;
         _window.FocusChanged += OnWindowFocusChanged;
+        _window.FileDrop += OnFilesDropped;
         _window.Closing += OnClosing;
         _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
         GlfwErrorLog.Install(_glfwApi);
@@ -2302,6 +2303,7 @@ internal static partial class DottyWindowHost
     private static void OnKeyboardActivity()
     {
         RecordInteraction();
+        HidePointerWhileTyping();
         _cursorBlinkVisible = true;
         _lastCursorBlinkTimestampMs = GetClockMilliseconds();
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.CursorBlink);
@@ -2860,10 +2862,7 @@ internal static partial class DottyWindowHost
 
         public void SetPointerCursor(StandardCursor cursor)
         {
-            if (_mouse != null)
-            {
-                _mouse.Cursor.StandardCursor = cursor;
-            }
+            SetHostPointer(cursor);
         }
     }
 }

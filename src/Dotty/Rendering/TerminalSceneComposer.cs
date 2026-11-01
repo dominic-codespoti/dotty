@@ -299,7 +299,7 @@ public sealed class TerminalSceneComposer : IDisposable
         ArgumentNullException.ThrowIfNull(padding);
 
         var activePane = activeTab.ActivePane;
-        var leaves = activeTab.PaneTree.Leaves;
+        var leaves = activeTab.PaneTree.VisibleLeaves;
         // cellWidth/cellHeight are whole device pixels; scale is the display content scale for chrome.
         scale = Math.Max(0.1f, scale);
         var devicePadding = DevicePadding.FromLogical(padding.Left, padding.Top, padding.Right, padding.Bottom, scale);
@@ -515,9 +515,11 @@ public sealed class TerminalSceneComposer : IDisposable
                     && leafSnapshot.CursorCol >= 0 && leafSnapshot.CursorCol < paneColumns)
                 {
                     var cursorConfig = UserConfigService.Current.Cursor;
-                    var (cursorShape, cursorBlinks) = CursorGeometry.ResolveStyle(
+                    var (cursorShape, _) = CursorGeometry.ResolveStyle(
                         leafSnapshot.CursorStyleIsDefault, leafSnapshot.CursorShape, leafSnapshot.CursorBlinking,
                         CursorGeometry.ParseShape(cursorConfig.Shape), cursorConfig.Blink);
+                    bool cursorBlinks = Dotty.Runtime.Input.CursorBlinkPolicy.Blinks(leafSnapshot.CursorStyleIsDefault,
+                        leafSnapshot.CursorBlinking, cursorConfig.Blink, SystemCursorBlink.Allowed);
                     if (cursorBlinks)
                         BlinkActive = true;
 

@@ -265,6 +265,13 @@ the background equals the cursor colour) or `cell-foreground` (the text keeps
 its colour). The cursor colour is the pane's default foreground. Only the
 active pane draws a cursor, and not while it is scrolled back.
 
+Where the operating system exposes a caret-blink preference cheaply (Windows:
+caret blink turned off in Settings), a disabled preference keeps the cursor
+steady regardless of `blink` or DECSCUSR. Other platforms use the
+configuration and DECSCUSR alone.
+
+Changelog: W4-C18 — Windows caret-blink preference honoured.
+
 ### `theme`, `selectionColor`, and `panes`
 
 `theme` names a built-in or user theme. `selectionColor` accepts the color
@@ -438,6 +445,18 @@ each platform ([Platform Support](PlatformSupport.md#manual-link-opener-checks))
 | `alternateScroll` | string | `"auto"` | `auto`: on the alternate screen, with no mouse reporting active and mode 1007 not reset by the application, the wheel sends cursor up/down keys (`SS3 A`/`SS3 B` under DECCKM) so `less`, `man` and similar programs scroll. `off`: never. Unknown values mean `auto`. |
 | `reportBypassModifier` | string | `"shift"` | While held, clicks, drags and the wheel stay local (selection, scrollback, links) even when an application tracks the mouse: `shift`, `ctrl`, `alt`, `super`, or `none` (always report). Unknown values mean `shift`. |
 | `middleClickAction` | string | `"clipboard-paste"` | What a middle click does in a pane that is not reporting mouse events: `primary-paste`, `clipboard-paste`, or `ignore` (`-` and `_` are interchangeable). Unknown values mean `clipboard-paste`. |
+| `hideWhileTyping` | boolean | `false` | Hide the pointer when a key sends input to a pane; it reappears as soon as the mouse moves. |
+
+Applications may set the pointer shape over their pane with OSC 22
+(`OSC 22 ; name ST`): CSS names (`pointer`, `text`, `crosshair`, `ew-resize`,
+`ns-resize`, `move`, `not-allowed`, `wait`, `progress`, `default`, …) and the
+common X11 cursor-font names (`hand2`, `xterm`, `left_ptr`, `watch`, …); a
+comma-separated list takes the first known name, an empty name or `default`
+resets, and RIS resets. The shape replaces only the text beam over pane
+content: divider resize, link, scrollbar, tab-bar and menu pointers keep the
+host's shape, and `hideWhileTyping` hides the pointer whatever was requested.
+
+Changelog: W4-C18 — `hideWhileTyping`, OSC 22 pointer shapes.
 
 Copy-on-select runs when the left button is released after a drag, or after a
 double- or triple-click, completed a local selection. It never clears the
@@ -458,6 +477,18 @@ reads and writes use the real PRIMARY selection on X11 only (see
 All mouse options are read live: a change applies to the next selection, click or wheel event.
 Interoperation of X11 PRIMARY with other applications is a manual check; see
 [E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click).
+
+### `drop`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | string | `"paste-path"` | `paste-path`: dropping files on the window pastes their shell-escaped paths, separated by spaces, into the active pane through the normal paste path (bracketed paste, sanitising and `clipboard.confirmPaste` apply). `ignore`: drops do nothing. Unknown values mean `paste-path`. |
+| `quote` | string | `"auto"` | `auto` picks the dialect from the pane's launch shell (`fish`, `pwsh`/`powershell`, `cmd`, anything else `posix`; `cmd` on Windows when no shell was given). `posix`: bare when every character is safe, otherwise single quotes (`'` becomes `'\''`). `fish`: single quotes with `\\` and `\'`. `powershell`: single quotes, every single-quote character (typographic ones too) doubled. `cmd`: double quotes; paths containing `"`, `%` or `!` are refused. |
+
+A path containing a control character (C0, DEL, C1, U+2028/U+2029) or an
+unpaired surrogate is never pasted; the other dropped paths still are.
+
+Changelog: W4-C18 — new section.
 
 ### `selection`
 
@@ -714,6 +745,12 @@ the chord that is bound at the time the menu opens.
 | `move_tab_right` | — | Move the active tab one place to the right. |
 | `toggle_tab_bar` | — | Show or hide the tab bar. |
 | `send_text` | — | Write the escaped text after the colon to the active pane (`send_text:\x1bOA`). |
+| `resize_pane_left` | — | Move the active pane's nearest vertical divider one cell left. |
+| `resize_pane_right` | — | Move the active pane's nearest vertical divider one cell right. |
+| `resize_pane_up` | — | Move the active pane's nearest horizontal divider one row up. |
+| `resize_pane_down` | — | Move the active pane's nearest horizontal divider one row down. |
+| `zoom_pane` | — | Zoom the active pane to fill the tab, or restore the splits. |
+| `equalize_panes` | — | Reset every split in the tab to an even ratio. |
 
 The scroll actions are not performed on the alternate screen or when the pane
 has no scrollback; the key then goes to the application. `Shift+Up/Down/Home/End`
@@ -728,6 +765,12 @@ macOS Command set, new actions `send_text`, `select_all`, `clear_scrollback`,
 `reload_config`, `paste_selection`, `search_next`, `search_previous`,
 `copy_or_send`, `move_tab_left`, `move_tab_right`, `toggle_tab_bar`; rejected
 entries are reported instead of silently ignored.
+
+Changelog: W4-C16 — `resize_pane_left/right/up/down`, `zoom_pane` and
+`equalize_panes`. Dividers can be dragged with the left button (resize pointer
+over a divider, with a wider band once hovered so it does not flicker); every
+pane keeps at least 2 columns or 1 row. Zoom ends when focus moves or the
+splits change.
 
 ### `keyboard`
 
@@ -888,6 +931,9 @@ startup failures, and release smoke requirements.
 |------|--------|
 | 2026-11-01 | W4-C12/C13: `window.opacity` and `window.title` are applied; added `window.columns`, `window.rows`, `window.startMaximized`, `window.startFullscreen`, `window.floating`. |
 | 2026-11-01 | W4-C4: added `font.builtinGlyphs` (default `true`): built-in box drawing, block, braille, sextant, octant and Powerline sprites. |
+| 2026-11-01 | W4-C22: headless `AccessibleTextModel` (trimmed lines, UTF-16 caret/selection offsets, char/word/line moves, coalesced change events) and `UiStrings` for every menu, prompt and chrome label; no new options. |
+| 2026-11-01 | W4-C18: `drop.mode`, `drop.quote` (dropped files paste shell-escaped paths), `mouse.hideWhileTyping`, OSC 22 pointer shapes; the Windows caret-blink preference can keep the cursor steady. |
+| 2026-11-01 | W4-C16: `resize_pane_*`, `zoom_pane`, `equalize_panes` actions; draggable split dividers with a resize pointer. |
 | 2026-11-01 | W4-C6: `font.family` is the ordered fallback list with an OS default stack; added `font.boldFamily`, `font.italicFamily`, `font.boldItalicFamily`, `font.weight`, `font.features`. |
 | 2026-11-01 | W4-C1: the display scale comes from the OS content scale (fixes unscaled text on Windows/X11 HiDPI); cells are integer device pixels; padding is rounded to device pixels. |
 | 2026-11-01 | W4-C2: `font.size` is in points (was pixels; default 11.25 pt = 15 px at 100 %); added `font.adjustCellWidth`, `font.adjustCellHeight`; half-leading line height. |

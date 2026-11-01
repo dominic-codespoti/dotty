@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Prompt;
+using Dotty.Runtime.Localization;
 
 namespace Dotty.Silk;
 
@@ -44,8 +44,8 @@ internal static class ClipboardReadPromptBuilder
             BuildPreviewLines(clipboardText),
             new (string Label, Action Run)[]
             {
-                ("Deny", static () => { }),
-                ("Allow", allow),
+                (UiStrings.Deny, static () => { }),
+                (UiStrings.Allow, allow),
             },
             DenyActionIndex,
             onDismissed: null);
@@ -56,8 +56,8 @@ internal static class ClipboardReadPromptBuilder
     {
         string name = HostPrompt.SanitizeLine(tabTitle, MaxTabTitleChars);
         return name.Length == 0
-            ? "A tab wants to read the clipboard"
-            : "Tab \"" + name + "\" wants to read the clipboard";
+            ? UiStrings.ClipboardReadUnnamedTab
+            : UiStrings.ClipboardReadNamedTab(name);
     }
 
     /// <summary>
@@ -70,14 +70,12 @@ internal static class ClipboardReadPromptBuilder
         var lines = new List<string>(HostPrompt.MaxLines);
         if (text.Length == 0)
         {
-            lines.Add("(clipboard is empty)");
+            lines.Add(UiStrings.ClipboardEmpty);
             return lines;
         }
 
         AppendPreviewRows(lines, text);
-        lines.Add(text.Length == 1
-            ? "(1 character)"
-            : "(" + text.Length.ToString(CultureInfo.InvariantCulture) + " characters)");
+        lines.Add(UiStrings.CharacterCount(text.Length));
         return lines;
     }
 

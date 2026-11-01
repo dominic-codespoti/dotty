@@ -145,4 +145,22 @@ public enum TerminalAction
 
     /// <summary>Write the binding's text argument to the active pane (<c>send_text:&lt;escaped&gt;</c>).</summary>
     SendText,
+
+    /// <summary>Move the active pane's nearest vertical divider one cell left.</summary>
+    ResizePaneLeft,
+
+    /// <summary>Move the active pane's nearest vertical divider one cell right.</summary>
+    ResizePaneRight,
+
+    /// <summary>Move the active pane's nearest horizontal divider one row up.</summary>
+    ResizePaneUp,
+
+    /// <summary>Move the active pane's nearest horizontal divider one row down.</summary>
+    ResizePaneDown,
+
+    /// <summary>Zoom the active pane to fill the tab, or restore the split layout.</summary>
+    ZoomPane,
+
+    /// <summary>Reset every split in the tab to an even ratio.</summary>
+    EqualizePanes,
 }

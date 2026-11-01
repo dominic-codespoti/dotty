@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Prompt;
+using Dotty.Runtime.Localization;
 
 namespace Dotty.Silk;
 
@@ -32,16 +33,16 @@ internal static class HyperlinkPromptBuilder
 
         var lines = new List<string>(HostPrompt.MaxLines);
         if ((risks & HyperlinkRisk.NonWebScheme) != 0)
-            lines.Add("Non-web link (" + target.Scheme + ")");
+            lines.Add(UiStrings.LinkNonWeb(target.Scheme));
         if ((risks & HyperlinkRisk.LocalFile) != 0)
-            lines.Add("Opens a local file");
+            lines.Add(UiStrings.LinkLocalFile);
         if ((risks & HyperlinkRisk.Userinfo) != 0)
-            lines.Add("URL contains credentials");
+            lines.Add(UiStrings.LinkCredentials);
         if ((risks & HyperlinkRisk.Idn) != 0)
-            lines.Add("Host contains non-ASCII characters");
+            lines.Add(UiStrings.LinkNonAsciiHost);
         if ((risks & HyperlinkRisk.TextMismatch) != 0)
         {
-            lines.Add("Link text differs from the target:");
+            lines.Add(UiStrings.LinkTextDiffers);
             lines.Add(displayText ?? string.Empty);
         }
 
@@ -50,13 +51,13 @@ internal static class HyperlinkPromptBuilder
         AppendWrapped(lines, target.Canonical, targetRows);
 
         return HostPrompt.Build(
-            "Open link?",
+            UiStrings.OpenLinkTitle,
             lines,
             new (string Label, Action Run)[]
             {
-                ("Open", open),
-                ("Copy link address", copyAddress),
-                ("Cancel", static () => { }),
+                (UiStrings.OpenLink, open),
+                (UiStrings.CopyLinkAddress, copyAddress),
+                (UiStrings.Cancel, static () => { }),
             },
             CancelActionIndex,
             onDismissed: null);

@@ -57,6 +57,18 @@ public sealed class TerminalActionExecutor
             case TerminalAction.SplitHorizontal:
                 activeTab.PaneTree.Split(activeTab.ActivePane, SplitDirection.Horizontal);
                 return true;
+            case TerminalAction.ResizePaneLeft:
+                return activeTab.PaneTree.ResizeActive(PaneDirection.Left);
+            case TerminalAction.ResizePaneRight:
+                return activeTab.PaneTree.ResizeActive(PaneDirection.Right);
+            case TerminalAction.ResizePaneUp:
+                return activeTab.PaneTree.ResizeActive(PaneDirection.Up);
+            case TerminalAction.ResizePaneDown:
+                return activeTab.PaneTree.ResizeActive(PaneDirection.Down);
+            case TerminalAction.ZoomPane:
+                return activeTab.PaneTree.ToggleZoom();
+            case TerminalAction.EqualizePanes:
+                return activeTab.PaneTree.Equalize();
             case TerminalAction.FocusPaneLeft:
                 SelectPane(activeTab, PaneDirection.Left);
                 return true;

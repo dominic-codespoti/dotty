@@ -265,7 +265,10 @@ public static class QuadFrameBuilder
                     }
                     if (!glyphOk)
                     {
-                        var key = new GlyphKey(grapheme, typeface, textSize, GlyphStyles.From(style.Bold, style.Italic));
+                        // A narrow Private Use icon may spread into a blank next cell (W4-C9 glyph constraints).
+                        byte cellSpan = GlyphCellSpan.Decide((int)hot.Rune, hot.Width, graphemeIndex <= 0,
+                            GlyphCellSpan.IsBlank(cellHotSpan, column + 1, rowLength));
+                        var key = new GlyphKey(grapheme, typeface, textSize, GlyphStyles.From(style.Bold, style.Italic), cellSpan);
                         glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
                         if (!glyphOk)
                             glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);

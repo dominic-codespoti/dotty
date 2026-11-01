@@ -331,6 +331,8 @@ public sealed class TerminalSceneComposer : IDisposable
         _textOptions = _textOptions with { MinimumContrast = MinimumContrast.Normalize(UserConfigService.Current.Text.MinimumContrast) };
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
+        // Constrained glyphs (icons, fallback text) are fitted to the real cell; a changed cell rebuilds the atlas here.
+        _atlas.SetCellGeometry(_cellMetrics.CellWidth, _cellMetrics.CellHeight, _cellMetrics.Baseline, _cellMetrics.BaselineShift);
         // A full atlas is rebuilt here, at the frame boundary, and this frame re-ensures its visible glyphs. When the
         // previous frame already rebuilt and still overflowed (one screen needs more than a full atlas), wait for a
         // later frame instead of rebuilding on every frame.

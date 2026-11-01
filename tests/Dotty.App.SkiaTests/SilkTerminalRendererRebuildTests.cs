@@ -103,9 +103,6 @@ public sealed class SilkTerminalRendererRebuildTests
             height,
             CellWidth,
             CellHeight,
-            underlineY: 0.85f,
-            strikeY: 0.7f,
-            lineHalf: 0.04f,
             clearColor: SgrColorArgb.FromRgb(0, 0, 0),
             frameCaptured: true);
     }

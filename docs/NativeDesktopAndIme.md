@@ -70,7 +70,8 @@ straddles the right edge); on the last rows it is shifted up over the previous
 rows, and when it is taller than the pane, earlier rows scroll away so the caret
 row stays visible (the one-row search input therefore shifts left). Cells are
 drawn opaque in the pane's default foreground/background, the focused clause in
-the theme selection colour and the other clauses underlined; the terminal cells
+the theme selection colour and the other clauses underlined with a single-underline
+decoration sprite in the text colour; the terminal cells
 under the composition are hidden for that frame. Nothing is written to the
 terminal buffer. Stable composition frames reuse
 their emitted instances rather than repeatedly allocating grapheme strings.

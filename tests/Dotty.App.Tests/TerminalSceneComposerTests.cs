@@ -1019,7 +1019,10 @@ public sealed class TerminalSceneComposerTests
         using var tab = new TerminalTab(rows: 4, columns: 10);
         using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
-        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f)
+        {
+            CellMetrics = new CellMetrics(10, 20, 15, 12, 4, 3, 17, 1, 10, 1, 0, 1),
+        };
         var theme = themeName == "DarkPlus" ? BuiltInThemes.DarkPlus : BuiltInThemes.LightPlus;
         var selection = new SgrColorArgb(0x803385DB);
         tab.Session.Adapter.Buffer.SetCursor(0, 2);
@@ -1040,17 +1043,22 @@ public sealed class TerminalSceneComposerTests
         var composed = new ImePreeditState("A界e\u0301🙂", 4, 1, 1);
         var frame = Compose(composed);
         var cells = frame.AsSpan().ToArray().Where(i => i.BgA == 255).ToArray();
+        // Unfocused preedit cells are underlined by a cell-wide underline sprite (the terminal itself is blank).
+        var underlines = frame.AsSpan().ToArray().Where(i => (i.Flags & CellFlags.Decoration) != 0).ToArray();
 
         Assert.Equal(new[] { (2, 0), (3, 0), (5, 0), (6, 0) }, PreeditCells(frame));
         var foreground = new SgrColorArgb(theme.Foreground);
         var background = new SgrColorArgb(theme.Background);
         Assert.All(cells, c => Assert.Equal((foreground.R, foreground.G, foreground.B, (byte)255), (c.FgR, c.FgG, c.FgB, c.FgA)));
         Assert.Equal((selection.R, selection.G, selection.B), (cells[1].BgR, cells[1].BgG, cells[1].BgB));
-        Assert.True((cells[1].Flags & CellFlags.Underline) == 0);
+        Assert.DoesNotContain(underlines, u => u.Col == cells[1].Col && u.Row == cells[1].Row);
+        Assert.Equal(3, underlines.Length);
         Assert.All(new[] { cells[0], cells[2], cells[3] }, c =>
         {
             Assert.Equal((background.R, background.G, background.B), (c.BgR, c.BgG, c.BgB));
-            Assert.True((c.Flags & CellFlags.Underline) != 0);
+            var underline = Assert.Single(underlines, u => u.Col == c.Col && u.Row == c.Row);
+            Assert.Equal((c.Flags & CellFlags.WideCell) != 0 ? (short)20 : (short)10, underline.GlyphW);
+            Assert.Equal((foreground.R, foreground.G, foreground.B, (byte)255), (underline.FgR, underline.FgG, underline.FgB, underline.FgA));
         });
         Assert.True((cells[1].Flags & CellFlags.WideCell) != 0);
         Assert.True((cells[3].Flags & CellFlags.WideCell) != 0);
@@ -1062,6 +1070,8 @@ public sealed class TerminalSceneComposerTests
         tab.Session.Adapter.Buffer.SetCursor(0, 8);
         frame = Compose(new ImePreeditState("A界B", 3, 0, 0));
         Assert.Equal(new[] { (8, 0), (0, 1), (2, 1) }, PreeditCells(frame));
+        Assert.Equal(new[] { (8, 0), (0, 1), (2, 1) },
+            frame.AsSpan().ToArray().Where(i => (i.Flags & CellFlags.Decoration) != 0).Select(i => ((int)i.Col, (int)i.Row)).ToArray());
         Assert.Equal((30f, 20f), (frame.ImeCaretBounds.Left, frame.ImeCaretBounds.Top));
         Assert.Equal(8, tab.Session.Adapter.Buffer.CursorCol);
 
@@ -1074,6 +1084,7 @@ public sealed class TerminalSceneComposerTests
 
         frame = Compose(null);
         Assert.Empty(PreeditCells(frame));
+        Assert.DoesNotContain(frame.AsSpan().ToArray(), instance => (instance.Flags & CellFlags.Decoration) != 0);
         Assert.True(frame.ImeCaretBoundsValid);
         Assert.Equal(80f, frame.ImeCaretBounds.Left);
     }

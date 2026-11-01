@@ -31,14 +31,15 @@ internal sealed class ImePreeditQuadBuilder
     private SKTypeface? _cachedTypeface;
     private object? _cachedFallbackChain;
     private float _cachedFontSize;
+    private CellSpriteMetrics _cachedSprites;
     private int _cachedStartColumn;
     private int _cachedStartRow;
     private PreeditBox _cachedBox;
     private PreeditColors _cachedColors;
     private PreeditLayoutResult _cachedLayout;
 
-    /// <summary>Upper bound of instances <see cref="Build"/> writes for <paramref name="state"/>.</summary>
-    public static int MaxInstances(in ImePreeditState state) => state.Text?.Length ?? 0;
+    /// <summary>Upper bound of instances <see cref="Build"/> writes for <paramref name="state"/>: a glyph and an underline sprite per cell.</summary>
+    public static int MaxInstances(in ImePreeditState state) => (state.Text?.Length ?? 0) * 2;
 
     public int Build(
         in ImePreeditState state,
@@ -50,6 +51,7 @@ internal sealed class ImePreeditQuadBuilder
         GlyphAtlas atlas,
         SKTypeface typeface,
         float fontSize,
+        in CellSpriteMetrics sprites,
         HashSet<int> dirtyAtlasRows,
         out PreeditLayoutResult layout)
     {
@@ -58,6 +60,7 @@ internal sealed class ImePreeditQuadBuilder
             && ReferenceEquals(typeface, _cachedTypeface)
             && ReferenceEquals(atlas.FallbackChain, _cachedFallbackChain)
             && fontSize.Equals(_cachedFontSize)
+            && sprites == _cachedSprites
             && startColumn == _cachedStartColumn
             && startRow == _cachedStartRow
             && box == _cachedBox
@@ -69,7 +72,7 @@ internal sealed class ImePreeditQuadBuilder
         }
 
         layout = PreeditLayout.Compute(in state, startColumn, startRow, box, _cells);
-        int count = Emit(in state, destination, atlas, typeface, fontSize, colors, dirtyAtlasRows);
+        int count = Emit(in state, destination, atlas, typeface, fontSize, colors, in sprites, dirtyAtlasRows);
         if (_cachedInstances.Length < count)
             Array.Resize(ref _cachedInstances, Math.Max(count, _cachedInstances.Length == 0 ? 8 : _cachedInstances.Length * 2));
         destination[..count].CopyTo(_cachedInstances);
@@ -78,6 +81,7 @@ internal sealed class ImePreeditQuadBuilder
         _cachedTypeface = typeface;
         _cachedFallbackChain = atlas.FallbackChain;
         _cachedFontSize = fontSize;
+        _cachedSprites = sprites;
         _cachedStartColumn = startColumn;
         _cachedStartRow = startRow;
         _cachedBox = box;
@@ -90,7 +94,8 @@ internal sealed class ImePreeditQuadBuilder
 
     /// <summary>
     /// Removes from <paramref name="instances"/> the terminal cells the last built preedit covers, so their glyphs
-    /// (drawn in a later pass than every background) cannot show through the opaque preedit. Returns the new count.
+    /// (drawn in a later pass than every background) cannot show through the opaque preedit. A decoration sprite
+    /// goes with the cell instance it follows (it may span a wide cell). Returns the new count.
     /// </summary>
     public int RemoveCovered(Span<CellInstance> instances) =>
         RemoveCovered(instances, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_cells));
@@ -100,19 +105,22 @@ internal sealed class ImePreeditQuadBuilder
         if (cells.IsEmpty)
             return instances.Length;
         int written = 0;
+        bool cellCovered = false;
         for (int i = 0; i < instances.Length; i++)
         {
             ref readonly CellInstance instance = ref instances[i];
+            bool decoration = (instance.Flags & CellFlags.Decoration) != 0;
             int width = (instance.Flags & CellFlags.WideCell) != 0 ? 2 : 1;
-            bool covered = false;
+            bool covered = decoration && cellCovered;
             foreach (var cell in cells)
             {
-                if (cell.Row == instance.Row && instance.Col < cell.Column + cell.Width && instance.Col + width > cell.Column)
-                {
-                    covered = true;
+                if (covered)
                     break;
-                }
+                if (cell.Row == instance.Row && instance.Col < cell.Column + cell.Width && instance.Col + width > cell.Column)
+                    covered = true;
             }
+            if (!decoration)
+                cellCovered = covered;
             if (!covered)
                 instances[written++] = instances[i];
         }
@@ -126,6 +134,7 @@ internal sealed class ImePreeditQuadBuilder
         SKTypeface typeface,
         float fontSize,
         PreeditColors colors,
+        in CellSpriteMetrics sprites,
         HashSet<int> dirtyAtlasRows)
     {
         string text = state.Text;
@@ -145,7 +154,6 @@ internal sealed class ImePreeditQuadBuilder
             bool focused = cell.Style == PreeditCellStyle.Focused;
             SgrColorArgb background = focused ? colors.FocusedBackground : colors.Background;
             byte flags = (byte)((cell.Width == 2 ? CellFlags.WideCell : 0)
-                | (focused ? 0 : CellFlags.Underline)
                 | (glyphOk && glyphInfo.IsColor ? CellFlags.ColorGlyph : 0));
             destination[written++] = new CellInstance
             {
@@ -167,6 +175,30 @@ internal sealed class ImePreeditQuadBuilder
                 BgB = background.B,
                 BgA = 255,
             };
+            // Unfocused clauses are underlined with a single underline sprite in the text colour.
+            if (!focused && sprites.IsValid && written < destination.Length
+                && QuadFrameBuilder.TryEnsureSprite(atlas,
+                    new SpriteKey(DecorationGeometry.UnderlineCode(UnderlineStyle.Single), sprites.CellWidth * cell.Width, sprites),
+                    out var underline, out bool underlineAdded))
+            {
+                if (underlineAdded) dirtyAtlasRows.Add(cell.Row);
+                destination[written++] = new CellInstance
+                {
+                    Col = (ushort)cell.Column,
+                    Row = (ushort)cell.Row,
+                    OffX = (short)underline.LeftBearing,
+                    OffY = (short)underline.TopBearing,
+                    GlyphX = (short)underline.X,
+                    GlyphY = (short)underline.Y,
+                    GlyphW = (short)underline.Width,
+                    GlyphH = (short)underline.Height,
+                    FgR = colors.Foreground.R,
+                    FgG = colors.Foreground.G,
+                    FgB = colors.Foreground.B,
+                    FgA = 255,
+                    Flags = CellFlags.Decoration,
+                };
+            }
         }
         return written;
     }

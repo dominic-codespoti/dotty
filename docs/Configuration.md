@@ -177,6 +177,7 @@ trailing commas/comments are accepted by the JSON parser.
 | `adjustCellHeight` | string | `""` | Cell height adjustment in the same forms as `adjustCellWidth`; the change is split above and below the text like extra line height. Lua: `font.adjust_cell_height`. |
 | `symbolMap` | string[] | `[]` | Per-range font overrides; use `U+2500-U+257F: Preferred Font, Fallback Font`. For each range, the first installed family that contains the glyph wins; overlapping ranges use the first matching entry. |
 | `faintOpacity` | number | `0.5` | Faint (SGR 2) text keeps this share of its colour and is mixed toward the cell background (after inverse). Clamped to 0–1; a non-finite value uses `0.5`. |
+| `builtinGlyphs` | boolean | `true` | Draw box drawing (U+2500–257F, including dashed lines, rounded corners and diagonals), block elements (U+2580–259F), braille (U+2800–28FF), sextants (U+1FB00–1FB3B), octants (U+1CD00–1CDE5) and Powerline separators (U+E0B0–E0BF) as built-in pixel-exact sprites sized to the cell, so lines join across cells at any `lineHeight` without a Nerd Font. `false` uses the font's glyphs. Lua: `font.builtin_glyphs`. |
 | `boldFamily` | string | `""` | Comma-separated families for bold text in the primary font; the first installed one is used. Empty uses the primary family's own bold face; text is emboldened synthetically only when no heavier face exists. Fallback families always use their own bold face. Lua: `font.bold_family`. |
 | `italicFamily` | string | `""` | Same for italic text (synthetic slant when no italic/oblique face exists). Lua: `font.italic_family`. |
 | `boldItalicFamily` | string | `""` | Same for bold italic text. Lua: `font.bold_italic_family`. |
@@ -886,6 +887,7 @@ startup failures, and release smoke requirements.
 | Date | Change |
 |------|--------|
 | 2026-11-01 | W4-C12/C13: `window.opacity` and `window.title` are applied; added `window.columns`, `window.rows`, `window.startMaximized`, `window.startFullscreen`, `window.floating`. |
+| 2026-11-01 | W4-C4: added `font.builtinGlyphs` (default `true`): built-in box drawing, block, braille, sextant, octant and Powerline sprites. |
 | 2026-11-01 | W4-C6: `font.family` is the ordered fallback list with an OS default stack; added `font.boldFamily`, `font.italicFamily`, `font.boldItalicFamily`, `font.weight`, `font.features`. |
 | 2026-11-01 | W4-C1: the display scale comes from the OS content scale (fixes unscaled text on Windows/X11 HiDPI); cells are integer device pixels; padding is rounded to device pixels. |
 | 2026-11-01 | W4-C2: `font.size` is in points (was pixels; default 11.25 pt = 15 px at 100 %); added `font.adjustCellWidth`, `font.adjustCellHeight`; half-leading line height. |

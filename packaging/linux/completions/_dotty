@@ -27,6 +27,7 @@ dotty_config=(
     'font.adjustCellWidth:Cell width adjustment\: signed logical pixels ('\''1'\'', '\''-0.5'\'') or percent ('\''10%'\''), at most 100 either way; empty or malformed keeps the measured width'
     'font.boldFamily:Comma-separated families for bold text in the primary font; empty uses the primary family'\''s bold face, synthetic bold when it has none'
     'font.boldItalicFamily:Comma-separated families for bold italic text in the primary font; empty uses the primary family'\''s bold italic face, synthesized when missing'
+    'font.builtinGlyphs:Draw box drawing (U+2500-257F), block elements (U+2580-259F), braille (U+2800-28FF), sextants (U+1FB00-1FB3B), octants (U+1CD00-1CDE5) and Powerline (U+E0B0-E0BF) as pixel-exact built-in sprites instead of font glyphs'
     'font.faintOpacity:Share of its own colour that faint (SGR 2) text keeps when mixed toward the cell background; clamped to 0-1, non-finite values use 0.5'
     'font.family:Comma-separated font family names; the first installed family wins'
     'font.features:OpenType feature settings for shaping\: '\''+calt'\'', '\''-liga'\'', '\''ss01'\'', '\''cv01=2'\''; a tag is four letters or digits, later settings of a tag win, invalid entries are ignored'

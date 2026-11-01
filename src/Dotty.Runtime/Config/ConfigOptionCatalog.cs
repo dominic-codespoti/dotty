@@ -244,6 +244,8 @@ public static class ConfigOptionCatalog
             "Per-range font overrides, one per entry: 'U+2500-U+257F: Preferred Font, Fallback Font'; the first installed family containing the glyph wins."),
         Opt("font.faintOpacity", "font.faint_opacity", "number", null, c => c.Font.FaintOpacity,
             "Share of its own colour that faint (SGR 2) text keeps when mixed toward the cell background; clamped to 0-1, non-finite values use 0.5."),
+        Opt("font.builtinGlyphs", "font.builtin_glyphs", "boolean", null, c => c.Font.BuiltinGlyphs,
+            "Draw box drawing (U+2500-257F), block elements (U+2580-259F), braille (U+2800-28FF), sextants (U+1FB00-1FB3B), octants (U+1CD00-1CDE5) and Powerline (U+E0B0-E0BF) as pixel-exact built-in sprites instead of font glyphs."),
         Opt("font.boldFamily", "font.bold_family", "string", null, c => c.Font.BoldFamily,
             "Comma-separated families for bold text in the primary font; empty uses the primary family's bold face, synthetic bold when it has none."),
         Opt("font.italicFamily", "font.italic_family", "string", null, c => c.Font.ItalicFamily,

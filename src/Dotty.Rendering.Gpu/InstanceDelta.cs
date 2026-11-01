@@ -4,21 +4,18 @@ namespace Dotty.Rendering.Gpu;
 
 /// <summary>
 /// CPU-side diff between successive captured <see cref="CellInstance"/> frames for the GL instance stream.
-/// Owns the last staged source instances, the source→output instance map (decorated cells expand to two
-/// output instances) and the merged dirty source ranges, and decides between a partial and a full upload.
-/// Pure: no GL state; the renderer consumes <see cref="Instances"/>, <see cref="OutputStarts"/>,
-/// <see cref="OutputCounts"/> and the dirty ranges, then calls <see cref="MarkUploaded"/>.
+/// Owns the last staged instances and the merged dirty ranges, and decides between a partial and a full upload.
+/// Each staged instance is exactly one GPU instance (decorations are ordinary sprite instances from the frame
+/// builder), so dirty ranges index the GPU buffer directly.
+/// Pure: no GL state; the renderer consumes <see cref="Instances"/> and the dirty ranges, then calls
+/// <see cref="MarkUploaded"/>.
 /// </summary>
 public sealed class InstanceDelta
 {
-    private const byte DecorationMask = CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline;
-
     private CellInstance[] _last = Array.Empty<CellInstance>();
-    private int[] _outputStarts = Array.Empty<int>();
-    private int[] _outputCounts = Array.Empty<int>();
     private int[] _ranges = Array.Empty<int>();
 
-    /// <summary>Number of staged source instances.</summary>
+    /// <summary>Number of staged instances (and GPU instances).</summary>
     public int Count { get; private set; }
 
     /// <summary>True when staged instances differ from what was last uploaded.</summary>
@@ -27,34 +24,18 @@ public sealed class InstanceDelta
     /// <summary>True when the next upload must replace the whole buffer.</summary>
     public bool FullUpload { get; private set; } = true;
 
-    /// <summary>Output instance count of the staged frame (valid after a partial capture or upload).</summary>
-    public int StagedOutputCount { get; private set; }
-
-    /// <summary>Number of merged dirty source ranges.</summary>
+    /// <summary>Number of merged dirty ranges.</summary>
     public int RangeCount { get; private set; }
 
-    /// <summary>Staged source instances.</summary>
+    /// <summary>Staged instances.</summary>
     public ReadOnlySpan<CellInstance> Instances => _last.AsSpan(0, Count);
 
-    /// <summary>Output instance index of each source instance.</summary>
-    public ReadOnlySpan<int> OutputStarts => _outputStarts.AsSpan(0, Math.Min(Count, _outputStarts.Length));
-
-    /// <summary>Output instance count (1, or 2 when decorated) of each source instance.</summary>
-    public ReadOnlySpan<int> OutputCounts => _outputCounts.AsSpan(0, Math.Min(Count, _outputCounts.Length));
-
-    /// <summary>Half-open source range <c>[Start, End)</c> of dirty range <paramref name="index"/>.</summary>
+    /// <summary>Half-open instance range <c>[Start, End)</c> of dirty range <paramref name="index"/>.</summary>
     public (int Start, int End) GetRange(int index)
     {
         if ((uint)index >= (uint)RangeCount)
             throw new ArgumentOutOfRangeException(nameof(index));
         return (_ranges[index * 2], _ranges[index * 2 + 1]);
-    }
-
-    /// <summary>Half-open output range covered by dirty range <paramref name="index"/>.</summary>
-    public (int Start, int End) GetOutputRange(int index)
-    {
-        (int start, int end) = GetRange(index);
-        return (_outputStarts[start], _outputStarts[end - 1] + _outputCounts[end - 1]);
     }
 
     /// <summary>Forces the next upload to replace the whole buffer.</summary>
@@ -69,7 +50,7 @@ public sealed class InstanceDelta
 
     /// <summary>
     /// Stages <paramref name="instances"/>. <paramref name="stagingCompatible"/> is false when anything the
-    /// output encoding depends on (cell size, padding, bar rows, menu split) changed since the last upload.
+    /// GPU encoding depends on (cell size, padding, bar rows, menu split) changed since the last upload.
     /// </summary>
     public void Capture(ReadOnlySpan<CellInstance> instances, bool stagingCompatible)
     {
@@ -84,27 +65,11 @@ public sealed class InstanceDelta
             return;
         }
 
-        EnsureOutputMapCapacity(instances.Length);
         RangeCount = 0;
-        int output = 0;
         int dirtyStart = -1;
         for (int i = 0; i < instances.Length; i++)
         {
-            ref readonly var current = ref instances[i];
-            ref readonly var previous = ref _last[i];
-            bool decorated = (current.Flags & DecorationMask) != 0;
-            if (decorated != ((previous.Flags & DecorationMask) != 0))
-            {
-                StageFull(instances);
-                return;
-            }
-
-            _outputStarts[i] = output;
-            int count = decorated ? 2 : 1;
-            _outputCounts[i] = count;
-            output += count;
-
-            if (!Equal(current, previous))
+            if (!Equal(instances[i], _last[i]))
             {
                 if (dirtyStart < 0)
                     dirtyStart = i;
@@ -119,7 +84,6 @@ public sealed class InstanceDelta
         if (dirtyStart >= 0)
             AddRange(dirtyStart, instances.Length);
 
-        StagedOutputCount = output;
         Count = instances.Length;
         if (RangeCount == 0)
         {
@@ -138,25 +102,9 @@ public sealed class InstanceDelta
         FullUpload = false;
     }
 
-    /// <summary>Recomputes the output map for every staged instance and returns the total output count.</summary>
-    public int RebuildOutputMap()
+    /// <summary>Records a completed upload of the staged instances.</summary>
+    public void MarkUploaded()
     {
-        EnsureOutputMapCapacity(Count);
-        int output = 0;
-        for (int i = 0; i < Count; i++)
-        {
-            _outputStarts[i] = output;
-            int count = (_last[i].Flags & DecorationMask) != 0 ? 2 : 1;
-            _outputCounts[i] = count;
-            output += count;
-        }
-        return output;
-    }
-
-    /// <summary>Records a completed upload of <paramref name="outputCount"/> output instances.</summary>
-    public void MarkUploaded(int outputCount)
-    {
-        StagedOutputCount = outputCount;
         Dirty = false;
         FullUpload = Count == 0;
         RangeCount = 0;
@@ -177,15 +125,6 @@ public sealed class InstanceDelta
             return;
         int capacity = Math.Max(required, _last.Length == 0 ? 4096 : _last.Length * 2);
         _last = new CellInstance[capacity];
-    }
-
-    private void EnsureOutputMapCapacity(int required)
-    {
-        if (_outputStarts.Length >= required)
-            return;
-        int capacity = Math.Max(required, _outputStarts.Length == 0 ? 4096 : _outputStarts.Length * 2);
-        Array.Resize(ref _outputStarts, capacity);
-        Array.Resize(ref _outputCounts, capacity);
     }
 
     private void AddRange(int start, int end)

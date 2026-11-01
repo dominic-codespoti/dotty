@@ -42,11 +42,11 @@ public sealed class InstanceDeltaTests
     {
         var delta = new InstanceDelta();
         delta.Capture(Row(4), true);
-        delta.MarkUploaded(delta.RebuildOutputMap());
+        delta.MarkUploaded();
         delta.Capture(Row(4), true);
         Assert.False(delta.Dirty);
         Assert.False(delta.FullUpload);
-        Assert.Equal(4, delta.StagedOutputCount);
+        Assert.Equal(4, delta.Count);
     }
 
     public static TheoryData<string, int[], (int, int)[]> ChangedCells => new()
@@ -66,7 +66,7 @@ public sealed class InstanceDeltaTests
         _ = name;
         var delta = new InstanceDelta();
         delta.Capture(Row(8), true);
-        delta.MarkUploaded(delta.RebuildOutputMap());
+        delta.MarkUploaded();
         var next = Row(8);
         foreach (int i in changed)
             next[i].FgR = 0x99;
@@ -78,41 +78,38 @@ public sealed class InstanceDeltaTests
     }
 
     [Fact]
-    public void DecoratedCellsOccupyTwoOutputSlots()
+    public void DecorationInstancesAreOrdinaryInstances()
     {
+        // A decoration sprite is its own instance: changing one is a one-instance partial upload, not a relayout.
         var delta = new InstanceDelta();
-        var cells = Row(4, i => Cell(i, i == 1 ? CellFlags.Underline : (byte)0));
+        var cells = Row(4, i => Cell(i, i == 2 ? CellFlags.Decoration : (byte)0));
         delta.Capture(cells, true);
-        Assert.Equal(5, delta.RebuildOutputMap());
-        Assert.Equal(new[] { 0, 1, 3, 4 }, delta.OutputStarts.ToArray());
-        Assert.Equal(new[] { 1, 2, 1, 1 }, delta.OutputCounts.ToArray());
-        delta.MarkUploaded(5);
+        delta.MarkUploaded();
 
-        var next = Row(4, i => Cell(i, i == 1 ? CellFlags.Underline : (byte)0, i >= 1 ? (byte)0x55 : (byte)0x10));
-        next[3].FgR = 0x10;
+        var next = Row(4, i => Cell(i, i == 2 ? CellFlags.Decoration : (byte)0, i == 2 ? (byte)0x55 : (byte)0x10));
+        next[1].Flags = CellFlags.Decoration;
         delta.Capture(next, true);
+        Assert.True(delta.Dirty);
+        Assert.False(delta.FullUpload);
         Assert.Equal(new[] { (1, 3) }, Ranges(delta));
-        Assert.Equal((1, 4), delta.GetOutputRange(0));
+        Assert.Equal(4, delta.Count);
     }
 
-    public static TheoryData<string, Action<CellInstance[]>, int, bool> FullUploadTriggers => new()
+    public static TheoryData<string, int, bool> FullUploadTriggers => new()
     {
-        { "decoration added", c => c[2].Flags = CellFlags.Strikethrough, 4, true },
-        { "count changed", _ => { }, 5, true },
-        { "staging incompatible", _ => { }, 4, false },
+        { "count changed", 5, true },
+        { "staging incompatible", 4, false },
     };
 
     [Theory]
     [MemberData(nameof(FullUploadTriggers))]
-    public void LayoutChangesForceFullUpload(string name, Action<CellInstance[]> mutate, int count, bool compatible)
+    public void LayoutChangesForceFullUpload(string name, int count, bool compatible)
     {
         _ = name;
         var delta = new InstanceDelta();
         delta.Capture(Row(4), true);
-        delta.MarkUploaded(delta.RebuildOutputMap());
-        var next = Row(count);
-        mutate(next);
-        delta.Capture(next, compatible);
+        delta.MarkUploaded();
+        delta.Capture(Row(count), compatible);
         Assert.True(delta.Dirty);
         Assert.True(delta.FullUpload);
         Assert.Equal(0, delta.RangeCount);
@@ -124,7 +121,7 @@ public sealed class InstanceDeltaTests
     {
         var delta = new InstanceDelta();
         delta.Capture(ReadOnlySpan<CellInstance>.Empty, true);
-        delta.MarkUploaded(0);
+        delta.MarkUploaded();
         Assert.False(delta.Dirty);
         Assert.True(delta.FullUpload);
     }
@@ -141,12 +138,15 @@ public sealed class InstanceDeltaTests
     [InlineData(7)]
     [InlineData(42)]
     [InlineData(1234)]
-    public void MatchesLegacyAlgorithmOnRandomFrameSequences(int seed)
+    public void MatchesRendererAlgorithmOnRandomFrameSequences(int seed)
     {
         var random = new Random(seed);
         var delta = new InstanceDelta();
-        var oracle = new LegacyCapture();
+        var oracle = new RendererCapture();
+        // Model of the GPU instance buffer: what the renderer's uploads leave in it.
+        var gpu = new List<CellInstance>();
         CellInstance[] frame = Row(random.Next(0, 40));
+        CellInstance[] lastCaptured = Array.Empty<CellInstance>();
         for (int step = 0; step < 400; step++)
         {
             frame = Mutate(random, frame);
@@ -156,6 +156,7 @@ public sealed class InstanceDeltaTests
             {
                 delta.Capture(frame, compatible);
                 oracle.Capture(frame, compatible);
+                lastCaptured = frame;
             }
             if (!compatible)
             {
@@ -169,22 +170,31 @@ public sealed class InstanceDeltaTests
             Assert.Equal(oracle.Ranges, Ranges(delta));
             Assert.True(oracle.Last.AsSpan(0, oracle.Count).SequenceEqual(delta.Instances));
             if (!delta.Dirty)
-                continue;
-
-            if (!delta.FullUpload)
             {
-                Assert.Equal(oracle.StagedOutput, delta.StagedOutputCount);
-                Assert.True(oracle.Starts.AsSpan(0, oracle.Count).SequenceEqual(delta.OutputStarts));
-                Assert.True(oracle.Counts.AsSpan(0, oracle.Count).SequenceEqual(delta.OutputCounts));
+                Assert.True(lastCaptured.AsSpan().SequenceEqual(gpu.ToArray()));
+                continue;
             }
 
-            // Upload: the oracle mirrors the renderer's pre-extraction UploadAndDraw bookkeeping.
-            int output = delta.FullUpload ? delta.RebuildOutputMap() : delta.StagedOutputCount;
-            int oracleOutput = oracle.Upload();
-            Assert.Equal(oracleOutput, output);
-            delta.MarkUploaded(output);
+            // Upload exactly as UploadAndDraw does: everything, or each dirty range at its own index.
+            if (delta.FullUpload)
+            {
+                gpu.Clear();
+                gpu.AddRange(delta.Instances.ToArray());
+            }
+            else
+            {
+                for (int r = 0; r < delta.RangeCount; r++)
+                {
+                    (int start, int end) = delta.GetRange(r);
+                    for (int i = start; i < end; i++)
+                        gpu[i] = delta.Instances[i];
+                }
+            }
+            oracle.Upload();
+            delta.MarkUploaded();
             Assert.Equal(oracle.Full, delta.FullUpload);
             Assert.Equal(oracle.Dirty, delta.Dirty);
+            Assert.True(lastCaptured.AsSpan().SequenceEqual(gpu.ToArray()));
         }
     }
 
@@ -192,7 +202,7 @@ public sealed class InstanceDeltaTests
     {
         int roll = random.Next(20);
         if (roll == 0)
-            return Row(random.Next(0, 40), i => Cell(i, (byte)(random.Next(4) == 0 ? CellFlags.Underline : 0)));
+            return Row(random.Next(0, 40), i => Cell(i, (byte)(random.Next(4) == 0 ? CellFlags.Decoration : 0)));
         var next = (CellInstance[])frame.Clone();
         int edits = roll < 5 ? 0 : random.Next(1, 6);
         for (int e = 0; e < edits && next.Length > 0; e++)
@@ -203,22 +213,21 @@ public sealed class InstanceDeltaTests
                 case 0: next[i].FgR = (byte)random.Next(256); break;
                 case 1: next[i].GlyphX = (short)random.Next(100); break;
                 case 2: next[i].BgB = (byte)random.Next(256); break;
-                default: next[i].Flags ^= CellFlags.Overline; break;
+                default: next[i].Flags ^= CellFlags.Decoration; break;
             }
         }
         return next;
     }
 
-    /// <summary>Verbatim port of the pre-W4-C21 SilkTerminalRenderer.CaptureInstances state machine.</summary>
-    private sealed class LegacyCapture
+    /// <summary>
+    /// Verbatim port of the W4-C3 SilkTerminalRenderer.CaptureInstances state machine (one GPU instance per
+    /// cell instance) and its UploadAndDraw bookkeeping.
+    /// </summary>
+    private sealed class RendererCapture
     {
-        private const byte Mask = CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline;
         public CellInstance[] Last = Array.Empty<CellInstance>();
-        public int[] Starts = Array.Empty<int>();
-        public int[] Counts = Array.Empty<int>();
         public List<(int, int)> Ranges = new();
         public int Count;
-        public int StagedOutput;
         public bool Dirty = true;
         public bool Full = true;
 
@@ -229,29 +238,17 @@ public sealed class InstanceDeltaTests
                 Last = new CellInstance[Math.Max(instances.Length, Last.Length == 0 ? 4096 : Last.Length * 2)];
             if (!compatible)
             {
-                StageFull(instances);
+                Array.Copy(instances, Last, instances.Length);
+                Count = instances.Length;
+                Ranges.Clear();
+                Dirty = true;
+                Full = true;
                 return;
             }
-            if (Starts.Length < instances.Length)
-            {
-                Array.Resize(ref Starts, instances.Length);
-                Array.Resize(ref Counts, instances.Length);
-            }
             Ranges.Clear();
-            int output = 0;
             int dirtyStart = -1;
             for (int i = 0; i < instances.Length; i++)
             {
-                bool has = (instances[i].Flags & Mask) != 0;
-                bool had = (Last[i].Flags & Mask) != 0;
-                if (has != had)
-                {
-                    StageFull(instances);
-                    return;
-                }
-                Starts[i] = output;
-                Counts[i] = has ? 2 : 1;
-                output += Counts[i];
                 if (!InstanceDelta.Equal(instances[i], Last[i]))
                 {
                     if (dirtyStart < 0)
@@ -265,7 +262,6 @@ public sealed class InstanceDeltaTests
             }
             if (dirtyStart >= 0)
                 Ranges.Add((dirtyStart, instances.Length));
-            StagedOutput = output;
             Count = instances.Length;
             if (Ranges.Count == 0)
             {
@@ -279,29 +275,11 @@ public sealed class InstanceDeltaTests
             Full = false;
         }
 
-        public int Upload()
+        public void Upload()
         {
-            int output = StagedOutput;
-            if (Full)
-            {
-                output = 0;
-                for (int i = 0; i < Count; i++)
-                    output += (Last[i].Flags & Mask) != 0 ? 2 : 1;
-            }
-            StagedOutput = output;
             Dirty = false;
             Full = Count == 0;
             Ranges.Clear();
-            return output;
-        }
-
-        private void StageFull(CellInstance[] instances)
-        {
-            Array.Copy(instances, Last, instances.Length);
-            Count = instances.Length;
-            Ranges.Clear();
-            Dirty = true;
-            Full = true;
         }
     }
 }

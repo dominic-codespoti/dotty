@@ -32,7 +32,7 @@ public sealed class SilkTerminalRendererOpacityTests
         };
 
         renderer.Render(new[] { cell }, Array.Empty<ChromeQuadInstance>(), atlas.Width, atlas.Height, host.Width, host.Height,
-            32f, 32f, underlineY: 0.85f, strikeY: 0.7f, lineHalf: 0.04f, clearColor: SgrColorArgb.FromRgb(200, 100, 50));
+            32f, 32f, clearColor: SgrColorArgb.FromRgb(200, 100, 50));
 
         var cleared = host.ReadTopLeft(48, 48);
         Assert.InRange(cleared.R, 200 * alpha / 255 - 1, 200 * alpha / 255 + 1);

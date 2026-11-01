@@ -100,12 +100,15 @@ public sealed class QuadRowCache
     }
 
     /// <summary>
-    /// Records the frame's text options before <see cref="BeginFrame"/>. A faint-opacity change invalidates every row;
-    /// a blink-phase change invalidates only rows whose run contains blinking text.
+    /// Records the frame's text options before <see cref="BeginFrame"/>. A faint-opacity, baseline, sprite-metrics or
+    /// built-in-glyph change invalidates every row; a blink-phase change invalidates only rows whose run contains
+    /// blinking text.
     /// </summary>
     public void ApplyTextOptions(in TextAttributeOptions options)
     {
-        if (!_hasTextOptions || !options.FaintOpacity.Equals(_textOptions.FaintOpacity))
+        if (!_hasTextOptions || !options.FaintOpacity.Equals(_textOptions.FaintOpacity)
+            || options.BaselineShift != _textOptions.BaselineShift || options.Sprites != _textOptions.Sprites
+            || options.BuiltinGlyphs != _textOptions.BuiltinGlyphs)
         {
             InvalidateAll();
         }
@@ -214,7 +217,7 @@ public sealed class QuadRowCache
 
     public void EnsureEntryCapacity(ref Entry entry, int cells)
     {
-        Ensure(ref entry.Instances, cells);
+        Ensure(ref entry.Instances, checked(cells * QuadFrameBuilder.MaxInstancesPerCell));
         Ensure(ref entry.SelectionExtras, cells);
         Ensure(ref entry.SourceCells, cells);
         Ensure(ref entry.SourceColdCells, cells);

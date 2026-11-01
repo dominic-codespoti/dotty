@@ -136,6 +136,10 @@ public sealed class FontUserConfig
     [JsonPropertyName("faintOpacity")]
     public double FaintOpacity { get; set; } = 0.5;
 
+    /// <summary>Draw box drawing, blocks, braille, sextants, octants and Powerline from built-in sprites, not the font.</summary>
+    [JsonPropertyName("builtinGlyphs")]
+    public bool BuiltinGlyphs { get; set; } = true;
+
     /// <summary>Families for bold text in the primary font (comma list); empty uses the primary family's bold face.</summary>
     [JsonPropertyName("boldFamily")]
     public string BoldFamily { get; set; } = string.Empty;

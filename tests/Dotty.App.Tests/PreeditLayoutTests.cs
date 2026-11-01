@@ -138,6 +138,24 @@ public sealed class PreeditLayoutTests
         Assert.Equal(new[] { (2, 0), (5, 0), (3, 1) }, instances.Take(kept).Select(i => ((int)i.Col, (int)i.Row)));
     }
 
+    [Fact]
+    public void RemoveCovered_DropsDecorationsWithTheirCell()
+    {
+        PreeditCell[] preedit = [new(0, 1, 3, 0, 1, -1, PreeditCellStyle.Clause)];
+        CellInstance[] instances =
+        [
+            new() { Col = 2, Row = 0, Flags = CellFlags.WideCell }, // wide cell reaching into column 3: covered
+            new() { Col = 2, Row = 0, Flags = CellFlags.Decoration }, // its underline sprite at column 2: covered with it
+            new() { Col = 4, Row = 0 },                             // right neighbour: kept
+            new() { Col = 4, Row = 0, Flags = CellFlags.Decoration }, // its decoration: kept
+        ];
+
+        int kept = ImePreeditQuadBuilder.RemoveCovered(instances, preedit);
+
+        Assert.Equal(new[] { (4, (byte)0), (4, CellFlags.Decoration) },
+            instances.Take(kept).Select(i => ((int)i.Col, i.Flags)));
+    }
+
     [Theory]
     [InlineData(0xFFD4D4D4u, 0xFF1E1E1Eu, 0x803385DBu)]   // dark theme, translucent selection
     [InlineData(0xFF000000u, 0xFFFFFFFFu, 0xFFADD6FFu)]   // light theme

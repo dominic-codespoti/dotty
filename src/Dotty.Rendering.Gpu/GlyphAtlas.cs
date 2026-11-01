@@ -100,7 +100,7 @@ public readonly struct AtlasDirtyRegion
 /// Mutation and atlas packing are lock-protected. Glyph lookup reads an immutable
 /// copy-on-write map; bitmap access remains lock-protected for texture upload.
 /// </summary>
-public sealed class GlyphAtlas : IDisposable
+public sealed partial class GlyphAtlas : IDisposable
 {
     public const int MaxAtlasSize = 4096;   // Each page capped independently; A8 1 B/px, RGBA 4 B/px.
     private const int DefaultInitialSize = 1024;
@@ -463,6 +463,7 @@ public sealed class GlyphAtlas : IDisposable
             if (_disposed)
                 return;
             _map.Clear();
+            ClearSpritesLocked();
             _publishedMap = GlyphMapSnapshot.Empty;
             _glyphMapDirty = false;
             _shelves.Clear();
@@ -505,9 +506,9 @@ public sealed class GlyphAtlas : IDisposable
     {
         lock (_lock)
         {
+            PublishPendingSpritesLocked();
             if (!_glyphMapDirty)
                 return;
-
             Volatile.Write(ref _publishedMap,
                 new GlyphMapSnapshot(new Dictionary<GlyphKey, GlyphInfo>(_map)));
             _glyphMapDirty = false;

@@ -11,7 +11,7 @@ snapshots so rendering can run without changing parser or PTY code.
    active screen has Kitty image placements, the same hold advances playing
    animations and copies the visible placements, each with a lease on its
    pixels (see [Image layers](#kitty-image-layers)).
-2. `TerminalSceneComposer` classifies cells and builds background, underline,
+2. `TerminalSceneComposer` classifies cells and builds background, decoration,
    scrollbar, tab, pane, selection, cursor, and glyph instances.
 3. `GlyphAtlasService` resolves the configured font stack, shapes glyphs, and
    stores grayscale coverage and intrinsic-color pixels in shared atlas pages.
@@ -329,6 +329,7 @@ expected to change the row; it is not a release date or a commitment.
 | Font size unit | Supported | `font.size` is points (`px = pt × 96/72 × display scale`, default 11.25); cells are integer device pixels and HiDPI uses the OS content scale on every platform | |
 | Font family list | Supported | `font.family` is an ordered list and the fallback order (Ghostty semantics): every installed family in turn, then installed built-in symbol/CJK/emoji families, then at most 16 faces the system matches for uncovered scalars. Default: the OS stack (Linux `monospace`, DejaVu Sans Mono, Noto Sans Mono, Liberation Mono, Noto Color Emoji; macOS Menlo, SF Mono, Monaco, Apple Color Emoji, Apple Symbols; Windows Cascadia Mono, Consolas, Segoe UI Emoji, Segoe UI Symbol). No Nerd Font is assumed | |
 | `font.symbolMap` per-range overrides | Supported | Tried before the chain | |
+| Box drawing, blocks, braille, sextants, octants, Powerline | Supported | Built-in pixel-exact sprites (`font.builtinGlyphs`, default on): U+2500–257F (light, heavy, double, dashed, rounded arcs, diagonals), U+2580–259F (eighths, halves, shades as 25/50/75 % coverage, quadrants), U+2800–28FF, U+1FB00–1FB3B, U+1CD00–1CDE5 and U+E0B0–E0BF; see [Built-in glyph sprites](#built-in-glyph-sprites). Other Nerd Font icons (U+E0A0–E0A3 included) need an installed font | |
 | Colour emoji and emoji presentation | Supported | Intrinsic-colour glyphs use the RGBA atlas page. Cluster face selection: VS16, default-emoji bases, regional-indicator pairs, keycaps, tag sequences, skin-tone modifiers and ZWJ sequences with a pictograph prefer a colour face; VS15 prefers a monochrome face; variation selectors, ZWJ, modifiers and tags are not required in a face's character map. Sequences are still drawn without shaping (W4-C10) | |
 | Character width and grapheme clusters | Supported | Widths generated from Unicode 16.0.0 (East Asian Width W/F wide; Cc/Cf/Mn/Me and Hangul medial/final jamo zero; ambiguous narrow); RI pairs, VS16/VS15 on the 371 emoji-variation bases; clusters are UAX #29 (.NET `StringInfo`) and re-join across writes, so a late VS16 widens the cell. See [Parsing](Parsing.md#combining-cap-grapheme-clusters-cell-width-and-the-grapheme-store). No `unicode.ambiguousWidth` option | |
 | Text shaping (ZWJ sequences, combining-mark placement) | Not supported | Each grapheme is rasterized through the font's character map, one per cell; `TextShaper` exists but has no callers | W4-C10 |
@@ -339,8 +340,8 @@ expected to change the row; it is not a release date or a commitment.
 | Faint (SGR 2) | Supported | Text colour mixed toward the cell background after inverse, keeping `font.faintOpacity` (default 0.5) of it; decorations follow the text colour | |
 | Conceal (SGR 8) | Supported | No glyph; background and decorations stay | |
 | Text blink (SGR 5, 6) | Supported | One rate for both, shared with the cursor blink phase (`cursor.blinkIntervalMs`); the glyph is hidden in the off phase, background and decorations stay; steady while the window is unfocused | |
-| Inverse, strikethrough, overline | Supported | | |
-| Underline | Partial | Single underline only. Double, curly, dotted, and dashed (SGR 4:2–4:5) and the SGR 58 underline colour are parsed but drawn as the same single underline | W4-C3 |
+| Inverse | Supported | | |
+| Underline, strikethrough, overline | Supported | Single, double, curly, dotted and dashed underlines (SGR 4:1–4:5) at the font's underline row and thickness, strikethrough (SGR 9) and overline (SGR 53) at their `CellMetrics` rows; drawn as A8 sprites in the glyph pass (see [Decoration sprites](#decoration-sprites)). The underline uses the SGR 58 colour when set, else the text colour; strikethrough and overline use the text colour | |
 | Cursor shape | Supported | Block (text drawn in the cell background), beam and underline; DECSCUSR shape and blink bit, else `cursor.shape`/`cursor.blink`; DECTCEM hides it; wide characters get a two-cell cursor; unfocused windows draw `cursor.unfocusedStyle` (hollow outline by default) | |
 | Pane dividers / active-pane border | Supported | `panes.dividerThickness` sets the gap (logical px, rounded to device px); dividers use the chrome border colour; `panes.activeBorder` paints the gap around the active pane in the accent colour when the tab has splits | |
 | Default colour overrides (OSC 10/11, 110/111) | Supported | Per pane; the pane rect is painted with the override background, the window padding keeps the theme background | |
@@ -351,6 +352,34 @@ expected to change the row; it is not a release date or a commitment.
 | Bell | Partial | Window attention request while unfocused (`bell.attention`, default on), optional visual flash drawn as a separate overlay pass after the frame (`bell.visual`), tab marker, Lua `bell` event; rate-limited to one effect per 150 ms. No sound: `bell.audible` is accepted but not implemented | |
 | Kitty graphics | Implemented, unverified | Off by default (`graphics.kittyProtocol`); see [Kitty graphics](KittyGraphics.md) | |
 | Render failures and GPU resets | Partial | Exceptions retry, rebuild the renderer, then prompt; a driver reset (lost context) stops rendering with a title and stderr notice until Dotty restarts. See [Render failures and context loss](#render-failures-and-context-loss) | W4-C24 (context recreation) |
+
+### Decoration sprites
+
+`DecorationGeometry` turns `CellSpriteMetrics` (the GPU-project copy of `CellMetrics`) into whole-pixel A8
+sprites: single and double strokes (gap = thickness, at least 1 px; pushed up to stay in the cell, one stroke
+when the cell is under 3 px tall), dotted and dashed marks centred in equal integer segments of each cell,
+and a curly raised cosine whose period is the cell width, so any span of cells, wide or not, continues
+without a phase step. Strikethrough and overline share one sprite. `QuadFrameBuilder` emits each sprite as
+an ordinary glyph-pass instance after the cell's glyph or background instance, flagged
+`CellFlags.Decoration` so selection and cursor recolouring skip it; the shader has no decoration path and
+no decoration flag bits. A cell emits at most `QuadFrameBuilder.MaxInstancesPerCell` = 3 instances (main,
+underline in its SGR 58 colour, strikethrough/overline in the text colour), so frame, row-cache and
+composer buffers are sized by `QuadFrameBuilder.InstanceBudget(rows, cols)` = 3 × rows × cols and never
+drop a decoration. Sprites live in the A8 atlas page keyed by `SpriteKey` (code, span width, metrics) and
+are cleared by atlas rebuilds.
+
+### Built-in glyph sprites
+
+With `font.builtinGlyphs` on, `QuadFrameBuilder` asks `SpriteRasterizer` (pure, A8, no Skia) for single-scalar
+cells in its ranges before the font, keyed `SpriteKey(code point, span width, metrics)`, and places the
+cell-sized sprite at the cell origin (no baseline shift). Edge rules: the light stroke is
+max(1, round(cellWidth / 8)) px, heavy twice that, a double line two light strokes with a light gap; a stroke
+of thickness `t` starts at `(extent − t) / 2` and runs to the cell edge, so every arm's edge row or column
+equals that of `─`/`━`/`═` (or `│`/`┃`/`║`) and neighbours meet exactly at any line height. Double crossings
+keep the inner corners open. Rounded corners are anti-aliased quarter circles that end one pixel before the
+cell edge in a straight run; diagonals and Powerline shapes are anti-aliased (4 × 4 supersampled fills,
+distance-based strokes). Block, sextant and octant edges are `round(k × extent / n)`, so complementary
+blocks tile without gaps or overlap. Octant masks are generated from the Unicode 16 names.
 
 ## Memory diagnostics and lifecycle measurements
 
@@ -551,7 +580,10 @@ fails the smoke run.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C3 × W4-C21: with one GPU instance per cell instance, `InstanceDelta` drops the source→output map; its dirty ranges index the GPU buffer directly (`InstanceDeltaTests` oracle is the W4-C3 renderer capture plus a modelled GPU buffer). The IME preedit underline of unfocused clauses is a single-underline sprite. |
 | 2026-11-01 | W4-C12: background-only window opacity (premultiplied clear, pane default-background fills scaled). W4-C17: IME preedit wraps/shifts instead of clipping, uses theme colours on an opaque background and hides the cells it covers. |
+| 2026-11-01 | W4-C4: built-in sprites for box drawing, blocks, shades, quadrants, braille, sextants, octants and Powerline (`font.builtinGlyphs`, default on). |
+| 2026-11-01 | W4-C3: decoration sprites (all SGR 4:n underline styles, SGR 58 colour, strikethrough/overline from `CellMetrics`); removed the `DecorOnly` shader path, the decoration uniforms and the underline/strike/overline flag bits; instance budget 3 × rows × cols. |
 | 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |
 | 2026-11-01 | W4-C1/C2: `DisplayScale`/`GridFit` integer device-pixel layout, content-scale callback, `font.size` in points, `CellMetrics` (baseline, half-leading, decoration strokes) and `font.adjustCellWidth/Height`. |
 | 2026-11-01 | W4-C21: the GL instance-stream diff (captured-frame comparison, source→output map for decorated cells, merged dirty ranges, partial vs full upload decision) moved from `SilkTerminalRenderer` into the pure `Dotty.Rendering.Gpu.InstanceDelta`, tested against the previous algorithm with a randomised oracle (`InstanceDeltaTests`). |

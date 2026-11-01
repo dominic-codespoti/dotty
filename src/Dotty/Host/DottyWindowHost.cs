@@ -456,7 +456,7 @@ internal static partial class DottyWindowHost
         _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain);
         GlyphAtlasService.AcquireAtlas(_atlas);
         _renderer = new SilkTerminalRenderer(_gl, _atlas);
-        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx()) { BaselineShift = _cellMetrics.BaselineShift };
+        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx()) { CellMetrics = _cellMetrics };
         ApplyLiveWindowOptions(UserConfigService.Current);
 
         _mouseHost = new MouseHost();
@@ -1265,7 +1265,7 @@ internal static partial class DottyWindowHost
         _cellWidthPx = _cellMetrics.CellWidth;
         _cellHeightPx = _cellMetrics.CellHeight;
         if (_sceneComposer != null)
-            _sceneComposer.BaselineShift = _cellMetrics.BaselineShift;
+            _sceneComposer.CellMetrics = _cellMetrics;
         _cellWidth = _cellWidthPx / _display.ContentScale;
         _cellHeight = _cellHeightPx / _display.ContentScale;
     }
@@ -2020,9 +2020,6 @@ internal static partial class DottyWindowHost
                     framebufferHeight,
                     _cellWidthPx,
                     _cellHeightPx,
-                    0.85f,
-                    0.7f,
-                    0.04f,
                     _themeBackground,
                     false);
                 _frameTimings.RecordRender(emptyRenderStart, FrameTimestamp());
@@ -2129,9 +2126,6 @@ internal static partial class DottyWindowHost
                 framebufferHeight,
                 _cellWidthPx,
                 _cellHeightPx,
-                0.85f,
-                0.7f,
-                0.04f,
                 _themeBackground,
                 true,
                 padLeft,

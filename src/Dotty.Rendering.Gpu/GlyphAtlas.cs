@@ -812,14 +812,18 @@ public sealed partial class GlyphAtlas : IDisposable
             }
             : null;
         var font = fontOverride ?? ownedFont!;
+        // W4-C10: multi-scalar graphemes draw HarfBuzz-shaped glyphs; .notdef keeps the per-scalar draw below.
+        bool preShaped = blob != null;
+        using var shapedBlob = preShaped ? null : TryShapeGrapheme(key.Grapheme, font);
+        blob ??= shapedBlob;
         using var paint = new SKPaint
         {
             Color = SKColors.White,
             IsAntialias = _rasterPolicy.IsAntialias,
             // Synthetic bold applies to raw-string glyphs whose family has no
             // heavier face. Pre-shaped blobs carry their own weight via the run font.
-            Style = blob == null && syntheticBold ? SKPaintStyle.StrokeAndFill : SKPaintStyle.Fill,
-            StrokeWidth = blob == null && syntheticBold ? Math.Max(0.5f, key.TextSize * 0.04f) : 0f,
+            Style = !preShaped && syntheticBold ? SKPaintStyle.StrokeAndFill : SKPaintStyle.Fill,
+            StrokeWidth = !preShaped && syntheticBold ? Math.Max(0.5f, key.TextSize * 0.04f) : 0f,
         };
 
         var fm = font.Metrics;
@@ -842,14 +846,14 @@ public sealed partial class GlyphAtlas : IDisposable
         float boundedAdvance = MathF.Min(advance, maxAdvance);
         // A skewed (synthetic italic) raw-string glyph leans right above the baseline and left below it:
         // widen the scratch surface on both sides and draw from originX so no ink is clipped.
-        float lean = blob == null ? MathF.Max(0f, -font.SkewX) : 0f;
+        float lean = !preShaped ? MathF.Max(0f, -font.SkewX) : 0f;
         float originX = MathF.Ceiling(lean * descent);
         int width = Math.Max(1, (int)(advance + originX + MathF.Ceiling(lean * ascent)));
         int height = Math.Max(1, (int)(ascent + descent));
 
         // Monochrome faces (no CBDT/CBLC/sbix/COLR/SVG table) go straight to one A8 raster pass; only colour
         // faces and pre-shaped blobs (whose run fonts are not known here) take the intrinsic-colour probe.
-        if ((blob != null || ColorFontTables.IsColorFace(font.Typeface ?? key.Typeface))
+        if ((preShaped || ColorFontTables.IsColorFace(font.Typeface ?? key.Typeface))
             && TryRasterizeIntrinsicColor(key, blob, font, paint, width, height, originX, drawBaseline, boundedAdvance, reportedBaseline, out var colorRaster))
             return colorRaster;
 
@@ -1001,6 +1005,7 @@ public sealed partial class GlyphAtlas : IDisposable
             _colorCanvas?.Dispose();
             _colorBitmap?.Dispose();
             _rasterBlitPaint.Dispose();
+            DisposeGraphemeShaper();
         }
     }
 }

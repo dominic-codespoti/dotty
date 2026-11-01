@@ -722,8 +722,8 @@ public sealed class KittyPlacementTests
     public void TransmitAndPutReportsAPlacementErrorAfterKeepingTheImage()
     {
         using var rig = new KittyRig();
-        rig.Apc("a=T,i=8,s=1,v=1,f=24,P=2", "AAAA");
-        Assert.Equal(new[] { Err("i=8", "EINVAL:Invalid key value") }, rig.Replies);
+        rig.Apc("a=T,i=8,s=1,v=1,f=24,P=2", "AAAA");   // P names an unknown parent image (docs/KittyGraphics.md)
+        Assert.Equal(new[] { Err("i=8", "ENOPARENT:Parent placement not found") }, rig.Replies);
         Assert.NotNull(rig.Store.FindByClientId(8));
         Assert.Equal(0, rig.Store.PlacementCount);
 
@@ -776,9 +776,10 @@ public sealed class KittyPlacementTests
     {
         using var rig = new KittyRig();
         rig.Apc("a=T,i=1,s=1,v=1,f=24,q=1", "AAAA");
-        rig.Apc("a=T,i=2,s=1,v=1,f=24,q=2,P=1", "AAAA");
-        rig.Apc("a=T,i=3,s=1,v=1,f=24,q=1,P=1", "AAAA");
-        Assert.Equal(new[] { Err("i=3", "EINVAL:Invalid key value") }, rig.Replies);
+        // An unknown parent (P=9) fails the placement: q=2 hides that error, q=1 only hides OK.
+        rig.Apc("a=T,i=2,s=1,v=1,f=24,q=2,P=9", "AAAA");
+        rig.Apc("a=T,i=3,s=1,v=1,f=24,q=1,P=9", "AAAA");
+        Assert.Equal(new[] { Err("i=3", "ENOPARENT:Parent placement not found") }, rig.Replies);
     }
 
     [Fact]

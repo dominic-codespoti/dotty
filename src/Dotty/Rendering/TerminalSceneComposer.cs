@@ -281,7 +281,7 @@ public sealed class TerminalSceneComposer : IDisposable
         ArgumentNullException.ThrowIfNull(padding);
 
         var activePane = activeTab.ActivePane;
-        var leaves = activeTab.PaneTree.Leaves;
+        var leaves = activeTab.PaneTree.VisibleLeaves;
         // cellWidth/cellHeight are whole device pixels; scale is the display content scale for chrome.
         scale = Math.Max(0.1f, scale);
         var devicePadding = DevicePadding.FromLogical(padding.Left, padding.Top, padding.Right, padding.Bottom, scale);

@@ -38,6 +38,9 @@ public sealed class SplitPaneNode : PaneNode
 
     public PaneRect DividerBounds { get; internal set; }
 
+    /// <summary>Bounds of the whole split (both children and the divider) from the last layout.</summary>
+    public PaneRect Bounds { get; internal set; }
+
     public SplitPaneNode(SplitDirection direction, PaneNode first, PaneNode second, float splitRatio = 0.5f)
     {
         Direction = direction;

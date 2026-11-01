@@ -76,6 +76,12 @@ public static class ActionRegistry
         new(TerminalAction.MoveTabRight, "move_tab_right", "Move the active tab one place to the right."),
         new(TerminalAction.ToggleTabBar, "toggle_tab_bar", "Show or hide the tab bar."),
         new(TerminalAction.SendText, "send_text", "Write the escaped text after the colon to the active pane (send_text:\\x1bOA).", TakesArgument: true),
+        new(TerminalAction.ResizePaneLeft, "resize_pane_left", "Move the active pane's nearest vertical divider one cell left."),
+        new(TerminalAction.ResizePaneRight, "resize_pane_right", "Move the active pane's nearest vertical divider one cell right."),
+        new(TerminalAction.ResizePaneUp, "resize_pane_up", "Move the active pane's nearest horizontal divider one row up."),
+        new(TerminalAction.ResizePaneDown, "resize_pane_down", "Move the active pane's nearest horizontal divider one row down."),
+        new(TerminalAction.ZoomPane, "zoom_pane", "Zoom the active pane to fill the tab, or restore the splits."),
+        new(TerminalAction.EqualizePanes, "equalize_panes", "Reset every split in the tab to an even ratio."),
     ];
 
     /// <summary>Every action, in enum order.</summary>

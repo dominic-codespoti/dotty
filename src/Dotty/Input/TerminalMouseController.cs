@@ -103,6 +103,8 @@ public sealed class TerminalMouseController
     private bool _selectionMoved;
     private LeafPane? _scrollbarPane;
     private Vector2 _lastContentPointer;
+    private SplitPaneNode? _hoveredDivider;
+    private SplitPaneNode? _draggedDivider;
 
     private readonly record struct PaneHit(
         LeafPane? Pane,
@@ -322,6 +324,14 @@ public sealed class TerminalMouseController
             return;
         }
 
+        if (button == MouseButton.Left && HoverDivider(activeTab, geom) is { } divider)
+        {
+            _draggedDivider = divider;
+            _pressedButtons |= mask;
+            _host.SetPointerCursor(ResizeCursor(divider));
+            return;
+        }
+
         var hit = HitTest(activeTab, pos);
         var pane = hit.Pane;
         bool insidePane = pane != null && hit.Inside;
@@ -493,6 +503,21 @@ public sealed class TerminalMouseController
                 shortcutFor: _host.GetShortcutLabel));
     }
 
+    /// <summary>The divider under the pointer, with hover hysteresis (see <see cref="PaneResizeMath"/>).</summary>
+    private SplitPaneNode? HoverDivider(TerminalTab tab, TerminalMouseGeometry geom)
+    {
+        float scale = Math.Max(1f, geom.ContentScale);
+        float x = _lastContentPointer.X, y = _lastContentPointer.Y;
+        bool keep = _hoveredDivider != null &&
+            PaneResizeMath.IsNear(_hoveredDivider.DividerBounds, x, y, PaneResizeMath.KeepTolerance * scale);
+        _hoveredDivider = PaneResizeMath.ResolveHover(_hoveredDivider, keep,
+            keep ? null : tab.PaneTree.HitTestDivider(x, y, PaneResizeMath.EnterTolerance * scale));
+        return _hoveredDivider;
+    }
+
+    private static StandardCursor ResizeCursor(SplitPaneNode divider) =>
+        divider.Direction == SplitDirection.Vertical ? StandardCursor.HResize : StandardCursor.VResize;
+
     private Vector2 ContentVector(Vector2 position)
     {
         var (x, y) = ContentPosition(position);
@@ -581,6 +606,18 @@ public sealed class TerminalMouseController
             return;
         }
 
+        if (_draggedDivider != null && LeftMouseDown)
+        {
+            activeTab.PaneTree.DragDivider(_draggedDivider, _lastContentPointer.X, _lastContentPointer.Y);
+            _host.SetPointerCursor(ResizeCursor(_draggedDivider));
+            return;
+        }
+        if (_selectionPane == null && !IsDraggingScrollbar && HoverDivider(activeTab, geom) is { } divider)
+        {
+            _host.SetPointerCursor(ResizeCursor(divider));
+            return;
+        }
+
         var hit = HitTest(activeTab, position);
         IsScrollbarHovered = hit.Pane != null && hit.Inside &&
             hit.Pane.Session.Adapter.Buffer.ScrollbackCount > 0 &&
@@ -651,6 +688,7 @@ public sealed class TerminalMouseController
                 (_selectionMoved || _clickCount >= 2))
                 _host.OnLocalSelectionFinished(finished);
             IsDraggingScrollbar = false;
+            _draggedDivider = null;
             _scrollbarPane = null;
             _selectionPane = null;
             _selectionMoved = false;

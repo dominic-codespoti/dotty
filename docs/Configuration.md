@@ -709,6 +709,12 @@ the chord that is bound at the time the menu opens.
 | `move_tab_right` | — | Move the active tab one place to the right. |
 | `toggle_tab_bar` | — | Show or hide the tab bar. |
 | `send_text` | — | Write the escaped text after the colon to the active pane (`send_text:\x1bOA`). |
+| `resize_pane_left` | — | Move the active pane's nearest vertical divider one cell left. |
+| `resize_pane_right` | — | Move the active pane's nearest vertical divider one cell right. |
+| `resize_pane_up` | — | Move the active pane's nearest horizontal divider one row up. |
+| `resize_pane_down` | — | Move the active pane's nearest horizontal divider one row down. |
+| `zoom_pane` | — | Zoom the active pane to fill the tab, or restore the splits. |
+| `equalize_panes` | — | Reset every split in the tab to an even ratio. |
 
 The scroll actions are not performed on the alternate screen or when the pane
 has no scrollback; the key then goes to the application. `Shift+Up/Down/Home/End`
@@ -723,6 +729,12 @@ macOS Command set, new actions `send_text`, `select_all`, `clear_scrollback`,
 `reload_config`, `paste_selection`, `search_next`, `search_previous`,
 `copy_or_send`, `move_tab_left`, `move_tab_right`, `toggle_tab_bar`; rejected
 entries are reported instead of silently ignored.
+
+Changelog: W4-C16 — `resize_pane_left/right/up/down`, `zoom_pane` and
+`equalize_panes`. Dividers can be dragged with the left button (resize pointer
+over a divider, with a wider band once hovered so it does not flicker); every
+pane keeps at least 2 columns or 1 row. Zoom ends when focus moves or the
+splits change.
 
 ### `keyboard`
 

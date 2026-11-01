@@ -48,7 +48,8 @@ C compiler it warns and the PTY tests fail, and `make -C src/Dotty.NativePty` bu
 
 What to expect: every suite passes. `Dotty.App.SkiaTests` contains GL tests that run only with a display (they skip
 otherwise and say so). Linux tests that read a child's window size use `/proc/<pid>/task/<pid>/children`, which some
-kernels (for example Android) do not provide.
+kernels (for example Android) do not provide. On musl distributions (Alpine) the KeraLua package ships no native Lua,
+so the Lua tests fail unless a Lua 5.4 library is copied in as `runtimes/linux-musl-<arch>/native/lua54.so`.
 
 ## 4. Run it
 
@@ -60,10 +61,9 @@ dotnet run --project src/Dotty/Dotty.csproj -c Release -- +diagnose   # versions
 Use a throwaway configuration so your own settings are not touched:
 
 ```bash
-What to expect: every suite passes. `Dotty.App.SkiaTests` contains GL tests that run only with a display (they skip
-otherwise and say so). Linux tests that read a child's window size use `/proc/<pid>/task/<pid>/children`, which some
-kernels (for example Android) do not provide. On musl distributions (Alpine) the KeraLua package ships no native Lua,
-so the Lua tests fail unless a Lua 5.4 library is copied in as `runtimes/linux-musl-<arch>/native/lua54.so`.
+export DOTTY_CONFIG_HOME=$(mktemp -d)
+dotnet run --project src/Dotty/Dotty.csproj -c Release -- +init-config   # writes a minimal commented config.json
+```
 
 `+show-config`, `+validate-config` and `+explain-config <key>` print the effective configuration, check a file
 with line/column errors, and explain any option.

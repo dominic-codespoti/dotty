@@ -13,6 +13,8 @@ SOURCE = ROOT / "vendor" / "glfw" / "source"
 RID_INFO = {
     "linux-x64": ("Linux", "x86_64", "libglfw.so.3"),
     "linux-arm64": ("Linux", "aarch64", "libglfw.so.3"),
+    "linux-musl-x64": ("Linux", "x86_64", "libglfw.so.3"),
+    "linux-musl-arm64": ("Linux", "aarch64", "libglfw.so.3"),
     "win-x64": ("Windows", "x86_64", "glfw3.dll"),
     "win-arm64": ("Windows", "aarch64", "glfw3.dll"),
     "osx-x64": ("Darwin", "x86_64", "libglfw.3.dylib"),

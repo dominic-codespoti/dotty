@@ -20,7 +20,7 @@ internal sealed partial class KittyImageStore
     /// <returns>Placements deleted plus images freed (0: nothing changed).</returns>
     public int ApplyDelete(in KittyGraphicsCommand cmd, int cursorRow, int cursorCol, int rows)
     {
-        var spec = KittyDelete.Parse(cmd.DeleteWhat);
+        var spec = KittyDeleteSpec.Parse(cmd.DeleteWhat);
         if (spec.Kind == KittyDeleteKind.Frames)
             return DeleteFrames(in cmd);
         if (spec.Kind == KittyDeleteKind.Unknown)

@@ -19,7 +19,8 @@ public sealed class SkiaImageDecoder : IImageDecoder
         try
         {
             using var data = SKData.CreateCopy(png);
-            using var codec = SKCodec.Create(data, out SKCodecResult created);
+            // The codec takes ownership of the stream (SkiaSharp revokes the managed owner), so the stream is not disposed here.
+            using var codec = SKCodec.Create(new SKMemoryStream(data), out SKCodecResult created);
             if (codec == null) return Map(created);
             if (codec.EncodedFormat != SKEncodedImageFormat.Png) return ImageDecodeStatus.Invalid;
             if (codec.Info.Width != width || codec.Info.Height != height) return ImageDecodeStatus.Invalid;
@@ -27,7 +28,7 @@ public sealed class SkiaImageDecoder : IImageDecoder
             var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
             fixed (byte* p = straightRgba)
             {
-                var result = codec.GetPixels(info, (IntPtr)p, width * 4);
+                var result = codec.GetPixels(info, (IntPtr)p);
                 return result == SKCodecResult.Success ? ImageDecodeStatus.Ok : Map(result);
             }
         }

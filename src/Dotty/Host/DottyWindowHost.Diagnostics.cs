@@ -8,6 +8,7 @@ using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Panes;
 using Dotty.Silk.Rendering;
 using Silk.NET.OpenGL;
+using Silk.NET.Windowing;
 
 namespace Dotty.Silk;
 

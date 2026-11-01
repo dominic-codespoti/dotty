@@ -1,5 +1,6 @@
 using System;
 using Dotty.Runtime.Hyperlinks;
+using Dotty.Terminal.Adapter;
 using Xunit;
 
 namespace Dotty.App.Tests;

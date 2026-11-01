@@ -125,7 +125,7 @@ public static class Osc7WorkingDirectory
         // 8/9. Platform rules and normalization.
         Span<char> output = stackalloc char[MaxPathLength + 2];
         int length;
-        ReadOnlySpan<char> segments;
+        scoped ReadOnlySpan<char> segments;
         char separator;
         int rootLength;
         if (windows)

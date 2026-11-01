@@ -16,8 +16,13 @@ namespace Dotty.Rendering.Gpu;
 /// <param name="Sprites">
 /// Cell geometry decoration sprites are built against; <c>default</c> (unmeasured) emits no decorations.
 /// </param>
+/// <param name="BuiltinGlyphs">
+/// <c>font.builtinGlyphs</c>: box drawing, blocks, braille, sextants, octants and Powerline come from
+/// <see cref="SpriteRasterizer"/> instead of the font (needs valid <paramref name="Sprites"/>).
+/// </param>
 public readonly record struct TextAttributeOptions(
-    float FaintOpacity, bool BlinkVisible, int BaselineShift = 0, CellSpriteMetrics Sprites = default)
+    float FaintOpacity, bool BlinkVisible, int BaselineShift = 0, CellSpriteMetrics Sprites = default,
+    bool BuiltinGlyphs = false)
 {
     /// <summary>Default of <c>font.faintOpacity</c>.</summary>
     public const float DefaultFaintOpacity = 0.5f;

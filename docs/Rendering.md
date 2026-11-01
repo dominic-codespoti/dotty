@@ -329,6 +329,7 @@ expected to change the row; it is not a release date or a commitment.
 | Font size unit | Supported | `font.size` is points (`px = pt × 96/72 × display scale`, default 11.25); cells are integer device pixels and HiDPI uses the OS content scale on every platform | |
 | Font family list | Supported | `font.family` is an ordered list and the fallback order (Ghostty semantics): every installed family in turn, then installed built-in symbol/CJK/emoji families, then at most 16 faces the system matches for uncovered scalars. Default: the OS stack (Linux `monospace`, DejaVu Sans Mono, Noto Sans Mono, Liberation Mono, Noto Color Emoji; macOS Menlo, SF Mono, Monaco, Apple Color Emoji, Apple Symbols; Windows Cascadia Mono, Consolas, Segoe UI Emoji, Segoe UI Symbol). No Nerd Font is assumed | |
 | `font.symbolMap` per-range overrides | Supported | Tried before the chain | |
+| Box drawing, blocks, braille, sextants, octants, Powerline | Supported | Built-in pixel-exact sprites (`font.builtinGlyphs`, default on): U+2500–257F (light, heavy, double, dashed, rounded arcs, diagonals), U+2580–259F (eighths, halves, shades as 25/50/75 % coverage, quadrants), U+2800–28FF, U+1FB00–1FB3B, U+1CD00–1CDE5 and U+E0B0–E0BF; see [Built-in glyph sprites](#built-in-glyph-sprites). Other Nerd Font icons (U+E0A0–E0A3 included) need an installed font | |
 | Colour emoji and emoji presentation | Supported | Intrinsic-colour glyphs use the RGBA atlas page. Cluster face selection: VS16, default-emoji bases, regional-indicator pairs, keycaps, tag sequences, skin-tone modifiers and ZWJ sequences with a pictograph prefer a colour face; VS15 prefers a monochrome face; variation selectors, ZWJ, modifiers and tags are not required in a face's character map. Sequences are still drawn without shaping (W4-C10) | |
 | Character width and grapheme clusters | Supported | Widths generated from Unicode 16.0.0 (East Asian Width W/F wide; Cc/Cf/Mn/Me and Hangul medial/final jamo zero; ambiguous narrow); RI pairs, VS16/VS15 on the 371 emoji-variation bases; clusters are UAX #29 (.NET `StringInfo`) and re-join across writes, so a late VS16 widens the cell. See [Parsing](Parsing.md#combining-cap-grapheme-clusters-cell-width-and-the-grapheme-store). No `unicode.ambiguousWidth` option | |
 | Text shaping (ZWJ sequences, combining-mark placement) | Not supported | Each grapheme is rasterized through the font's character map, one per cell; `TextShaper` exists but has no callers | W4-C10 |
@@ -366,6 +367,19 @@ underline in its SGR 58 colour, strikethrough/overline in the text colour), so f
 composer buffers are sized by `QuadFrameBuilder.InstanceBudget(rows, cols)` = 3 × rows × cols and never
 drop a decoration. Sprites live in the A8 atlas page keyed by `SpriteKey` (code, span width, metrics) and
 are cleared by atlas rebuilds.
+
+### Built-in glyph sprites
+
+With `font.builtinGlyphs` on, `QuadFrameBuilder` asks `SpriteRasterizer` (pure, A8, no Skia) for single-scalar
+cells in its ranges before the font, keyed `SpriteKey(code point, span width, metrics)`, and places the
+cell-sized sprite at the cell origin (no baseline shift). Edge rules: the light stroke is
+max(1, round(cellWidth / 8)) px, heavy twice that, a double line two light strokes with a light gap; a stroke
+of thickness `t` starts at `(extent − t) / 2` and runs to the cell edge, so every arm's edge row or column
+equals that of `─`/`━`/`═` (or `│`/`┃`/`║`) and neighbours meet exactly at any line height. Double crossings
+keep the inner corners open. Rounded corners are anti-aliased quarter circles that end one pixel before the
+cell edge in a straight run; diagonals and Powerline shapes are anti-aliased (4 × 4 supersampled fills,
+distance-based strokes). Block, sextant and octant edges are `round(k × extent / n)`, so complementary
+blocks tile without gaps or overlap. Octant masks are generated from the Unicode 16 names.
 
 ## Memory diagnostics and lifecycle measurements
 
@@ -566,6 +580,7 @@ fails the smoke run.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C4: built-in sprites for box drawing, blocks, shades, quadrants, braille, sextants, octants and Powerline (`font.builtinGlyphs`, default on). |
 | 2026-11-01 | W4-C3: decoration sprites (all SGR 4:n underline styles, SGR 58 colour, strikethrough/overline from `CellMetrics`); removed the `DecorOnly` shader path, the decoration uniforms and the underline/strike/overline flag bits; instance budget 3 × rows × cols. |
 | 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |
 | 2026-11-01 | W4-C1/C2: `DisplayScale`/`GridFit` integer device-pixel layout, content-scale callback, `font.size` in points, `CellMetrics` (baseline, half-leading, decoration strokes) and `font.adjustCellWidth/Height`. |

@@ -241,6 +241,7 @@ public static class QuadFrameBuilder
 
             GlyphInfo glyphInfo = default;
             bool glyphOk = false;
+            bool builtinGlyph = false;
             // Conceal (SGR 8) and the off phase of blink (SGR 5/6) drop the glyph but keep background and decorations.
             if (!style.Invisible && !(grapheme.Length == 1 && char.IsWhiteSpace(grapheme[0])))
             {
@@ -248,12 +249,26 @@ public static class QuadFrameBuilder
                     hasBlinkingText = true;
                 if (!style.SlowBlink || textOptions.BlinkVisible)
                 {
-                    var key = new GlyphKey(grapheme, typeface, textSize, GlyphStyles.From(style.Bold, style.Italic));
-                    glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
+                    // Box drawing, blocks, braille, sextants, octants and Powerline come from the sprite rasteriser
+                    // (font.builtinGlyphs), sized to the cell span; a combining cluster keeps the font path.
+                    if (textOptions.BuiltinGlyphs && graphemeIndex <= 0 && textOptions.Sprites.IsValid
+                        && SpriteRasterizer.IsSupported((int)hot.Rune))
+                    {
+                        var spriteKey = new SpriteKey((int)hot.Rune,
+                            textOptions.Sprites.CellWidth * (hot.Width > 1 ? hot.Width : 1), textOptions.Sprites);
+                        builtinGlyph = glyphOk = TryEnsureSprite(atlas, spriteKey, out glyphInfo, out bool spriteAdded);
+                        if (spriteAdded)
+                            dirtyAtlasRows?.Add(row);
+                    }
                     if (!glyphOk)
-                        glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-                    if (glyphAdded)
-                        dirtyAtlasRows?.Add(row);
+                    {
+                        var key = new GlyphKey(grapheme, typeface, textSize, GlyphStyles.From(style.Bold, style.Italic));
+                        glyphOk = atlas.EnsureGlyph(key, out glyphInfo, out bool glyphAdded);
+                        if (!glyphOk)
+                            glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+                        if (glyphAdded)
+                            dirtyAtlasRows?.Add(row);
+                    }
                 }
             }
 
@@ -295,7 +310,10 @@ public static class QuadFrameBuilder
                     Col = (ushort)column,
                     Row = (ushort)row,
                     OffX = (short)glyphInfo.LeftBearing,
-                    OffY = (short)(RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing) + textOptions.BaselineShift),
+                    // Sprites are placed from the cell top; font glyphs from the baseline.
+                    OffY = builtinGlyph
+                        ? (short)glyphInfo.TopBearing
+                        : (short)(RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing) + textOptions.BaselineShift),
                     GlyphX = (short)glyphInfo.X,
                     GlyphY = (short)glyphInfo.Y,
                     GlyphW = (short)glyphInfo.Width,
@@ -411,7 +429,7 @@ public static class QuadFrameBuilder
             return true;
         SpriteBitmap? bitmap = DecorationGeometry.IsDecorationCode(key.Code)
             ? DecorationGeometry.Rasterize(key.Code, key.Width, key.Metrics)
-            : null;
+            : SpriteRasterizer.Rasterize(key.Code, key.Width, key.Metrics.CellHeight, key.Metrics.CellWidth);
         return bitmap != null && atlas.AddSprite(key, bitmap, out info, out added);
     }
 }

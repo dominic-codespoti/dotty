@@ -520,4 +520,31 @@ public sealed class QuadFrameBuilderTests
 
         Assert.Equal(5, written);
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void BuiltinGlyphs_DrawBoxDrawingFromCellSizedSprites(bool builtin)
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 4);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("─┼A".AsSpan(), CellAttributes.Default);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var options = SpriteOptions with { BaselineShift = 3, BuiltinGlyphs = builtin };
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize, new FrameGeometry(CellW, CellH, 1, 4),
+            textOptions: options);
+
+        Assert.Equal(3, result.InstanceCount);
+        Assert.Equal(builtin ? 2 : 0, atlas.SpriteCount);
+        for (int i = 0; i < 2; i++)
+        {
+            var box = result.Instances[i];
+            if (builtin)
+                Assert.Equal(((short)10, (short)20, (short)0, (short)0), (box.GlyphW, box.GlyphH, box.OffX, box.OffY));
+            else
+                Assert.True(box.GlyphW < 10 || box.GlyphH < 20, "font glyphs are tight-bounded, not cell sized");
+        }
+        Assert.True(atlas.TryGetGlyph(new GlyphKey("A", SKTypeface.Default, TextSize, GlyphStyle.Regular), out _));
+    }
 }

@@ -321,9 +321,10 @@ public sealed class TerminalSceneComposer : IDisposable
         _dirtyAtlasRows.Clear();
         BlinkActive = false;
         // cursorVisible is the shared blink phase, so SGR 5/6 text blinks in step with the cursor.
+        var fontConfig = UserConfigService.Current.Font;
         _textOptions = new TextAttributeOptions(
-            TextAttributeOptions.NormalizeFaintOpacity(UserConfigService.Current.Font.FaintOpacity), cursorVisible,
-            _cellMetrics.BaselineShift, _spriteMetrics);
+            TextAttributeOptions.NormalizeFaintOpacity(fontConfig.FaintOpacity), cursorVisible,
+            _cellMetrics.BaselineShift, _spriteMetrics, fontConfig.BuiltinGlyphs);
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
         // A full atlas is rebuilt here, at the frame boundary, and this frame re-ensures its visible glyphs. When the

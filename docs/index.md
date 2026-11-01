@@ -45,6 +45,9 @@ Start here: [README and quick start](../Readme.md) for the application, [Contrib
 | Document | Description |
 |----------|-------------|
 | [Release Policy](Releasing.md) | Central version, explicit stable/prerelease release triggers, readiness gates, and bump advice |
+| [Install](Install.md) | Release archives, user-local `install.sh` (desktop entry, icons, terminfo, man page, completions, uninstall), packages, source installs |
+| [Packaging](Packaging.md) | Publish layout, nfpm `.deb`/`.rpm`, generated man page and completions, notices/NuGet inventory check, size and start-time measurement and budgets |
+| [Troubleshooting](Troubleshooting.md) | `+diagnose`, GPU requirements (OpenGL 3.3 core), Mesa llvmpipe workaround, helper/terminfo/completion problems |
 
 ## Platform
 

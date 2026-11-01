@@ -299,6 +299,10 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         {
             HandleOsc52(payload);
         }
+        else if (code == 22)
+        {
+            HandleOsc22(payload);
+        }
         else if (code == 10 || code == 11 || code == 12)
         {
             HandleOscDynamicColor(code, payload);
@@ -605,6 +609,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         OnSetSynchronizedUpdate(false);
         OnSetReverseVideo(false);
         ResetPaletteForRis();
+        RequestedPointerShape = PointerShape.Default;
         ResetKittyKeyboardState();
         ResetBackarrowKeyMode();
         ResetVisibilityReports();

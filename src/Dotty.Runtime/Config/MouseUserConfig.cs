@@ -24,4 +24,8 @@ public sealed class MouseUserConfig
     /// <summary>Modifier that keeps clicks, drags and the wheel local while an application tracks the mouse: <c>shift</c> (default), <c>ctrl</c>, <c>alt</c>, <c>super</c> or <c>none</c>.</summary>
     [JsonPropertyName("reportBypassModifier")]
     public string ReportBypassModifier { get; set; } = "shift";
+
+    /// <summary>Hide the pointer while typing in a pane until it moves again (default false).</summary>
+    [JsonPropertyName("hideWhileTyping")]
+    public bool HideWhileTyping { get; set; }
 }

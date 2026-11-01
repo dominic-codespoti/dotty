@@ -260,6 +260,13 @@ the background equals the cursor colour) or `cell-foreground` (the text keeps
 its colour). The cursor colour is the pane's default foreground. Only the
 active pane draws a cursor, and not while it is scrolled back.
 
+Where the operating system exposes a caret-blink preference cheaply (Windows:
+caret blink turned off in Settings), a disabled preference keeps the cursor
+steady regardless of `blink` or DECSCUSR. Other platforms use the
+configuration and DECSCUSR alone.
+
+Changelog: W4-C18 — Windows caret-blink preference honoured.
+
 ### `theme`, `selectionColor`, and `panes`
 
 `theme` names a built-in or user theme. `selectionColor` accepts the color
@@ -433,6 +440,18 @@ each platform ([Platform Support](PlatformSupport.md#manual-link-opener-checks))
 | `alternateScroll` | string | `"auto"` | `auto`: on the alternate screen, with no mouse reporting active and mode 1007 not reset by the application, the wheel sends cursor up/down keys (`SS3 A`/`SS3 B` under DECCKM) so `less`, `man` and similar programs scroll. `off`: never. Unknown values mean `auto`. |
 | `reportBypassModifier` | string | `"shift"` | While held, clicks, drags and the wheel stay local (selection, scrollback, links) even when an application tracks the mouse: `shift`, `ctrl`, `alt`, `super`, or `none` (always report). Unknown values mean `shift`. |
 | `middleClickAction` | string | `"clipboard-paste"` | What a middle click does in a pane that is not reporting mouse events: `primary-paste`, `clipboard-paste`, or `ignore` (`-` and `_` are interchangeable). Unknown values mean `clipboard-paste`. |
+| `hideWhileTyping` | boolean | `false` | Hide the pointer when a key sends input to a pane; it reappears as soon as the mouse moves. |
+
+Applications may set the pointer shape over their pane with OSC 22
+(`OSC 22 ; name ST`): CSS names (`pointer`, `text`, `crosshair`, `ew-resize`,
+`ns-resize`, `move`, `not-allowed`, `wait`, `progress`, `default`, …) and the
+common X11 cursor-font names (`hand2`, `xterm`, `left_ptr`, `watch`, …); a
+comma-separated list takes the first known name, an empty name or `default`
+resets, and RIS resets. The shape replaces only the text beam over pane
+content: divider resize, link, scrollbar, tab-bar and menu pointers keep the
+host's shape, and `hideWhileTyping` hides the pointer whatever was requested.
+
+Changelog: W4-C18 — `hideWhileTyping`, OSC 22 pointer shapes.
 
 Copy-on-select runs when the left button is released after a drag, or after a
 double- or triple-click, completed a local selection. It never clears the
@@ -453,6 +472,18 @@ reads and writes use the real PRIMARY selection on X11 only (see
 All mouse options are read live: a change applies to the next selection, click or wheel event.
 Interoperation of X11 PRIMARY with other applications is a manual check; see
 [E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click).
+
+### `drop`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `mode` | string | `"paste-path"` | `paste-path`: dropping files on the window pastes their shell-escaped paths, separated by spaces, into the active pane through the normal paste path (bracketed paste, sanitising and `clipboard.confirmPaste` apply). `ignore`: drops do nothing. Unknown values mean `paste-path`. |
+| `quote` | string | `"auto"` | `auto` picks the dialect from the pane's launch shell (`fish`, `pwsh`/`powershell`, `cmd`, anything else `posix`; `cmd` on Windows when no shell was given). `posix`: bare when every character is safe, otherwise single quotes (`'` becomes `'\''`). `fish`: single quotes with `\\` and `\'`. `powershell`: single quotes, every single-quote character (typographic ones too) doubled. `cmd`: double quotes; paths containing `"`, `%` or `!` are refused. |
+
+A path containing a control character (C0, DEL, C1, U+2028/U+2029) or an
+unpaired surrogate is never pasted; the other dropped paths still are.
+
+Changelog: W4-C18 — new section.
 
 ### `selection`
 

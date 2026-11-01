@@ -312,6 +312,13 @@ public static class ConfigOptionCatalog
             "Search overlay starts matching whole words only (neither end touches a letter, digit, or underscore). Alt+W toggles it while the overlay is open.",
             "Read when the overlay opens."),
 
+        Opt("drop.mode", "drop.mode", "string", ["paste-path", "ignore"], c => c.Drop.Mode,
+            "What dropping files on the window does: 'paste-path' pastes the shell-escaped paths, space-separated, into the active pane through the paste router (bracketed paste and paste confirmation apply); 'ignore' does nothing. Paths with control characters are never pasted. Unknown values mean paste-path.",
+            "Read live; takes effect at the next drop."),
+        Opt("drop.quote", "drop.quote", "string", ["auto", "posix", "fish", "powershell", "cmd"], c => c.Drop.Quote,
+            "Quoting for dropped paths. 'auto' picks from the pane's launch shell (fish, pwsh/powershell, cmd, otherwise posix; cmd on Windows without a shell). posix: bare when safe, else single quotes; fish: single quotes with \\ and \' escapes; powershell: single quotes doubled; cmd: double quotes, and paths containing \", % or ! are refused. Unknown values mean auto.",
+            "Read live; takes effect at the next drop."),
+
         Opt("keybindings", "keybindings", "map", null, c => c.Keybindings,
             "Map of chord ('ctrl+shift+t', 'cmd+k', 'physical:ctrl+shift+c') to an action name such as new_tab, copy or send_text:\\x01; 'none' unbinds a chord. Entries are added to the built-in bindings, which are not part of this default; rejected entries are logged and listed by +validate-config."),
         Opt("keyboard.leftAlt", "keyboard.left_alt", "string", ["auto", "meta", "compose"], c => c.Keyboard.LeftAlt,
@@ -356,6 +363,9 @@ public static class ConfigOptionCatalog
         Opt("mouse.reportBypassModifier", "mouse.report_bypass_modifier", "string", ["shift", "ctrl", "alt", "super", "none"], c => c.Mouse.ReportBypassModifier,
             "Modifier that, while held, keeps clicks, drags and the wheel local (selection, scrollback) when an application tracks the mouse; 'none' always reports. Unknown values mean shift.",
             "Read live; takes effect for the next pointer event."),
+        Opt("mouse.hideWhileTyping", "mouse.hide_while_typing", "boolean", null, c => c.Mouse.HideWhileTyping,
+            "Hide the pointer when a key sends input to a pane; it reappears as soon as the mouse moves.",
+            "Read live; takes effect at the next key."),
         Opt("mouse.middleClickAction", "mouse.middle_click_action", "string", ["primary-paste", "clipboard-paste", "ignore"], c => c.Mouse.MiddleClickAction,
             "What a middle-click in a pane does when the application is not capturing the mouse: paste the primary selection, paste the clipboard, or nothing. Unknown values mean clipboard-paste.",
             "Read live; takes effect for the next click."),

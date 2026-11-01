@@ -39,7 +39,13 @@ public sealed class ClipboardPasteRouter
     {
         ArgumentNullException.ThrowIfNull(pane);
 
-        string? text = _clipboard.GetText();
+        PasteText(pane, _clipboard.GetText());
+    }
+
+    /// <summary>Pastes <paramref name="text"/> (e.g. dropped file paths) with the same confirmation rules as a clipboard paste.</summary>
+    public void PasteText(LeafPane pane, string? text)
+    {
+        ArgumentNullException.ThrowIfNull(pane);
         if (string.IsNullOrEmpty(text))
             return;
 

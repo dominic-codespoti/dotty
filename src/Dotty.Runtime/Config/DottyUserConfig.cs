@@ -70,6 +70,9 @@ public sealed class DottyUserConfig
     [JsonPropertyName("search")]
     public SearchUserConfig Search { get; set; } = new();
 
+    [JsonPropertyName("drop")]
+    public DropUserConfig Drop { get; set; } = new();
+
     [JsonPropertyName("keybindings")]
     public System.Collections.Generic.Dictionary<string, string> Keybindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -454,6 +457,7 @@ public static class UserConfigService
             config.Graphics ??= new GraphicsUserConfig();
             config.Bell ??= new BellUserConfig();
             config.Search ??= new SearchUserConfig();
+            config.Drop ??= new DropUserConfig();
             config.Keyboard ??= new KeyboardUserConfig();
         }
         return config;

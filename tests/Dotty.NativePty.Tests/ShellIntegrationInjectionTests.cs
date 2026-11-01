@@ -270,12 +270,15 @@ public class ShellIntegrationInjectionTests
         File.Exists(Path.Combine(IntegrationDirectory, "inject", "zsh", ".zshenv")).Should().BeTrue();
     }
 
+    // Since W4-B21 the release workflow checks archive contents with scripts/dist/verify_archive.py.
     [Fact]
     public void ReleaseWorkflow_AssertsInjectionAssetsInArchives()
     {
         string release = File.ReadAllText(Path.Combine(RepoRoot, ".github", "workflows", "release.yml"));
-        release.Should().Contain("inject/zsh/.zshenv");
-        release.Should().Contain("inject/bash/dotty-rcfile.bash");
-        release.Should().Contain("Dotty.ps1");
+        release.Should().Contain("scripts/dist/verify_archive.py");
+        string verify = File.ReadAllText(Path.Combine(RepoRoot, "scripts", "dist", "verify_archive.py"));
+        verify.Should().Contain("inject/zsh/.zshenv");
+        verify.Should().Contain("inject/bash/dotty-rcfile.bash");
+        verify.Should().Contain("Dotty.ps1");
     }
 }

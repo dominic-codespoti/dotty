@@ -104,8 +104,9 @@ public sealed class GlyphAtlasTests
         Assert.Equal(a, b);
         Assert.NotEqual(a, c);
         Assert.NotEqual(a, d);
+        Assert.NotEqual(new GlyphKey("W", Font, 16f, GlyphStyle.Regular, 1), new GlyphKey("W", Font, 16f, GlyphStyle.Regular, 2));
         // The API surface has no foreground color — the atlas is coverage-only.
-        Assert.Equal(4, typeof(GlyphKey).GetFields().Length);
+        Assert.Equal(5, typeof(GlyphKey).GetFields().Length);
     }
 
     [Theory]
@@ -206,7 +207,7 @@ public sealed class GlyphAtlasTests
     }
 
     [Fact]
-    public void FallbackGlyph_NormalizesToPrimaryCell_AndKeepsBaseline()
+    public void FallbackGlyph_FitsRealCell_AndKeepsBaseline()
     {
         if (!TryFindMissingGlyph(out var grapheme, out var fallbackTypeface))
         {
@@ -215,21 +216,22 @@ public sealed class GlyphAtlasTests
 
         using var chain = new FontFallbackChain(Font, new[] { fallbackTypeface });
         using var atlas = new GlyphAtlas(Font, 16f, fallbackChain: chain);
+        atlas.SetCellGeometry(10, 20, 15, 0);
         Assert.True(atlas.EnsureGlyph(new GlyphKey("A", Font, 16f, GlyphStyle.Regular), out var primary));
         Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, GlyphStyle.Regular), out var fallback));
         Assert.True(atlas.EnsureGlyph(new GlyphKey(grapheme, Font, 16f, GlyphStyle.Regular), out var cached));
         Assert.Equal(fallback, cached);
         Assert.True(RegionHasCoverage(atlas, fallback));
 
-        // Fallback ink fills the primary line box without becoming a
-        // materially smaller glyph, and both paths share the same baseline.
-        Assert.True(fallback.Height >= Math.Max(1, (int)MathF.Floor(primary.Height * 0.75f)),
-            $"fallback height {fallback.Height} should track primary height {primary.Height}");
+        // Fallback ink keeps its natural size unless it overflows the real cell span (W4-C9), and both paths
+        // share the same baseline.
         Assert.Equal(primary.BaselineOffset, fallback.BaselineOffset);
-        int cellWidth = grapheme.Length > 1 || grapheme[0] > '\u2E7F' ? 32 : 16;
-        Assert.InRange(fallback.Advance, 0f, cellWidth);
-        Assert.InRange(fallback.Width, 1, cellWidth);
-        Assert.InRange(fallback.Height, 1, 32);
+        int span = new GlyphKey(grapheme, Font, 16f, GlyphStyle.Regular).CellSpan;
+        Assert.InRange(fallback.Advance, 0f, 10f * span);
+        Assert.InRange(fallback.Width, 1, 10 * span);
+        Assert.InRange(fallback.Height, 1, 20);
+        float top = fallback.BaselineOffset + fallback.TopBearing;
+        Assert.InRange(top, -0.5f, 20.5f - fallback.Height);
     }
 
     [Fact]

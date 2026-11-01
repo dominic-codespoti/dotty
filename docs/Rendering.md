@@ -288,13 +288,31 @@ a GLFW content-scale callback (monitor moves, display-scale changes without a
 resize) does the same on the UI thread. If the content scale changes, the host
 obtains/acquires a new glyph atlas, updates
 renderer and scene-composer resources, then releases the previous atlas.
-Session dimensions are recalculated from the integer cell geometry. Fallback
-typefaces are normalized to the primary font's cell height and constrained to a
-one-cell or two-cell width; the span is the cluster's `UnicodeWidth`, the same
-measure the buffer used to place it, and the bound is the font size in pixels
-times that span rather than the measured cell width.
-Oversized fallback ink is re-rasterized at smaller scales, then replaced by the
-reserved tofu glyph if it still cannot fit.
+Session dimensions are recalculated from the integer cell geometry.
+
+### Glyph constraints
+
+The scene composer hands the real cell width, height, baseline and half-leading
+shift to the atlas (`GlyphAtlas.SetCellGeometry`) at each frame boundary; a change
+rebuilds the atlas. Glyphs are then placed by the pure
+`ConstraintSolver.Solve(ink, cellW, cellH, baseline, span, constraint)` using the
+`GlyphConstraints` table (`Fit` shrinks only, `Cover` scales up or down keeping the
+aspect, `Stretch` fills per axis; alignment start/centre/end or the font's own
+position; padding as a fraction of the box):
+
+| Glyphs | Rule |
+|---|---|
+| Primary-family text | Unconstrained (exact raster) |
+| Fallback-family text | Natural size and position; shrunk and moved inside only when the ink overflows its span (the cluster's `UnicodeWidth`) |
+| Nerd Font icon sets and all other Private Use code points (U+E000–F8FF, planes 15–16) | Shrink to fit, centred; a narrow single-scalar icon followed by a blank cell on the row is fitted into two cells (`GlyphKey.CellSpan`) |
+| Powerline (extra) separators U+E0B0–E0C8, E0CA, E0CC–E0D7 | Stretched to the cell (only reached for code points the built-in sprites do not draw) |
+
+Icon ranges are transcribed from the Nerd Fonts v3 glyph-set list (Pomicons,
+Powerline Extra, Font Awesome Extension, Weather, Seti-UI, Devicons, Codicons, Font
+Awesome, Font Logos, Octicons, Material Design); range ends were not
+machine-verified, which only matters next to the separator block because every
+other PUA code point gets the icon rule anyway. Scaling re-rasterizes at the solved
+size; a glyph that still cannot fit is replaced by the reserved tofu glyph.
 
 ## Glyph atlas limitations
 
@@ -585,6 +603,7 @@ fails the smoke run.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C9: glyph constraints — `GlyphConstraints` table, pure `ConstraintSolver`, real cell geometry in the atlas, `GlyphKey.CellSpan` (icons spread into a blank next cell); replaces the fallback height-ratio heuristic. |
 | 2026-11-01 | W4-C3 × W4-C21: with one GPU instance per cell instance, `InstanceDelta` drops the source→output map; its dirty ranges index the GPU buffer directly (`InstanceDeltaTests` oracle is the W4-C3 renderer capture plus a modelled GPU buffer). The IME preedit underline of unfocused clauses is a single-underline sprite. |
 | 2026-11-01 | W4-C5: shared `RasterPolicy` (`font.hinting`, `font.antialias`) for metrics and atlas, part of the atlas identity; `text.blending`/`text.contrast` coverage correction (`uTextBlend`/`uTextContrast`, CPU reference `CoverageCorrection`, readback test); `text.minimumContrast` in `QuadFrameBuilder` and the selection overlay. `native` blending remains the default pending a real-display A/B. |
 | 2026-11-01 | W4-C12: background-only window opacity (premultiplied clear, pane default-background fills scaled). W4-C17: IME preedit wraps/shifts instead of clipping, uses theme colours on an opaque background and hides the cells it covers. |

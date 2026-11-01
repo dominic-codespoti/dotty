@@ -44,7 +44,8 @@ public readonly struct GlyphInfo
 /// serves every foreground color/alpha. Typeface identity is by instance: the host
 /// resolves each configured family once and reuses that instance across reloads,
 /// zoom and resize (W4-B7), so keys stay stable. <see cref="Style"/> separates
-/// regular, bold, italic and bold-italic rasterizations of the same grapheme.
+/// regular, bold, italic and bold-italic rasterizations of the same grapheme. <see cref="CellSpan"/> (1 or 2) is the
+/// number of cells a constrained glyph is fitted into (<see cref="GlyphCellSpan"/>).
 /// </summary>
 public readonly struct GlyphKey : IEquatable<GlyphKey>
 {
@@ -52,13 +53,21 @@ public readonly struct GlyphKey : IEquatable<GlyphKey>
     public readonly SKTypeface Typeface;
     public readonly float TextSize;
     public readonly GlyphStyle Style;
+    public readonly byte CellSpan;
 
-    public GlyphKey(string grapheme, SKTypeface typeface, float textSize, GlyphStyle style)
+    /// <param name="cellSpan">1 or 2; 0 derives it from the grapheme's Unicode width.</param>
+    public GlyphKey(string grapheme, SKTypeface typeface, float textSize, GlyphStyle style, byte cellSpan = 0)
     {
         Grapheme = grapheme ?? string.Empty;
         Typeface = typeface ?? SKTypeface.Default;
         TextSize = textSize;
         Style = style;
+        CellSpan = cellSpan switch
+        {
+            1 => 1,
+            0 => Dotty.Terminal.Adapter.UnicodeWidth.GetWidth(Grapheme) >= 2 ? (byte)2 : (byte)1,
+            _ => 2,
+        };
     }
 
     public bool IsBold => (Style & GlyphStyle.Bold) != 0;
@@ -69,12 +78,13 @@ public readonly struct GlyphKey : IEquatable<GlyphKey>
         string.Equals(Grapheme, other.Grapheme, StringComparison.Ordinal) &&
         ReferenceEquals(Typeface, other.Typeface) &&
         TextSize.Equals(other.TextSize) &&
-        Style == other.Style;
+        Style == other.Style &&
+        CellSpan == other.CellSpan;
 
     public override bool Equals(object? obj) => obj is GlyphKey other && Equals(other);
 
     public override int GetHashCode() =>
-        HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Style);
+        HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Style, CellSpan);
 }
 /// <summary>One changed rectangle in an atlas page bitmap.</summary>
 public readonly struct AtlasDirtyRegion
@@ -106,8 +116,6 @@ public sealed partial class GlyphAtlas : IDisposable
     private const int DefaultInitialSize = 1024;
     private const int Padding = 2;          // gap between entries (sampling bleed)
     private const int MaxGlyphDimension = 512;
-    private const float MinFallbackScale = 0.5f;
-    private const float MaxFallbackScale = 1.5f;
     private const string FallbackGrapheme = "\uFFFD";
     /// <summary>Horizontal skew of synthetic italic (<see cref="GlyphStyle.Italic"/>): x += -SkewX × (height above the baseline).</summary>
     public const float SyntheticItalicSkewX = -0.25f;
@@ -324,6 +332,7 @@ public sealed partial class GlyphAtlas : IDisposable
             _primaryCellHeight = MathF.Max(1f,
                 MathF.Ceiling(-metrics.Ascent) + 1f +
                 MathF.Ceiling(metrics.Descent) + 1f);
+            InitDefaultCellGeometry(primaryFont);
         }
         FallbackChain = fallbackChain;
         int size = Math.Clamp(initialSize, 64, MaxAtlasSize);
@@ -607,99 +616,30 @@ public sealed partial class GlyphAtlas : IDisposable
     /// </summary>
     private GlyphRaster RasterizeEffective(GlyphKey key)
     {
+        var constraint = GlyphConstraints.ForGrapheme(key.Grapheme);
         var fallbackChain = Volatile.Read(ref _fallbackChain);
         if (fallbackChain == null || string.IsNullOrEmpty(key.Grapheme))
         {
-            return RasterizeTight(key);
+            return constraint.IsNone
+                ? RasterizeTight(key)
+                : RasterizeConstrained(key, key.Typeface, constraint, key.IsBold, key.IsItalic);
         }
 
         var resolution = fallbackChain.Resolve(key.Grapheme, key.Style);
         var resolvedTypeface = resolution.Typeface ?? key.Typeface;
-        // The primary family, including its real bold/italic faces and its
-        // Nerd Font PUA glyphs, keeps the exact raster path. Normalization is
-        // only for a fallback family.
-        if (!resolution.IsFallback ||
+        // The primary family, including its real bold/italic faces, keeps the exact raster path for text; icons are
+        // fitted to the real cell span (W4-C9). Fallback-family text is clamped only when it overflows.
+        bool primary = !resolution.IsFallback ||
             ReferenceEquals(resolvedTypeface, key.Typeface) ||
-            ReferenceEquals(resolvedTypeface, _typeface))
+            ReferenceEquals(resolvedTypeface, _typeface);
+        if (primary && constraint.IsNone)
         {
             return RasterizeTightCore(key, blob: null, typeface: resolvedTypeface,
                 syntheticBold: resolution.SyntheticBold, syntheticItalic: resolution.SyntheticItalic);
         }
-
-        using var fallbackFont = new SKFont(resolvedTypeface, key.TextSize)
-        {
-            Edging = _rasterPolicy.SkiaEdging,
-            Subpixel = false,
-            Hinting = _rasterPolicy.SkiaHinting,
-            SkewX = resolution.SyntheticItalic ? SyntheticItalicSkewX : 0f,
-        };
-        var fallbackMetrics = fallbackFont.Metrics;
-        float fallbackHeight = MathF.Max(1f,
-            MathF.Ceiling(-fallbackMetrics.Ascent) + 1f +
-            MathF.Ceiling(fallbackMetrics.Descent) + 1f);
-        float scale = _primaryCellHeight / fallbackHeight;
-        scale = Math.Clamp(scale, MinFallbackScale, MaxFallbackScale);
-        // A fallback's ink can overhang its advance. Reserve the complete
-        // one-cell or wide-cell allocation before rasterizing. The span is the
-        // cell width the buffer assigned to this cluster: BufferTextWriter
-        // measures the same string with UnicodeWidth (a zero-width cluster
-        // still occupies one cell).
-        float cellWidth = key.TextSize * Math.Max(1, Dotty.Terminal.Adapter.UnicodeWidth.GetWidth(key.Grapheme));
-        float measuredAdvance = MathF.Max(1f, fallbackFont.MeasureText(key.Grapheme) + 1f);
-        scale = MathF.Min(scale, cellWidth / measuredAdvance);
-        scale = MathF.Max(0.05f, scale);
-
-        // Metrics are normally sufficient to fit the cell. Re-rasterize at a
-        // smaller scale when a particular glyph's ink or synthetic bold
-        // stroke still exceeds its hard allocation.
-        // Synthetic italic ink leans past the advance by up to |skew| x cell height.
-        float inkWidth = cellWidth + (resolution.SyntheticItalic ? -SyntheticItalicSkewX * _primaryCellHeight : 0f);
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            var effectiveKey = new GlyphKey(
-                key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Style);
-            fallbackFont.Size = key.TextSize * scale;
-            var raster = RasterizeTightCore(
-                effectiveKey, blob: null, baselineOverride: _primaryBaseline,
-                maxAdvance: cellWidth, fontOverride: fallbackFont, syntheticBold: resolution.SyntheticBold);
-            if (raster.Width <= MathF.Ceiling(inkWidth) &&
-                raster.Height <= MathF.Ceiling(_primaryCellHeight))
-            {
-                return raster;
-            }
-
-            float widthScale = raster.Width > 0 ? inkWidth / raster.Width : 1f;
-            float heightScale = raster.Height > 0 ? _primaryCellHeight / raster.Height : 1f;
-            float correction = MathF.Min(widthScale, heightScale) * 0.98f;
-            raster.Image.Dispose();
-            if (!(correction > 0f) || correction >= 1f)
-            {
-                scale *= 0.5f;
-            }
-            else
-            {
-                scale *= correction;
-            }
-            scale = MathF.Max(0.05f, scale);
-        }
-
-        // The final attempt is still a valid A8 raster. CommitRasterizedGlyph
-        var finalKey = new GlyphKey(key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Style);
-        fallbackFont.Size = key.TextSize * scale;
-        var finalRaster = RasterizeTightCore(finalKey, blob: null,
-            baselineOverride: _primaryBaseline, maxAdvance: cellWidth,
-            fontOverride: fallbackFont, syntheticBold: resolution.SyntheticBold);
-        if (finalRaster.Width > MathF.Ceiling(inkWidth) ||
-            finalRaster.Height > MathF.Ceiling(_primaryCellHeight))
-        {
-            // Do not commit an entry whose tight bounds cannot fit its cell;
-            // the caller will use the reserved tofu glyph instead.
-            return new GlyphRaster(
-                finalRaster.Image, 0, 0, 0, 0,
-                MathF.Min(finalRaster.Advance, cellWidth),
-                _primaryBaseline, 0f, 0f);
-        }
-        return finalRaster;
+        return RasterizeConstrained(key, resolvedTypeface,
+            constraint.IsNone ? GlyphConstraint.TextFallback : constraint,
+            resolution.SyntheticBold, resolution.SyntheticItalic);
     }
 
     private GlyphRaster RasterizeTight(GlyphKey key)

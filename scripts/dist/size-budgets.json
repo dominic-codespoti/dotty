@@ -1,0 +1,16 @@
+{
+  "linux-musl-arm64": {
+    "unpackedBytes": 23244000,
+    "archiveBytes": 9360000,
+    "recorded": {
+      "date": "2026-11-01",
+      "commit": "68e6278",
+      "how": "dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-musl-arm64 --self-contained true (no terminfo); scripts/dist/measure.py --runs 11",
+      "unpackedBytes": 21131314,
+      "archiveBytes": 8508767,
+      "versionStartMsMedian": 84.54,
+      "versionPeakRssKiB": 13308,
+      "note": "Budgets are the recorded sizes plus 10 %. Time and RSS were measured on a shared Android/Alpine aarch64 host and are recorded only, not budgeted. No other rid has a recorded run."
+    }
+  }
+}

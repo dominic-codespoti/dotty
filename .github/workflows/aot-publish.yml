@@ -181,6 +181,12 @@ jobs:
         shell: bash
         run: ${{ matrix.python }} scripts/dist/check_baseline.py scan --rid "$RID" --publish-dir "publish/$RID" --targets scripts/dist/baseline-targets.json --output "dist/baselines-$RID.json" --summary "$GITHUB_STEP_SUMMARY"
 
+      - name: Measure distribution size and start time
+        shell: bash
+        # Per-file/unpacked/archive sizes, `dotty --version` median and peak RSS (scripts/dist/measure.py).
+        # Fails only for a rid with a recorded budget in scripts/dist/size-budgets.json.
+        run: ${{ matrix.python }} scripts/dist/measure.py --rid "$RID" --publish-dir "publish/$RID" --budgets scripts/dist/size-budgets.json --output "dist/measure-$RID.json" --summary "$GITHUB_STEP_SUMMARY"
+
       - name: Create tarball (release)
         if: inputs.version != '' && runner.os != 'Windows'
         shell: bash

@@ -13,6 +13,8 @@ internal static unsafe class NativeGlfwMetadata
     private static delegate* unmanaged[Cdecl]<nint, int*, int*, void> _getWindowPos;
     private static delegate* unmanaged[Cdecl]<nint> _getPrimaryMonitor;
     private static delegate* unmanaged[Cdecl]<nint, int*> _getVideoMode;
+    private static delegate* unmanaged[Cdecl]<nint, float*, float*, void> _getWindowContentScale;
+    private static delegate* unmanaged[Cdecl]<nint, delegate* unmanaged[Cdecl]<nint, float, float, void>, nint> _setWindowContentScaleCallback;
     private const int PlatformWayland = 0x00060003;
     private static bool _initialized;
 
@@ -37,6 +39,11 @@ internal static unsafe class NativeGlfwMetadata
             ? (delegate* unmanaged[Cdecl]<nint>)primaryMonitor : null;
         _getVideoMode = glfw.Context.TryGetProcAddress("glfwGetVideoMode", out nint videoMode)
             ? (delegate* unmanaged[Cdecl]<nint, int*>)videoMode : null;
+        // GLFW 3.3+; absent exports make the content scale fall back to the framebuffer/window ratio.
+        _getWindowContentScale = glfw.Context.TryGetProcAddress("glfwGetWindowContentScale", out nint contentScale)
+            ? (delegate* unmanaged[Cdecl]<nint, float*, float*, void>)contentScale : null;
+        _setWindowContentScaleCallback = glfw.Context.TryGetProcAddress("glfwSetWindowContentScaleCallback", out nint contentScaleCallback)
+            ? (delegate* unmanaged[Cdecl]<nint, delegate* unmanaged[Cdecl]<nint, float, float, void>, nint>)contentScaleCallback : null;
         _initialized = true;
     }
 
@@ -44,6 +51,34 @@ internal static unsafe class NativeGlfwMetadata
 
     /// <summary>True while the window is minimized (GLFW_ICONIFIED). Always false where GLFW cannot observe it (Wayland).</summary>
     public static bool IsWindowIconified(nint window) => window != 0 && _getWindowAttrib != null && _getWindowAttrib(window, 0x00020002) != 0;
+
+    /// <summary><c>glfwGetWindowContentScale</c>: the OS display scale for the window; false (and 0) when unavailable.</summary>
+    public static bool TryGetWindowContentScale(nint window, out float x, out float y)
+    {
+        x = 0f;
+        y = 0f;
+        if (window == 0 || _getWindowContentScale == null)
+            return false;
+
+        float sx = 0f, sy = 0f;
+        _getWindowContentScale(window, &sx, &sy);
+        x = sx;
+        y = sy;
+        return true;
+    }
+
+    /// <summary>
+    /// Installs <c>glfwSetWindowContentScaleCallback</c> (Silk.NET does not wrap it): GLFW calls
+    /// <paramref name="callback"/> on the event-polling thread when the window moves to a monitor with
+    /// a different scale or the user changes the display scale. False when the export is missing.
+    /// </summary>
+    public static bool TrySetWindowContentScaleCallback(nint window, delegate* unmanaged[Cdecl]<nint, float, float, void> callback)
+    {
+        if (window == 0 || _setWindowContentScaleCallback == null)
+            return false;
+        _setWindowContentScaleCallback(window, callback);
+        return true;
+    }
 
     /// <summary>Window position in screen coordinates; false when GLFW does not export the query.</summary>
     public static bool TryGetWindowPosition(nint window, out int x, out int y)

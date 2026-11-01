@@ -13,8 +13,14 @@ using Silk.NET.Input;
 
 namespace Dotty.Silk.Input;
 
+/// <summary>
+/// Pointer-hit geometry. <paramref name="CellWidth"/>/<paramref name="CellHeight"/>, padding, offsets
+/// and sizes are device (framebuffer) pixels; <paramref name="WindowUnitsToDevice"/> converts GLFW pointer
+/// positions to device pixels; <paramref name="ContentScale"/> scales logical chrome lengths.
+/// </summary>
 public readonly record struct TerminalMouseGeometry(
-    float Scale,
+    float ContentScale,
+    float WindowUnitsToDevice,
     float CellWidth,
     float CellHeight,
     float PaddingLeft,
@@ -163,8 +169,8 @@ public sealed class TerminalMouseController
     {
         var geom = _host.Geometry;
         return (
-            position.X * geom.Scale - geom.PaddingLeft,
-            position.Y * geom.Scale - geom.TopOffset - geom.PaddingTop);
+            position.X * geom.WindowUnitsToDevice - geom.PaddingLeft,
+            position.Y * geom.WindowUnitsToDevice - geom.TopOffset - geom.PaddingTop);
     }
 
     private PaneHit HitTest(TerminalTab tab, Vector2 position, LeafPane? forcedPane = null)
@@ -182,8 +188,8 @@ public sealed class TerminalMouseController
         float relX = x - pane.Bounds.X;
         float relY = y - pane.Bounds.Y;
         var geom = _host.Geometry;
-        float cellW = geom.CellWidth * geom.Scale;
-        float cellH = geom.CellHeight * geom.Scale;
+        float cellW = geom.CellWidth;
+        float cellH = geom.CellHeight;
         int col = cellW > 0f
             ? Math.Clamp((int)MathF.Floor(relX / cellW), 0, Math.Max(0, pane.Columns - 1))
             : 0;
@@ -259,8 +265,8 @@ public sealed class TerminalMouseController
         var geom = _host.Geometry;
 
         var pos = mouse.Position;
-        float physX = pos.X * geom.Scale;
-        float physY = pos.Y * geom.Scale;
+        float physX = pos.X * geom.WindowUnitsToDevice;
+        float physY = pos.Y * geom.WindowUnitsToDevice;
         _lastContentPointer = ContentVector(pos);
         int mask = ButtonMask(button);
         if (_reportingPane != null && _reportingButtons != 0 && mask != 0)
@@ -275,7 +281,7 @@ public sealed class TerminalMouseController
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
             var menuLayout = ContextMenuLayout.Calculate(activeContextMenu, geom.FramebufferWidth, geom.FramebufferHeight,
-                geom.CellWidth * geom.Scale, geom.CellHeight * geom.Scale);
+                geom.CellWidth, geom.CellHeight);
             int hitItemIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
             activeContextMenu.HoveredIndex = hitItemIndex;
             if (hitItemIndex >= 0) activeContextMenu.ExecuteHovered();
@@ -321,7 +327,7 @@ public sealed class TerminalMouseController
         // The scrollbar is the owner of a click in its strip, including Ctrl+clicks.
         if (button == MouseButton.Left && insidePane &&
             pane!.Session.Adapter.Buffer.ScrollbackCount > 0 &&
-            IsInScrollbarHitArea(hit.RelativeX, pane.Bounds.Width, geom.CellWidth * geom.Scale, geom.Scale))
+            IsInScrollbarHitArea(hit.RelativeX, pane.Bounds.Width, geom.CellWidth, geom.ContentScale))
         {
             _pressedButtons |= mask;
             ResetClickSequence();
@@ -402,7 +408,7 @@ public sealed class TerminalMouseController
     }
     private void OpenTabContextMenu(int tabIndex, Vector2 position, TerminalMouseGeometry geometry)
     {
-        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.Scale, position.Y * geometry.Scale,
+        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.WindowUnitsToDevice, position.Y * geometry.WindowUnitsToDevice,
             DefaultContextMenus.BuildTabMenu(
                 onSplitRight: () => _host.TryExecuteAction(TerminalAction.SplitVertical),
                 onSplitDown: () => _host.TryExecuteAction(TerminalAction.SplitHorizontal),
@@ -417,7 +423,7 @@ public sealed class TerminalMouseController
         TerminalMouseGeometry geometry)
     {
         LeafPane contextPane = pane ?? activeTab.ActivePane;
-        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.Scale, position.Y * geometry.Scale,
+        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.WindowUnitsToDevice, position.Y * geometry.WindowUnitsToDevice,
             DefaultContextMenus.BuildTerminalMenu(
                 hasSelection: contextPane.Selection.HasSelection,
                 onCopy: () => _host.TryExecuteAction(TerminalAction.Copy),
@@ -501,8 +507,8 @@ public sealed class TerminalMouseController
         HoveredTabIndex = -1;
         HoveredTabHitType = TabBarHitType.None;
         var geom = _host.Geometry;
-        float physX = position.X * geom.Scale;
-        float physY = position.Y * geom.Scale;
+        float physX = position.X * geom.WindowUnitsToDevice;
+        float physY = position.Y * geom.WindowUnitsToDevice;
         if (_reportingPane != null && _reportingButtons != 0)
         {
             if (!ReportingBypassed())
@@ -517,7 +523,7 @@ public sealed class TerminalMouseController
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
             var menuLayout = ContextMenuLayout.Calculate(activeContextMenu, geom.FramebufferWidth, geom.FramebufferHeight,
-                geom.CellWidth * geom.Scale, geom.CellHeight * geom.Scale);
+                geom.CellWidth, geom.CellHeight);
             bool actionable = ContextMenuHitTester.TryHitInteractiveItem(menuLayout, physX, physY, out int item) &&
                 item >= 0 && item < activeContextMenu.Items.Count && activeContextMenu.Items[item].Action != null;
             activeContextMenu.HoveredIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
@@ -543,7 +549,7 @@ public sealed class TerminalMouseController
         var hit = HitTest(activeTab, position);
         IsScrollbarHovered = hit.Pane != null && hit.Inside &&
             hit.Pane.Session.Adapter.Buffer.ScrollbackCount > 0 &&
-            IsInScrollbarHitArea(hit.RelativeX, hit.Pane.Bounds.Width, geom.CellWidth * geom.Scale, geom.Scale);
+            IsInScrollbarHitArea(hit.RelativeX, hit.Pane.Bounds.Width, geom.CellWidth, geom.ContentScale);
 
         if (IsDraggingScrollbar && _scrollbarPane != null && LeftMouseDown)
         {
@@ -749,7 +755,7 @@ public sealed class TerminalMouseController
             return false;
         }
 
-        float cellHeight = _host.Geometry.CellHeight * _host.Geometry.Scale;
+        float cellHeight = _host.Geometry.CellHeight;
         int lines = cellHeight > 0f
             ? Math.Clamp((int)MathF.Min(8f, MathF.Ceiling(overshoot / cellHeight)), 1, 8)
             : 1;

@@ -66,8 +66,9 @@ public sealed class TerminalSceneComposerImageTests
                 selectionColor: new SgrColorArgb(0x803385DB),
                 framebufferWidth: framebufferWidth,
                 framebufferHeight: framebufferHeight,
-                cellWidth: cellWidth,
-                cellHeight: cellHeight,
+                // The composer takes whole device-pixel cells (the host's GridFit cell); tests pass logical cells.
+                cellWidth: MathF.Round(cellWidth * scale, MidpointRounding.AwayFromZero),
+                cellHeight: MathF.Round(cellHeight * scale, MidpointRounding.AwayFromZero),
                 scale: scale,
                 rows: rows,
                 columns: columns,

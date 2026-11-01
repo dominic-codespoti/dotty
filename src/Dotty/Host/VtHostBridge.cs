@@ -4,16 +4,22 @@ using Dotty.Runtime.Config;
 using Dotty.Runtime.Hosting;
 using Dotty.Runtime.Tabs;
 using Dotty.Terminal.Adapter;
+using Dotty.Silk.Rendering;
 using Silk.NET.Windowing;
 
 namespace Dotty.Silk;
 
-/// <summary>Layout facts the bridge needs from the window host (logical pixels unless noted).</summary>
+/// <summary>
+/// Layout facts the bridge needs from the window host: the integer device-pixel cell (the exact
+/// size the layout uses, reported to applications for CSI 14/16 t and kitty graphics), tab-bar
+/// rows, device padding and the device-pixels-per-window-unit ratio for client sizes.
+/// </summary>
 internal readonly record struct VtHostLayout(
-    float CellWidth,
-    float CellHeight,
-    float Scale,
+    int CellWidthPx,
+    int CellHeightPx,
     int BarRows,
+    DevicePadding Padding,
+    float WindowUnitsToDevice,
     int Cols,
     int Rows);
 
@@ -177,10 +183,10 @@ internal static class VtHostBridge
             }
         }
 
-        float scale = float.IsFinite(facts.Scale) && facts.Scale > 0f ? facts.Scale : 1f;
+        // The exact layout cell: kitty graphics and CSI 14/16 t must agree with what is drawn.
         var metrics = new Metrics(
-            ToPixels(facts.CellWidth, scale),
-            ToPixels(facts.CellHeight, scale),
+            Math.Max(1, facts.CellWidthPx),
+            Math.Max(1, facts.CellHeightPx),
             _positionX,
             _positionY,
             _screenWidth,
@@ -193,9 +199,6 @@ internal static class VtHostBridge
         foreach (var adapter in Subscribed)
             PushMetrics(adapter, metrics);
     }
-
-    private static int ToPixels(float logicalSize, float scale) =>
-        float.IsFinite(logicalSize) ? Math.Max(1, (int)MathF.Round(logicalSize * scale)) : 1;
 
     private static void PushMetrics(TerminalAdapter adapter, Metrics metrics)
     {
@@ -234,19 +237,8 @@ internal static class VtHostBridge
             return;
         }
 
-        var padding = config.Window.Padding;
-        VtHostPolicy.ComputeClientSize(
-            newCols,
-            newRows,
-            facts.CellWidth,
-            facts.CellHeight,
-            facts.BarRows,
-            padding.Left,
-            padding.Right,
-            padding.Top,
-            padding.Bottom,
-            out int width,
-            out int height);
+        var (width, height) = GridFit.ClientSize(
+            newCols, newRows, facts.CellWidthPx, facts.CellHeightPx, facts.BarRows, facts.Padding, facts.WindowUnitsToDevice);
         setClientSize(width, height);
     }
 

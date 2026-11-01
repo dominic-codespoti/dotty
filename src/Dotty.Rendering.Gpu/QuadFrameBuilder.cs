@@ -285,7 +285,7 @@ public static class QuadFrameBuilder
                     Col = (ushort)column,
                     Row = (ushort)row,
                     OffX = (short)glyphInfo.LeftBearing,
-                    OffY = RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+                    OffY = (short)(RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing) + textOptions.BaselineShift),
                     GlyphX = (short)glyphInfo.X,
                     GlyphY = (short)glyphInfo.Y,
                     GlyphW = (short)glyphInfo.Width,

@@ -84,7 +84,7 @@ internal static partial class DottyWindowHost
     {
         var windowSize = _window.Size;
         var framebufferSize = _window.FramebufferSize;
-        TryGetWindowContentScale(out float contentScaleX, out float contentScaleY);
+        NativeGlfwMetadata.TryGetWindowContentScale(_window.Native?.Glfw ?? 0, out float contentScaleX, out float contentScaleY);
         var json = new StringBuilder(512);
         json.Append("{\"vendor\":").Append(QuoteJson(_glVendor ?? string.Empty))
             .Append(",\"renderer\":").Append(QuoteJson(_glRenderer ?? string.Empty))
@@ -98,6 +98,10 @@ internal static partial class DottyWindowHost
             .Append(",\"framebufferHeight\":").Append(framebufferSize.Y.ToString(CultureInfo.InvariantCulture))
             .Append(",\"contentScaleX\":").Append(contentScaleX.ToString("0.###", CultureInfo.InvariantCulture))
             .Append(",\"contentScaleY\":").Append(contentScaleY.ToString("0.###", CultureInfo.InvariantCulture))
+            .Append(",\"displayContentScale\":").Append(_display.ContentScale.ToString("0.####", CultureInfo.InvariantCulture))
+            .Append(",\"windowUnitsToDevice\":").Append(_display.WindowUnitsToDevice.ToString("0.####", CultureInfo.InvariantCulture))
+            .Append(",\"cellWidthPx\":").Append(_cellWidthPx.ToString(CultureInfo.InvariantCulture))
+            .Append(",\"cellHeightPx\":").Append(_cellHeightPx.ToString(CultureInfo.InvariantCulture))
             .Append(",\"glfwPlatform\":").Append(QuoteJson(_windowBackend))
             .Append(",\"software\":").Append(_graphicsClassification.IsSoftware ? "true" : "false")
             .Append(",\"family\":").Append(QuoteJson(_graphicsClassification.Family.ToString()))
@@ -106,21 +110,6 @@ internal static partial class DottyWindowHost
             .Append(",\"khrDebugCallback\":").Append(_glDebugCallbackInstalled ? "true" : "false")
             .Append('}');
         return json.ToString();
-    }
-
-    /// <summary><c>glfwGetWindowContentScale</c> (not wrapped by Silk.NET 2.x); 0 when unavailable.</summary>
-    private static unsafe void TryGetWindowContentScale(out float x, out float y)
-    {
-        x = 0f;
-        y = 0f;
-        nint window = _window.Native?.Glfw ?? 0;
-        if (window == 0 || _glfwApi == null || !_glfwApi.Context.TryGetProcAddress("glfwGetWindowContentScale", out nint proc))
-            return;
-
-        float sx, sy;
-        ((delegate* unmanaged[Cdecl]<nint, float*, float*, void>)proc)(window, &sx, &sy);
-        x = sx;
-        y = sy;
     }
 
     private static void CheckGlErrorsIfDebugging(string stage)

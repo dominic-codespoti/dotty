@@ -31,10 +31,11 @@ frames keep the existing front buffer instead of swapping stale back-buffer
 contents.
 
 The window is created hidden and sized before it is shown. The initial client
-size comes from `VtHostPolicy.ComputeClientSize` (the same function CSI 8 t
-uses): 80x24 cells plus tab-bar rows and `window.padding`, rounded up, so the
-first layout pass (`VtHostPolicy.ComputeGrid`, the host's grid-fit rule) yields
-exactly 80x24 at integer scales. The window is shown once: after the first
+size comes from `GridFit.ClientSize` (the same function CSI 8 t and the control
+port use): 80x24 integer device-pixel cells plus tab-bar rows and device padding,
+divided by the window-unit ratio and rounded up, so the first layout pass
+(`GridFit.Compute`, the host's integer grid-fit rule) yields exactly 80x24 at any
+display scale. The window is shown once: after the first
 frame is presented, on the first render error, or 500 ms after load if no frame
 could be presented yet (for example a synchronized-update hold), so it never
 stays hidden. Showing invalidates one more frame: Wayland drops swaps on a
@@ -237,28 +238,54 @@ Unused space between tabs and custom caption controls remains draggable.
 ## Font and scale behavior
 
 `FontMetricsService.ResolveTypeface` tries each comma-separated family in order
-and falls back to `SKTypeface.Default`. `MeasureCell` clamps non-finite or
-out-of-range font size, line-height, and framebuffer scale inputs, uses full
-hinting with antialiasing and subpixel rendering disabled, and rounds the
-resulting positive cell width and height to pixel-aligned values. Pane origins
-are rounded to cell indices before instances are emitted, keeping grid
-geometry aligned instead of accumulating fractional-pixel drift. These
-settings match the atlas raster policy and avoid color-channel-dependent
-subpixel coverage.
+and falls back to `SKTypeface.Default`. `MeasureCell` returns `CellMetrics` in
+whole device pixels (cell size, baseline, half-leading `BaselineShift`, underline,
+strikethrough and overline rows and thicknesses; see "Display scale and cell
+metrics" below). It clamps non-finite or out-of-range inputs, uses full hinting
+with antialiasing and subpixel rendering disabled (matching the atlas raster
+policy, without color-channel-dependent subpixel coverage), and pane origins are
+rounded to cell indices before instances are emitted, so grid geometry never
+accumulates fractional-pixel drift.
 
 The host resolves the typeface only when `font.family` changes (config load,
 reload, zoom and resize reuse the same `SKTypeface` object, so the glyph atlas
 and the composer row cache keep hitting); a font installed while Dotty runs is
 picked up on the next `font.family` change or restart. `MeasureCell` results
 are cached by value: typeface family name and style (weight, width, slant),
-clamped size, line height and scale. Equal inputs never re-measure, separate
+normalized size, line height, content scale and cell adjustments. Equal inputs never re-measure, separate
 wrapper objects for the same face share an entry, and the cache is a
 least-recently-used map bounded at 32 entries.
 
-A framebuffer resize recomputes only the scale and the (cached) cell metrics.
-If the scale changes, the host obtains/acquires a new glyph atlas, updates
+### Display scale and cell metrics
+
+`DisplayScale.Compute` turns GLFW facts into two factors (`DisplayMetrics`):
+`ContentScale` (device pixels per logical unit, for fonts, cells, padding and
+chrome) and `WindowUnitsToDevice` (framebuffer pixels per window coordinate, for
+pointer positions, the IME caret rectangle and client sizes). On Windows and X11
+the framebuffer equals the window, so the content scale comes from
+`glfwGetWindowContentScale` (before W4-C1 text was unscaled there); macOS uses the
+framebuffer/window ratio (backing scale); Wayland uses the reported fractional
+scale quantised to 1/120 steps, so GLFW's `round(width × n / 120)` framebuffer
+jitter never wobbles the scale. A failed query (0, NaN) or a minimised 0x0 window
+keeps the previous metrics.
+
+Cells are integer device pixels; the logical view is `cell / ContentScale`.
+`font.size` is in points: device pixels = `pt × 96/72 × ContentScale`. Padding is
+`round(logical × ContentScale)`. The kitty graphics / `CSI 14/16 t` cell size is
+exactly the layout cell. `CellMetricsCalculator` (pure) derives the cell from
+`FontMetricsInput` (Skia `SKFontMetrics`): width = rounded advance, height =
+rounded `max(px × lineHeight, ascent + descent)` adjusted by
+`font.adjustCellWidth/Height`; extra height is split half above and half below
+(floor above), and the composer adds `BaselineShift` to every cell glyph. Stroke
+thicknesses come from the font (fallback 1/14 em, at least 1 px) and every stroke
+is clamped inside the cell.
+
+A framebuffer resize recomputes the display metrics and the (cached) cell metrics;
+a GLFW content-scale callback (monitor moves, display-scale changes without a
+resize) does the same on the UI thread. If the content scale changes, the host
+obtains/acquires a new glyph atlas, updates
 renderer and scene-composer resources, then releases the previous atlas.
-Session dimensions are recalculated from the scaled cell geometry. Fallback
+Session dimensions are recalculated from the integer cell geometry. Fallback
 typefaces are normalized to the primary font's cell height and constrained to a
 one-cell or two-cell width; the span is the cluster's `UnicodeWidth`, the same
 measure the buffer used to place it, and the bound is the font size in pixels
@@ -299,7 +326,7 @@ expected to change the row; it is not a release date or a commitment.
 
 | Feature | Status | Notes | Planned |
 |---|---|---|---|
-| Font size unit | Partial | `font.size` is pixels multiplied by the framebuffer scale (default `14`), not points | W4-C2 (points) |
+| Font size unit | Supported | `font.size` is points (`px = pt × 96/72 × display scale`, default 11.25); cells are integer device pixels and HiDPI uses the OS content scale on every platform | |
 | Font family list | Supported | `font.family` is an ordered list and the fallback order (Ghostty semantics): every installed family in turn, then installed built-in symbol/CJK/emoji families, then at most 16 faces the system matches for uncovered scalars. Default: the OS stack (Linux `monospace`, DejaVu Sans Mono, Noto Sans Mono, Liberation Mono, Noto Color Emoji; macOS Menlo, SF Mono, Monaco, Apple Color Emoji, Apple Symbols; Windows Cascadia Mono, Consolas, Segoe UI Emoji, Segoe UI Symbol). No Nerd Font is assumed | |
 | `font.symbolMap` per-range overrides | Supported | Tried before the chain | |
 | Colour emoji and emoji presentation | Supported | Intrinsic-colour glyphs use the RGBA atlas page. Cluster face selection: VS16, default-emoji bases, regional-indicator pairs, keycaps, tag sequences, skin-tone modifiers and ZWJ sequences with a pictograph prefer a colour face; VS15 prefers a monochrome face; variation selectors, ZWJ, modifiers and tags are not required in a face's character map. Sequences are still drawn without shaping (W4-C10) | |
@@ -525,3 +552,4 @@ fails the smoke run.
 | Date | Change |
 |------|--------|
 | 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |
+| 2026-11-01 | W4-C1/C2: `DisplayScale`/`GridFit` integer device-pixel layout, content-scale callback, `font.size` in points, `CellMetrics` (baseline, half-leading, decoration strokes) and `font.adjustCellWidth/Height`. |

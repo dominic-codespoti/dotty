@@ -7,10 +7,13 @@ namespace Dotty.App.Tests
 {
     public class FontMetricsServiceTests
     {
+        private static CellMetricsOptions Options(float sizePx, double lineHeight = 1.2, float scale = 1f) =>
+            new(sizePx, lineHeight, scale);
+
         [Fact]
         public void MeasureCell_ThrowsArgumentNullException_WhenTypefaceIsNull()
         {
-            Assert.Throws<ArgumentNullException>(() => FontMetricsService.MeasureCell(null!, 12f, 1.2, 1.0f));
+            Assert.Throws<ArgumentNullException>(() => FontMetricsService.MeasureCell(null!, Options(12f)));
         }
 
         [Theory]
@@ -31,98 +34,62 @@ namespace Dotty.App.Tests
         }
 
         [Theory]
-        [InlineData(10f, 1.0, 1.0f)]
-        [InlineData(14f, 1.2, 1.0f)]
-        [InlineData(14f, 1.2, 2.0f)]
-        [InlineData(16f, 1.5, 0.5f)]
-        public void MeasureCell_ReturnsPositiveDimensions(float fontSize, double lineHeight, float scale)
+        [InlineData(10f, 1.0)]
+        [InlineData(14f, 1.2)]
+        [InlineData(28f, 1.2)]
+        [InlineData(8f, 1.5)]
+        public void MeasureCell_ReturnsConsistentDevicePixelMetrics(float fontSizePx, double lineHeight)
         {
             using var typeface = SKTypeface.Default;
-            var (cellWidth, cellHeight) = FontMetricsService.MeasureCell(typeface, fontSize, lineHeight, scale);
+            var metrics = FontMetricsService.MeasureCell(typeface, Options(fontSizePx, lineHeight));
 
-            Assert.True(cellWidth >= 4f, $"Cell width ({cellWidth}) should be >= 4px");
-            Assert.True(cellHeight > 0f, $"Cell height ({cellHeight}) should be positive");
+            Assert.True(metrics.CellWidth >= 1);
+            Assert.True(metrics.CellHeight >= fontSizePx * lineHeight - 0.5f);
+            Assert.InRange(metrics.Baseline, 0, metrics.CellHeight);
+            Assert.InRange(metrics.UnderlineThickness, 1, metrics.CellHeight);
+            Assert.InRange(metrics.UnderlinePosition, 0, metrics.CellHeight - metrics.UnderlineThickness);
+            Assert.InRange(metrics.StrikethroughPosition, 0, metrics.Baseline);
         }
 
         [Fact]
         public void MeasureCell_UsesA8AtlasFontMetricsPolicy()
         {
             using var typeface = SKTypeface.Default;
-            const float fontSize = 17f;
-            const double lineHeight = 1.25;
-            const float scale = 1.5f;
-            float scaledFontSize = fontSize * scale;
-
-            var (cellWidth, cellHeight) = FontMetricsService.MeasureCell(
-                typeface, fontSize, lineHeight, scale);
-
-            using var atlasFont = new SKFont(typeface, scaledFontSize)
+            const float fontSizePx = 25.5f;
+            using var atlasFont = new SKFont(typeface, fontSizePx)
             {
                 Subpixel = false,
                 Hinting = SKFontHinting.Full,
                 Edging = SKFontEdging.Antialias,
             };
-            var metrics = atlasFont.Metrics;
-            float ascent = float.IsFinite(metrics.Ascent)
-                ? MathF.Abs(metrics.Ascent)
-                : scaledFontSize;
-            float descent = float.IsFinite(metrics.Descent)
-                ? MathF.Abs(metrics.Descent)
-                : 0f;
-            float glyphHeight = MathF.Max(scaledFontSize, ascent + descent);
-            float glyphAdvance = float.IsFinite(metrics.AverageCharacterWidth)
-                ? MathF.Max(0.5f, metrics.AverageCharacterWidth)
-                : scaledFontSize * 0.6f;
-            float wideGlyphAdvance = atlasFont.MeasureText("W");
-            if (float.IsFinite(wideGlyphAdvance))
-                glyphAdvance = MathF.Max(glyphAdvance, wideGlyphAdvance);
+            var fm = atlasFont.Metrics;
+            float advance = MathF.Max(MathF.Max(0.5f, fm.AverageCharacterWidth), atlasFont.MeasureText("W"));
 
-            Assert.Equal(
-                MathF.Round(MathF.Max(4f, glyphAdvance / scale)),
-                cellWidth);
-            Assert.Equal(
-                MathF.Round(MathF.Max(fontSize * (float)lineHeight, glyphHeight / scale)),
-                cellHeight);
+            var metrics = FontMetricsService.MeasureCell(typeface, Options(fontSizePx, 1.0));
+
+            Assert.Equal((int)MathF.Round(advance, MidpointRounding.AwayFromZero), metrics.CellWidth);
+            Assert.Equal((int)MathF.Round(MathF.Abs(fm.Ascent), MidpointRounding.AwayFromZero), metrics.Ascent);
         }
 
         [Fact]
         public void MeasureCell_ScalesLineHeight_WhenLineHeightIncreases()
         {
             using var typeface = SKTypeface.Default;
-            const float fontSize = 24f;
-            const float scale = 1.0f;
+            var normal = FontMetricsService.MeasureCell(typeface, Options(24f, 1.0));
+            var tall = FontMetricsService.MeasureCell(typeface, Options(24f, 2.5));
 
-            var (_, normalHeight) = FontMetricsService.MeasureCell(typeface, fontSize, 1.0, scale);
-            var (_, doubleHeight) = FontMetricsService.MeasureCell(typeface, fontSize, 2.5, scale);
-
-            Assert.True(doubleHeight > normalHeight, "Cell height should increase when line height multiplier increases significantly");
+            Assert.True(tall.CellHeight > normal.CellHeight);
+            Assert.True(tall.BaselineShift > normal.BaselineShift, "extra line height is split above the text");
         }
 
-        [Fact]
-        public void MeasureCell_ClampsScale_WhenZeroOrNegativeScaleProvided()
-        {
-            using var typeface = SKTypeface.Default;
-            var (widthZero, heightZero) = FontMetricsService.MeasureCell(typeface, 12f, 1.2, 0f);
-            var (widthNeg, heightNeg) = FontMetricsService.MeasureCell(typeface, 12f, 1.2, -1.0f);
-
-            Assert.True(widthZero >= 4f);
-            Assert.True(heightZero > 0f);
-            Assert.True(widthNeg >= 4f);
-            Assert.True(heightNeg > 0f);
-        }
         [Fact]
         public void MeasureCell_NormalizesNonFiniteInputs()
         {
             using var typeface = SKTypeface.Default;
+            var metrics = FontMetricsService.MeasureCell(typeface, new CellMetricsOptions(float.NaN, double.PositiveInfinity, float.NaN));
 
-            var (cellWidth, cellHeight) = FontMetricsService.MeasureCell(
-                typeface,
-                float.NaN,
-                double.PositiveInfinity,
-                float.PositiveInfinity);
-
-            Assert.True(float.IsFinite(cellWidth) && cellWidth >= 4f);
-            Assert.True(float.IsFinite(cellHeight) && cellHeight > 0f);
+            Assert.True(metrics.CellWidth >= 1);
+            Assert.True(metrics.CellHeight >= 1);
         }
 
         [Fact]
@@ -131,35 +98,48 @@ namespace Dotty.App.Tests
             var cache = new CellMetricsCache(capacity: 4);
             var typeface = SKTypeface.Default;
 
-            var first = FontMetricsService.MeasureCell(cache, typeface, 14f, 1.2, 1.5f);
+            var first = FontMetricsService.MeasureCell(cache, typeface, Options(21f, 1.2, 1.5f));
             for (int i = 0; i < 10; i++)
-                Assert.Equal(first, FontMetricsService.MeasureCell(cache, typeface, 14f, 1.2, 1.5f));
+                Assert.Equal(first, FontMetricsService.MeasureCell(cache, typeface, Options(21f, 1.2, 1.5f)));
 
             Assert.Equal(1, cache.Count);
         }
 
         [Theory]
-        // Size, line height and scale that clamp to the same value share one entry.
+        // Options that normalize to the same value share one entry.
         [InlineData(14f, 1.2, 0f, 14f, 1.2, -1f, 1)]
-        [InlineData(1000f, 1.2, 1f, 512f, 1.2, 1f, 1)]
+        [InlineData(5000f, 1.2, 1f, 4096f, 1.2, 1f, 1)]
         [InlineData(14f, 20.0, 1f, 14f, 8.0, 1f, 1)]
-        [InlineData(14f, 1.2, 100f, 14f, 1.2, 16f, 1)]
+        [InlineData(14f, 1.2, 100f, 14f, 1.2, DisplayScale.MaxScale, 1)]
         // Any differing measurement input is a different entry.
         [InlineData(14f, 1.2, 1f, 15f, 1.2, 1f, 2)]
         [InlineData(14f, 1.2, 1f, 14f, 1.3, 1f, 2)]
         [InlineData(14f, 1.2, 1f, 14f, 1.2, 2f, 2)]
-        public void MeasureCell_KeysByClampedValue(
+        public void MeasureCell_KeysByNormalizedValue(
             float sizeA, double lineHeightA, float scaleA,
             float sizeB, double lineHeightB, float scaleB,
             int expectedEntries)
         {
-            var cache = new CellMetricsCache(capacity: 4);
+            var cache = new CellMetricsCache(capacity: 8);
             var typeface = SKTypeface.Default;
 
-            FontMetricsService.MeasureCell(cache, typeface, sizeA, lineHeightA, scaleA);
-            FontMetricsService.MeasureCell(cache, typeface, sizeB, lineHeightB, scaleB);
+            FontMetricsService.MeasureCell(cache, typeface, Options(sizeA, lineHeightA, scaleA));
+            FontMetricsService.MeasureCell(cache, typeface, Options(sizeB, lineHeightB, scaleB));
 
             Assert.Equal(expectedEntries, cache.Count);
+        }
+
+        [Fact]
+        public void MeasureCell_AdjustmentsArePartOfTheKey()
+        {
+            var cache = new CellMetricsCache(capacity: 8);
+            var typeface = SKTypeface.Default;
+
+            var plain = FontMetricsService.MeasureCell(cache, typeface, Options(20f));
+            var wider = FontMetricsService.MeasureCell(cache, typeface, Options(20f) with { AdjustWidth = new CellAdjustment(2, false) });
+
+            Assert.Equal(plain.CellWidth + 2, wider.CellWidth);
+            Assert.Equal(2, cache.Count);
         }
 
         [Fact]
@@ -175,8 +155,8 @@ namespace Dotty.App.Tests
                 "Reloading the default font data did not yield a separate wrapper with the same family and style");
             var cache = new CellMetricsCache(capacity: 4);
 
-            var fromOriginal = FontMetricsService.MeasureCell(cache, original, 14f, 1.2, 1f);
-            var fromCopy = FontMetricsService.MeasureCell(cache, copy!, 14f, 1.2, 1f);
+            var fromOriginal = FontMetricsService.MeasureCell(cache, original, Options(14f));
+            var fromCopy = FontMetricsService.MeasureCell(cache, copy!, Options(14f));
 
             Assert.Equal(fromOriginal, fromCopy);
             Assert.Equal(1, cache.Count);
@@ -189,7 +169,7 @@ namespace Dotty.App.Tests
             var typeface = SKTypeface.Default;
 
             for (int size = 10; size < 20; size++)
-                FontMetricsService.MeasureCell(cache, typeface, size, 1.2, 1f);
+                FontMetricsService.MeasureCell(cache, typeface, Options(size));
 
             Assert.Equal(3, cache.Count);
         }

@@ -18,7 +18,8 @@ public static class DottyDefaults
     public static readonly string FontFamily =
         OperatingSystem.IsMacOS() ? FontFamilyMacOS : OperatingSystem.IsWindows() ? FontFamilyWindows : FontFamilyLinux;
     public const string FontWeight = "regular";
-    public const double FontSize = 15.0;
+    /// <summary>Default <c>font.size</c> in points: 11.25 pt = 15 px at content scale 1.</summary>
+    public const double FontSize = 11.25;
     public const double ContentPaddingLeft = 0.0;
     public const double ContentPaddingTop = 0.0;
     public const double ContentPaddingRight = 0.0;

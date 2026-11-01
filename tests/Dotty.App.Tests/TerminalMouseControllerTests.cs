@@ -80,7 +80,8 @@ public sealed class TerminalMouseControllerTests
         public ContextMenuModel? ActiveContextMenu { get; set; }
 
         public TerminalMouseGeometry Geometry { get; set; } = new(
-            Scale: 1.0f,
+            ContentScale: 1.0f,
+            WindowUnitsToDevice: 1.0f,
             CellWidth: 10.0f,
             CellHeight: 20.0f,
             PaddingLeft: 0f,
@@ -317,6 +318,29 @@ public sealed class TerminalMouseControllerTests
         // Drag to col 10, row 3
         controller.HandleMouseMove(mouse, new Vector2(100f, 80f));
         Assert.Equal(10, tab.ActivePane.Selection.ActiveColumn);
+    }
+
+    // Pointer positions are window units: only WindowUnitsToDevice converts them; the content scale
+    // (fonts, padding) must not, or a Windows 125 % click lands 25 % too far right.
+    [Theory]
+    [InlineData(1.25f, 1f, 50f, 60f)]  // Windows/X11 125 %: window units are device pixels
+    [InlineData(2f, 2f, 25f, 30f)]     // macOS/Wayland 200 %: window units are half device pixels
+    [InlineData(1f, 1f, 50f, 60f)]
+    public void HandleMouseDown_MapsPointerThroughWindowUnitsToDevice(
+        float contentScale, float windowUnitsToDevice, float pointerX, float pointerY)
+    {
+        using var host = new FakeTerminalMouseHost();
+        host.Geometry = host.Geometry with { ContentScale = contentScale, WindowUnitsToDevice = windowUnitsToDevice };
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+
+        var controller = new TerminalMouseController(host);
+        controller.HandleMouseDown(new FakeMouse { Position = new Vector2(pointerX, pointerY) }, MouseButton.Left);
+
+        // Device (50, 60) minus the 20 px tab bar: column 5, row 2.
+        Assert.Equal(2, tab.ActivePane.Selection.AnchorRow);
+        Assert.Equal(5, tab.ActivePane.Selection.AnchorColumn);
     }
 
     [Fact]

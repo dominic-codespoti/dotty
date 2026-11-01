@@ -12,11 +12,8 @@ namespace Dotty.Silk.Rendering;
 /// </summary>
 internal sealed record TypefaceIdentity(string FamilyName, int Weight, int Width, SKFontStyleSlant Slant);
 
-/// <summary>Cache key: face identity plus the already-clamped measurement inputs.</summary>
-internal readonly record struct CellMetricsKey(TypefaceIdentity Face, float FontSize, double LineHeight, float Scale);
-
-/// <summary>Logical cell size produced by <see cref="FontMetricsService.MeasureCell(SKTypeface, float, double, float)"/>.</summary>
-internal readonly record struct CellMetrics(float Width, float Height);
+/// <summary>Cache key: face identity plus the already-normalized measurement options.</summary>
+internal readonly record struct CellMetricsKey(TypefaceIdentity Face, CellMetricsOptions Options);
 
 /// <summary>
 /// Fixed-capacity least-recently-used map from <see cref="CellMetricsKey"/> to <see cref="CellMetrics"/>.

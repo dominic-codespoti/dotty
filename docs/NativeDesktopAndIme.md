@@ -64,9 +64,15 @@ archive from Dotty's checked-in ownership and scalar-caret patches.
 Preedit text, caret, and selected clause are kept as ephemeral composition state.
 Native Unicode scalar offsets are converted to UTF-16 offsets at the managed
 boundary. The scene composer uses the terminal's canonical grapheme width rules
-and configured font fallback, clips composition at the active pane boundary, and
-draws underlining, clause selection, and the composition caret without writing
-preedit characters into the terminal buffer. Stable composition frames reuse
+and configured font fallback. `PreeditLayout` places the composition from the
+cursor and wraps it onto the next rows of the active pane (a wide grapheme never
+straddles the right edge); on the last rows it is shifted up over the previous
+rows, and when it is taller than the pane, earlier rows scroll away so the caret
+row stays visible (the one-row search input therefore shifts left). Cells are
+drawn opaque in the pane's default foreground/background, the focused clause in
+the theme selection colour and the other clauses underlined; the terminal cells
+under the composition are hidden for that frame. Nothing is written to the
+terminal buffer. Stable composition frames reuse
 their emitted instances rather than repeatedly allocating grapheme strings.
 
 After composition, the host converts the completed frame's framebuffer caret
@@ -150,3 +156,9 @@ native IME attempt showed no preedit because its isolated run lacked system XKB
 data; the successful retry used a private read-only XKB-data mount and an
 explicitly activated private D-Bus input-method service. That initial failure was
 an environment setup issue, not evidence of a native bridge defect.
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C17: preedit wraps/shifts instead of clipping, theme colours on an opaque background, per-clause styles, covered cells hidden. |

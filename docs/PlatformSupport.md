@@ -341,3 +341,24 @@ Support promotion is staged:
 - [ ] Extract every archive into a clean directory and run the host.
 - [ ] Generate `MANIFEST.txt`, `SHA256SUMS` and the provenance attestation; verify checksums (`sha256sum -c SHA256SUMS`) and `gh attestation verify`.
 - [ ] Record unsupported architecture candidates separately from release assets.
+
+## Desktop identity
+
+| Item | Value / file |
+|---|---|
+| App id, Wayland `app_id`, X11 `WM_CLASS` class | `io.github.dominic_codespoti.Dotty` (X11 instance `dotty`), set with `glfwWindowHintString` before the window is created |
+| Window title | `window.title`, default `Dotty`; then the active tab title |
+| Icon master | `assets/icons/dotty.svg`; `scripts/dist/gen-icons.py` (standard-library Python) writes `dotty-{16..512}.png`, `dotty.ico`, `dotty.icns` |
+| Window icon | Embedded PNGs set with `glfwSetWindowIcon` on X11 and Windows; Wayland and macOS take it from the desktop entry / app bundle |
+| Linux desktop entry | `packaging/linux/io.github.dominic_codespoti.Dotty.desktop` (`StartupWMClass` = app id) |
+| macOS bundle | `packaging/macos/Info.plist` (bundle id = app id, `NSHighResolutionCapable`, `dotty.icns`) |
+| Windows | `packaging/windows/app.manifest` (per-monitor-v2 DPI awareness), `ApplicationIcon` `dotty.ico`, GUI subsystem (`WinExe`); see [Command Line](CommandLine.md) for console output |
+
+Not yet verified on a real desktop: X11 class / Wayland app_id matching the desktop entry, the window icon,
+Windows console attach and DPI manifest, macOS bundle launch.
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C13: desktop identity (app id, icon set, desktop entry, Info.plist, Windows manifest). |

@@ -1,14 +1,28 @@
 using System;
-using System.Globalization;
+using System.Collections.Generic;
 using Dotty.Rendering.Gpu;
 using Dotty.Terminal.Adapter;
 using SkiaSharp;
 
 namespace Dotty.Silk.Rendering;
 
-/// <summary>Emits the ephemeral, cell-aligned composition text for an IME.</summary>
+/// <summary>Theme-derived preedit colours: text on an opaque background, the focused clause in selection colours.</summary>
+internal readonly record struct PreeditColors(SgrColorArgb Foreground, SgrColorArgb Background, SgrColorArgb FocusedBackground)
+{
+    /// <summary>
+    /// Colours from the pane's default foreground/background and the theme selection colour (alpha dropped:
+    /// the preedit is drawn opaque so the cells it covers never show through).
+    /// </summary>
+    public static PreeditColors FromTheme(SgrColorArgb foreground, SgrColorArgb background, SgrColorArgb selection) =>
+        new(Opaque(foreground), Opaque(background), selection.IsEmpty ? Opaque(foreground) : Opaque(selection));
+
+    private static SgrColorArgb Opaque(SgrColorArgb color) => new(color.Argb | 0xFF000000u);
+}
+
+/// <summary>Emits the ephemeral, cell-aligned composition text for an IME, laid out by <see cref="PreeditLayout"/>.</summary>
 internal sealed class ImePreeditQuadBuilder
 {
+    private readonly List<PreeditCell> _cells = new();
     private CellInstance[] _cachedInstances = Array.Empty<CellInstance>();
     private int _cachedCount;
     private bool _hasCachedState;
@@ -17,45 +31,45 @@ internal sealed class ImePreeditQuadBuilder
     private SKTypeface? _cachedTypeface;
     private object? _cachedFallbackChain;
     private float _cachedFontSize;
-    private int _cachedFirstColumn;
-    private int _cachedRow;
-    private int _cachedVisibleColumns;
-    private int _cachedCaretCellOffset;
-    private static readonly SgrColorArgb Foreground = SgrColorArgb.FromRgb(255, 255, 255);
-    private static readonly SgrColorArgb SelectionBackground = SgrColorArgb.FromRgb(64, 112, 180);
+    private int _cachedStartColumn;
+    private int _cachedStartRow;
+    private PreeditBox _cachedBox;
+    private PreeditColors _cachedColors;
+    private PreeditLayoutResult _cachedLayout;
+
+    /// <summary>Upper bound of instances <see cref="Build"/> writes for <paramref name="state"/>.</summary>
+    public static int MaxInstances(in ImePreeditState state) => state.Text?.Length ?? 0;
 
     public int Build(
         in ImePreeditState state,
-        int firstColumn,
-        int row,
-        int visibleColumns,
+        int startColumn,
+        int startRow,
+        PreeditBox box,
+        PreeditColors colors,
         Span<CellInstance> destination,
         GlyphAtlas atlas,
         SKTypeface typeface,
         float fontSize,
         HashSet<int> dirtyAtlasRows,
-        out int caretCellOffset)
+        out PreeditLayoutResult layout)
     {
-        caretCellOffset = 0;
-        if (!state.IsActive || visibleColumns <= 0 || destination.IsEmpty)
-            return 0;
-
         if (_hasCachedState && state == _cachedState
             && ReferenceEquals(atlas, _cachedAtlas)
             && ReferenceEquals(typeface, _cachedTypeface)
             && ReferenceEquals(atlas.FallbackChain, _cachedFallbackChain)
             && fontSize.Equals(_cachedFontSize)
-            && firstColumn == _cachedFirstColumn
-            && row == _cachedRow
-            && visibleColumns == _cachedVisibleColumns)
+            && startColumn == _cachedStartColumn
+            && startRow == _cachedStartRow
+            && box == _cachedBox
+            && colors == _cachedColors)
         {
             _cachedInstances.AsSpan(0, _cachedCount).CopyTo(destination);
-            caretCellOffset = _cachedCaretCellOffset;
+            layout = _cachedLayout;
             return _cachedCount;
         }
 
-        int count = BuildGlyphs(in state, firstColumn, row, visibleColumns, destination, atlas,
-            typeface, fontSize, dirtyAtlasRows, out caretCellOffset);
+        layout = PreeditLayout.Compute(in state, startColumn, startRow, box, _cells);
+        int count = Emit(in state, destination, atlas, typeface, fontSize, colors, dirtyAtlasRows);
         if (_cachedInstances.Length < count)
             Array.Resize(ref _cachedInstances, Math.Max(count, _cachedInstances.Length == 0 ? 8 : _cachedInstances.Length * 2));
         destination[..count].CopyTo(_cachedInstances);
@@ -64,96 +78,96 @@ internal sealed class ImePreeditQuadBuilder
         _cachedTypeface = typeface;
         _cachedFallbackChain = atlas.FallbackChain;
         _cachedFontSize = fontSize;
-        _cachedFirstColumn = firstColumn;
-        _cachedRow = row;
-        _cachedVisibleColumns = visibleColumns;
-        _cachedCaretCellOffset = caretCellOffset;
+        _cachedStartColumn = startColumn;
+        _cachedStartRow = startRow;
+        _cachedBox = box;
+        _cachedColors = colors;
+        _cachedLayout = layout;
         _cachedCount = count;
         _hasCachedState = true;
         return count;
     }
-    private static int BuildGlyphs(
+
+    /// <summary>
+    /// Removes from <paramref name="instances"/> the terminal cells the last built preedit covers, so their glyphs
+    /// (drawn in a later pass than every background) cannot show through the opaque preedit. Returns the new count.
+    /// </summary>
+    public int RemoveCovered(Span<CellInstance> instances) =>
+        RemoveCovered(instances, System.Runtime.InteropServices.CollectionsMarshal.AsSpan(_cells));
+
+    internal static int RemoveCovered(Span<CellInstance> instances, ReadOnlySpan<PreeditCell> cells)
+    {
+        if (cells.IsEmpty)
+            return instances.Length;
+        int written = 0;
+        for (int i = 0; i < instances.Length; i++)
+        {
+            ref readonly CellInstance instance = ref instances[i];
+            int width = (instance.Flags & CellFlags.WideCell) != 0 ? 2 : 1;
+            bool covered = false;
+            foreach (var cell in cells)
+            {
+                if (cell.Row == instance.Row && instance.Col < cell.Column + cell.Width && instance.Col + width > cell.Column)
+                {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered)
+                instances[written++] = instances[i];
+        }
+        return written;
+    }
+
+    private int Emit(
         in ImePreeditState state,
-        int firstColumn,
-        int row,
-        int visibleColumns,
         Span<CellInstance> destination,
         GlyphAtlas atlas,
         SKTypeface typeface,
         float fontSize,
-        HashSet<int> dirtyAtlasRows,
-        out int caretCellOffset)
+        PreeditColors colors,
+        HashSet<int> dirtyAtlasRows)
     {
-        caretCellOffset = 0;
-        if (!state.IsActive || visibleColumns <= 0 || destination.IsEmpty)
-            return 0;
-
-        ReadOnlySpan<char> text = state.Text.AsSpan();
-        int selectionStart = Math.Clamp(state.SelectionStart, 0, text.Length);
-        int selectionLength = Math.Clamp(state.SelectionLength, 0, text.Length - selectionStart);
-        int selectionEnd = selectionStart + selectionLength;
-        int caretUtf16 = Math.Clamp(state.CaretIndex, 0, text.Length);
+        string text = state.Text;
         int written = 0;
-        int utf16 = 0;
-        int cellOffset = 0;
-        bool caretResolved = false;
-        while (utf16 < text.Length)
+        foreach (var cell in _cells)
         {
-            int length = StringInfo.GetNextTextElementLength(text[utf16..]);
-            if (length <= 0) break;
-            ReadOnlySpan<char> graphemeSpan = text.Slice(utf16, length);
-            int width = UnicodeWidth.GetWidth(graphemeSpan);
-            if (!caretResolved && caretUtf16 <= utf16)
+            if (written >= destination.Length)
+                break;
+            if (cell.Column < 0 || cell.Row < 0 || cell.Column + cell.Width > ushort.MaxValue || cell.Row > ushort.MaxValue)
+                continue;
+            string grapheme = text.Substring(cell.Utf16Start, cell.Utf16Length);
+            var key = new GlyphKey(grapheme, typeface, fontSize, GlyphStyle.Regular);
+            int oldEntryCount = atlas.EntryCount;
+            bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
+            if (!glyphOk) glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
+            if (atlas.EntryCount > oldEntryCount) dirtyAtlasRows.Add(cell.Row);
+            bool focused = cell.Style == PreeditCellStyle.Focused;
+            SgrColorArgb background = focused ? colors.FocusedBackground : colors.Background;
+            byte flags = (byte)((cell.Width == 2 ? CellFlags.WideCell : 0)
+                | (focused ? 0 : CellFlags.Underline)
+                | (glyphOk && glyphInfo.IsColor ? CellFlags.ColorGlyph : 0));
+            destination[written++] = new CellInstance
             {
-                caretCellOffset = cellOffset;
-                caretResolved = true;
-            }
-            bool selected = selectionStart < utf16 + length && selectionEnd > utf16;
-            int visibleStart = Math.Max(cellOffset, 0);
-            int visibleEnd = Math.Min(cellOffset + width, visibleColumns);
-            // Instances are cell quads, not clipped glyph fragments. Do not let a
-            // wide grapheme straddle the pane edge and bleed into its neighbour.
-            if (width > 0 && visibleStart == cellOffset && visibleEnd == cellOffset + width
-                && firstColumn + cellOffset >= 0 && firstColumn + cellOffset + width <= ushort.MaxValue)
-            {
-                if (written >= destination.Length) break;
-                string grapheme = graphemeSpan.ToString();
-                var key = new GlyphKey(grapheme, typeface, fontSize, GlyphStyle.Regular);
-                int oldEntryCount = atlas.EntryCount;
-                bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
-                if (!glyphOk) glyphOk = atlas.TryGetFallbackGlyph(out glyphInfo);
-                if (atlas.EntryCount > oldEntryCount) dirtyAtlasRows.Add(row);
-                destination[written++] = new CellInstance
-                {
-                    Col = (ushort)(firstColumn + cellOffset),
-                    Row = (ushort)row,
-                    OffX = glyphOk ? (short)glyphInfo.LeftBearing : (short)0,
-                    OffY = glyphOk ? QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing) : (short)0,
-                    GlyphX = glyphOk ? (short)glyphInfo.X : (short)0,
-                    GlyphY = glyphOk ? (short)glyphInfo.Y : (short)0,
-                    GlyphW = glyphOk ? (short)glyphInfo.Width : (short)0,
-                    GlyphH = glyphOk ? (short)glyphInfo.Height : (short)0,
-                    FgR = Foreground.R,
-                    FgG = Foreground.G,
-                    FgB = Foreground.B,
-                    FgA = 255,
-                    Flags = (byte)((width == 2 ? CellFlags.WideCell : 0) | CellFlags.Underline | (glyphOk && glyphInfo.IsColor ? CellFlags.ColorGlyph : 0)),
-                    BgR = SelectionBackground.R,
-                    BgG = SelectionBackground.G,
-                    BgB = SelectionBackground.B,
-                    BgA = selected ? (byte)255 : (byte)0
-                };
-            }
-            if (!caretResolved && caretUtf16 < utf16 + length)
-            {
-                caretCellOffset = cellOffset;
-                caretResolved = true;
-            }
-            cellOffset += width;
-            utf16 += length;
+                Col = (ushort)cell.Column,
+                Row = (ushort)cell.Row,
+                OffX = glyphOk ? (short)glyphInfo.LeftBearing : (short)0,
+                OffY = glyphOk ? QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing) : (short)0,
+                GlyphX = glyphOk ? (short)glyphInfo.X : (short)0,
+                GlyphY = glyphOk ? (short)glyphInfo.Y : (short)0,
+                GlyphW = glyphOk ? (short)glyphInfo.Width : (short)0,
+                GlyphH = glyphOk ? (short)glyphInfo.Height : (short)0,
+                FgR = colors.Foreground.R,
+                FgG = colors.Foreground.G,
+                FgB = colors.Foreground.B,
+                FgA = 255,
+                Flags = flags,
+                BgR = background.R,
+                BgG = background.G,
+                BgB = background.B,
+                BgA = 255,
+            };
         }
-        if (!caretResolved) caretCellOffset = cellOffset;
         return written;
     }
-
 }

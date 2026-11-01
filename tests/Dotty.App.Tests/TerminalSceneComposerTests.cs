@@ -1011,64 +1011,69 @@ public sealed class TerminalSceneComposerTests
     }
 
 
-    [Fact]
-    public void Compose_PreeditRendersGraphemeClustersAndClipsAtPaneEdgeWithoutChangingTerminal()
+    [Theory]
+    [InlineData("DarkPlus")]
+    [InlineData("LightPlus")]
+    public void Compose_PreeditRendersOpaqueThemeColouredCellsWrapsAndShiftsWithoutChangingTerminal(string themeName)
     {
         using var tab = new TerminalTab(rows: 4, columns: 10);
         using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
         var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
-        var theme = BuiltInThemes.DarkPlus;
+        var theme = themeName == "DarkPlus" ? BuiltInThemes.DarkPlus : BuiltInThemes.LightPlus;
+        var selection = new SgrColorArgb(0x803385DB);
         tab.Session.Adapter.Buffer.SetCursor(0, 2);
 
         TerminalSceneFrame Compose(ImePreeditState? preedit) => composer.Compose(
-            tab, manager, theme, new SgrColorArgb(theme.Foreground), new SgrColorArgb(0x803385DB),
+            tab, manager, theme, new SgrColorArgb(theme.Foreground), selection,
             framebufferWidth: 100, framebufferHeight: 80, cellWidth: 10, cellHeight: 20, scale: 1,
             rows: 4, columns: 10, padding: NoPadding(), showTabBar: false, cursorVisible: false,
             scrollbarHovered: false, scrollbarDragging: false,
             searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
             activeContextMenu: null, preeditState: preedit);
 
+        // The empty terminal has no opaque cell backgrounds, so BgA == 255 identifies the preedit cells.
+        static (int Col, int Row)[] PreeditCells(TerminalSceneFrame frame) =>
+            frame.AsSpan().ToArray().Where(i => i.BgA == 255).Select(i => ((int)i.Col, (int)i.Row)).ToArray();
+
+        // Focused clause 界 (UTF-16 1..2) in selection colours; the rest underlined in the theme colours.
         var composed = new ImePreeditState("A界e\u0301🙂", 4, 1, 1);
         var frame = Compose(composed);
-        ReadOnlySpan<CellInstance> instances = frame.AsSpan();
-        Span<ushort> columns = stackalloc ushort[4];
-        Span<CellInstance> preeditCells = stackalloc CellInstance[4];
-        int count = 0;
-        for (int i = 0; i < instances.Length; i++)
-        {
-            if ((instances[i].Flags & CellFlags.Underline) == 0)
-                continue;
-            columns[count] = instances[i].Col;
-            preeditCells[count++] = instances[i];
-        }
+        var cells = frame.AsSpan().ToArray().Where(i => i.BgA == 255).ToArray();
 
-        Assert.Equal(4, count);
-        Assert.Equal(new ushort[] { 2, 3, 5, 6 }, columns.ToArray());
-        Assert.True((preeditCells[1].Flags & CellFlags.WideCell) != 0);
-        Assert.True((preeditCells[3].Flags & CellFlags.WideCell) != 0);
-        Assert.Equal((byte)255, preeditCells[1].BgA);
+        Assert.Equal(new[] { (2, 0), (3, 0), (5, 0), (6, 0) }, PreeditCells(frame));
+        var foreground = new SgrColorArgb(theme.Foreground);
+        var background = new SgrColorArgb(theme.Background);
+        Assert.All(cells, c => Assert.Equal((foreground.R, foreground.G, foreground.B, (byte)255), (c.FgR, c.FgG, c.FgB, c.FgA)));
+        Assert.Equal((selection.R, selection.G, selection.B), (cells[1].BgR, cells[1].BgG, cells[1].BgB));
+        Assert.True((cells[1].Flags & CellFlags.Underline) == 0);
+        Assert.All(new[] { cells[0], cells[2], cells[3] }, c =>
+        {
+            Assert.Equal((background.R, background.G, background.B), (c.BgR, c.BgG, c.BgB));
+            Assert.True((c.Flags & CellFlags.Underline) != 0);
+        });
+        Assert.True((cells[1].Flags & CellFlags.WideCell) != 0);
+        Assert.True((cells[3].Flags & CellFlags.WideCell) != 0);
         Assert.Equal(2, tab.Session.Adapter.Buffer.CursorCol);
         Assert.True(frame.ImeCaretBoundsValid);
         Assert.Equal(60f, frame.ImeCaretBounds.Left);
 
+        // At the row end the text wraps onto the next row instead of being clipped.
         tab.Session.Adapter.Buffer.SetCursor(0, 8);
-        frame = Compose(new ImePreeditState("A界B", 0, 0, 0));
-        instances = frame.AsSpan();
-        count = 0;
-        for (int i = 0; i < instances.Length; i++)
-        {
-            if ((instances[i].Flags & CellFlags.Underline) != 0)
-            {
-                Assert.Equal((ushort)8, instances[i].Col);
-                count++;
-            }
-        }
-        Assert.Equal(1, count);
+        frame = Compose(new ImePreeditState("A界B", 3, 0, 0));
+        Assert.Equal(new[] { (8, 0), (0, 1), (2, 1) }, PreeditCells(frame));
+        Assert.Equal((30f, 20f), (frame.ImeCaretBounds.Left, frame.ImeCaretBounds.Top));
         Assert.Equal(8, tab.Session.Adapter.Buffer.CursorCol);
 
+        // On the last row the wrapped text is shifted up over the previous row.
+        tab.Session.Adapter.Buffer.SetCursor(3, 8);
+        frame = Compose(new ImePreeditState("A界B", 3, 0, 0));
+        Assert.Equal(new[] { (8, 2), (0, 3), (2, 3) }, PreeditCells(frame));
+        Assert.Equal((30f, 60f), (frame.ImeCaretBounds.Left, frame.ImeCaretBounds.Top));
+        Assert.Equal(3, tab.Session.Adapter.Buffer.CursorRow);
+
         frame = Compose(null);
-        Assert.DoesNotContain(frame.AsSpan().ToArray(), instance => (instance.Flags & CellFlags.Underline) != 0);
+        Assert.Empty(PreeditCells(frame));
         Assert.True(frame.ImeCaretBoundsValid);
         Assert.Equal(80f, frame.ImeCaretBounds.Left);
     }

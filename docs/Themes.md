@@ -24,9 +24,12 @@ Available built-in names:
 
 ## Transparency
 
-Window transparency is not supported yet. `window.opacity` in `config.json` is
-accepted, but the host never reads it, so the window is always opaque. There is
-no blur support.
+A theme's `opacity` (0–1) multiplies `window.opacity`; only the default
+background becomes translucent, text and chrome stay opaque (see
+[Configuration](Configuration.md#window)). The window must start translucent:
+the alpha framebuffer is a creation-time hint, so a theme that becomes
+translucent later (for example through `themeAuto`) stays opaque until restart.
+There is no blur support.
 
 ---
 
@@ -470,3 +473,9 @@ normal text and 3:1 for large text.
 ## See Also
 
 - [Configuration Guide](Configuration.md) - Full configuration documentation
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C12: theme `opacity` multiplies `window.opacity` (background only). |

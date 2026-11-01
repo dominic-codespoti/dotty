@@ -2,6 +2,7 @@ using System;
 using Silk.NET.OpenGL;
 using Dotty.Rendering.Gpu;
 using Dotty.Terminal.Adapter;
+using Dotty.Silk.Rendering;
 
 namespace Dotty.Silk;
 
@@ -294,6 +295,12 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
     }
 
 
+    /// <summary>
+    /// Alpha of the default background (<see cref="BackgroundOpacity.Resolve"/>); below 255 only shows through
+    /// when the window was created with an alpha framebuffer.
+    /// </summary>
+    public byte BackgroundAlpha { get; set; } = 255;
+
     public void Render(
         ReadOnlySpan<CellInstance> instances,
         ReadOnlySpan<ChromeQuadInstance> chromeQuads,
@@ -335,7 +342,8 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         _lastFramebufferWidth = framebufferWidth;
         _lastFramebufferHeight = framebufferHeight;
         _gl.Viewport(0, 0, (uint)framebufferWidth, (uint)framebufferHeight);
-        _gl.ClearColor(clearColor.R / 255f, clearColor.G / 255f, clearColor.B / 255f, 1f);
+        var clear = BackgroundOpacity.PremultipliedClear(clearColor, BackgroundAlpha);
+        _gl.ClearColor(clear.R, clear.G, clear.B, clear.A);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
         uint texId = TextureManager.UpdateTexture();

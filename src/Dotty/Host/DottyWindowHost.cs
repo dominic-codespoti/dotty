@@ -238,9 +238,8 @@ internal static partial class DottyWindowHost
         InputWindowExtensions.ShouldLoadFirstPartyPlatforms(false);
         global::Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
 
-        var options = WindowOptions.Default with
+        var options = WithStartOptions(WindowOptions.Default) with
         {
-            Title = "Dotty (Silk)",
             // Shown by RevealWindowWhenReady once the first frame is presented, so the user
             // never sees an unpainted or wrongly sized window.
             IsVisible = false,
@@ -272,6 +271,7 @@ internal static partial class DottyWindowHost
         GlfwErrorLog.Install(_glfwApi);
         HostWake.Initialize(static () => _glfwApi!.PostEmptyEvent(), Environment.CurrentManagedThreadId);
         RequestRobustContext();
+        RequestDesktopIdentityHints();
         try
         {
             _window.Initialize();
@@ -348,6 +348,7 @@ internal static partial class DottyWindowHost
         _windowRevealed = true;
         WindowPresentationGate.Invalidate(WindowFrameReason.Initial);
         _window.IsVisible = true;
+        ApplyStartWindowState();
     }
 
     private static void PublishCustomFrameHitTestGeometry(
@@ -449,12 +450,14 @@ internal static partial class DottyWindowHost
         _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
         NativeGlfwMetadata.Initialize(_glfwApi);
         _displayPlatform = NativeGlfwMetadata.TryGetPlatform(out int platform) ? (DisplayPlatform)platform : DisplayPlatform.Unknown;
+        ApplyLoadedWindowOptions();
         ResolveFontAndMetrics();
         InstallContentScaleCallback();
         _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain);
         GlyphAtlasService.AcquireAtlas(_atlas);
         _renderer = new SilkTerminalRenderer(_gl, _atlas);
         _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx()) { BaselineShift = _cellMetrics.BaselineShift };
+        ApplyLiveWindowOptions(UserConfigService.Current);
 
         _mouseHost = new MouseHost();
         _keyboardDispatcher = new TerminalKeyboardDispatcher(_mouseHost);
@@ -1167,6 +1170,7 @@ internal static partial class DottyWindowHost
                 SilkConfig.ApplyConfigToAdapter(pane.Session.Adapter, _activeTheme);
         (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme(theme: _activeTheme);
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
+        ApplyLiveWindowOptions(config);
     }
     private static void StartSystemThemeRefresher()
     {

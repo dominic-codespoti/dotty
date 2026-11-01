@@ -26,7 +26,7 @@ public sealed class LeafPane : PaneNode, IDisposable
         Session = session ?? throw new ArgumentNullException(nameof(session));
         Id = id ?? session.SurfaceId;
         session.SurfaceId = Id;
-        Selection = new TextSelectionService();
+        Selection = new TextSelectionService(session.Adapter.Buffer);
         Columns = session.Adapter.Buffer.Columns;
         Rows = session.Adapter.Buffer.Rows;
     }

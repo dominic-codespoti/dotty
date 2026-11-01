@@ -53,6 +53,10 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `mouse.alternate_scroll` | string (`"auto"`, `"off"`) | `"auto"` |
 | `mouse.report_bypass_modifier` | string (`"shift"`, `"ctrl"`, `"alt"`, `"super"`, `"none"`) | `"shift"` |
 | `mouse.middle_click_action` | string (`"primary-paste"`, `"clipboard-paste"`, `"ignore"`) | `"clipboard-paste"` |
+| `selection.word_chars` | string | `"@-./_~?&=%+#"` |
+| `selection.clear_on_copy` | boolean | `true` |
+| `selection.clear_on_typing` | boolean | `true` |
+| `selection.rectangle_modifier` | string (`"alt"`, `"ctrl"`, `"shift"`, `"super"`, `"none"`) | `"alt"` |
 | `vt.window_resize_allowed` | boolean | `false` |
 | `vt.checksum_report_enabled` | boolean | `false` |
 | `shell_integration` | string (`"none"`, `"detect"`) | `"none"` |

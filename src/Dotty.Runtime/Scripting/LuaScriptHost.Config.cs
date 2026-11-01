@@ -90,7 +90,11 @@ public sealed partial class LuaScriptHost
         ["mouse.scroll_multiplier"] = new(ConfigValueKind.Number, c => c.Mouse.ScrollMultiplier, (c, v) => c.Mouse.ScrollMultiplier = (double)v!),
         ["mouse.alternate_scroll"] = new(ConfigValueKind.String, c => c.Mouse.AlternateScroll, (c, v) => c.Mouse.AlternateScroll = (string)v!),
         ["mouse.report_bypass_modifier"] = new(ConfigValueKind.String, c => c.Mouse.ReportBypassModifier, (c, v) => c.Mouse.ReportBypassModifier = (string)v!),
-        ["mouse.middle_click_action"] = new(ConfigValueKind.String, c => c.Mouse.MiddleClickAction, (c, v) => c.Mouse.MiddleClickAction = (string)v!)
+        ["mouse.middle_click_action"] = new(ConfigValueKind.String, c => c.Mouse.MiddleClickAction, (c, v) => c.Mouse.MiddleClickAction = (string)v!),
+        ["selection.word_chars"] = new(ConfigValueKind.String, c => c.Selection.WordChars, (c, v) => c.Selection.WordChars = (string)v!),
+        ["selection.clear_on_copy"] = new(ConfigValueKind.Boolean, c => c.Selection.ClearOnCopy, (c, v) => c.Selection.ClearOnCopy = (bool)v!),
+        ["selection.clear_on_typing"] = new(ConfigValueKind.Boolean, c => c.Selection.ClearOnTyping, (c, v) => c.Selection.ClearOnTyping = (bool)v!),
+        ["selection.rectangle_modifier"] = new(ConfigValueKind.String, c => c.Selection.RectangleModifier, (c, v) => c.Selection.RectangleModifier = (string)v!)
     };
 
     private unsafe partial void RegisterConfig(Lua lua, int dottyIndex)
@@ -133,7 +137,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "keyboard")
         {
             host.PushConfigProxyTable(lua, key);
             return 1;
@@ -168,7 +172,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "keyboard")
         {
             if (lua.Type(3) != LuaType.Table)
             {
@@ -211,7 +215,7 @@ public sealed partial class LuaScriptHost
         }
 
         string path = NormalizeConfigKey(parent + "." + key);
-        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard")
+        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "keyboard")
         {
             host.PushConfigProxyTable(lua, path);
             return 1;
@@ -385,7 +389,7 @@ public sealed partial class LuaScriptHost
             {
                 string path = NormalizeConfigKey((prefix.Length == 0 ? "" : prefix + ".") + key);
                 if (lua.Type(-1) == LuaType.Table
-                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "scrollback" or "graphics" or "bell" or "keyboard"))
+                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "keyboard"))
                 {
                     ApplyConfigTable(lua, -1, path);
                 }

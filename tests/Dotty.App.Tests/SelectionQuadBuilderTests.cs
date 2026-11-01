@@ -40,9 +40,12 @@ public sealed class SelectionQuadBuilderTests
     {
         const int paneRows = 6;
         const int paneColumns = 12;
-        var selection = new TextSelectionService();
-        selection.StartSelection(anchorRow, anchorColumn, mode);
-        selection.UpdateSelection(activeRow, activeColumn);
+        bool block = mode == SelectionMode.Block;
+        var range = block
+            ? new TerminalSelectionRange(
+                Math.Min(anchorRow, activeRow), Math.Min(anchorColumn, activeColumn),
+                Math.Max(anchorRow, activeRow), Math.Max(anchorColumn, activeColumn))
+            : TerminalSelectionRange.From(anchorRow, anchorColumn, activeRow, activeColumn);
         var random = new Random(9173 + name.Length * 101 + anchorRow * 13 + activeColumn * 7 + scrollOffset);
 
         for (int trial = 0; trial < 40; trial++)
@@ -51,9 +54,8 @@ public sealed class SelectionQuadBuilderTests
             int rowOffset = random.Next(0, 5);
             CellInstance[] pane = RandomPaneInstances(random, paneRows, paneColumns, columnOffset, rowOffset);
 
-            CellInstance[] expected = OldOverlay(pane, selection, paneRows, paneColumns, scrollOffset, columnOffset, rowOffset);
+            CellInstance[] expected = OldOverlay(pane, range, block, paneRows, paneColumns, scrollOffset, columnOffset, rowOffset);
 
-            var range = selection.GetNormalizedRange();
             int coverageLength = SelectionQuadBuilder.CoverageLength(range, paneRows, paneColumns, scrollOffset);
             var actual = new CellInstance[pane.Length + coverageLength];
             pane.CopyTo(actual, 0);
@@ -61,7 +63,7 @@ public sealed class SelectionQuadBuilderTests
             // Stale coverage from an earlier pane must not leak into this one.
             coverage.AsSpan().Fill(true);
             int appended = SelectionQuadBuilder.Apply(
-                actual, pane.Length, range, mode == SelectionMode.Block, paneRows, paneColumns, scrollOffset,
+                actual, pane.Length, range, block, paneRows, paneColumns, scrollOffset,
                 columnOffset, rowOffset, SelectionColor, SelectionAlpha, Foreground, coverage);
 
             Assert.Equal(expected.Length, pane.Length + appended);
@@ -73,10 +75,7 @@ public sealed class SelectionQuadBuilderTests
     [Fact]
     public void Apply_FillsAnEmptyWrappedSelectionRowByRow()
     {
-        var selection = new TextSelectionService();
-        selection.StartSelection(0, 2);
-        selection.UpdateSelection(1, 1);
-        var range = selection.GetNormalizedRange();
+        var range = TerminalSelectionRange.From(0, 2, 1, 1);
         var instances = new CellInstance[SelectionQuadBuilder.CoverageLength(range, 3, 4, 0)];
         var coverage = new bool[instances.Length];
 
@@ -97,10 +96,7 @@ public sealed class SelectionQuadBuilderTests
     [Fact]
     public void Apply_AllocatesNothing()
     {
-        var selection = new TextSelectionService();
-        selection.StartSelection(-5, 3);
-        selection.UpdateSelection(50, 7);
-        var range = selection.GetNormalizedRange();
+        var range = TerminalSelectionRange.From(-5, 3, 50, 7);
         var random = new Random(7);
         CellInstance[] pane = RandomPaneInstances(random, 60, 200, 0, 0);
         int coverageLength = SelectionQuadBuilder.CoverageLength(range, 60, 200, 5);
@@ -146,10 +142,15 @@ public sealed class SelectionQuadBuilderTests
         return instances.ToArray();
     }
 
+    private static bool IsSelected(TerminalSelectionRange range, bool block, int row, int col) =>
+        block
+            ? row >= range.StartRow && row <= range.EndRow && col >= range.StartColumn && col <= range.EndColumn
+            : range.Contains(row, col);
+
     // Oracle: the pre-W4-B6 composer algorithm (per-instance IsCellSelected, then a full scan of the pane's
     // instances for every selected cell).
     private static CellInstance[] OldOverlay(
-        CellInstance[] pane, TextSelectionService selection, int paneRows, int paneColumns, int scrollOffset,
+        CellInstance[] pane, TerminalSelectionRange range, bool block, int paneRows, int paneColumns, int scrollOffset,
         int startColumnOffset, int startRowOffset)
     {
         var result = new List<CellInstance>(pane);
@@ -159,7 +160,7 @@ public sealed class SelectionQuadBuilderTests
             int localColumn = instance.Col - startColumnOffset;
             int viewRow = instance.Row - startRowOffset;
             int logicalRow = viewRow - scrollOffset;
-            if (selection.IsCellSelected(logicalRow, localColumn))
+            if (IsSelected(range, block, logicalRow, localColumn))
             {
                 instance.BgR = SelectionColor.R;
                 instance.BgG = SelectionColor.G;
@@ -169,7 +170,6 @@ public sealed class SelectionQuadBuilderTests
             }
         }
 
-        var range = selection.GetNormalizedRange();
         int firstLogicalRow = Math.Max(range.StartRow, -scrollOffset);
         int lastLogicalRow = Math.Min(range.EndRow, paneRows - 1 - scrollOffset);
         for (int logicalRow = firstLogicalRow; logicalRow <= lastLogicalRow; logicalRow++)
@@ -179,7 +179,7 @@ public sealed class SelectionQuadBuilderTests
             int maxColumn = Math.Min(paneColumns - 1, logicalRow == range.EndRow ? range.EndColumn : paneColumns - 1);
             for (int column = minColumn; column <= maxColumn; column++)
             {
-                if (!selection.IsCellSelected(logicalRow, column))
+                if (!IsSelected(range, block, logicalRow, column))
                     continue;
 
                 int targetColumn = column + startColumnOffset;

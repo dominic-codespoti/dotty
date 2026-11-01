@@ -432,6 +432,24 @@ All mouse options are read live: a change applies to the next selection, click o
 Interoperation of X11 PRIMARY with other applications is a manual check; see
 [E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click).
 
+### `selection`
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `wordChars` | string | `"@-./_~?&=%+#"` | Punctuation a double-click keeps inside a word, besides letters, digits, combining marks, `_`, CJK and emoji clusters (ZWJ sequences included). Other punctuation selects as runs of its own; `""` keeps none. |
+| `clearOnCopy` | boolean | `true` | Clear the selection after the Copy action put it on the clipboard. |
+| `clearOnTyping` | boolean | `true` | Clear the selection when typed text or a key is sent to the pane. |
+| `rectangleModifier` | string | `"alt"` | Held when a drag starts, makes a rectangular (block) selection: `alt`, `ctrl`, `shift`, `super`, or `none`. Unknown values mean `alt`. |
+
+Selections are anchored to content: they follow their text while output
+scrolls, while the view scrolls, and across a resize reflow. A selection is
+cleared when its text is evicted from scrollback, by `CSI 3 J`, by an `ED 2`
+that wipes history, by a reset and by an alternate-screen switch. Gestures:
+drag selects cells, double-click a word, triple-click a logical line (across
+soft-wrapped rows), Ctrl+triple-click the OSC 133 zone (prompt, command or
+output) under the pointer, Shift+click extends the selection keeping the
+granularity it started with, and Select All covers the whole scrollback.
+
 ### `vt`
 
 Opt-in VT behaviors that expose host or screen state to the program running in
@@ -734,6 +752,7 @@ options (the `Scope` line of `dotty +explain-config OPTION` states the same):
 |---|---|
 | `mouse.copyOnSelect` | for selections completed after the reload |
 | `mouse.middleClickAction` | at the next middle click |
+| `selection.wordChars`, `selection.clearOnCopy`, `selection.clearOnTyping`, `selection.rectangleModifier` | at the next click, copy or key |
 | `mouse.scrollMultiplier`, `mouse.alternateScroll`, `mouse.reportBypassModifier` | at the next pointer or wheel event |
 | `vt.windowResizeAllowed` | at the next resize request |
 | `vt.checksumReportEnabled` | applied to every session on reload and to sessions created later |

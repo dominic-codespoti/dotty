@@ -82,6 +82,9 @@ public partial class TerminalBuffer
             oldActiveScrollback,
             oldRows,
             oldTotalScrolled);
+        var selectionAnchors = SelectionAnchors;
+        int selectionSlots = CaptureSelectionAnchors(
+            selectionAnchors, oldActiveScreen, activeLayout, activeMapping, oldActiveScrollback, oldRows, oldTotalScrolled);
 
         // Kitty graphics: the anchored placements of each screen join the reflow like the prompt marks do.
         var mainImages = WithPlacements(_screens.MainImages);
@@ -143,6 +146,7 @@ public partial class TerminalBuffer
         }
 
         RebasePromptMarks(promptAnchors, activeMapping, rows);
+        RebaseSelectionAnchors(selectionAnchors, selectionSlots, activeMapping, rows, columns);
 
         if (mainImages is not null)
         {

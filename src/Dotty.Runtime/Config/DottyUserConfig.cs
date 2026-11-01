@@ -167,6 +167,10 @@ public sealed class FontUserConfig
     [JsonPropertyName("features")]
     public System.Collections.Generic.List<string> Features { get; set; } = new();
 
+    /// <summary>Programming ligatures: <c>never</c>, <c>cursor</c> (default; not under the cursor) or <c>always</c>.</summary>
+    [JsonPropertyName("ligatures")]
+    public string Ligatures { get; set; } = "cursor";
+
     /// <summary>Outline hinting: <c>none</c>, <c>slight</c>, <c>normal</c> or <c>full</c> (default, the historical raster).</summary>
     [JsonPropertyName("hinting")]
     public string Hinting { get; set; } = "full";

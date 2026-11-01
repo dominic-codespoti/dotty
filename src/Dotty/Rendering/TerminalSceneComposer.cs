@@ -157,7 +157,12 @@ public sealed class TerminalSceneComposer : IDisposable
         public bool HasColors;
         public LeafPane? Owner;
         public readonly QuadRowCache Cache = new();
+        // Cursor cell the cached rows were built around in font.ligatures=cursor mode (W4-C11).
+        public int LigatureCursorRow = -1;
+        public int LigatureCursorCol = -1;
     }
+
+    private readonly LigatureRenderer _ligatures = new(new LigatureShaper(), ownsShaper: true);
 
     private LeafRowCache[] _leafRowCaches = Array.Empty<LeafRowCache>();
     private bool _hasRowCacheConfiguration;
@@ -220,7 +225,11 @@ public sealed class TerminalSceneComposer : IDisposable
     internal Action<LeafPane, RenderSnapshot>? LeafSnapshotCaptured { get; set; }
 
     /// <summary>Releases the pixel leases held by the last composed frame's image draw list.</summary>
-    public void Dispose() => _imageDraws.Clear();
+    public void Dispose()
+    {
+        _imageDraws.Clear();
+        _ligatures.Dispose();
+    }
 
     public TerminalSceneComposer(
         GlyphAtlas atlas,
@@ -328,7 +337,12 @@ public sealed class TerminalSceneComposer : IDisposable
         _textOptions = new TextAttributeOptions(
             TextAttributeOptions.NormalizeFaintOpacity(fontConfig.FaintOpacity), cursorVisible,
             _cellMetrics.BaselineShift, _spriteMetrics, fontConfig.BuiltinGlyphs);
-        _textOptions = _textOptions with { MinimumContrast = MinimumContrast.Normalize(UserConfigService.Current.Text.MinimumContrast) };
+        _ligatures.Configure(LigatureModes.Parse(fontConfig.Ligatures), _atlas.FallbackChain?.Features);
+        _textOptions = _textOptions with
+        {
+            MinimumContrast = MinimumContrast.Normalize(UserConfigService.Current.Text.MinimumContrast),
+            Ligatures = _ligatures,
+        };
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
         // A full atlas is rebuilt here, at the frame boundary, and this frame re-ensures its visible glyphs. When the
@@ -1031,6 +1045,7 @@ public sealed class TerminalSceneComposer : IDisposable
         }
 
         cache.ApplyMappings();
+        InvalidateLigatureCursorRows(slot, snapshot, rows);
         for (int row = 0; row < rows; row++)
         {
             ref var entry = ref cache.GetEntryRef(row);
@@ -1074,6 +1089,28 @@ public sealed class TerminalSceneComposer : IDisposable
                 BlinkActive = true;
         }
         return written;
+    }
+
+    /// <summary>
+    /// In <c>font.ligatures=cursor</c> mode the cursor cell is drawn unshaped, so the rows the cursor left and
+    /// entered are rebuilt whenever it moves; the cell contents alone do not show the change.
+    /// </summary>
+    private void InvalidateLigatureCursorRows(LeafRowCache slot, RenderSnapshot snapshot, int rows)
+    {
+        int cursorRow = -1, cursorCol = -1;
+        if (_ligatures.Mode == LigatureMode.Cursor && snapshot.CursorVisible)
+        {
+            cursorRow = snapshot.CursorRow;
+            cursorCol = snapshot.CursorCol;
+        }
+        if (cursorRow == slot.LigatureCursorRow && cursorCol == slot.LigatureCursorCol)
+            return;
+        if ((uint)slot.LigatureCursorRow < (uint)rows)
+            slot.Cache.GetEntryRef(slot.LigatureCursorRow).Valid = false;
+        if ((uint)cursorRow < (uint)rows)
+            slot.Cache.GetEntryRef(cursorRow).Valid = false;
+        slot.LigatureCursorRow = cursorRow;
+        slot.LigatureCursorCol = cursorCol;
     }
 
     private void InvalidateLeafRowCaches()

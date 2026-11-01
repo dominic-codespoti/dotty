@@ -36,6 +36,7 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `font.line_height` | number | `1.25` |
 | `font.adjust_cell_width`, `font.adjust_cell_height` | string | `""` (`"2"` logical px or `"10%"`) |
 | `font.symbol_map` | array of strings | empty |
+| `font.ligatures` | string (`"never"`, `"cursor"`, `"always"`) | `"cursor"` |
 | `font.hinting` | string (`"none"`, `"slight"`, `"normal"`, `"full"`) | `"full"` |
 | `font.antialias` | string (`"gray"`, `"none"`) | `"gray"` |
 | `text.blending` | string (`"native"`, `"linear"`, `"linear-corrected"`) | `"native"` |
@@ -207,3 +208,4 @@ end)
 | 2026-11-01 | W4-C2: `font.size` is in points (default 11.25); added `font.adjust_cell_width`, `font.adjust_cell_height`. |
 | 2026-11-01 | W4-C15/C16: `dotty.bind`/`dotty.action` take snake_case action names and `send_text:`; chords match like `config.json` keybindings; added `search.regex`, `search.case_sensitive`, `search.whole_word`. |
 | 2026-11-01 | W4-C5: added `font.hinting`, `font.antialias`, `text.blending`, `text.contrast`, `text.minimum_contrast`. |
+| 2026-11-01 | W4-C11: added `font.ligatures`. |

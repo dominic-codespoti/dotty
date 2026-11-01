@@ -130,6 +130,9 @@ Outline hinting for cell metrics and glyph rasterisation (one shared policy); 'f
 \fBfont.italicFamily\fR (string; Lua \fBfont.italic_family\fR)
 Comma\-separated families for italic text in the primary font; empty uses the primary family's italic face, synthetic slant when it has none.
 .TP
+\fBfont.ligatures\fR (string; Lua \fBfont.ligatures\fR)
+Programming ligatures and contextual alternates for runs of ASCII punctuation: 'never', 'cursor' (default; the cell under the cursor is drawn unshaped) or 'always'. Unknown values mean cursor. One of: never, cursor, always.
+.TP
 \fBfont.lineHeight\fR (number; Lua \fBfont.line_height\fR)
 Line\-height multiplier; values below 0.1 are clamped.
 .TP

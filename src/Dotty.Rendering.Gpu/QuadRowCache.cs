@@ -52,6 +52,7 @@ public sealed class QuadRowCache
     private float _cellH;
     private TextAttributeOptions _textOptions;
     private bool _hasTextOptions;
+    private int? _ligatureStamp;
 
     public long Hits;
     public long Misses;
@@ -108,7 +109,8 @@ public sealed class QuadRowCache
     {
         if (!_hasTextOptions || !options.FaintOpacity.Equals(_textOptions.FaintOpacity)
             || options.BaselineShift != _textOptions.BaselineShift || options.Sprites != _textOptions.Sprites
-            || options.BuiltinGlyphs != _textOptions.BuiltinGlyphs)
+            || options.BuiltinGlyphs != _textOptions.BuiltinGlyphs
+            || !ReferenceEquals(options.Ligatures, _textOptions.Ligatures) || options.Ligatures?.ConfigStamp != _ligatureStamp)
         {
             InvalidateAll();
         }
@@ -124,6 +126,7 @@ public sealed class QuadRowCache
         if (_hasTextOptions && !options.MinimumContrast.Equals(_textOptions.MinimumContrast))
             InvalidateAll();
         _textOptions = options;
+        _ligatureStamp = options.Ligatures?.ConfigStamp;
         _hasTextOptions = true;
     }
 

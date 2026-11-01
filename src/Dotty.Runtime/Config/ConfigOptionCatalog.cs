@@ -256,6 +256,8 @@ public static class ConfigOptionCatalog
             "Weight of regular text: thin, extralight, light, regular, medium, semibold, bold, extrabold, black or a number 1-1000; bold text uses 700 (900 from semibold up)."),
         Opt("font.features", "font.features", "string[]", null, c => c.Font.Features,
             "OpenType feature settings for shaping: '+calt', '-liga', 'ss01', 'cv01=2'; a tag is four letters or digits, later settings of a tag win, invalid entries are ignored."),
+        Opt("font.ligatures", "font.ligatures", "string", ["never", "cursor", "always"], c => c.Font.Ligatures,
+            "Programming ligatures and contextual alternates for runs of ASCII punctuation: 'never', 'cursor' (default; the cell under the cursor is drawn unshaped) or 'always'. Unknown values mean cursor."),
         Opt("font.hinting", "font.hinting", "string", ["none", "slight", "normal", "full"], c => c.Font.Hinting,
             "Outline hinting for cell metrics and glyph rasterisation (one shared policy); 'full' is the historical raster. Case-insensitive; unknown values mean full."),
         Opt("font.antialias", "font.antialias", "string", ["gray", "none"], c => c.Font.Antialias,

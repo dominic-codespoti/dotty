@@ -35,6 +35,9 @@ public readonly record struct TextAttributeOptions(
     /// </summary>
     public float MinimumContrast { get; init; } = Gpu.MinimumContrast.Off;
 
+    /// <summary>Programming-ligature state (<c>font.ligatures</c>, W4-C11); null draws every cell unshaped.</summary>
+    public LigatureRenderer? Ligatures { get; init; }
+
     /// <summary>Clamps a configured faint opacity to 0-1; non-finite values use <see cref="DefaultFaintOpacity"/>.</summary>
     public static float NormalizeFaintOpacity(double value) =>
         double.IsFinite(value) ? (float)Math.Clamp(value, 0d, 1d) : DefaultFaintOpacity;

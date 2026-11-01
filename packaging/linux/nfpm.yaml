@@ -1,0 +1,78 @@
+# nfpm (https://nfpm.goreleaser.com) definition for Dotty .deb and .rpm packages.
+# Run from the repository root after an AOT publish that includes the compiled terminfo:
+#   DOTTY_VERSION=0.3.0 DOTTY_ARCH=amd64 DOTTY_PUBLISH_DIR=publish/linux-x64 \
+#     nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/
+# DOTTY_ARCH uses Go names (amd64, arm64); nfpm maps them to deb/rpm names.
+# Layout: the publish directory is copied flat to /usr/lib/dotty (dotty loads its native libraries
+# and pty-helper from beside itself) and /usr/bin/dotty is a symlink to it. See docs/Packaging.md.
+name: dotty
+arch: ${DOTTY_ARCH}
+platform: linux
+version: ${DOTTY_VERSION}
+version_schema: semver
+section: x11
+priority: optional
+maintainer: Dotty maintainers <https://github.com/dominic-codespoti/dotty/issues>
+description: |-
+  GPU-accelerated terminal emulator.
+  Dotty renders with OpenGL 3.3 core and runs the user's shell or a given command.
+vendor: Dotty
+homepage: https://github.com/dominic-codespoti/dotty
+license: MIT
+
+# The executable is NativeAOT (no .NET runtime dependency). GLFW, Skia, HarfBuzz and Lua ship in
+# /usr/lib/dotty; these are the system libraries those load at run time.
+overrides:
+  deb:
+    depends:
+      - libc6
+      - libfontconfig1
+      - libgl1
+      - libxkbcommon0
+    recommends:
+      - libwayland-client0
+      - libx11-6
+  rpm:
+    depends:
+      - glibc
+      - fontconfig
+      - libglvnd-glx
+      - libxkbcommon
+    recommends:
+      - libwayland-client
+      - libX11
+
+contents:
+  - src: ${DOTTY_PUBLISH_DIR}/
+    dst: /usr/lib/dotty/
+    type: tree
+  - src: /usr/lib/dotty/dotty
+    dst: /usr/bin/dotty
+    type: symlink
+
+  - src: ${DOTTY_PUBLISH_DIR}/terminfo/x/xterm-dotty
+    dst: /usr/share/terminfo/x/xterm-dotty
+
+  - src: packaging/linux/dotty.1
+    dst: /usr/share/man/man1/dotty.1
+  - src: packaging/linux/completions/dotty.bash
+    dst: /usr/share/bash-completion/completions/dotty
+  - src: packaging/linux/completions/_dotty
+    dst: /usr/share/zsh/vendor-completions/_dotty
+    packager: deb
+  - src: packaging/linux/completions/_dotty
+    dst: /usr/share/zsh/site-functions/_dotty
+    packager: rpm
+  - src: packaging/linux/completions/dotty.fish
+    dst: /usr/share/fish/vendor_completions.d/dotty.fish
+
+  - src: packaging/linux/io.github.dominic_codespoti.Dotty.desktop
+    dst: /usr/share/applications/io.github.dominic_codespoti.Dotty.desktop
+  - src: assets/icons/hicolor/
+    dst: /usr/share/icons/hicolor/
+    type: tree
+
+  - src: License.md
+    dst: /usr/share/doc/dotty/copyright
+  - src: THIRD-PARTY-NOTICES.md
+    dst: /usr/share/doc/dotty/THIRD-PARTY-NOTICES.md

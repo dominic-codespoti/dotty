@@ -249,6 +249,12 @@ jobs:
       - name: Run distribution script tests
         run: python3 -m unittest discover -s scripts/dist/tests
 
+      - name: Check generated man page and shell completions are current
+        run: python3 scripts/dist/gen_packaging.py --check
+
+      - name: Check THIRD-PARTY-NOTICES.md against the restored NuGet packages
+        run: python3 scripts/dist/check_notices.py
+
       # tools/gen-width-tables.py derives the width tables from Python's unicodedata and refuses
       # any UCD other than 16.0.0. Python 3.14's unicodedata is UCD 16.0.0
       # (docs.python.org/3.14/library/unicodedata.html), so pin 3.14 for this check.

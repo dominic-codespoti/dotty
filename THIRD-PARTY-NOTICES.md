@@ -12,16 +12,14 @@ shipped as `licenses/GLFW-LICENSE.md` in every archive.
 |---|---|---|---|
 | .NET runtime and libraries | .NET 11 (see `global.json`) | Compiled into the `dotty` executable by NativeAOT | MIT |
 | Silk.NET (`Silk.NET.Windowing`, `Silk.NET.Input`, `Silk.NET.OpenGL` and their `Silk.NET.*` dependencies) | 2.23.0 | Compiled into `dotty` | MIT |
-| Ultz.Bcl.Half (Silk.NET dependency) | 1.0.0 | Compiled into `dotty` | MIT |
-| Microsoft.DotNet.PlatformAbstractions, Microsoft.Extensions.DependencyModel, Microsoft.CSharp, Microsoft.Bcl.HashCode (Silk.NET dependencies) | 3.1.6, 9.0.9, 4.7.0, 6.0.0 | Compiled into `dotty` where referenced | MIT |
+| Microsoft.DotNet.PlatformAbstractions, Microsoft.Extensions.DependencyModel (Silk.NET dependencies) | 3.1.6, 9.0.9 | Compiled into `dotty` where referenced | MIT |
 | SkiaSharp, SkiaSharp.HarfBuzz | 4.151.1 | Compiled into `dotty`; native `libSkiaSharp` beside it | MIT |
 | Skia (inside `libSkiaSharp`) | as bundled by SkiaSharp 4.151.1 | Native library | BSD-3-Clause |
-| HarfBuzzSharp | 14.2.1.2 | Compiled into `dotty`; native `libHarfBuzzSharp` beside it when present | MIT |
-| HarfBuzz (inside `libHarfBuzzSharp`) | as bundled by HarfBuzzSharp 14.2.1.2 | Native library | "Old MIT" |
+| HarfBuzzSharp | 14.2.1.1 | Compiled into `dotty`; native `libHarfBuzzSharp` beside it when present | MIT |
+| HarfBuzz (inside `libHarfBuzzSharp`) | as bundled by HarfBuzzSharp 14.2.1.1 | Native library | "Old MIT" |
 | KeraLua | 1.4.9 | Compiled into `dotty` | MIT |
 | Lua 5.4 (`liblua54`/`lua54.dll`, from KeraLua) | as bundled by KeraLua 1.4.9 | Native library | MIT |
-| GLFW (Clear Code 3.6 development fork, commit `068858eece20cd6b6128f6f07a1d61f2dc2cbfaf`, **modified**: local patches listed in `vendor/glfw/SOURCE.json`) | 3.6.0 | Native `libglfw.so.3`/`libglfw.3.dylib`/`glfw3.dll`, built from `vendor/glfw/source` | zlib/libpng |
-| SDL2 (`Ultz.Native.SDL`, pulled in by `Silk.NET.Windowing`) | 2.32.10 | Native SDL2 library, if the NuGet native asset is copied into the publish output | zlib |
+| GLFW (Clear Code 3.6 development fork, commit `068858eece20cd6b6128f6f07a1d61f2dc2cbfaf`, **modified**: local patches listed in `vendor/glfw/SOURCE.json`) | 3.6.0 | Native `libglfw.so.3`/`libglfw.3.dylib`/`glfw3.dll`, built from `vendor/glfw/source`; replaces the GLFW 3.4.0 binary of the `Ultz.Native.GLFW` package that `Silk.NET.Windowing.Glfw` restores | zlib/libpng |
 | Unicode Character Database 16.0.0 | 16.0.0 | Data used to generate the character-width tables compiled into `dotty` | Unicode License v3 |
 
 `libSkiaSharp` and `libHarfBuzzSharp` incorporate further third-party code. The
@@ -36,6 +34,39 @@ third-party components are listed in
 
 Portions of the native SkiaSharp library may be copyright © The FreeType
 Project (www.freetype.org). All rights reserved.
+
+## NuGet package inventory
+
+Every NuGet package restored for `src/Dotty` (`obj/project.assets.json`), except the
+NativeAOT/trimming build tools (`Microsoft.DotNet.ILCompiler`,
+`runtime.<rid>.Microsoft.DotNet.ILCompiler`, `Microsoft.NET.ILLink.Tasks`), which compile
+`dotty` but are not shipped. `scripts/dist/check_notices.py` fails CI when this table and the
+restore disagree. "Platforms" lists the host OSes whose restore includes the package.
+
+| Package | Version | Platforms | Component above |
+|---|---|---|---|
+| HarfBuzzSharp | 14.2.1.1 | all | HarfBuzzSharp |
+| HarfBuzzSharp.NativeAssets.macOS | 14.2.1.1 | all | HarfBuzzSharp |
+| HarfBuzzSharp.NativeAssets.Win32 | 14.2.1.1 | all | HarfBuzzSharp |
+| KeraLua | 1.4.9 | all | KeraLua |
+| Microsoft.DotNet.PlatformAbstractions | 3.1.6 | all | Microsoft.DotNet.PlatformAbstractions |
+| Microsoft.Extensions.DependencyModel | 9.0.9 | all | Microsoft.Extensions.DependencyModel |
+| Silk.NET.Core | 2.23.0 | all | Silk.NET |
+| Silk.NET.GLFW | 2.23.0 | all | Silk.NET |
+| Silk.NET.Input | 2.23.0 | all | Silk.NET |
+| Silk.NET.Input.Common | 2.23.0 | all | Silk.NET |
+| Silk.NET.Input.Glfw | 2.23.0 | all | Silk.NET |
+| Silk.NET.Maths | 2.23.0 | all | Silk.NET |
+| Silk.NET.OpenGL | 2.23.0 | all | Silk.NET |
+| Silk.NET.Windowing | 2.23.0 | all | Silk.NET |
+| Silk.NET.Windowing.Common | 2.23.0 | all | Silk.NET |
+| Silk.NET.Windowing.Glfw | 2.23.0 | all | Silk.NET |
+| SkiaSharp | 4.151.1 | all | SkiaSharp |
+| SkiaSharp.HarfBuzz | 4.151.1 | all | SkiaSharp |
+| SkiaSharp.NativeAssets.Linux | 4.151.1 | linux | SkiaSharp |
+| SkiaSharp.NativeAssets.macOS | 4.151.1 | all | SkiaSharp |
+| SkiaSharp.NativeAssets.Win32 | 4.151.1 | all | SkiaSharp |
+| Ultz.Native.GLFW | 3.4.0 | all | GLFW |
 
 ## License texts
 
@@ -274,28 +305,6 @@ freely, subject to the following restrictions:
 
 3. This notice may not be removed or altered from any source
    distribution.
-```
-
-### zlib license: SDL2
-
-```
-Copyright (C) 1997-2026 Sam Lantinga <slouken@libsdl.org>
-
-This software is provided 'as-is', without any express or implied
-warranty.  In no event will the authors be held liable for any damages
-arising from the use of this software.
-
-Permission is granted to anyone to use this software for any purpose,
-including commercial applications, and to alter it and redistribute it
-freely, subject to the following restrictions:
-
-1. The origin of this software must not be misrepresented; you must not
-   claim that you wrote the original software. If you use this software
-   in a product, an acknowledgment in the product documentation would be
-   appreciated but is not required.
-2. Altered source versions must be plainly marked as such, and must not be
-   misrepresented as being the original software.
-3. This notice may not be removed or altered from any source distribution.
 ```
 
 ### Unicode License v3: Unicode Character Database

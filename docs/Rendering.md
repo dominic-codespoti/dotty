@@ -553,3 +553,4 @@ fails the smoke run.
 |------|--------|
 | 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |
 | 2026-11-01 | W4-C1/C2: `DisplayScale`/`GridFit` integer device-pixel layout, content-scale callback, `font.size` in points, `CellMetrics` (baseline, half-leading, decoration strokes) and `font.adjustCellWidth/Height`. |
+| 2026-11-01 | W4-C21: the GL instance-stream diff (captured-frame comparison, source→output map for decorated cells, merged dirty ranges, partial vs full upload decision) moved from `SilkTerminalRenderer` into the pure `Dotty.Rendering.Gpu.InstanceDelta`, tested against the previous algorithm with a randomised oracle (`InstanceDeltaTests`). |

@@ -454,7 +454,7 @@ internal static partial class DottyWindowHost
         ApplyLoadedWindowOptions();
         ResolveFontAndMetrics();
         InstallContentScaleCallback();
-        _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain);
+        _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain, rasterPolicy: CurrentRasterPolicy());
         GlyphAtlasService.AcquireAtlas(_atlas);
         _renderer = new SilkTerminalRenderer(_gl, _atlas);
         _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx()) { CellMetrics = _cellMetrics };
@@ -1262,13 +1262,21 @@ internal static partial class DottyWindowHost
             font.LineHeight,
             _display.ContentScale,
             CellAdjustment.Parse(font.AdjustCellWidth),
-            CellAdjustment.Parse(font.AdjustCellHeight)));
+            CellAdjustment.Parse(font.AdjustCellHeight),
+            CurrentRasterPolicy()));
         _cellWidthPx = _cellMetrics.CellWidth;
         _cellHeightPx = _cellMetrics.CellHeight;
         if (_sceneComposer != null)
             _sceneComposer.CellMetrics = _cellMetrics;
         _cellWidth = _cellWidthPx / _display.ContentScale;
         _cellHeight = _cellHeightPx / _display.ContentScale;
+    }
+
+    /// <summary><c>font.hinting</c>/<c>font.antialias</c>: one policy for cell metrics and the glyph atlas.</summary>
+    private static RasterPolicy CurrentRasterPolicy()
+    {
+        var font = UserConfigService.Current.Font;
+        return RasterPolicy.FromConfig(font.Hinting, font.Antialias);
     }
 
     private static int CurrentBarRows() =>
@@ -1316,7 +1324,7 @@ internal static partial class DottyWindowHost
     private static void RefreshFontResources()
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Atlas);
-        var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain);
+        var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain, rasterPolicy: CurrentRasterPolicy());
         ApplyConfiguredSymbolMap(newAtlas);
         if (!ReferenceEquals(newAtlas, _atlas))
         {
@@ -2117,6 +2125,9 @@ internal static partial class DottyWindowHost
                     Math.Max(1, (int)MathF.Ceiling(caret.Right / toWindow) - left),
                     Math.Max(1, (int)MathF.Ceiling(caret.Bottom / toWindow) - top));
             }
+            var textConfig = UserConfigService.Current.Text;
+            _renderer.TextBlend = CoverageCorrection.ParseMode(textConfig.Blending);
+            _renderer.TextContrast = CoverageCorrection.NormalizeContrast(textConfig.Contrast);
             long renderStart = FrameTimestamp();
             _renderer.Render(
                 frame.AsSpan(),

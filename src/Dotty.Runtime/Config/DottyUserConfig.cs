@@ -107,6 +107,10 @@ public sealed class DottyUserConfig
     [JsonPropertyName("graphics")]
     public GraphicsUserConfig Graphics { get; set; } = new();
 
+    /// <summary>Text blending and contrast (W4-C5); read every frame.</summary>
+    [JsonPropertyName("text")]
+    public TextUserConfig Text { get; set; } = new();
+
     /// <summary>Normalized Kitty graphics options derived from <see cref="Graphics"/>.</summary>
     public KittyGraphicsOptions ToKittyGraphicsOptions() => (Graphics ?? new GraphicsUserConfig()).ToOptions();
 }
@@ -162,6 +166,14 @@ public sealed class FontUserConfig
     /// <summary>OpenType feature settings for shaping, such as <c>+calt</c>, <c>-liga</c>, <c>cv01=2</c>.</summary>
     [JsonPropertyName("features")]
     public System.Collections.Generic.List<string> Features { get; set; } = new();
+
+    /// <summary>Outline hinting: <c>none</c>, <c>slight</c>, <c>normal</c> or <c>full</c> (default, the historical raster).</summary>
+    [JsonPropertyName("hinting")]
+    public string Hinting { get; set; } = "full";
+
+    /// <summary>Glyph coverage: <c>gray</c> (default) or <c>none</c> (aliased, 1-bit).</summary>
+    [JsonPropertyName("antialias")]
+    public string Antialias { get; set; } = "gray";
 }
 
 public sealed class WindowUserConfig
@@ -482,6 +494,7 @@ public static class UserConfigService
             config.Bell ??= new BellUserConfig();
             config.Search ??= new SearchUserConfig();
             config.Drop ??= new DropUserConfig();
+            config.Text ??= new TextUserConfig();
             config.Keyboard ??= new KeyboardUserConfig();
         }
         return config;

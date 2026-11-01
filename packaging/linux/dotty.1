@@ -91,11 +91,20 @@ Text colour inside a block cursor: 'auto' uses the cell background (the cell for
 \fBcursor.unfocusedStyle\fR (string; Lua \fBcursor.unfocused_style\fR)
 Cursor while the window is unfocused: an outline of the cursor cell ('hollow'), the focused shape ('same'), or none ('hidden'). One of: hollow, same, hidden.
 .TP
+\fBdrop.mode\fR (string; Lua \fBdrop.mode\fR)
+What dropping files on the window does: 'paste\-path' pastes the shell\-escaped paths, space\-separated, into the active pane through the paste router (bracketed paste and paste confirmation apply); 'ignore' does nothing. Paths with control characters are never pasted. Unknown values mean paste\-path. One of: paste\-path, ignore.
+.TP
+\fBdrop.quote\fR (string; Lua \fBdrop.quote\fR)
+Quoting for dropped paths. 'auto' picks from the pane's launch shell (fish, pwsh/powershell, cmd, otherwise posix; cmd on Windows without a shell). posix: bare when safe, else single quotes; fish: single quotes with \e and ' escapes; powershell: single quotes doubled; cmd: double quotes, and paths containing ", % or ! are refused. Unknown values mean auto. One of: auto, posix, fish, powershell, cmd.
+.TP
 \fBfont.adjustCellHeight\fR (string; Lua \fBfont.adjust_cell_height\fR)
 Cell height adjustment: signed logical pixels ('2') or percent ('\-5%'), at most 100 either way; the change is split above and below the text.
 .TP
 \fBfont.adjustCellWidth\fR (string; Lua \fBfont.adjust_cell_width\fR)
 Cell width adjustment: signed logical pixels ('1', '\-0.5') or percent ('10%'), at most 100 either way; empty or malformed keeps the measured width.
+.TP
+\fBfont.antialias\fR (string; Lua \fBfont.antialias\fR)
+Glyph coverage: 'gray' (antialiased, the historical raster) or 'none' (aliased, hard edges). Subpixel (LCD) antialiasing is not supported. Unknown values mean gray. One of: gray, none.
 .TP
 \fBfont.boldFamily\fR (string; Lua \fBfont.bold_family\fR)
 Comma\-separated families for bold text in the primary font; empty uses the primary family's bold face, synthetic bold when it has none.
@@ -114,6 +123,9 @@ Comma\-separated font family names; the first installed family wins.
 .TP
 \fBfont.features\fR (string[]; Lua \fBfont.features\fR)
 OpenType feature settings for shaping: '+calt', '\-liga', 'ss01', 'cv01=2'; a tag is four letters or digits, later settings of a tag win, invalid entries are ignored.
+.TP
+\fBfont.hinting\fR (string; Lua \fBfont.hinting\fR)
+Outline hinting for cell metrics and glyph rasterisation (one shared policy); 'full' is the historical raster. Case\-insensitive; unknown values mean full. One of: none, slight, normal, full.
 .TP
 \fBfont.italicFamily\fR (string; Lua \fBfont.italic_family\fR)
 Comma\-separated families for italic text in the primary font; empty uses the primary family's italic face, synthetic slant when it has none.
@@ -175,6 +187,9 @@ Right Alt/Option (AltGr): 'auto' is compose on Linux/Windows when the layout has
 \fBmouse.copyOnSelect\fR (string; Lua \fBmouse.copy_on_select\fR)
 Where a finished local selection is copied automatically; it does not clear the selection and does not affect middle\-click. Case\-insensitive; the legacy spellings "true" (primary on Linux, clipboard elsewhere) and "false" (none) are also accepted as strings, and unknown values mean none. One of: none, primary, clipboard, both.
 .TP
+\fBmouse.hideWhileTyping\fR (boolean; Lua \fBmouse.hide_while_typing\fR)
+Hide the pointer when a key sends input to a pane; it reappears as soon as the mouse moves.
+.TP
 \fBmouse.middleClickAction\fR (string; Lua \fBmouse.middle_click_action\fR)
 What a middle\-click in a pane does when the application is not capturing the mouse: paste the primary selection, paste the clipboard, or nothing. Unknown values mean clipboard\-paste. One of: primary\-paste, clipboard\-paste, ignore.
 .TP
@@ -234,6 +249,15 @@ Tab bar style; the renderer currently uses one chrome style, so the stored value
 .TP
 \fBterm\fR (string; Lua \fBterm\fR)
 TERM value for shells and commands Dotty starts: 'xterm\-256color', or a terminfo entry such as 'xterm\-dotty' (shipped in the packages). When the entry is not found in any terminfo directory (TERMINFO, ~/.terminfo, TERMINFO_DIRS, the system directories, or the bundled terminfo directory), xterm\-256color is used. XTGETTCAP TN reports the value actually used.
+.TP
+\fBtext.blending\fR (string; Lua \fBtext.blending\fR)
+Glyph coverage blending: 'native' blends in gamma space (the historical look), 'linear' matches linear\-light luminance, 'linear\-corrected' is linear plus the text.contrast boost. 'native' stays the default until an A/B on real displays; unknown values mean native. One of: native, linear, linear\-corrected.
+.TP
+\fBtext.contrast\fR (number; Lua \fBtext.contrast\fR)
+Coverage boost of 'linear\-corrected' blending, 0\-1 (stronger for dark text on light backgrounds); ignored by the other modes. Clamped; non\-finite values use 0.5.
+.TP
+\fBtext.minimumContrast\fR (number; Lua \fBtext.minimum_contrast\fR)
+Minimum WCAG contrast ratio of text against its visible background (after inverse, faint and selection), 1\-21; the foreground moves toward black or white until it is met. 1 turns it off.
 .TP
 \fBtheme\fR (string; Lua \fBtheme\fR)
 Built\-in or user theme name (user themes load from <config\-directory>/themes); the dark fallback when themeAuto is true. The DOTTY_THEME environment variable overrides it.

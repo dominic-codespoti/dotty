@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using Dotty.Rendering.Gpu;
 
 namespace Dotty.Silk.Rendering;
 
@@ -74,12 +75,14 @@ internal readonly record struct CellAdjustment(double Value, bool IsPercent)
 /// <param name="FontSizePx">Font size in device pixels (points × 96/72 × content scale).</param>
 /// <param name="LineHeight">Multiplier of the font size giving the minimum cell height.</param>
 /// <param name="ContentScale">Display content scale; converts logical-pixel adjustments.</param>
+/// <param name="Raster">Hinting/antialiasing shared with the glyph atlas, so metrics match the drawn glyphs.</param>
 internal readonly record struct CellMetricsOptions(
     float FontSizePx,
     double LineHeight,
     float ContentScale,
     CellAdjustment AdjustWidth = default,
-    CellAdjustment AdjustHeight = default);
+    CellAdjustment AdjustHeight = default,
+    RasterPolicy Raster = default);
 
 /// <summary>
 /// Cell geometry in whole device pixels; all vertical positions are measured down from the cell top.

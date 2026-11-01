@@ -34,18 +34,21 @@ public static class GlyphAtlasService
     }
 
     /// <summary>
-    /// Gets or creates the shared atlas for the font configuration. The caller
-    /// must pair this with <see cref="AcquireAtlas"/> when it starts using the
+    /// Gets or creates the shared atlas for the font configuration: typeface instance, text size and
+    /// <paramref name="rasterPolicy"/> (hinting/antialiasing change every glyph, so they are part of the identity).
+    /// The caller must pair this with <see cref="AcquireAtlas"/> when it starts using the
     /// atlas and <see cref="ReleaseAtlas"/> when it stops. A non-null
     /// <paramref name="fallbackChain"/> becomes the atlas's chain.
     /// </summary>
-    public static GlyphAtlas GetOrCreateAtlas(SKTypeface typeface, float textSize, int initialSize = 1024, FontFallbackChain? fallbackChain = null)
+    public static GlyphAtlas GetOrCreateAtlas(SKTypeface typeface, float textSize, int initialSize = 1024, FontFallbackChain? fallbackChain = null,
+        RasterPolicy rasterPolicy = default)
     {
         lock (_lock)
         {
             foreach (var entry in _atlases.Values)
             {
-                if (ReferenceEquals(entry.Atlas.Typeface, typeface) && Math.Abs(entry.Atlas.TextSize - textSize) < 0.01f)
+                if (ReferenceEquals(entry.Atlas.Typeface, typeface) && Math.Abs(entry.Atlas.TextSize - textSize) < 0.01f
+                    && entry.Atlas.RasterPolicy == rasterPolicy)
                 {
                     // A different chain (font.* changed) replaces the old one;
                     // the atlas rebuilds itself on the swap.
@@ -57,7 +60,7 @@ public static class GlyphAtlasService
             }
 
             var chain = fallbackChain ?? FontFallbackChain.CreateDefault(typeface);
-            var atlas = new GlyphAtlas(typeface, textSize, initialSize, chain);
+            var atlas = new GlyphAtlas(typeface, textSize, initialSize, chain, rasterPolicy);
             _atlases[atlas] = new AtlasEntry { Atlas = atlas, RefCount = 0, Stamp = ++_stamp };
             return atlas;
         }

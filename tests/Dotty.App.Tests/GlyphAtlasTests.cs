@@ -338,6 +338,54 @@ public sealed class GlyphAtlasTests
     }
 
     [Fact]
+    public void Service_GetOrCreate_KeysOnRasterPolicy()
+    {
+        var aliased = new RasterPolicy(FontHinting.None, FontAntialias.None);
+        var historical = GlyphAtlasService.GetOrCreateAtlas(Font, 16f);
+        var explicitDefault = GlyphAtlasService.GetOrCreateAtlas(Font, 16f, rasterPolicy: RasterPolicy.Default);
+        var other = GlyphAtlasService.GetOrCreateAtlas(Font, 16f, rasterPolicy: aliased);
+
+        Assert.Same(historical, explicitDefault);
+        Assert.NotSame(historical, other);
+        Assert.Equal(aliased, other.RasterPolicy);
+        Assert.Same(other, GlyphAtlasService.GetOrCreateAtlas(Font, 16f, rasterPolicy: aliased));
+    }
+
+    [Fact]
+    public void AntialiasNone_RastersOnlyEmptyOrFullCoverage()
+    {
+        using var gray = new GlyphAtlas(Font, 24f);
+        using var aliased = new GlyphAtlas(Font, 24f, rasterPolicy: new RasterPolicy(FontHinting.Full, FontAntialias.None));
+        var key = new GlyphKey("@", Font, 24f, GlyphStyle.Regular);
+        Assert.True(gray.EnsureGlyph(key, out var grayInfo));
+        Assert.True(aliased.EnsureGlyph(key, out var aliasedInfo));
+
+        Assert.True(CountPartialCoverage(gray, grayInfo) > 0, "gray antialiasing should leave partial edge coverage");
+        Assert.Equal(0, CountPartialCoverage(aliased, aliasedInfo));
+        Assert.True(RegionHasCoverage(aliased, aliasedInfo));
+    }
+
+    private static int CountPartialCoverage(GlyphAtlas atlas, GlyphInfo info)
+    {
+        var bitmap = atlas.AtlasBitmap;
+        int partial = 0;
+        unsafe
+        {
+            var p = (byte*)bitmap.GetPixels();
+            for (int y = info.Y; y < info.Y + info.Height; y++)
+            {
+                var row = p + (nint)y * bitmap.RowBytes;
+                for (int x = info.X; x < info.X + info.Width; x++)
+                {
+                    if (row[x] is not 0 and not 255)
+                        partial++;
+                }
+            }
+        }
+        return partial;
+    }
+
+    [Fact]
     public void Service_EvictsUnreferencedOverBudget_KeepsReferenced()
     {
         // 2048^2 A8 = 4 MB each; 9 atlases = 36 MB > 32 MB budget.

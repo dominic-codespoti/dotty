@@ -114,6 +114,7 @@ public sealed partial class GlyphAtlas : IDisposable
     private readonly object _lock = new();
     private readonly SKTypeface _typeface;
     private readonly float _textSize;
+    private readonly RasterPolicy _rasterPolicy;
     private readonly float _primaryBaseline;
     private readonly float _primaryCellHeight;
     private FontFallbackChain? _fallbackChain;
@@ -170,6 +171,8 @@ public sealed partial class GlyphAtlas : IDisposable
 
     public SKTypeface Typeface => _typeface;
     public float TextSize => _textSize;
+    /// <summary>Hinting and antialiasing used for every glyph; part of the atlas identity.</summary>
+    public RasterPolicy RasterPolicy => _rasterPolicy;
     public FontFallbackChain? FallbackChain
     {
         get => Volatile.Read(ref _fallbackChain);
@@ -308,10 +311,12 @@ public sealed partial class GlyphAtlas : IDisposable
         public int Height;
         public int X;
     }
-    public GlyphAtlas(SKTypeface typeface, float textSize, int initialSize = DefaultInitialSize, FontFallbackChain? fallbackChain = null)
+    public GlyphAtlas(SKTypeface typeface, float textSize, int initialSize = DefaultInitialSize, FontFallbackChain? fallbackChain = null,
+        RasterPolicy rasterPolicy = default)
     {
         _typeface = typeface ?? SKTypeface.Default;
         _textSize = textSize > 0 ? textSize : 12f;
+        _rasterPolicy = rasterPolicy;
         using (var primaryFont = new SKFont(_typeface, _textSize))
         {
             var metrics = primaryFont.Metrics;
@@ -623,9 +628,9 @@ public sealed partial class GlyphAtlas : IDisposable
 
         using var fallbackFont = new SKFont(resolvedTypeface, key.TextSize)
         {
-            Edging = SKFontEdging.Antialias,
+            Edging = _rasterPolicy.SkiaEdging,
             Subpixel = false,
-            Hinting = SKFontHinting.Full,
+            Hinting = _rasterPolicy.SkiaHinting,
             SkewX = resolution.SyntheticItalic ? SyntheticItalicSkewX : 0f,
         };
         var fallbackMetrics = fallbackFont.Metrics;
@@ -800,9 +805,9 @@ public sealed partial class GlyphAtlas : IDisposable
         using var ownedFont = fontOverride == null
             ? new SKFont(typeface ?? key.Typeface, key.TextSize)
             {
-                Edging = SKFontEdging.Antialias,
+                Edging = _rasterPolicy.SkiaEdging,
                 Subpixel = false,
-                Hinting = SKFontHinting.Full,
+                Hinting = _rasterPolicy.SkiaHinting,
                 SkewX = syntheticItalic ? SyntheticItalicSkewX : 0f,
             }
             : null;
@@ -810,7 +815,7 @@ public sealed partial class GlyphAtlas : IDisposable
         using var paint = new SKPaint
         {
             Color = SKColors.White,
-            IsAntialias = true,
+            IsAntialias = _rasterPolicy.IsAntialias,
             // Synthetic bold applies to raw-string glyphs whose family has no
             // heavier face. Pre-shaped blobs carry their own weight via the run font.
             Style = blob == null && syntheticBold ? SKPaintStyle.StrokeAndFill : SKPaintStyle.Fill,

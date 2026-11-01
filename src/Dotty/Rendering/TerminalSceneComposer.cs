@@ -328,6 +328,7 @@ public sealed class TerminalSceneComposer : IDisposable
         _textOptions = new TextAttributeOptions(
             TextAttributeOptions.NormalizeFaintOpacity(fontConfig.FaintOpacity), cursorVisible,
             _cellMetrics.BaselineShift, _spriteMetrics, fontConfig.BuiltinGlyphs);
+        _textOptions = _textOptions with { MinimumContrast = MinimumContrast.Normalize(UserConfigService.Current.Text.MinimumContrast) };
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
         // A full atlas is rebuilt here, at the frame boundary, and this frame re-ensures its visible glyphs. When the
@@ -506,7 +507,9 @@ public sealed class TerminalSceneComposer : IDisposable
                         selectionColor,
                         selectionAlpha,
                         leafForeground,
-                        _selectionCoverage);
+                        _selectionCoverage,
+                        _textOptions.MinimumContrast,
+                        leafBackground);
                 }
 
                 // cursorVisible is the shared blink phase: it hides only a blinking cursor in its off phase.

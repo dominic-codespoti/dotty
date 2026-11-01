@@ -36,6 +36,11 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `font.line_height` | number | `1.25` |
 | `font.adjust_cell_width`, `font.adjust_cell_height` | string | `""` (`"2"` logical px or `"10%"`) |
 | `font.symbol_map` | array of strings | empty |
+| `font.hinting` | string (`"none"`, `"slight"`, `"normal"`, `"full"`) | `"full"` |
+| `font.antialias` | string (`"gray"`, `"none"`) | `"gray"` |
+| `text.blending` | string (`"native"`, `"linear"`, `"linear-corrected"`) | `"native"` |
+| `text.contrast` | number | `0.5` (0–1, used by `linear-corrected`) |
+| `text.minimum_contrast` | number | `1` (off; WCAG ratio 1–21) |
 | `search.regex`, `search.case_sensitive`, `search.whole_word` | boolean | `false` |
 | `clipboard.allow_osc52_write` | boolean | `false` |
 | `clipboard.osc52_read` | string (`"deny"`, `"ask"`, `"allow"`) | `"deny"` |
@@ -76,6 +81,7 @@ The configuration table is readable and writable at any depth. Fields exposed to
 The `graphics.*` keys behave exactly like the JSON [`graphics`](../Configuration.md#graphics) options and control the [Kitty graphics protocol](../KittyGraphics.md), which is off by default. For example `dotty.config.graphics.kitty_protocol = true` turns it on. The settings are re-applied to running panes on reload except `graphics.windows_passthrough`, which is read when a PTY is created (`needs runtime verification`).
 The clipboard and hyperlink keys behave exactly like the JSON `clipboard` and `hyperlinks` options in the [configuration reference](../Configuration.md#clipboard). In particular `clipboard.osc52_read = "allow"` lets any program that can write to the terminal read the clipboard without a prompt; prefer `"ask"`.
 The `bell.*` keys behave exactly like the JSON [`bell`](../Configuration.md#bell) options and are read at each bell; the `bell` event below fires for every bell regardless of them.
+The `font.hinting`/`font.antialias` and `text.*` keys behave exactly like the JSON [`font`](../Configuration.md#font) and [`text`](../Configuration.md#text) options; the `text.*` keys are read every frame.
 The `keyboard.*` keys behave exactly like the JSON [`keyboard`](../Configuration.md#keyboard) options and are read at the next key press; for example `dotty.config.keyboard.left_alt = "meta"` makes the left Option key Meta on macOS.
 The `mouse`, `vt`, and `shell_integration` keys behave exactly like the JSON [`mouse`](../Configuration.md#mouse), [`vt`](../Configuration.md#vt), and [`shellIntegration`](../Configuration.md#shellintegration) options. `mouse.copy_on_select` takes a string, so the Ghostty-style `"true"`/`"false"` spellings are strings here too. The two `vt` switches are off by default because they let a program resize the window or read the screen back; see the configuration reference for the security rationale. Reload behavior: `mouse.*` and `vt.window_resize_allowed` are read live, `vt.checksum_report_enabled` is applied to sessions on reload, and `shell_integration` applies to tabs and panes created after the reload. Run `dotty +explain-config OPTION` (JSON path or Lua key) for the type, default, and scope of any key.
 `font.symbol_map` entries use `U+START-END: Preferred Font, Fallback Font`; the first installed family that contains the glyph wins. OpenType features and ligatures are not supported: rendering is one grapheme per terminal cell.
@@ -200,3 +206,4 @@ end)
 |------|--------|
 | 2026-11-01 | W4-C2: `font.size` is in points (default 11.25); added `font.adjust_cell_width`, `font.adjust_cell_height`. |
 | 2026-11-01 | W4-C15/C16: `dotty.bind`/`dotty.action` take snake_case action names and `send_text:`; chords match like `config.json` keybindings; added `search.regex`, `search.case_sensitive`, `search.whole_word`. |
+| 2026-11-01 | W4-C5: added `font.hinting`, `font.antialias`, `text.blending`, `text.contrast`, `text.minimum_contrast`. |

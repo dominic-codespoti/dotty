@@ -79,6 +79,45 @@ public static class SilkGlShaders
         out vec4 fragColor;
         const uint FLAG_COLOR_GLYPH = 64u;
 
+        // Coverage correction (text.blending); mirrors CoverageCorrection.Correct in Dotty.Rendering.Gpu.
+        // 0 native (coverage unchanged), 1 linear, 2 linear-corrected with uTextContrast.
+        uniform int uTextBlend;
+        uniform float uTextContrast;
+        float srgbToLinear(float c)
+        {
+            c = clamp(c, 0.0, 1.0);
+            return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+        }
+        float linearToSrgb(float l)
+        {
+            l = clamp(l, 0.0, 1.0);
+            return l <= 0.0031308 ? l * 12.92 : 1.055 * pow(l, 1.0 / 2.4) - 0.055;
+        }
+        float luminance(vec3 c)
+        {
+            return 0.2126 * srgbToLinear(c.r) + 0.7152 * srgbToLinear(c.g) + 0.0722 * srgbToLinear(c.b);
+        }
+        float correctCoverage(float coverage, vec3 fg, vec3 bg)
+        {
+            float a = clamp(coverage, 0.0, 1.0);
+            float fgLuma = luminance(fg);
+            float bgLuma = luminance(bg);
+            float pf = linearToSrgb(fgLuma);
+            float pb = linearToSrgb(bgLuma);
+            float d = pf - pb;
+            if (abs(d) >= 1.0 / 255.0)
+            {
+                float target = linearToSrgb(bgLuma + (fgLuma - bgLuma) * a);
+                a = clamp((target - pb) / d, 0.0, 1.0);
+            }
+            if (uTextBlend == 2)
+            {
+                float k = clamp(uTextContrast, 0.0, 1.0) * clamp(0.5 + 0.5 * (pb - pf), 0.0, 1.0);
+                a = clamp(a + k * a * (1.0 - a), 0.0, 1.0);
+            }
+            return a;
+        }
+
         void main()
         {
             if (uPass == 0) {
@@ -93,6 +132,7 @@ public static class SilkGlShaders
             } else {
                 float coverage = texture(uAtlas, vUv).r;
                 if (coverage <= 0.001) discard;
+                if (uTextBlend != 0) coverage = correctCoverage(coverage, vFg.rgb, vBg.rgb);
                 fragColor = vec4(vFg.rgb * coverage * vFg.a, coverage * vFg.a);
             }
         }

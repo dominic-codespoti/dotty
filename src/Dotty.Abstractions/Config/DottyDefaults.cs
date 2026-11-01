@@ -11,7 +11,8 @@ public static class DottyDefaults
 {
     // Font Settings
     public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Cascadia Code, Consolas, Liberation Mono, Noto Sans Mono, monospace, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols";
-    public const double FontSize = 15.0;
+    /// <summary>Default <c>font.size</c> in points: 11.25 pt = 15 px at content scale 1.</summary>
+    public const double FontSize = 11.25;
     public const double ContentPaddingLeft = 0.0;
     public const double ContentPaddingTop = 0.0;
     public const double ContentPaddingRight = 0.0;

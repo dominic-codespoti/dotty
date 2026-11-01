@@ -239,7 +239,7 @@ internal static partial class DottyWindowHost
             initialFocus: 0,
             onDismissed: null);
         var size = _window.FramebufferSize;
-        ClipboardReadPromptBuilder.Center(prompt, size.X, size.Y, _cellWidth * _scale, _cellHeight * _scale);
+        ClipboardReadPromptBuilder.Center(prompt, size.X, size.Y, _cellWidthPx, _cellHeightPx);
         _renderFailurePrompt = prompt;
         _mouseHost.ActiveContextMenu = prompt;
         WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);

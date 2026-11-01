@@ -9,7 +9,11 @@ namespace Dotty.Rendering.Gpu;
 /// </summary>
 /// <param name="FaintOpacity">Weight of the foreground when faint text is mixed toward its background, 0-1.</param>
 /// <param name="BlinkVisible">False in the off phase of the shared blink timer: blinking glyphs are not drawn.</param>
-public readonly record struct TextAttributeOptions(float FaintOpacity, bool BlinkVisible)
+/// <param name="BaselineShift">
+/// Device pixels the cell baseline sits below the atlas baseline (the half-leading split of extra line
+/// height, <c>CellMetrics.BaselineShift</c>); added to every cell glyph's vertical offset.
+/// </param>
+public readonly record struct TextAttributeOptions(float FaintOpacity, bool BlinkVisible, int BaselineShift = 0)
 {
     /// <summary>Default of <c>font.faintOpacity</c>.</summary>
     public const float DefaultFaintOpacity = 0.5f;

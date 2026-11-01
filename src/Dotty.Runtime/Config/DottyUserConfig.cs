@@ -106,11 +106,20 @@ public sealed class FontUserConfig
     [JsonPropertyName("family")]
     public string Family { get; set; } = "JetBrainsMono Nerd Font Mono, JetBrains Mono, Fira Code, Cascadia Code, monospace";
 
+    /// <summary>Font size in points; device pixels = points × 96/72 × display content scale.</summary>
     [JsonPropertyName("size")]
-    public double Size { get; set; } = 14.0;
+    public double Size { get; set; } = DottyDefaults.FontSize;
 
     [JsonPropertyName("lineHeight")]
     public double LineHeight { get; set; } = 1.25;
+
+    /// <summary>Cell width adjustment: signed logical pixels (<c>"1"</c>) or percent (<c>"10%"</c>); empty keeps the measured width.</summary>
+    [JsonPropertyName("adjustCellWidth")]
+    public string AdjustCellWidth { get; set; } = string.Empty;
+
+    /// <summary>Cell height adjustment: signed logical pixels (<c>"2"</c>) or percent (<c>"-5%"</c>); extra height is split above and below the text.</summary>
+    [JsonPropertyName("adjustCellHeight")]
+    public string AdjustCellHeight { get; set; } = string.Empty;
 
     /// <summary>Per-range font overrides, checked before the generic fallback chain.</summary>
     [JsonPropertyName("symbolMap")]

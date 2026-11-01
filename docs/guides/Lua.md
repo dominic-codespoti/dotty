@@ -32,8 +32,9 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `theme_auto` | boolean | `false` |
 | `selection_color` | string or `nil` | `nil` |
 | `font.family` | string | `"JetBrainsMono Nerd Font Mono, JetBrains Mono, Fira Code, Cascadia Code, monospace"` |
-| `font.size` | number | `14` |
+| `font.size` | number | `11.25` (points) |
 | `font.line_height` | number | `1.25` |
+| `font.adjust_cell_width`, `font.adjust_cell_height` | string | `""` (`"2"` logical px or `"10%"`) |
 | `font.symbol_map` | array of strings | empty |
 | `clipboard.allow_osc52_write` | boolean | `false` |
 | `clipboard.osc52_read` | string (`"deny"`, `"ask"`, `"allow"`) | `"deny"` |
@@ -188,3 +189,9 @@ dotty.on("update_status", function()
   return os.date("%H:%M:%S")
 end)
 ```
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C2: `font.size` is in points (default 11.25); added `font.adjust_cell_width`, `font.adjust_cell_height`. |

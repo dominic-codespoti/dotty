@@ -70,8 +70,9 @@ public sealed class TerminalSceneComposerPlaceholderTests
                 selectionColor: new SgrColorArgb(0x803385DB),
                 framebufferWidth: framebufferWidth,
                 framebufferHeight: framebufferHeight,
-                cellWidth: cellWidth,
-                cellHeight: cellHeight,
+                // The composer takes whole device-pixel cells (the host's GridFit cell); tests pass logical cells.
+                cellWidth: MathF.Round(cellWidth * scale, MidpointRounding.AwayFromZero),
+                cellHeight: MathF.Round(cellHeight * scale, MidpointRounding.AwayFromZero),
                 scale: scale,
                 rows: rows,
                 columns: columns,
@@ -159,14 +160,14 @@ public sealed class TerminalSceneComposerPlaceholderTests
         scene.VirtualImage(42, 16, 32, "c=2,r=2");
         PrintTwoByTwo(scene, row: 1, column: 2);
 
-        // Scaled cells are 11.25 x 22.5 px. Both edges snap like the cell backgrounds: x 22.5 -> 23 .. 45,
-        // the upper run's y 22.5 -> 23 .. 45 and the lower one's 45 .. 67.5 -> 68; they share the edge at y 45.
-        var frame = scene.Compose(450, 180, 9, 18, 1.25f, 8, 40);
+        // At 125 % the 9 x 18 logical cell is a whole 11 x 23 device-pixel cell (W4-C1 GridFit). The 16 x 32 image
+        // fits the 22 x 46 box as 22 x 44, centred at y 24 .. 68; the two runs share the cell edge at y 46.
+        var frame = scene.Compose(450, 184, 9, 18, 1.25f, 8, 40);
 
         Assert.Equal(2, frame.ImageDraws.QuadCount);
         ImageQuadInstance top = frame.ImageDraws.Quads[0], bottom = frame.ImageDraws.Quads[1];
-        Assert.Equal((23f, 23f, 22f, 22f), (top.X, top.Y, top.W, top.H));
-        Assert.Equal((23f, 45f, 22f, 23f), (bottom.X, bottom.Y, bottom.W, bottom.H));
+        Assert.Equal((22f, 24f, 22f, 22f), (top.X, top.Y, top.W, top.H));
+        Assert.Equal((22f, 46f, 22f, 22f), (bottom.X, bottom.Y, bottom.W, bottom.H));
         Assert.Equal(top.Y + top.H, bottom.Y);
         Assert.Equal((0f, 0f, 1f, 0.5f), (top.U0, top.V0, top.U1, top.V1));
         Assert.Equal((0f, 0.5f, 1f, 1f), (bottom.U0, bottom.V0, bottom.U1, bottom.V1));

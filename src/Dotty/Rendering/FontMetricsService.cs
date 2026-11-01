@@ -45,47 +45,53 @@ public static class FontMetricsService
     }
 
     /// <summary>
-    /// Measures character cell width and height in logical (window-coordinate) units, accounting
-    /// for font metrics, line height, and DPI scale; the device cell is the result times
-    /// <paramref name="scale"/>. Results are cached by value (typeface family and style, size,
-    /// line height, scale) in a bounded least-recently-used cache, so equal inputs never re-measure
-    /// and the cache never grows past <see cref="MetricsCacheCapacity"/> entries.
+    /// Measures the cell for <paramref name="typeface"/> in whole device pixels: size, baseline and
+    /// decoration strokes (see <see cref="CellMetricsCalculator"/>). This is the thin Skia adapter: it
+    /// fills a <see cref="FontMetricsInput"/> from <see cref="SKFontMetrics"/> at the device font size.
+    /// Results are cached by value (typeface family and style plus the normalized options) in a bounded
+    /// least-recently-used cache, so equal inputs never re-measure and the cache never grows past
+    /// <see cref="MetricsCacheCapacity"/> entries.
     /// </summary>
-    public static (float CellWidth, float CellHeight) MeasureCell(SKTypeface typeface, float fontSize, double lineHeight, float scale)
+    internal static CellMetrics MeasureCell(SKTypeface typeface, in CellMetricsOptions options)
     {
         lock (MetricsLock)
         {
-            return MeasureCell(SharedMetricsCache, typeface, fontSize, lineHeight, scale);
+            return MeasureCell(SharedMetricsCache, typeface, options);
         }
     }
 
     /// <summary>
-    /// <see cref="MeasureCell(SKTypeface, float, double, float)"/> against an explicit cache.
+    /// <see cref="MeasureCell(SKTypeface, in CellMetricsOptions)"/> against an explicit cache.
     /// The caller synchronizes access to <paramref name="cache"/>.
     /// </summary>
-    internal static (float CellWidth, float CellHeight) MeasureCell(
-        CellMetricsCache cache, SKTypeface typeface, float fontSize, double lineHeight, float scale)
+    internal static CellMetrics MeasureCell(CellMetricsCache cache, SKTypeface typeface, in CellMetricsOptions options)
     {
         ArgumentNullException.ThrowIfNull(cache);
         ArgumentNullException.ThrowIfNull(typeface);
 
-        fontSize = float.IsFinite(fontSize)
-            ? Math.Clamp(fontSize, 1f, 512f)
-            : (float)DottyDefaults.FontSize;
-        lineHeight = double.IsFinite(lineHeight)
-            ? Math.Clamp(lineHeight, 0.1, 8.0)
-            : 1.0;
-        scale = float.IsFinite(scale)
-            ? Math.Clamp(scale, 0.1f, 16f)
-            : 1.0f;
-
-        var key = new CellMetricsKey(GetIdentity(typeface), fontSize, lineHeight, scale);
+        var normalized = Normalize(options);
+        var key = new CellMetricsKey(GetIdentity(typeface), normalized);
         if (cache.TryGet(key, out CellMetrics cached))
-            return (cached.Width, cached.Height);
+            return cached;
 
-        CellMetrics measured = MeasureCellCore(typeface, fontSize, lineHeight, scale);
+        CellMetrics measured = CellMetricsCalculator.Compute(ReadFontMetrics(typeface, normalized.FontSizePx), normalized);
         cache.Set(key, measured);
-        return (measured.Width, measured.Height);
+        return measured;
+    }
+
+    /// <summary>Clamps non-finite or out-of-range options so equal effective inputs share one cache entry.</summary>
+    internal static CellMetricsOptions Normalize(in CellMetricsOptions options)
+    {
+        float scale = float.IsFinite(options.ContentScale) && options.ContentScale > 0f
+            ? Math.Clamp(options.ContentScale, DisplayScale.MinScale, DisplayScale.MaxScale)
+            : 1f;
+        float fontSize = float.IsFinite(options.FontSizePx)
+            ? Math.Clamp(options.FontSizePx, 1f, 4096f)
+            : CellMetricsCalculator.PointsToPixels(DottyDefaults.FontSize, scale);
+        double lineHeight = double.IsFinite(options.LineHeight)
+            ? Math.Clamp(options.LineHeight, 0.1, 8.0)
+            : 1.0;
+        return options with { FontSizePx = fontSize, LineHeight = lineHeight, ContentScale = scale };
     }
 
     /// <summary>
@@ -97,10 +103,9 @@ public static class FontMetricsService
             typeface,
             static face => new TypefaceIdentity(face.FamilyName ?? string.Empty, face.FontWeight, face.FontWidth, face.FontSlant));
 
-    private static CellMetrics MeasureCellCore(SKTypeface typeface, float fontSize, double lineHeight, float scale)
+    private static FontMetricsInput ReadFontMetrics(SKTypeface typeface, float fontSizePx)
     {
-        float scaledFontSize = fontSize * scale;
-        using var font = new SKFont(typeface, scaledFontSize)
+        using var font = new SKFont(typeface, fontSizePx)
         {
             // Keep cell metrics identical to the A8 glyph atlas raster policy.
             // Subpixel coverage requires RGB channels and cannot be represented
@@ -111,18 +116,19 @@ public static class FontMetricsService
         };
 
         var fm = font.Metrics;
-        float ascent = float.IsFinite(fm.Ascent) ? MathF.Abs(fm.Ascent) : scaledFontSize;
-        float descent = float.IsFinite(fm.Descent) ? MathF.Abs(fm.Descent) : 0f;
-        float glyphHeight = MathF.Max(scaledFontSize, ascent + descent);
-        float glyphAdvance = float.IsFinite(fm.AverageCharacterWidth)
-            ? MathF.Max(0.5f, fm.AverageCharacterWidth)
-            : scaledFontSize * 0.6f;
+        float advance = float.IsFinite(fm.AverageCharacterWidth) ? MathF.Max(0.5f, fm.AverageCharacterWidth) : float.NaN;
         float wideGlyphAdvance = font.MeasureText("W");
         if (float.IsFinite(wideGlyphAdvance))
-            glyphAdvance = MathF.Max(glyphAdvance, wideGlyphAdvance);
+            advance = float.IsFinite(advance) ? MathF.Max(advance, wideGlyphAdvance) : wideGlyphAdvance;
 
-        float cellWidth = MathF.Round(MathF.Max(4, glyphAdvance / scale));
-        float cellHeight = MathF.Round(MathF.Max(fontSize * (float)lineHeight, glyphHeight / scale));
-        return new CellMetrics(cellWidth, cellHeight);
+        return new FontMetricsInput(
+            Ascent: fm.Ascent,
+            Descent: fm.Descent,
+            Advance: advance,
+            UnderlinePosition: fm.UnderlinePosition ?? float.NaN,
+            UnderlineThickness: fm.UnderlineThickness ?? float.NaN,
+            StrikeoutPosition: fm.StrikeoutPosition ?? float.NaN,
+            StrikeoutThickness: fm.StrikeoutThickness ?? float.NaN,
+            XHeight: fm.XHeight);
     }
 }

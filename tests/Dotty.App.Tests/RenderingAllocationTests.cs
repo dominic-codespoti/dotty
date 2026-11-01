@@ -358,10 +358,10 @@ public sealed class RenderingAllocationTests
     {
         var typeface = SKTypeface.Default;
         for (int i = 0; i < 8; i++)
-            _ = FontMetricsService.MeasureCell(typeface, 14f, 1.2, 1f);
+            _ = FontMetricsService.MeasureCell(typeface, new CellMetricsOptions(14f, 1.2, 1f));
 
         AllocationAssert.NoAllocations(
-            () => _ = FontMetricsService.MeasureCell(typeface, 14f, 1.2, 1f),
+            () => _ = FontMetricsService.MeasureCell(typeface, new CellMetricsOptions(14f, 1.2, 1f)),
             measuredIterationsPerWindow: 100);
     }
 

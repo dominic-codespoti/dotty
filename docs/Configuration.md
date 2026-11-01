@@ -92,7 +92,7 @@ become unreadable therefore no longer prevents a new tab from opening.
 {
   "font": {
     "family": "JetBrains Mono, Cascadia Code, Liberation Mono, monospace",
-    "size": 14,
+    "size": 11.25,
     "lineHeight": 1.25,
     "symbolMap": ["U+2500-U+257F: Symbols Nerd Font Mono, Symbols Nerd Font"]
   },
@@ -171,15 +171,21 @@ trailing commas/comments are accepted by the JSON parser.
 | Property | Type | Default | Notes |
 |---|---|---|---|
 | `family` | string | platform-neutral fallback stack | Comma-separated family names; first installed family wins. |
-| `size` | number | `14` | Font size in pixels before display scaling: the host rasterizes at `size × (framebuffer width / window width)`. Values are clamped to 1–512; a non-finite value falls back to the built-in default. Not points. |
-| `lineHeight` | number | `1.25` | Line-height multiplier; values below `0.1` are clamped. |
+| `size` | number | `11.25` | Font size in **points**: device pixels = `size × 96/72 × display scale`, so the default is 15 px at 100 % and 30 px at 200 %. The display scale is the OS scale (Windows/X11 `glfwGetWindowContentScale`, macOS backing scale, Wayland fractional scale in 1/120 steps). Values are clamped to 1–512; a non-finite value falls back to the default. Zoom steps are 1 pt. |
+| `lineHeight` | number | `1.25` | Line-height multiplier; values below `0.1` are clamped. The cell is at least `size × lineHeight` tall; extra height is split half above and half below the text (an odd pixel goes below). |
+| `adjustCellWidth` | string | `""` | Cell width adjustment: signed logical pixels (`"1"`, `"-0.5"`, multiplied by the display scale) or a percentage (`"10%"`); at most 100 either way. Empty or malformed values keep the measured width; the cell never drops below 1 px. Lua: `font.adjust_cell_width`. |
+| `adjustCellHeight` | string | `""` | Cell height adjustment in the same forms as `adjustCellWidth`; the change is split above and below the text like extra line height. Lua: `font.adjust_cell_height`. |
 | `symbolMap` | string[] | `[]` | Per-range font overrides; use `U+2500-U+257F: Preferred Font, Fallback Font`. For each range, the first installed family that contains the glyph wins; overlapping ranges use the first matching entry. |
 | `faintOpacity` | number | `0.5` | Faint (SGR 2) text keeps this share of its colour and is mixed toward the cell background (after inverse). Clamped to 0–1; a non-finite value uses `0.5`. |
 OpenType features and programming ligatures are not supported. The renderer draws
 one grapheme per terminal cell rather than shaping ligatures across cells.
-The renderer measures the selected typeface at the current framebuffer scale.
-Cell width and height remain finite and positive even when a platform font
-reports incomplete metrics.
+The renderer measures the selected typeface at the device font size and sizes cells
+in whole device pixels (width = rounded advance, height = rounded
+`max(size × lineHeight, ascent + descent)`, then adjusted). Window padding is in
+logical pixels, multiplied by the display scale and rounded to whole pixels (14 at
+125 % is 18). Underline and strikethrough positions and thicknesses come from the
+font (fallback 1/14 em, at least 1 px). Cell metrics stay finite and positive even
+when a platform font reports incomplete metrics.
 
 ### `theme`, `themeLight`, `themeDark`, `themeAuto`
 
@@ -771,3 +777,10 @@ The guard checks that every config property and every Lua key has a catalog entr
 
 See [Platform Support](PlatformSupport.md) for native dependencies, graphics
 startup failures, and release smoke requirements.
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C1: the display scale comes from the OS content scale (fixes unscaled text on Windows/X11 HiDPI); cells are integer device pixels; padding is rounded to device pixels. |
+| 2026-11-01 | W4-C2: `font.size` is in points (was pixels; default 11.25 pt = 15 px at 100 %); added `font.adjustCellWidth`, `font.adjustCellHeight`; half-leading line height. |

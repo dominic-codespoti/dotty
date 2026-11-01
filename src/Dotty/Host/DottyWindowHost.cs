@@ -40,11 +40,19 @@ internal static partial class DottyWindowHost
     private static GlyphAtlas _atlas = null!;
     private static SKTypeface _typeface = null!;
     private static readonly TypefaceResolutionCache _typefaces = new(FontMetricsService.ResolveTypeface);
-    private static float _cellWidth, _cellHeight, _scale = 1f;
+    // Cell size in whole device pixels (layout, renderer, VT reports) and its logical view
+    // (device / ContentScale, used only where config lengths are logical, e.g. tab-bar rows).
+    private static int _cellWidthPx = 1, _cellHeightPx = 1;
+    // Full cell metrics (baseline, decoration strokes) behind _cellWidthPx/_cellHeightPx.
+    private static CellMetrics _cellMetrics;
+    private static float _cellWidth = 1f, _cellHeight = 1f;
+    private static DisplayMetrics _display = DisplayMetrics.Identity;
+    private static DisplayPlatform _displayPlatform;
+    private static int _contentScaleChangePending;
     private const float MinRuntimeFontSize = 6f;
     private const float MaxRuntimeFontSize = 72f;
     private static double? _runtimeFontSize;
-    private static double _configuredFontSize = 14d;
+    private static double _configuredFontSize = DottyDefaults.FontSize;
     private static WindowState _previousNonFullscreenState = WindowState.Normal;
     private static int _cols = 80, _rows = 24;
     private static SilkTerminalRenderer _renderer = null!;
@@ -351,7 +359,7 @@ internal static partial class DottyWindowHost
         _customFrameHitTestStatusWidth = statusWidth;
         _customFrameHitTestCaptionButtonsWidth = _customFrameActive
             ? Math.Min(framebufferWidth,
-                TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _display.ContentScale)
             : 0f;
         _customFrameHitTestTabCount = _tabManager?.Count ?? 0;
         _customFrameHitTestActiveIndex = _tabManager?.ActiveIndex ?? -1;
@@ -437,25 +445,27 @@ internal static partial class DottyWindowHost
         ConfigureFramePacing();
         ConfigureRenderRecovery();
 
+        _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
+        NativeGlfwMetadata.Initialize(_glfwApi);
+        _displayPlatform = NativeGlfwMetadata.TryGetPlatform(out int platform) ? (DisplayPlatform)platform : DisplayPlatform.Unknown;
         ResolveFontAndMetrics();
+        InstallContentScaleCallback();
         _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
         GlyphAtlasService.AcquireAtlas(_atlas);
         _renderer = new SilkTerminalRenderer(_gl, _atlas);
-        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx());
+        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx()) { BaselineShift = _cellMetrics.BaselineShift };
 
         _mouseHost = new MouseHost();
         _keyboardDispatcher = new TerminalKeyboardDispatcher(_mouseHost);
-        _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
-        NativeGlfwMetadata.Initialize(_glfwApi);
-        _windowBackend = NativeGlfwMetadata.TryGetPlatform(out int platform) ? platform switch
+        _windowBackend = _displayPlatform switch
         {
-            0x00060001 => "windows",
-            0x00060002 => "macos",
-            0x00060003 => "wayland",
-            0x00060004 => "x11",
-            0x00060005 => "null",
+            DisplayPlatform.Win32 => "windows",
+            DisplayPlatform.Cocoa => "macos",
+            DisplayPlatform.Wayland => "wayland",
+            DisplayPlatform.X11 => "x11",
+            DisplayPlatform.Null => "null",
             _ => "unknown"
-        } : "unknown";
+        };
         _keyboardController = new TerminalKeyboardController(
             keyEventReceived: _keyboardDispatcher.HandleKeyEvent,
             textReceived: _keyboardDispatcher.HandleCommittedText,
@@ -508,16 +518,11 @@ internal static partial class DottyWindowHost
         _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
         if (_customFrameActive)
             InstallCustomFrame();
-        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
-        var padding = UserConfigService.Current.Window.Padding;
-        VtHostPolicy.ComputeClientSize(
-            _cols, _rows, _cellWidth, _cellHeight, barRows,
-            padding.Left, padding.Right, padding.Top, padding.Bottom,
-            out int clientWidth, out int clientHeight);
+        var (clientWidth, clientHeight) = ClientSizeFor(_cols, _rows);
         SetWindowClientSize(new Vector2D<int>(clientWidth, clientHeight));
         _revealDeadlineMs = GetClockMilliseconds() + RevealFallbackMs;
         VtHostBridge.Attach(_window, _tabManager,
-            static () => new VtHostLayout(_cellWidth, _cellHeight, _scale, IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0, _cols, _rows),
+            static () => new VtHostLayout(_cellWidthPx, _cellHeightPx, CurrentBarRows(), CurrentDevicePadding(), _display.WindowUnitsToDevice, _cols, _rows),
             static (width, height) => SetWindowClientSize(new Vector2D<int>(width, height)));
         LogGraphicsInfoIfRequested();
         StartControlServer();
@@ -871,12 +876,8 @@ internal static partial class DottyWindowHost
 
     private static void OnSessionPaletteChanged() =>
         WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
-    private static float _cellFontSizePx()
-    {
-        float size = EffectiveFontSize();
-        float scale = float.IsFinite(_scale) ? Math.Clamp(_scale, 0.1f, 16f) : 1f;
-        return size * scale;
-    }
+    // font.size and zoom are points; the atlas and chrome text want device pixels.
+    private static float _cellFontSizePx() => CellMetricsCalculator.PointsToPixels(EffectiveFontSize(), _display.ContentScale);
 
     private static float EffectiveFontSize()
     {
@@ -884,7 +885,7 @@ internal static partial class DottyWindowHost
             ? _configuredFontSize
             : UserConfigService.Current.Font.Size;
         double size = _runtimeFontSize ?? configured;
-        return float.IsFinite((float)size) ? Math.Clamp((float)size, 1f, 512f) : 14f;
+        return float.IsFinite((float)size) ? Math.Clamp((float)size, 1f, 512f) : (float)DottyDefaults.FontSize;
     }
 
     private static void OnConfigChanged(DottyUserConfig config)
@@ -1211,22 +1212,80 @@ internal static partial class DottyWindowHost
     private static void ResolveFontAndMetrics()
     {
         var config = UserConfigService.Current;
-        _configuredFontSize = double.IsFinite(config.Font.Size) ? config.Font.Size : 14d;
+        _configuredFontSize = double.IsFinite(config.Font.Size) ? config.Font.Size : DottyDefaults.FontSize;
         _typeface = _typefaces.Resolve(config.Font.Family);
         UpdateScaleAndCellMetrics();
     }
 
-    // Resize path: only the framebuffer/window ratio can have changed. MeasureCell is cached by
-    // value, so an unchanged scale costs a dictionary hit and no Skia work.
+    // Resize and content-scale path: re-reads the display metrics. MeasureCell is cached by value,
+    // so an unchanged scale costs a dictionary hit and no Skia work.
     private static void UpdateScaleAndCellMetrics()
     {
-        float rawScale = _window.FramebufferSize.X / (float)MathF.Max(1, _window.Size.X);
-        _scale = float.IsFinite(rawScale) ? Math.Clamp(rawScale, 0.1f, 16f) : 1f;
-        (_cellWidth, _cellHeight) = FontMetricsService.MeasureCell(
-            _typeface,
-            EffectiveFontSize(),
-            UserConfigService.Current.Font.LineHeight,
-            _scale);
+        nint window = _window.Native?.Glfw ?? 0;
+        NativeGlfwMetadata.TryGetWindowContentScale(window, out float contentScaleX, out float contentScaleY);
+        var windowSize = _window.Size;
+        var framebufferSize = _window.FramebufferSize;
+        _display = DisplayScale.Compute(
+            _displayPlatform,
+            windowSize.X, windowSize.Y,
+            framebufferSize.X, framebufferSize.Y,
+            contentScaleX, contentScaleY,
+            _display);
+        var font = UserConfigService.Current.Font;
+        _cellMetrics = FontMetricsService.MeasureCell(_typeface, new CellMetricsOptions(
+            _cellFontSizePx(),
+            font.LineHeight,
+            _display.ContentScale,
+            CellAdjustment.Parse(font.AdjustCellWidth),
+            CellAdjustment.Parse(font.AdjustCellHeight)));
+        _cellWidthPx = _cellMetrics.CellWidth;
+        _cellHeightPx = _cellMetrics.CellHeight;
+        if (_sceneComposer != null)
+            _sceneComposer.BaselineShift = _cellMetrics.BaselineShift;
+        _cellWidth = _cellWidthPx / _display.ContentScale;
+        _cellHeight = _cellHeightPx / _display.ContentScale;
+    }
+
+    private static int CurrentBarRows() =>
+        IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+
+    private static DevicePadding CurrentDevicePadding()
+    {
+        var padding = UserConfigService.Current.Window.Padding;
+        return DevicePadding.FromLogical(padding.Left, padding.Top, padding.Right, padding.Bottom, _display.ContentScale);
+    }
+
+    /// <summary>Window client size (window units) that holds the given grid at the current metrics.</summary>
+    private static (int Width, int Height) ClientSizeFor(int columns, int rows) =>
+        GridFit.ClientSize(columns, rows, _cellWidthPx, _cellHeightPx, CurrentBarRows(), CurrentDevicePadding(), _display.WindowUnitsToDevice);
+
+    private static unsafe void InstallContentScaleCallback() =>
+        NativeGlfwMetadata.TrySetWindowContentScaleCallback(_window.Native?.Glfw ?? 0, &OnNativeContentScaleChanged);
+
+    // GLFW event thread: a monitor move or display-scale change, possibly without a framebuffer
+    // resize (macOS, Wayland). Coalesce and rebuild metrics and atlas on the UI thread.
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void OnNativeContentScaleChanged(nint window, float x, float y)
+    {
+        if (Interlocked.Exchange(ref _contentScaleChangePending, 1) != 0)
+            return;
+        if (!_lifecycle.TryEnqueue(ApplyContentScaleChange))
+            Volatile.Write(ref _contentScaleChangePending, 0);
+    }
+
+    private static void ApplyContentScaleChange()
+    {
+        Volatile.Write(ref _contentScaleChangePending, 0);
+        if (_closed)
+            return;
+        WindowPresentationGate.Invalidate(WindowFrameReason.Resize);
+        var previous = _display;
+        UpdateScaleAndCellMetrics();
+        if (DisplayScale.ContentScaleChanged(previous, _display))
+            RefreshFontResources();
+        var size = _window.FramebufferSize;
+        if (size.X > 0 && size.Y > 0)
+            ApplyFramebufferLayout(size);
     }
 
     private static void RefreshFontResources()
@@ -1278,9 +1337,9 @@ internal static partial class DottyWindowHost
         WindowPresentationGate.Invalidate(WindowFrameReason.Resize);
         if (size.X <= 0 || size.Y <= 0) return;
 
-        float previousScale = _scale;
+        var previous = _display;
         UpdateScaleAndCellMetrics();
-        if (MathF.Abs(previousScale - _scale) > 0.01f)
+        if (DisplayScale.ContentScaleChanged(previous, _display))
             RefreshFontResources();
 
         ApplyFramebufferLayout(size);
@@ -1289,16 +1348,9 @@ internal static partial class DottyWindowHost
     private static void ApplyFramebufferLayout(Vector2D<int> size)
     {
         _gl.Viewport(size);
-        var pad = UserConfigService.Current.Window.Padding;
-        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
-        VtHostPolicy.ComputeGrid(
-            size.X, size.Y, _cellWidth, _cellHeight, _scale, barRows,
-            pad.Left, pad.Right, pad.Top, pad.Bottom,
-            out _cols, out _rows);
-        // Physical text-area pixels: the same rounded cell size the VT metrics report, times the grid.
-        int cellPixelWidth = Math.Max(1, (int)MathF.Round(_cellWidth * _scale));
-        int cellPixelHeight = Math.Max(1, (int)MathF.Round(_cellHeight * _scale));
-        _tabManager?.ResizeAll(_cols, _rows, _cols * cellPixelWidth, _rows * cellPixelHeight);
+        (_cols, _rows) = GridFit.Compute(size.X, size.Y, _cellWidthPx, _cellHeightPx, CurrentBarRows(), CurrentDevicePadding());
+        // Physical text-area pixels: the same integer cell size the layout and the VT metrics use.
+        _tabManager?.ResizeAll(_cols, _rows, _cols * _cellWidthPx, _rows * _cellHeightPx);
     }
     private static void StartControlServer()
     {
@@ -1478,13 +1530,8 @@ internal static partial class DottyWindowHost
             return "ERROR dimensions must be positive integers";
         }
 
-        var config = UserConfigService.Current;
-        var padding = config.Window.Padding;
-        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(config.TabBar.Height, _cellHeight) : 0;
-        var target = new Vector2D<int>(
-            Math.Max(1, (int)MathF.Ceiling(columns * _cellWidth + (float)(padding.Left + padding.Right))),
-            Math.Max(1, (int)MathF.Ceiling((rows + barRows) * _cellHeight + (float)(padding.Top + padding.Bottom))));
-        SetWindowClientSize(target);
+        var (width, height) = ClientSizeFor(columns, rows);
+        SetWindowClientSize(new Vector2D<int>(width, height));
         return "OK";
     }
 
@@ -1948,8 +1995,8 @@ internal static partial class DottyWindowHost
                     _atlas.Height,
                     framebufferWidth,
                     framebufferHeight,
-                    _cellWidth * _scale,
-                    _cellHeight * _scale,
+                    _cellWidthPx,
+                    _cellHeightPx,
                     0.85f,
                     0.7f,
                     0.04f,
@@ -1967,19 +2014,20 @@ internal static partial class DottyWindowHost
 
             var theme = _activeTheme;
             var padding = UserConfigService.Current.Window.Padding;
-            float padLeft = (float)padding.Left * _scale;
-            float padTop = (float)padding.Top * _scale;
-            int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+            var devicePadding = CurrentDevicePadding();
+            float padLeft = devicePadding.Left;
+            float padTop = devicePadding.Top;
+            int barRows = CurrentBarRows();
             float statusWidth = TabBarQuadBuilder.MeasureStatusWidth(
                 GetLuaStatusText(),
-                _cellWidth * _scale,
+                _cellWidthPx,
                 _typeface,
                 _cellFontSizePx(),
                 _atlas,
                 _luaStatusWarning);
             PublishCustomFrameHitTestGeometry(
                 framebufferWidth,
-                barRows * _cellHeight * _scale,
+                barRows * _cellHeightPx,
                 statusWidth);
 
             long composeStart = FrameTimestamp();
@@ -1991,9 +2039,9 @@ internal static partial class DottyWindowHost
                 _themeSelectionColor,
                 framebufferWidth,
                 framebufferHeight,
-                _cellWidth,
-                _cellHeight,
-                _scale,
+                _cellWidthPx,
+                _cellHeightPx,
+                _display.ContentScale,
                 _rows,
                 _cols,
                 padding,
@@ -2015,7 +2063,7 @@ internal static partial class DottyWindowHost
                 GetLuaStatusText(),
                 _luaStatusWarning,
                 captionButtonsWidth: _customFrameActive
-                    ? Math.Min(framebufferWidth, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                    ? Math.Min(framebufferWidth, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _display.ContentScale)
                     : 0f,
                 isMaximized: _window.WindowState == WindowState.Maximized,
                 preeditState: _nativeTextInput?.Preedit,
@@ -2038,12 +2086,14 @@ internal static partial class DottyWindowHost
             }
             if (frame.ImeCaretBoundsValid && _nativeTextInput != null)
             {
+                // The composer reports device pixels; the IME wants window coordinates.
                 var caret = frame.ImeCaretBounds;
-                int left = (int)MathF.Floor(caret.Left / _scale);
-                int top = (int)MathF.Floor(caret.Top / _scale);
+                float toWindow = _display.WindowUnitsToDevice;
+                int left = (int)MathF.Floor(caret.Left / toWindow);
+                int top = (int)MathF.Floor(caret.Top / toWindow);
                 _nativeTextInput.SetCursorRectangle(left, top,
-                    Math.Max(1, (int)MathF.Ceiling(caret.Right / _scale) - left),
-                    Math.Max(1, (int)MathF.Ceiling(caret.Bottom / _scale) - top));
+                    Math.Max(1, (int)MathF.Ceiling(caret.Right / toWindow) - left),
+                    Math.Max(1, (int)MathF.Ceiling(caret.Bottom / toWindow) - top));
             }
             long renderStart = FrameTimestamp();
             _renderer.Render(
@@ -2053,8 +2103,8 @@ internal static partial class DottyWindowHost
                 _atlas.Height,
                 framebufferWidth,
                 framebufferHeight,
-                _cellWidth * _scale,
-                _cellHeight * _scale,
+                _cellWidthPx,
+                _cellHeightPx,
                 0.85f,
                 0.7f,
                 0.04f,
@@ -2516,7 +2566,7 @@ internal static partial class DottyWindowHost
         public void ShowPrompt(ContextMenuModel prompt)
         {
             var size = _window.FramebufferSize;
-            ClipboardReadPromptBuilder.Center(prompt, size.X, size.Y, _cellWidth * _scale, _cellHeight * _scale);
+            ClipboardReadPromptBuilder.Center(prompt, size.X, size.Y, _cellWidthPx, _cellHeightPx);
             _mouseHost.ActiveContextMenu = prompt;
             WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
         }
@@ -2565,25 +2615,26 @@ internal static partial class DottyWindowHost
             get
             {
                 var size = _window.FramebufferSize;
-                var padding = UserConfigService.Current.Window.Padding;
-                int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+                var padding = CurrentDevicePadding();
+                int barRows = CurrentBarRows();
                 float captionButtonsWidth = _customFrameActive
-                    ? Math.Min(size.X, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                    ? Math.Min(size.X, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _display.ContentScale)
                     : 0f;
                 float statusWidth = TabBarQuadBuilder.MeasureStatusWidth(
                     GetLuaStatusText(),
-                    _cellWidth * _scale,
+                    _cellWidthPx,
                     _typeface,
                     _cellFontSizePx(),
                     _atlas,
                     _luaStatusWarning);
                 return new TerminalMouseGeometry(
-                    Scale: _scale,
-                    CellWidth: _cellWidth,
-                    CellHeight: _cellHeight,
-                    PaddingLeft: (float)padding.Left * _scale,
-                    PaddingTop: (float)padding.Top * _scale,
-                    TopOffset: barRows * _cellHeight * _scale,
+                    ContentScale: _display.ContentScale,
+                    WindowUnitsToDevice: _display.WindowUnitsToDevice,
+                    CellWidth: _cellWidthPx,
+                    CellHeight: _cellHeightPx,
+                    PaddingLeft: padding.Left,
+                    PaddingTop: padding.Top,
+                    TopOffset: barRows * _cellHeightPx,
                     FramebufferWidth: size.X,
                     FramebufferHeight: size.Y,
                     Columns: _cols,
@@ -2758,8 +2809,8 @@ internal static partial class DottyWindowHost
                 return;
 
             var pointer = _mouse?.Position ?? default;
-            prompt.X = pointer.X * _scale;
-            prompt.Y = pointer.Y * _scale;
+            prompt.X = _display.WindowToDevice(pointer.X);
+            prompt.Y = _display.WindowToDevice(pointer.Y);
             ActiveContextMenu = prompt;
             WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
         }

@@ -230,6 +230,12 @@ public sealed class TerminalSceneComposer : IDisposable
         _fontSize = fontSize;
     }
 
+    /// <summary>
+    /// Half-leading baseline offset of cell text in device pixels (<c>CellMetrics.BaselineShift</c>);
+    /// changes only together with the cell height or font, both of which invalidate the row caches.
+    /// </summary>
+    public int BaselineShift { get; set; }
+
     public void UpdateResources(GlyphAtlas atlas, SKTypeface typeface, float fontSize)
     {
         _atlas = atlas ?? throw new ArgumentNullException(nameof(atlas));
@@ -274,13 +280,15 @@ public sealed class TerminalSceneComposer : IDisposable
 
         var activePane = activeTab.ActivePane;
         var leaves = activeTab.PaneTree.Leaves;
+        // cellWidth/cellHeight are whole device pixels; scale is the display content scale for chrome.
         scale = Math.Max(0.1f, scale);
-        float padLeft = (float)padding.Left * scale;
-        float padTop = (float)padding.Top * scale;
-        float padX = (float)(padding.Left + padding.Right) * scale;
-        float padY = (float)(padding.Top + padding.Bottom) * scale;
-        int barRows = showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, cellHeight) : 0;
-        float topOffset = barRows * cellHeight * scale;
+        var devicePadding = DevicePadding.FromLogical(padding.Left, padding.Top, padding.Right, padding.Bottom, scale);
+        float padLeft = devicePadding.Left;
+        float padTop = devicePadding.Top;
+        float padX = devicePadding.Horizontal;
+        float padY = devicePadding.Vertical;
+        int barRows = showTabBar ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, cellHeight / scale) : 0;
+        float topOffset = barRows * cellHeight;
         int maxInstances = checked(Math.Max(1024, rows * columns * 2 + 1024));
         EnsureScratchCapacity(maxInstances);
         EnsureScrollbarScratchCapacity(checked(Math.Max(2, leaves.Count * 2)));
@@ -297,7 +305,7 @@ public sealed class TerminalSceneComposer : IDisposable
         BlinkActive = false;
         // cursorVisible is the shared blink phase, so SGR 5/6 text blinks in step with the cursor.
         _textOptions = new TextAttributeOptions(
-            TextAttributeOptions.NormalizeFaintOpacity(UserConfigService.Current.Font.FaintOpacity), cursorVisible);
+            TextAttributeOptions.NormalizeFaintOpacity(UserConfigService.Current.Font.FaintOpacity), cursorVisible, BaselineShift);
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
         int atlasVersionAtStart = _atlas.ContentVersion;
@@ -308,7 +316,7 @@ public sealed class TerminalSceneComposer : IDisposable
         float terminalHeight = Math.Max(10f, framebufferHeight - topOffset - padY);
         var panes = UserConfigService.Current.Panes;
         float dividerThickness = PaneDecorationBuilder.ResolveThickness(panes.DividerThickness, scale);
-        activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth * scale, cellHeight * scale, dividerThickness);
+        activeTab.PaneTree.Layout(terminalWidth, terminalHeight, cellWidth, cellHeight, dividerThickness);
 
         // Underlay chrome (drawn below the cell backgrounds): pane backgrounds that differ from the window
         // background (OSC 11, DECSCNM), then dividers, then the active-pane ring.
@@ -316,8 +324,8 @@ public sealed class TerminalSceneComposer : IDisposable
             Array.Resize(ref _leafColors, Math.Max(leaves.Count, Math.Max(2, _leafColors.Length * 2)));
         EnsureChromeScratchCapacity(leaves.Count + PaneDecorationBuilder.MaxQuadCount(leaves.Count));
         var themeBackground = new SgrColorArgb(theme.Background);
-        float gridCellWidth = cellWidth * scale;
-        float gridCellHeight = cellHeight * scale;
+        float gridCellWidth = cellWidth;
+        float gridCellHeight = cellHeight;
         for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
         {
             var leaf = leaves[leafIndex];
@@ -396,8 +404,8 @@ public sealed class TerminalSceneComposer : IDisposable
                 int written = AppendCachedLeafRows(
                     leafIndex, leaf, leafSnapshot, _frameScratch.AsSpan(startInstanceIndex),
                     paneRows, paneColumns, leafForeground, leafBackground);
-                int startColumnOffset = (int)Math.Round(leaf.Bounds.X / (cellWidth * scale));
-                int startRowOffset = (int)Math.Round(leaf.Bounds.Y / (cellHeight * scale)) + barRows;
+                int startColumnOffset = (int)Math.Round(leaf.Bounds.X / cellWidth);
+                int startRowOffset = (int)Math.Round(leaf.Bounds.Y / cellHeight) + barRows;
                 for (int i = 0; i < written; i++)
                 {
                     ref var instance = ref _frameScratch[startInstanceIndex + i];
@@ -418,8 +426,8 @@ public sealed class TerminalSceneComposer : IDisposable
                     {
                         // startRowOffset already contains the tab-bar rows, so padTop is NOT combined with
                         // topOffset here (the cell pass uses the same origin: padTop + row * cellH).
-                        float imageCellWidth = cellWidth * scale;
-                        float imageCellHeight = cellHeight * scale;
+                        float imageCellWidth = cellWidth;
+                        float imageCellHeight = cellHeight;
                         float gridLeft = padLeft + startColumnOffset * imageCellWidth;
                         float gridTop = padTop + startRowOffset * imageCellHeight;
                         var imageGeometry = new ImageSceneGeometry(
@@ -489,8 +497,8 @@ public sealed class TerminalSceneComposer : IDisposable
                         && cursorCells[leadColumn].Width == 2 ? 2 : 1;
                     int cursorRow = leafSnapshot.CursorRow + startRowOffset;
                     int cursorColumn = leadColumn + startColumnOffset;
-                    float cursorCellWidth = cellWidth * scale;
-                    float cursorCellHeight = cellHeight * scale;
+                    float cursorCellWidth = cellWidth;
+                    float cursorCellHeight = cellHeight;
                     CursorPlan cursorPlan = CursorGeometry.Plan(
                         cursorShape,
                         windowFocused,
@@ -537,8 +545,8 @@ public sealed class TerminalSceneComposer : IDisposable
                 {
                     int cursorGlobalRow = leafSnapshot.CursorRow + startRowOffset;
                     int cursorGlobalColumn = leafSnapshot.CursorCol + startColumnOffset;
-                    float scaledCellWidth = cellWidth * scale;
-                    float scaledCellHeight = cellHeight * scale;
+                    float scaledCellWidth = cellWidth;
+                    float scaledCellHeight = cellHeight;
                     float paneLeft = padLeft + leaf.Bounds.X;
                     float paneTop = padTop + topOffset + leaf.Bounds.Y;
                     float paneRight = paneLeft + leaf.Bounds.Width;
@@ -618,7 +626,7 @@ public sealed class TerminalSceneComposer : IDisposable
                         paneHeight: leaf.Bounds.Height,
                         scrollbackCount: leafBuffer.ScrollbackCount,
                         scrollOffset: scrollOffset,
-                        cellHeight: cellHeight * scale,
+                        cellHeight: cellHeight,
                         theme: theme,
                         destination: _scrollbarScratch.AsSpan(scrollbarChromeCount),
                         isHoveredOrDragging: emphasizedScrollbar);
@@ -641,12 +649,12 @@ public sealed class TerminalSceneComposer : IDisposable
                 _fontSize,
                 theme,
                 framebufferWidth,
-                cellWidth * scale,
-                cellHeight * scale,
+                cellWidth,
+                cellHeight,
                 _frameScratch.AsSpan(instanceCount),
                 _chromeScratch.AsSpan(chromeQuadCount),
                 out int chromeQuadsWritten,
-                barRows * cellHeight * scale,
+                barRows * cellHeight,
                 hoveredTabIndex,
                 hoveredTabHitType,
                 titles,
@@ -669,8 +677,8 @@ public sealed class TerminalSceneComposer : IDisposable
             EnsureScratchCapacity(instanceCount + 1024);
             int overlayQuads = SearchQuadBuilder.BuildOverlayQuads(
                 in overlayLayout,
-                cellWidth * scale,
-                cellHeight * scale,
+                cellWidth,
+                cellHeight,
                 _atlas,
                 _typeface,
                 _fontSize,
@@ -679,8 +687,8 @@ public sealed class TerminalSceneComposer : IDisposable
             instanceCount += overlayQuads;
             if (searchOverlay.QueryCursorIndex >= 0 && (activeContextMenu == null || !activeContextMenu.IsVisible))
             {
-                float scaledWidth = cellWidth * scale;
-                float scaledHeight = cellHeight * scale;
+                float scaledWidth = cellWidth;
+                float scaledHeight = cellHeight;
                 int inputStart = (int)(overlayLayout.InputBoxRect.X / scaledWidth);
                 int inputRow = (int)(overlayLayout.InputBoxRect.Y / scaledHeight);
                 int inputColumns = Math.Max(0, (int)(overlayLayout.InputBoxRect.Width / scaledWidth));
@@ -743,8 +751,8 @@ public sealed class TerminalSceneComposer : IDisposable
                 activeContextMenu,
                 framebufferWidth,
                 framebufferHeight,
-                cellWidth * scale,
-                cellHeight * scale);
+                cellWidth,
+                cellHeight);
             EnsureScratchCapacity(instanceCount + 1024);
             EnsureChromeScratchCapacity(chromeQuadCount + activeContextMenu.Items.Count * 2 + 8);
             int menuQuads = ContextMenuQuadBuilder.Build(
@@ -754,8 +762,8 @@ public sealed class TerminalSceneComposer : IDisposable
                 _typeface,
                 _fontSize,
                 theme,
-                cellWidth * scale,
-                cellHeight * scale,
+                cellWidth,
+                cellHeight,
                 _frameScratch.AsSpan(instanceCount),
                 _chromeScratch.AsSpan(chromeQuadCount),
                 out int menuChromeWritten,

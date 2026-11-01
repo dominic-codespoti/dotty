@@ -9,9 +9,11 @@ public sealed class CellMetricsCacheTests
 {
     private static readonly TypefaceIdentity Face = new("Test Mono", 400, 5, SKFontStyleSlant.Upright);
 
-    private static CellMetricsKey Key(char name) => new(Face, name, 1.2, 1f);
+    private static CellMetricsKey Key(char name) => KeyOf(Face, name);
 
-    private static CellMetrics Metrics(char name) => new(name, name * 2);
+    private static CellMetricsKey KeyOf(TypefaceIdentity face, float size) => new(face, new CellMetricsOptions(size, 1.2, 1f));
+
+    private static CellMetrics Metrics(char name) => new(name, name * 2, name, name, 1, 0, name + 1, 1, name / 2, 1, 0, 1);
 
     // Operations: "+X" sets X, "?X" reads X. Expected: the keys present afterwards, in any order.
     [Theory]
@@ -44,13 +46,14 @@ public sealed class CellMetricsCacheTests
     public void KeysCompareFaceByValue()
     {
         var cache = new CellMetricsCache(4);
-        cache.Set(new CellMetricsKey(new TypefaceIdentity("Test Mono", 400, 5, SKFontStyleSlant.Upright), 14f, 1.2, 1f), new CellMetrics(8, 17));
+        var metrics = Metrics('H');
+        cache.Set(KeyOf(new TypefaceIdentity("Test Mono", 400, 5, SKFontStyleSlant.Upright), 14f), metrics);
 
-        Assert.True(cache.TryGet(new CellMetricsKey(new TypefaceIdentity("Test Mono", 400, 5, SKFontStyleSlant.Upright), 14f, 1.2, 1f), out var hit));
-        Assert.Equal(new CellMetrics(8, 17), hit);
-        Assert.False(cache.TryGet(new CellMetricsKey(new TypefaceIdentity("Test Mono", 700, 5, SKFontStyleSlant.Upright), 14f, 1.2, 1f), out _));
-        Assert.False(cache.TryGet(new CellMetricsKey(new TypefaceIdentity("Test Mono", 400, 5, SKFontStyleSlant.Italic), 14f, 1.2, 1f), out _));
-        Assert.False(cache.TryGet(new CellMetricsKey(new TypefaceIdentity("Other Mono", 400, 5, SKFontStyleSlant.Upright), 14f, 1.2, 1f), out _));
+        Assert.True(cache.TryGet(KeyOf(new TypefaceIdentity("Test Mono", 400, 5, SKFontStyleSlant.Upright), 14f), out var hit));
+        Assert.Equal(metrics, hit);
+        Assert.False(cache.TryGet(KeyOf(new TypefaceIdentity("Test Mono", 700, 5, SKFontStyleSlant.Upright), 14f), out _));
+        Assert.False(cache.TryGet(KeyOf(new TypefaceIdentity("Test Mono", 400, 5, SKFontStyleSlant.Italic), 14f), out _));
+        Assert.False(cache.TryGet(KeyOf(new TypefaceIdentity("Other Mono", 400, 5, SKFontStyleSlant.Upright), 14f), out _));
     }
 
     [Fact]

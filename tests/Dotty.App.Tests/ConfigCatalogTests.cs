@@ -233,7 +233,7 @@ public sealed class ConfigCatalogTests
             "font.size\n" +
             "Lua key: font.size\n" +
             "Type:    number\n" +
-            "Default: 14\n" +
+            "Default: 11.25\n" +
             "\n" +
             size.Description,
             ConfigOptionCatalog.Render(size));
@@ -259,7 +259,7 @@ public sealed class ConfigCatalogTests
     [Fact]
     public void DefaultsAreFormattedFromTheLiveConfig()
     {
-        Assert.Equal("14", ConfigOptionCatalog.Find("font.size")!.Default());
+        Assert.Equal("11.25", ConfigOptionCatalog.Find("font.size")!.Default());
         Assert.Equal("1.25", ConfigOptionCatalog.Find("font.lineHeight")!.Default());
         Assert.Equal("true", ConfigOptionCatalog.Find("clipboard.confirmPaste")!.Default());
         Assert.Equal("false", ConfigOptionCatalog.Find("clipboard.allowOsc52Write")!.Default());

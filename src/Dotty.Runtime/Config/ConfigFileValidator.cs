@@ -78,7 +78,9 @@ public static class ConfigFileValidator
         catch (JsonException ex)
         {
             string? path = ex.Path is { Length: > 2 } p && p.StartsWith("$.", StringComparison.Ordinal) ? p[2..] : null;
-            diagnostics.Add(FromJsonException(file, ex, path));
+            // A group given a non-object value was already reported by the walk; the serializer fails on that same token.
+            if (path is null || !KnownPaths.Groups.Contains(path))
+                diagnostics.Add(FromJsonException(file, ex, path));
         }
         return diagnostics;
     }

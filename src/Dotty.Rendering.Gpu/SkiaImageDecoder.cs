@@ -10,6 +10,8 @@ namespace Dotty.Rendering.Gpu;
 /// </summary>
 public sealed class SkiaImageDecoder : IImageDecoder
 {
+    private static ReadOnlySpan<byte> PngSignature => [0x89, (byte)'P', (byte)'N', (byte)'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
     public unsafe ImageDecodeStatus DecodePngRgba(ReadOnlySpan<byte> png, int width, int height, Span<byte> straightRgba)
     {
         if (width <= 0 || height <= 0 || png.IsEmpty) return ImageDecodeStatus.Invalid;
@@ -21,7 +23,9 @@ public sealed class SkiaImageDecoder : IImageDecoder
             using var data = SKData.CreateCopy(png);
             // The codec takes ownership of the stream (SkiaSharp revokes the managed owner), so the stream is not disposed here.
             using var codec = SKCodec.Create(new SKMemoryStream(data), out SKCodecResult created);
-            if (codec == null) return Map(created);
+            // Without a whole PNG signature no codec recognizes the bytes (Unimplemented): the PNG is truncated or
+            // corrupt, not well formed data this decoder cannot handle.
+            if (codec == null) return png.StartsWith(PngSignature) ? Map(created) : ImageDecodeStatus.Invalid;
             if (codec.EncodedFormat != SKEncodedImageFormat.Png) return ImageDecodeStatus.Invalid;
             if (codec.Info.Width != width || codec.Info.Height != height) return ImageDecodeStatus.Invalid;
 

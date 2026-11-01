@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using SkiaSharp;
 
 namespace Dotty.Rendering.Gpu;
 
-/// <summary>Per-range font-family preferences. The first installed family wins.</summary>
+/// <summary>
+/// Per-range font-family preferences (<c>font.symbolMap</c>). <see cref="FontFallbackChain"/> tries the families of
+/// the first matching range, in order, before its own faces; the first installed family that covers the cluster wins.
+/// </summary>
 public sealed class SymbolMap
 {
     public readonly struct Entry : IEquatable<Entry>
@@ -36,7 +38,6 @@ public sealed class SymbolMap
     }
 
     private readonly List<Entry> _entries = new();
-    private readonly Dictionary<string, SKTypeface?> _familyCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
 
     public int Count { get { lock (_lock) return _entries.Count; } }
@@ -81,35 +82,18 @@ public sealed class SymbolMap
         return false;
     }
 
-    public SKTypeface? ResolveTypeface(int codepoint)
+    /// <summary>The ordered family list of the first entry whose range contains <paramref name="codepoint"/>.</summary>
+    public bool TryResolveFamilies(int codepoint, out IReadOnlyList<string> families)
     {
-        Entry? match = null;
         lock (_lock)
             foreach (var entry in _entries)
                 if (codepoint >= entry.Start && codepoint <= entry.End)
                 {
-                    match = entry;
-                    break;
+                    families = entry.Families;
+                    return true;
                 }
-        if (match is not Entry matched) return null;
-
-        foreach (string family in matched.Families)
-        {
-            lock (_lock)
-            {
-                if (_familyCache.TryGetValue(family, out var cached))
-                {
-                    if (cached != null) return cached;
-                    continue;
-                }
-                SKTypeface? typeface;
-                try { typeface = SKFontManager.Default.MatchFamily(family); }
-                catch { typeface = null; }
-                _familyCache.Add(family, typeface);
-                if (typeface != null) return typeface;
-            }
-        }
-        return null;
+        families = Array.Empty<string>();
+        return false;
     }
 
     public static bool TryParseLine(string? line, out int start, out int end, out string? family)

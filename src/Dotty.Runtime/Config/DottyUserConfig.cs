@@ -103,8 +103,9 @@ public sealed class DottyUserConfig
 }
 public sealed class FontUserConfig
 {
+    /// <summary>Font families in fallback order (comma list); the first installed family is the primary font.</summary>
     [JsonPropertyName("family")]
-    public string Family { get; set; } = "JetBrainsMono Nerd Font Mono, JetBrains Mono, Fira Code, Cascadia Code, monospace";
+    public string Family { get; set; } = DottyDefaults.FontFamily;
 
     [JsonPropertyName("size")]
     public double Size { get; set; } = 14.0;
@@ -120,6 +121,25 @@ public sealed class FontUserConfig
     [JsonPropertyName("faintOpacity")]
     public double FaintOpacity { get; set; } = 0.5;
 
+    /// <summary>Families for bold text in the primary font (comma list); empty uses the primary family's bold face.</summary>
+    [JsonPropertyName("boldFamily")]
+    public string BoldFamily { get; set; } = string.Empty;
+
+    /// <summary>Families for italic text in the primary font (comma list); empty uses the primary family's italic face.</summary>
+    [JsonPropertyName("italicFamily")]
+    public string ItalicFamily { get; set; } = string.Empty;
+
+    /// <summary>Families for bold italic text in the primary font (comma list); empty uses the primary family's bold italic face.</summary>
+    [JsonPropertyName("boldItalicFamily")]
+    public string BoldItalicFamily { get; set; } = string.Empty;
+
+    /// <summary>Weight of regular text: a CSS weight name or a number 1-1000.</summary>
+    [JsonPropertyName("weight")]
+    public string Weight { get; set; } = DottyDefaults.FontWeight;
+
+    /// <summary>OpenType feature settings for shaping, such as <c>+calt</c>, <c>-liga</c>, <c>cv01=2</c>.</summary>
+    [JsonPropertyName("features")]
+    public System.Collections.Generic.List<string> Features { get; set; } = new();
 }
 
 public sealed class WindowUserConfig

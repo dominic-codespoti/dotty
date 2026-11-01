@@ -36,7 +36,8 @@ public static class GlyphAtlasService
     /// <summary>
     /// Gets or creates the shared atlas for the font configuration. The caller
     /// must pair this with <see cref="AcquireAtlas"/> when it starts using the
-    /// atlas and <see cref="ReleaseAtlas"/> when it stops.
+    /// atlas and <see cref="ReleaseAtlas"/> when it stops. A non-null
+    /// <paramref name="fallbackChain"/> becomes the atlas's chain.
     /// </summary>
     public static GlyphAtlas GetOrCreateAtlas(SKTypeface typeface, float textSize, int initialSize = 1024, FontFallbackChain? fallbackChain = null)
     {
@@ -46,10 +47,10 @@ public static class GlyphAtlasService
             {
                 if (ReferenceEquals(entry.Atlas.Typeface, typeface) && Math.Abs(entry.Atlas.TextSize - textSize) < 0.01f)
                 {
-                    if (fallbackChain != null && entry.Atlas.FallbackChain == null)
-                    {
+                    // A different chain (font.* changed) replaces the old one;
+                    // the atlas rebuilds itself on the swap.
+                    if (fallbackChain != null)
                         entry.Atlas.FallbackChain = fallbackChain;
-                    }
                     entry.Stamp = ++_stamp;
                     return entry.Atlas;
                 }

@@ -58,6 +58,19 @@ public static class UnicodeWidth
     internal static bool IsEmojiVariationBase(uint codePoint) =>
         InRanges(UnicodeWidthTables.EmojiVariationBases, codePoint);
 
+    /// <summary>
+    /// Whether <paramref name="codePoint"/> defaults to emoji presentation (Emoji_Presentation), approximated from the
+    /// width tables as a two-cell scalar in the symbol and pictograph blocks U+2300..U+2BFF and U+1F000..U+1FAFF,
+    /// excluding the angle brackets U+2329/U+232A. A few squared CJK signs in U+1F200..U+1F2FF are wide without
+    /// being emoji; callers use this only to prefer an emoji face, so they still fall back by coverage.
+    /// </summary>
+    public static bool IsDefaultEmojiPresentation(int codePoint)
+    {
+        uint cp = (uint)codePoint;
+        bool pictographBlock = (cp >= 0x2300 && cp <= 0x2BFF && cp != 0x2329 && cp != 0x232A) || (cp >= 0x1F000 && cp <= 0x1FAFF);
+        return pictographBlock && GetScalarWidth(cp) == 2;
+    }
+
     private static bool IsRegionalIndicator(uint codePoint) =>
         codePoint - RegionalIndicatorFirst <= RegionalIndicatorLast - RegionalIndicatorFirst;
 

@@ -39,7 +39,8 @@ internal static partial class DottyWindowHost
     private static GL _gl = null!;
     private static GlyphAtlas _atlas = null!;
     private static SKTypeface _typeface = null!;
-    private static readonly TypefaceResolutionCache _typefaces = new(FontMetricsService.ResolveTypeface);
+    private static readonly FontChainResolutionCache _fontChains = new(static options => new FontFallbackChain(options, SkiaFontCatalog.Shared));
+    private static FontFallbackChain _fontChain = null!;
     private static float _cellWidth, _cellHeight, _scale = 1f;
     private const float MinRuntimeFontSize = 6f;
     private const float MaxRuntimeFontSize = 72f;
@@ -438,7 +439,7 @@ internal static partial class DottyWindowHost
         ConfigureRenderRecovery();
 
         ResolveFontAndMetrics();
-        _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
+        _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain);
         GlyphAtlasService.AcquireAtlas(_atlas);
         _renderer = new SilkTerminalRenderer(_gl, _atlas);
         _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx());
@@ -1206,13 +1207,25 @@ internal static partial class DottyWindowHost
     }
 
 
-    // Config, zoom and load path. The typeface is re-resolved only when font.family changes,
-    // so its object identity (which keys the glyph atlas and the composer row cache) is stable.
+    // Config, zoom and load path. The fallback chain (and with it the primary typeface) is rebuilt only when the
+    // font model (font.family/boldFamily/italicFamily/boldItalicFamily/weight/features) changes, so the typeface
+    // object identity (which keys the glyph atlas and the composer row cache) is stable.
     private static void ResolveFontAndMetrics()
     {
         var config = UserConfigService.Current;
         _configuredFontSize = double.IsFinite(config.Font.Size) ? config.Font.Size : 14d;
-        _typeface = _typefaces.Resolve(config.Font.Family);
+        var font = config.Font;
+        var fontErrors = new List<string>();
+        var fontOptions = FontOptions.Create(font.Family, font.BoldFamily, font.ItalicFamily, font.BoldItalicFamily,
+            font.Weight, font.Features, fontErrors);
+        var chain = _fontChains.Resolve(fontOptions);
+        if (!ReferenceEquals(chain, _fontChain))
+        {
+            foreach (string error in fontErrors)
+                Console.Error.WriteLine("dotty: " + error);
+            _fontChain = chain;
+        }
+        _typeface = chain.PrimaryTypeface;
         UpdateScaleAndCellMetrics();
     }
 
@@ -1232,7 +1245,7 @@ internal static partial class DottyWindowHost
     private static void RefreshFontResources()
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Atlas);
-        var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
+        var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain);
         ApplyConfiguredSymbolMap(newAtlas);
         if (!ReferenceEquals(newAtlas, _atlas))
         {
@@ -1265,7 +1278,7 @@ internal static partial class DottyWindowHost
             return;
         }
         var map = SymbolMap.Parse(entries);
-        var target = atlas.FallbackChain ?? FontFallbackChain.CreateDefault(_typeface);
+        var target = atlas.FallbackChain ?? _fontChain;
         target.SymbolMap = map.Count > 0 ? map : null;
         atlas.FallbackChain = target;
     }

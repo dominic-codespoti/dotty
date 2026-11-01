@@ -170,12 +170,28 @@ trailing commas/comments are accepted by the JSON parser.
 
 | Property | Type | Default | Notes |
 |---|---|---|---|
-| `family` | string | platform-neutral fallback stack | Comma-separated family names; first installed family wins. |
+| `family` | string | OS stack (below) | Comma-separated families in fallback order; the first installed one is the primary font. |
 | `size` | number | `14` | Font size in pixels before display scaling: the host rasterizes at `size × (framebuffer width / window width)`. Values are clamped to 1–512; a non-finite value falls back to the built-in default. Not points. |
 | `lineHeight` | number | `1.25` | Line-height multiplier; values below `0.1` are clamped. |
 | `symbolMap` | string[] | `[]` | Per-range font overrides; use `U+2500-U+257F: Preferred Font, Fallback Font`. For each range, the first installed family that contains the glyph wins; overlapping ranges use the first matching entry. |
 | `faintOpacity` | number | `0.5` | Faint (SGR 2) text keeps this share of its colour and is mixed toward the cell background (after inverse). Clamped to 0–1; a non-finite value uses `0.5`. |
-OpenType features and programming ligatures are not supported. The renderer draws
+| `boldFamily` | string | `""` | Comma-separated families for bold text in the primary font; the first installed one is used. Empty uses the primary family's own bold face; text is emboldened synthetically only when no heavier face exists. Fallback families always use their own bold face. Lua: `font.bold_family`. |
+| `italicFamily` | string | `""` | Same for italic text (synthetic slant when no italic/oblique face exists). Lua: `font.italic_family`. |
+| `boldItalicFamily` | string | `""` | Same for bold italic text. Lua: `font.bold_italic_family`. |
+| `weight` | string | `"regular"` | Weight of regular text: `thin`, `extralight`, `light`, `regular`, `medium`, `semibold`, `bold`, `extrabold`, `black`, or a number 1–1000. Bold text asks for 700 (900 when `weight` is 600 or more). An invalid value prints a warning and uses regular. |
+| `features` | string[] | `[]` | OpenType feature settings kept for shaping: `+calt`, `-liga`, `ss01` (on), `cv01=2`, `liga=off`. A tag is four ASCII letters or digits; a later setting of a tag wins; ranged settings like `[3:5]calt` and malformed entries print a warning and are ignored. No effect until shaping lands (W4-C10/C11). |
+
+`family` is an ordered list and also the fallback order (as in Ghostty): every
+installed family is tried in turn for a glyph, then installed built-in symbol, CJK
+and emoji families, then a bounded set of faces the system matches. Emoji-style
+clusters (VS16, default-emoji characters, flags, keycaps, skin tones, ZWJ
+sequences) prefer a colour face from the list, and VS15 prefers a monochrome one.
+The default is the OS stack: Linux `monospace, DejaVu Sans Mono, Noto Sans Mono,
+Liberation Mono, Noto Color Emoji`; macOS `Menlo, SF Mono, Monaco, Apple Color
+Emoji, Apple Symbols`; Windows `Cascadia Mono, Consolas, Segoe UI Emoji, Segoe UI
+Symbol`. No Nerd Font is assumed; install one and list it to get its icons.
+
+Programming ligatures are not supported. The renderer draws
 one grapheme per terminal cell rather than shaping ligatures across cells.
 The renderer measures the selected typeface at the current framebuffer scale.
 Cell width and height remain finite and positive even when a platform font
@@ -771,3 +787,9 @@ The guard checks that every config property and every Lua key has a catalog entr
 
 See [Platform Support](PlatformSupport.md) for native dependencies, graphics
 startup failures, and release smoke requirements.
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C6: `font.family` is the ordered fallback list with an OS default stack; added `font.boldFamily`, `font.italicFamily`, `font.boldItalicFamily`, `font.weight`, `font.features`. |

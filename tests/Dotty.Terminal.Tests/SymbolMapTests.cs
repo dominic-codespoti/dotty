@@ -56,12 +56,17 @@ public sealed class SymbolMapTests
         Assert.False(original.HasSameEntries(SymbolMap.Parse(new[] { "U+E000: Icons", "U+2500-U+257F: First, Second" })));
     }
 
-    [Fact]
-    public void MissingFamiliesResolveWithoutThrowing()
+    [Theory]
+    [InlineData(0xE000, "Icons, Icons Fallback")]
+    [InlineData(0x2550, "Box")]
+    [InlineData(0x2580, null)]
+    [InlineData(0x41, null)]
+    public void TryResolveFamiliesReturnsTheFirstMatchingRangesListInOrder(int codepoint, string? expected)
     {
-        var map = SymbolMap.Parse(new[] { "U+E000: Definitely Missing Dotty Test Family" });
-        Assert.Null(map.ResolveTypeface(0xE000));
-        Assert.Null(map.ResolveTypeface(0xE000));
+        var map = SymbolMap.Parse(new[] { "U+2500-U+257F: Box", "U+E000-U+F8FF: Icons, Icons Fallback", "U+2550: Shadowed" });
+        bool found = map.TryResolveFamilies(codepoint, out var families);
+        Assert.Equal(expected != null, found);
+        Assert.Equal(expected ?? string.Empty, string.Join(", ", families));
     }
 
     [Fact]

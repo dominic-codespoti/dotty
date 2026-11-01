@@ -270,9 +270,10 @@ reserved tofu glyph if it still cannot fit.
 
 `GlyphAtlas` stores monochrome glyphs in a single-channel A8 coverage page and
 intrinsic-color glyphs in a separate, lazily allocated premultiplied RGBA page.
-The rasterizer probes glyph output using white and black paint, so classification
-does not depend on font names or a fixed emoji range. Monochrome foreground color
-and alpha are applied by the shader; intrinsic-color pixels preserve their own
+Colour classification is per face: a face with a `CBDT`/`CBLC`, `sbix`, `COLR` or
+`SVG ` table is a colour face and its glyphs are probed with white and black paint;
+any other face is rasterized once, straight to A8 coverage. Monochrome foreground
+color and alpha are applied by the shader; intrinsic-color pixels preserve their own
 RGB and are modulated only by terminal foreground alpha. Both pages share the
 same glyph lookup key and dirty-upload lifecycle, while the color page's four
 bytes per pixel are included in atlas memory accounting. The `MEMORY` diagnostic
@@ -280,7 +281,14 @@ also reports estimated R8 and RGBA8 texture pixel payloads from uploaded page
 dimensions; these are estimates, not driver RSS or total GPU allocation. The
 retained color-probe bitmap payload is reported separately from atlas page bytes.
 Atlas pages have finite glyph and texture-size limits; an unrepresentable glyph
-is not silently uploaded.
+is not silently uploaded. When a page is full at 4096², the atlas sets
+`NeedsRebuild`; the scene composer rebuilds it at the next frame boundary (all
+entries dropped, `LayoutEpoch` bumped, visible glyphs re-ensured by that frame),
+so a long session with many distinct glyphs recovers instead of drawing tofu until
+restart. If the very frame after a rebuild overflows again, the next rebuild waits
+for a later frame. Row caches key on `LayoutEpoch`, not on `ContentVersion`:
+adding a glyph or growing a page keeps every placement and no longer forces a
+recompose of every cached row.
 A native Wayland screenshot also confirmed that green ASCII and multicolor emoji
 retain their intended colors in the actual OpenGL window.
 
@@ -292,15 +300,15 @@ expected to change the row; it is not a release date or a commitment.
 | Feature | Status | Notes | Planned |
 |---|---|---|---|
 | Font size unit | Partial | `font.size` is pixels multiplied by the framebuffer scale (default `14`), not points | W4-C2 (points) |
-| Font family list | Partial | First installed family in `font.family` wins; later entries are not used as fallbacks. A built-in fallback chain covers missing glyphs | W4-C6 |
-| `font.symbolMap` per-range overrides | Supported | | |
-| Colour emoji (single code point) | Supported | Intrinsic-colour glyphs use the RGBA atlas page | |
+| Font family list | Supported | `font.family` is an ordered list and the fallback order (Ghostty semantics): every installed family in turn, then installed built-in symbol/CJK/emoji families, then at most 16 faces the system matches for uncovered scalars. Default: the OS stack (Linux `monospace`, DejaVu Sans Mono, Noto Sans Mono, Liberation Mono, Noto Color Emoji; macOS Menlo, SF Mono, Monaco, Apple Color Emoji, Apple Symbols; Windows Cascadia Mono, Consolas, Segoe UI Emoji, Segoe UI Symbol). No Nerd Font is assumed | |
+| `font.symbolMap` per-range overrides | Supported | Tried before the chain | |
+| Colour emoji and emoji presentation | Supported | Intrinsic-colour glyphs use the RGBA atlas page. Cluster face selection: VS16, default-emoji bases, regional-indicator pairs, keycaps, tag sequences, skin-tone modifiers and ZWJ sequences with a pictograph prefer a colour face; VS15 prefers a monochrome face; variation selectors, ZWJ, modifiers and tags are not required in a face's character map. Sequences are still drawn without shaping (W4-C10) | |
 | Character width and grapheme clusters | Supported | Widths generated from Unicode 16.0.0 (East Asian Width W/F wide; Cc/Cf/Mn/Me and Hangul medial/final jamo zero; ambiguous narrow); RI pairs, VS16/VS15 on the 371 emoji-variation bases; clusters are UAX #29 (.NET `StringInfo`) and re-join across writes, so a late VS16 widens the cell. See [Parsing](Parsing.md#combining-cap-grapheme-clusters-cell-width-and-the-grapheme-store). No `unicode.ambiguousWidth` option | |
 | Text shaping (ZWJ sequences, combining-mark placement) | Not supported | Each grapheme is rasterized through the font's character map, one per cell; `TextShaper` exists but has no callers | W4-C10 |
 | Programming ligatures / OpenType features | Not supported | | W4-C11 |
 | Bidirectional / RTL text | Not supported | Decision: out of scope, as in Ghostty and kitty. Text is laid out left to right in logical order. Per-grapheme shaping (W4-C10) will shape within one cell only; it is not a bidi layout engine | none |
-| Bold | Partial | Synthetic: the regular face is stroked; no separate bold face | W4-C6 |
-| Italic (SGR 3) | Partial | Synthetic: the regular face is skewed (`SkewX` −0.25) as its own atlas entry (regular, bold, italic, bold-italic keys); no separate italic face | W4-C6 |
+| Bold | Supported | The family's real bold face (`font.boldFamily` for the primary font); synthetic stroke only when the family has no heavier face | |
+| Italic (SGR 3) | Supported | The family's real italic/oblique face (`font.italicFamily`, `font.boldItalicFamily` for the primary font); synthetic skew (`SkewX` −0.25) only when none is installed | |
 | Faint (SGR 2) | Supported | Text colour mixed toward the cell background after inverse, keeping `font.faintOpacity` (default 0.5) of it; decorations follow the text colour | |
 | Conceal (SGR 8) | Supported | No glyph; background and decorations stay | |
 | Text blink (SGR 5, 6) | Supported | One rate for both, shared with the cursor blink phase (`cursor.blinkIntervalMs`); the glyph is hidden in the off phase, background and decorations stay; steady while the window is unfocused | |
@@ -511,3 +519,9 @@ DOTTY_CONFIG_HOME=/tmp/dotty-config timeout 8s \
 Exit status `124` is expected because the host remains open. Any earlier exit,
 native loader error, OpenGL initialization diagnostic, or unhandled exception
 fails the smoke run.
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |

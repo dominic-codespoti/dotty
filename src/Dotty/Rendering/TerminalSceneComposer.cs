@@ -164,7 +164,8 @@ public sealed class TerminalSceneComposer : IDisposable
     private GlyphAtlas? _cachedRowCacheAtlas;
     private SKTypeface? _cachedRowCacheTypeface;
     private float _cachedRowCacheFontSize;
-    private int _cachedRowCacheAtlasVersion;
+    private int _cachedRowCacheAtlasEpoch;
+    private bool _atlasRebuiltLastFrame;
     private int _cachedRowCacheFramebufferWidth;
     private int _cachedRowCacheFramebufferHeight;
     private int _cachedRowCacheRows;
@@ -300,9 +301,20 @@ public sealed class TerminalSceneComposer : IDisposable
             TextAttributeOptions.NormalizeFaintOpacity(UserConfigService.Current.Font.FaintOpacity), cursorVisible);
         // The previous frame has been consumed by now: drop its pixel leases before taking new ones.
         _imageDraws.Clear();
-        int atlasVersionAtStart = _atlas.ContentVersion;
+        // A full atlas is rebuilt here, at the frame boundary, and this frame re-ensures its visible glyphs. When the
+        // previous frame already rebuilt and still overflowed (one screen needs more than a full atlas), wait for a
+        // later frame instead of rebuilding on every frame.
+        bool rebuiltAtlas = false;
+        if (_atlas.NeedsRebuild && !_atlasRebuiltLastFrame)
+        {
+            _atlas.Rebuild();
+            rebuiltAtlas = true;
+        }
+        _atlasRebuiltLastFrame = rebuiltAtlas;
+        // Row caches hold atlas placements, which only a rebuild invalidates: adding a glyph keeps the layout epoch.
+        int atlasEpochAtStart = _atlas.LayoutEpoch;
         ConfigureRowCaches(theme, themeForeground, new SgrColorArgb(theme.Background), selectionColor,
-            framebufferWidth, framebufferHeight, rows, columns, cellWidth, cellHeight, scale, padding, leaves.Count, atlasVersionAtStart);
+            framebufferWidth, framebufferHeight, rows, columns, cellWidth, cellHeight, scale, padding, leaves.Count, atlasEpochAtStart);
 
         float terminalWidth = Math.Max(10f, framebufferWidth - padX);
         float terminalHeight = Math.Max(10f, framebufferHeight - topOffset - padY);
@@ -627,8 +639,11 @@ public sealed class TerminalSceneComposer : IDisposable
             }
         }
         _atlas.PublishPendingGlyphs();
-        if (_atlas.ContentVersion != atlasVersionAtStart)
+        if (_atlas.LayoutEpoch != atlasEpochAtStart)
             InvalidateLeafRowCaches();
+        // A glyph found the atlas full during this frame: draw one more frame, which rebuilds it.
+        if (_atlas.NeedsRebuild && !rebuiltAtlas)
+            global::Dotty.Silk.WindowPresentationGate.Invalidate(global::Dotty.Silk.WindowFrameReason.Atlas);
 
         if (showTabBar && tabManager.Count > 0)
         {
@@ -866,7 +881,7 @@ public sealed class TerminalSceneComposer : IDisposable
         float scale,
         PaddingUserConfig padding,
         int leafCount,
-        int atlasVersion)
+        int atlasEpoch)
     {
         if (_leafRowCaches.Length < leafCount)
             Array.Resize(ref _leafRowCaches, Math.Max(leafCount, Math.Max(2, _leafRowCaches.Length * 2)));
@@ -876,7 +891,7 @@ public sealed class TerminalSceneComposer : IDisposable
             || !ReferenceEquals(_cachedRowCacheAtlas, _atlas)
             || !ReferenceEquals(_cachedRowCacheTypeface, _typeface)
             || !_cachedRowCacheFontSize.Equals(_fontSize)
-            || _cachedRowCacheAtlasVersion != atlasVersion
+            || _cachedRowCacheAtlasEpoch != atlasEpoch
             || _cachedRowCacheFramebufferWidth != framebufferWidth
             || _cachedRowCacheFramebufferHeight != framebufferHeight
             || _cachedRowCacheRows != rows
@@ -903,7 +918,7 @@ public sealed class TerminalSceneComposer : IDisposable
         _cachedRowCacheAtlas = _atlas;
         _cachedRowCacheTypeface = _typeface;
         _cachedRowCacheFontSize = _fontSize;
-        _cachedRowCacheAtlasVersion = atlasVersion;
+        _cachedRowCacheAtlasEpoch = atlasEpoch;
         _cachedRowCacheFramebufferWidth = framebufferWidth;
         _cachedRowCacheFramebufferHeight = framebufferHeight;
         _cachedRowCacheRows = rows;

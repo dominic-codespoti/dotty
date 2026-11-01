@@ -10,7 +10,14 @@ namespace Dotty.Abstractions.Config;
 public static class DottyDefaults
 {
     // Font Settings
-    public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Cascadia Code, Consolas, Liberation Mono, Noto Sans Mono, monospace, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols";
+    // Default font.family per OS (decision F3): an ordered list that is also the fallback order. No Nerd
+    // Font is assumed: box drawing, blocks and Powerline come from built-in sprites.
+    public const string FontFamilyLinux = "monospace, DejaVu Sans Mono, Noto Sans Mono, Liberation Mono, Noto Color Emoji";
+    public const string FontFamilyMacOS = "Menlo, SF Mono, Monaco, Apple Color Emoji, Apple Symbols";
+    public const string FontFamilyWindows = "Cascadia Mono, Consolas, Segoe UI Emoji, Segoe UI Symbol";
+    public static readonly string FontFamily =
+        OperatingSystem.IsMacOS() ? FontFamilyMacOS : OperatingSystem.IsWindows() ? FontFamilyWindows : FontFamilyLinux;
+    public const string FontWeight = "regular";
     public const double FontSize = 15.0;
     public const double ContentPaddingLeft = 0.0;
     public const double ContentPaddingTop = 0.0;

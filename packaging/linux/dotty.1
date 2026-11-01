@@ -250,11 +250,17 @@ Answer DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y) rectangular\-area checksum
 \fBvt.windowResizeAllowed\fR (boolean; Lua \fBvt.window_resize_allowed\fR)
 Let applications resize the window with CSI 8 ; rows ; cols t (and CSI Ps t with Ps >= 24). Ignored with several tabs, split panes, or a maximized, fullscreen or minimized window.
 .TP
+\fBwindow.columns\fR (integer; Lua \fBwindow.columns\fR)
+Initial grid width in cells; 0 uses 80. Read at startup.
+.TP
 \fBwindow.decorations\fR (string; Lua \fBwindow.decorations\fR)
 Windows only: 'custom' draws the tab\-bar caption controls instead of the native title bar; other platforms always keep native decorations. One of: custom, native.
 .TP
+\fBwindow.floating\fR (boolean; Lua \fBwindow.floating\fR)
+Keep the window above other windows (always on top).
+.TP
 \fBwindow.opacity\fR (number; Lua \fBwindow.opacity\fR)
-Window opacity. Accepted but not yet applied: the window is always opaque.
+Default\-background opacity 0\-1, multiplied by the theme opacity; text, chrome and images stay opaque. Going from 1 to below 1 needs a restart.
 .TP
 \fBwindow.padding.bottom\fR (number; Lua \fBwindow.padding.bottom\fR)
 Bottom padding around the terminal content.
@@ -268,8 +274,17 @@ Right padding around the terminal content.
 \fBwindow.padding.top\fR (number; Lua \fBwindow.padding.top\fR)
 Top padding around the terminal content.
 .TP
+\fBwindow.rows\fR (integer; Lua \fBwindow.rows\fR)
+Initial grid height in cells; 0 uses 24. Read at startup.
+.TP
+\fBwindow.startFullscreen\fR (boolean; Lua \fBwindow.start_fullscreen\fR)
+Enter fullscreen when the window is first shown; wins over startMaximized. Read at startup.
+.TP
+\fBwindow.startMaximized\fR (boolean; Lua \fBwindow.start_maximized\fR)
+Maximize the window when it is first shown. Read at startup.
+.TP
 \fBwindow.title\fR (string; Lua \fBwindow.title\fR)
-Window title. Accepted but not yet applied: the title follows the active tab.
+Initial window title; the title then follows the active tab. Read at startup.
 .SH ENVIRONMENT
 .TP
 \fBDOTTY_CONFIG_HOME\fR

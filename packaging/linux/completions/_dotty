@@ -76,13 +76,18 @@ dotty_config=(
     'themeLight:Theme used when themeAuto is true and the OS reports a light color scheme'
     'vt.checksumReportEnabled:Answer DECRQCRA (CSI Pi '
     'vt.windowResizeAllowed:Let applications resize the window with CSI 8 ; rows ; cols t (and CSI Ps t with Ps >= 24)'
+    'window.columns:Initial grid width in cells; 0 uses 80'
     'window.decorations:Windows only\: '\''custom'\'' draws the tab-bar caption controls instead of the native title bar; other platforms always keep native decorations'
-    'window.opacity:Window opacity'
+    'window.floating:Keep the window above other windows (always on top)'
+    'window.opacity:Default-background opacity 0-1, multiplied by the theme opacity; text, chrome and images stay opaque'
     'window.padding.bottom:Bottom padding around the terminal content'
     'window.padding.left:Left padding around the terminal content'
     'window.padding.right:Right padding around the terminal content'
     'window.padding.top:Top padding around the terminal content'
-    'window.title:Window title'
+    'window.rows:Initial grid height in cells; 0 uses 24'
+    'window.startFullscreen:Enter fullscreen when the window is first shown; wins over startMaximized'
+    'window.startMaximized:Maximize the window when it is first shown'
+    'window.title:Initial window title; the title then follows the active tab'
 )
 if (( CURRENT == 2 )) && [[ $words[2] == +* ]]; then
   _describe -t actions 'dotty action' dotty_actions

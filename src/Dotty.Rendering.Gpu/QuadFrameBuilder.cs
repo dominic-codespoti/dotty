@@ -168,6 +168,8 @@ public static class QuadFrameBuilder
         int rowLength = Math.Min(cols, cellHotSpan.Length);
         int written = 0;
         int column = 0;
+        // W4-C11: shaped programming ligatures; null on the fast path (no adjacent ASCII punctuation, or mode never).
+        var ligatureRow = textOptions.Ligatures?.PrepareRow(source, row, rowLength, typeface, textSize);
         while (column < rowLength)
         {
             ref readonly var hot = ref cellHotSpan[column];
@@ -254,7 +256,15 @@ public static class QuadFrameBuilder
                 {
                     // Box drawing, blocks, braille, sextants, octants and Powerline come from the sprite rasteriser
                     // (font.builtinGlyphs), sized to the cell span; a combining cluster keeps the font path.
-                    if (textOptions.BuiltinGlyphs && graphemeIndex <= 0 && textOptions.Sprites.IsValid
+                    // W4-C11: a ligature draws from its first cell; the cells it covers keep only background/decorations.
+                    var ligatureKind = ligatureRow?.KindAt(column) ?? LigatureCellKind.None;
+                    if (ligatureKind == LigatureCellKind.Start)
+                    {
+                        glyphOk = ligatureRow!.EnsureGlyph(atlas, column, out glyphInfo, out bool ligatureAdded);
+                        if (ligatureAdded)
+                            dirtyAtlasRows?.Add(row);
+                    }
+                    if (!glyphOk && textOptions.BuiltinGlyphs && graphemeIndex <= 0 && textOptions.Sprites.IsValid
                         && SpriteRasterizer.IsSupported((int)hot.Rune))
                     {
                         var spriteKey = new SpriteKey((int)hot.Rune,
@@ -263,7 +273,7 @@ public static class QuadFrameBuilder
                         if (spriteAdded)
                             dirtyAtlasRows?.Add(row);
                     }
-                    if (!glyphOk)
+                    if (!glyphOk && ligatureKind != LigatureCellKind.Continuation)
                     {
                         // A narrow Private Use icon may spread into a blank next cell (W4-C9 glyph constraints).
                         byte cellSpan = GlyphCellSpan.Decide((int)hot.Rune, hot.Width, graphemeIndex <= 0,

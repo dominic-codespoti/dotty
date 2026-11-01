@@ -36,6 +36,7 @@ dotty_config=(
     'font.features:OpenType feature settings for shaping\: '\''+calt'\'', '\''-liga'\'', '\''ss01'\'', '\''cv01=2'\''; a tag is four letters or digits, later settings of a tag win, invalid entries are ignored'
     'font.hinting:Outline hinting for cell metrics and glyph rasterisation (one shared policy); '\''full'\'' is the historical raster'
     'font.italicFamily:Comma-separated families for italic text in the primary font; empty uses the primary family'\''s italic face, synthetic slant when it has none'
+    'font.ligatures:Programming ligatures and contextual alternates for runs of ASCII punctuation\: '\''never'\'', '\''cursor'\'' (default; the cell under the cursor is drawn unshaped) or '\''always'\'''
     'font.lineHeight:Line-height multiplier; values below 0.1 are clamped'
     'font.size:Font size in points (pixels = points x 96/72 x display scale; default 11.25 = 15 px at 100 %); clamped to 1-512, non-finite values use the default'
     'font.symbolMap:Per-range font overrides, one per entry\: '\''U+2500-U+257F\: Preferred Font, Fallback Font'\''; the first installed family containing the glyph wins'

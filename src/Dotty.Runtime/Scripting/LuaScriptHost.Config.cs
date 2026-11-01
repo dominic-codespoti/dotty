@@ -52,6 +52,7 @@ public sealed partial class LuaScriptHost
         ["font.bold_italic_family"] = new(ConfigValueKind.String, c => c.Font.BoldItalicFamily, (c, v) => c.Font.BoldItalicFamily = (string)v!),
         ["font.weight"] = new(ConfigValueKind.String, c => c.Font.Weight, (c, v) => c.Font.Weight = (string)v!),
         ["font.features"] = new(ConfigValueKind.StringList, c => c.Font.Features, (c, v) => c.Font.Features = (System.Collections.Generic.List<string>)v!),
+        ["font.ligatures"] = new(ConfigValueKind.String, c => c.Font.Ligatures, (c, v) => c.Font.Ligatures = (string)v!),
         ["font.hinting"] = new(ConfigValueKind.String, c => c.Font.Hinting, (c, v) => c.Font.Hinting = (string)v!),
         ["font.antialias"] = new(ConfigValueKind.String, c => c.Font.Antialias, (c, v) => c.Font.Antialias = (string)v!),
         ["window.opacity"] = new(ConfigValueKind.Number, c => c.Window.Opacity, (c, v) => c.Window.Opacity = (double)v!),

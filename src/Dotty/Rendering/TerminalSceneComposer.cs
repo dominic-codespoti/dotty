@@ -238,6 +238,9 @@ public sealed class TerminalSceneComposer : IDisposable
     /// </summary>
     public int BaselineShift { get; set; }
 
+    /// <summary>Default-background alpha (<see cref="BackgroundOpacity.Resolve"/>) for pane default-background fills.</summary>
+    public byte BackgroundAlpha { get; set; } = 255;
+
     public void UpdateResources(GlyphAtlas atlas, SKTypeface typeface, float fontSize)
     {
         _atlas = atlas ?? throw new ArgumentNullException(nameof(atlas));
@@ -346,7 +349,7 @@ public sealed class TerminalSceneComposer : IDisposable
             _leafColors[leafIndex] = colors;
             if ((colors.Background.Argb & 0x00FFFFFFu) != (themeBackground.Argb & 0x00FFFFFFu))
                 _chromeScratch[chromeQuadCount++] = MakePaneBackgroundQuad(
-                    leaf, colors.Background, padLeft, padTop + topOffset, gridCellWidth, gridCellHeight);
+                    leaf, colors.Background, padLeft, padTop + topOffset, gridCellWidth, gridCellHeight, BackgroundAlpha / 255f);
         }
 
         var chromePalette = ChromeStyleUtils.ResolvePalette(theme);
@@ -573,25 +576,28 @@ public sealed class TerminalSceneComposer : IDisposable
                         imeCaretBoundsValid = true;
                         if (preeditState is { IsActive: true } composition && !searchOverlay.IsActive)
                         {
-                            int availableColumns = Math.Min(paneColumns - leafSnapshot.CursorCol,
-                                Math.Max(0, columns - cursorGlobalColumn));
-                            if (availableColumns > 0)
+                            var preeditBox = new PreeditBox(startColumnOffset, Math.Min(startColumnOffset + paneColumns, columns),
+                                startRowOffset, startRowOffset + paneRows);
+                            EnsureScratchCapacity(checked(instanceCount + ImePreeditQuadBuilder.MaxInstances(in composition)));
+                            int preeditCount = _preeditQuadBuilder.Build(
+                                in composition, cursorGlobalColumn, cursorGlobalRow, preeditBox,
+                                PreeditColors.FromTheme(leafForeground, leafBackground, selectionColor),
+                                _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
+                                _dirtyAtlasRows, out PreeditLayoutResult preeditLayout);
+                            // Drop the pane cells under the opaque preedit, then move the preedit down behind the kept cells.
+                            int kept = startInstanceIndex + _preeditQuadBuilder.RemoveCovered(
+                                _frameScratch.AsSpan(startInstanceIndex, instanceCount - startInstanceIndex));
+                            _frameScratch.AsSpan(instanceCount, preeditCount).CopyTo(_frameScratch.AsSpan(kept));
+                            instanceCount = kept + preeditCount;
+                            float caretLeft = padLeft + preeditLayout.CaretColumn * scaledCellWidth;
+                            float caretTop = padTop + preeditLayout.CaretRow * scaledCellHeight;
+                            float caretRight = Math.Min(caretLeft + 2f, paneRight);
+                            if (preeditLayout.CaretVisible && caretLeft >= paneLeft && caretLeft < paneRight && caretRight > caretLeft)
                             {
-                                EnsureScratchCapacity(checked(instanceCount + composition.Text.Length));
-                                int preeditCount = _preeditQuadBuilder.Build(
-                                    in composition, cursorGlobalColumn, cursorGlobalRow, availableColumns,
-                                    _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
-                                    _dirtyAtlasRows, out int caretOffset);
-                                instanceCount += preeditCount;
-                                float caretLeft = cursorX + caretOffset * scaledCellWidth;
-                                float caretRight = Math.Min(caretLeft + 2f, paneRight);
-                                if (caretLeft >= paneLeft && caretLeft < paneRight && caretRight > caretLeft)
-                                {
-                                    imeCaretBounds = new SKRect(caretLeft, cursorY, caretRight, cursorY + scaledCellHeight);
-                                    imeCaretBoundsValid = true;
-                                    EnsureChromeScratchCapacity(chromeQuadCount + 1);
-                                    _chromeScratch[chromeQuadCount++] = MakeImeCaretQuad(imeCaretBounds, themeForeground);
-                                }
+                                imeCaretBounds = new SKRect(caretLeft, caretTop, caretRight, caretTop + scaledCellHeight);
+                                imeCaretBoundsValid = true;
+                                EnsureChromeScratchCapacity(chromeQuadCount + 1);
+                                _chromeScratch[chromeQuadCount++] = MakeImeCaretQuad(imeCaretBounds, leafForeground);
                             }
                         }
                     }
@@ -720,16 +726,21 @@ public sealed class TerminalSceneComposer : IDisposable
                     imeCaretBoundsValid = imeCaretBounds.Width > 0;
                     if (imeCaretBoundsValid && preeditState is { IsActive: true } composition && queryCursor < inputColumns)
                     {
-                        int visibleColumns = Math.Min(inputColumns - queryCursor, Math.Max(0, columns - caretColumn));
-                        EnsureScratchCapacity(checked(instanceCount + composition.Text.Length));
+                        int overlayStart = instanceCount - overlayQuads;
+                        var preeditBox = new PreeditBox(inputStart, Math.Min(inputStart + inputColumns, columns), inputRow, inputRow + 1);
+                        EnsureScratchCapacity(checked(instanceCount + ImePreeditQuadBuilder.MaxInstances(in composition)));
                         int preeditCount = _preeditQuadBuilder.Build(
-                            in composition, caretColumn, inputRow, visibleColumns,
+                            in composition, caretColumn, inputRow, preeditBox,
+                            PreeditColors.FromTheme(themeForeground, themeBackground, selectionColor),
                             _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
-                            _dirtyAtlasRows, out int caretOffset);
-                        instanceCount += preeditCount;
-                        float compositionCaretX = caretX + caretOffset * scaledWidth;
+                            _dirtyAtlasRows, out PreeditLayoutResult preeditLayout);
+                        int kept = overlayStart + _preeditQuadBuilder.RemoveCovered(
+                            _frameScratch.AsSpan(overlayStart, instanceCount - overlayStart));
+                        _frameScratch.AsSpan(instanceCount, preeditCount).CopyTo(_frameScratch.AsSpan(kept));
+                        instanceCount = kept + preeditCount;
+                        float compositionCaretX = preeditLayout.CaretColumn * scaledWidth;
                         float caretRight = Math.Min(compositionCaretX + 2f, inputRight);
-                        if (compositionCaretX < inputRight && caretRight > compositionCaretX)
+                        if (preeditLayout.CaretVisible && compositionCaretX < inputRight && caretRight > compositionCaretX)
                         {
                             imeCaretBounds = new SKRect(compositionCaretX, caretY, caretRight, caretY + scaledHeight);
                             EnsureChromeScratchCapacity(chromeQuadCount + 1);
@@ -826,7 +837,7 @@ public sealed class TerminalSceneComposer : IDisposable
     /// up to half a cell before the rect; the window padding keeps the theme background.
     /// </summary>
     private static ChromeQuadInstance MakePaneBackgroundQuad(
-        LeafPane leaf, SgrColorArgb color, float originX, float originY, float cellWidth, float cellHeight)
+        LeafPane leaf, SgrColorArgb color, float originX, float originY, float cellWidth, float cellHeight, float alpha)
     {
         var bounds = leaf.Bounds;
         float gridLeft = originX + (int)Math.Round(bounds.X / cellWidth) * cellWidth;
@@ -847,11 +858,11 @@ public sealed class TerminalSceneComposer : IDisposable
             TopR = r,
             TopG = g,
             TopB = b,
-            TopA = 1f,
+            TopA = alpha,
             BottomR = r,
             BottomG = g,
             BottomB = b,
-            BottomA = 1f
+            BottomA = alpha
         };
     }
     private static ChromeQuadInstance MakeImeCaretQuad(SKRect rect, SgrColorArgb color)

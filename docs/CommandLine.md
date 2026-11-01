@@ -15,11 +15,12 @@ Dotty accepts options before an optional command:
 
 An invalid option, working directory, or executable is reported before graphics startup and exits nonzero. With no command or explicit shell, Dotty retains its configured/default interactive shell behavior; new tabs and split panes inherit the selected interactive shell and active terminal working directory when available. The inherited directory is checked when the tab or pane is created: if the directory the shell reported (OSC 7) no longer exists, Dotty falls back to the session's launch directory (`-d`, or the default) and then to the default launch directory. Every session also receives `TERM_PROGRAM=dotty`, `TERM_PROGRAM_VERSION`, and `DOTTY_SURFACE_ID` (see [Configuration](Configuration.md#session-launch-context)).
 
-On Windows, before GUI startup, Dotty releases a console only when it is the
-console's sole attached process. Desktop and Start-menu launches therefore do not
-leave an extra console alongside the GUI; inherited/shared consoles remain
-attached. Help, version, and launch-validation errors return before this step.
-Redirected standard input, output, and error handles are preserved.
+On Windows `dotty.exe` is a GUI-subsystem program, so desktop and Start-menu
+launches never open a console. Help, version, `+actions` and launch errors
+attach to the console of the launching shell (`AttachConsole(ATTACH_PARENT_PROCESS)`)
+before printing; output redirected to a file or pipe is written there directly.
+`cmd.exe` does not wait for GUI programs, so the output may appear after the next
+prompt; use `start /wait dotty --version` or redirect to a file when that matters.
 
 Examples:
 
@@ -46,7 +47,7 @@ Rules shared by every action:
 
 - One action per invocation. Its flags (`--force`, `--default`, `--gl`) are accepted only after the action they belong to, each at most once; only `+explain-config` takes a positional argument.
 - Exit code `2` for a usage error: a second action, an unknown `+action`, a flag the action does not take, an extra argument, or combining the action with `--shell`, `-d`, or a command. The message goes to standard error with a hint to run `dotty --help`. `--help` and `--version` win over the action.
-- Early-exit contract: the action runs before launch validation and console detach (`Program.Main` returns the result of `CliActions.Run` immediately). No action loads the live configuration, starts the config watcher, or creates a terminal window, so all of them work on a machine with no display; the only graphics use is the hidden probe window of `+diagnose --gl`. Which files an action reads or writes is listed in its section.
+- Early-exit contract: the action runs before launch validation (`Program.Main` returns the result of `CliActions.Run` immediately). No action loads the live configuration, starts the config watcher, or creates a terminal window, so all of them work on a machine with no display; the only graphics use is the hidden probe window of `+diagnose --gl`. Which files an action reads or writes is listed in its section.
 
 ## `+explain-config`
 
@@ -109,3 +110,9 @@ Each problem goes to standard error as `file:line:column: message` (`file:line: 
  dotty +show-config --default
  dotty +diagnose --gl
 ```
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C13: Windows build is `WinExe`; CLI output attaches to the parent console instead of detaching an owned console. |

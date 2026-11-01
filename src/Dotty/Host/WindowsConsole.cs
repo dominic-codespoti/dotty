@@ -1,56 +1,31 @@
-using System.ComponentModel;
 using System.Runtime.InteropServices;
 
 namespace Dotty.Silk;
 
-internal static unsafe partial class WindowsConsole
+/// <summary>
+/// On Windows <c>dotty.exe</c> is a GUI-subsystem executable (<c>WinExe</c>), so starting it never flashes a
+/// console window. Command-line output (<c>--help</c>, <c>--version</c>, <c>+actions</c>, usage errors) is
+/// written to the console of the launching shell by attaching to it first; output redirected to a file or pipe
+/// is inherited as-is. Other platforms are unaffected.
+/// </summary>
+internal static partial class WindowsConsole
 {
-    internal static void DetachOwnedConsole()
+    private const uint AttachParentProcess = unchecked((uint)-1);
+    private static bool _attachAttempted;
+
+    /// <summary>
+    /// Attaches to the parent process's console, once, before the first <see cref="Console"/> use. A process
+    /// started from Explorer has no parent console and keeps writing to its (absent or redirected) handles.
+    /// cmd.exe does not wait for GUI-subsystem programs, so the output can interleave with the next prompt.
+    /// </summary>
+    internal static void AttachParentConsole()
     {
-        if (!OperatingSystem.IsWindows())
+        if (!OperatingSystem.IsWindows() || _attachAttempted)
             return;
-
-        uint processId = 0;
-        // A larger result means the console is shared; the one-element buffer
-        // need not be expanded because inherited consoles must remain attached.
-        if (GetConsoleProcessList(&processId, 1) != 1 || processId != (uint)Environment.ProcessId)
-            return;
-
-        nint input = GetRedirectedHandle(-10);
-        nint output = GetRedirectedHandle(-11);
-        nint error = GetRedirectedHandle(-12);
-        if (FreeConsole() == 0)
-            throw new Win32Exception(Marshal.GetLastWin32Error());
-
-        RestoreRedirectedHandle(-10, input);
-        RestoreRedirectedHandle(-11, output);
-        RestoreRedirectedHandle(-12, error);
-    }
-
-    private static nint GetRedirectedHandle(int standardHandle)
-    {
-        nint handle = GetStdHandle(standardHandle);
-        return handle != 0 && handle != -1 && GetConsoleMode(handle, out _) == 0 ? handle : 0;
-    }
-
-    private static void RestoreRedirectedHandle(int standardHandle, nint handle)
-    {
-        if (handle != 0 && SetStdHandle(standardHandle, handle) == 0)
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+        _attachAttempted = true;
+        _ = AttachConsole(AttachParentProcess);
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial uint GetConsoleProcessList(uint* processList, uint processCount);
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial int FreeConsole();
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial nint GetStdHandle(int standardHandle);
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial int GetConsoleMode(nint handle, out uint mode);
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    private static partial int SetStdHandle(int standardHandle, nint handle);
+    private static partial int AttachConsole(uint processId);
 }

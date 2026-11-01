@@ -345,8 +345,8 @@ expected to change the row; it is not a release date or a commitment.
 | Pane dividers / active-pane border | Supported | `panes.dividerThickness` sets the gap (logical px, rounded to device px); dividers use the chrome border colour; `panes.activeBorder` paints the gap around the active pane in the accent colour when the tab has splits | |
 | Default colour overrides (OSC 10/11, 110/111) | Supported | Per pane; the pane rect is painted with the override background, the window padding keeps the theme background | |
 | Reverse video (DECSCNM, mode 5) | Supported | Swaps the pane's effective default foreground and background; explicit SGR colours are unchanged | |
-| Window opacity | Not supported | `window.opacity` is not read; the window is opaque | W4-C12 |
-| Configured window title | Not supported | `window.title` is not read; the title follows the active tab | W4-C13 |
+| Window opacity | Supported | Background only: `window.opacity` × theme `opacity` scales the premultiplied clear colour and the pane default-background fills; text, explicit cell backgrounds, selection, cursor, chrome and images stay opaque. The alpha framebuffer is requested at window creation, so opaque → translucent needs a restart | |
+| Configured window title | Supported | `window.title` is the initial title; the title then follows the active tab | |
 | Rounded chrome | Supported | Tab bar, scrollbar, and context menus; window corners belong to the OS | |
 | Bell | Partial | Window attention request while unfocused (`bell.attention`, default on), optional visual flash drawn as a separate overlay pass after the frame (`bell.visual`), tab marker, Lua `bell` event; rate-limited to one effect per 150 ms. No sound: `bell.audible` is accepted but not implemented | |
 | Kitty graphics | Implemented, unverified | Off by default (`graphics.kittyProtocol`); see [Kitty graphics](KittyGraphics.md) | |
@@ -551,5 +551,6 @@ fails the smoke run.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C12: background-only window opacity (premultiplied clear, pane default-background fills scaled). W4-C17: IME preedit wraps/shifts instead of clipping, uses theme colours on an opaque background and hides the cells it covers. |
 | 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |
 | 2026-11-01 | W4-C1/C2: `DisplayScale`/`GridFit` integer device-pixel layout, content-scale callback, `font.size` in points, `CellMetrics` (baseline, half-leading, decoration strokes) and `font.adjustCellWidth/Height`. |

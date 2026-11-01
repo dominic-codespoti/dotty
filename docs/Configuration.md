@@ -217,8 +217,12 @@ when a platform font reports incomplete metrics.
 | Property | Type | Default | Notes |
 |---|---|---|---|
 | `padding.left` / `top` / `right` / `bottom` | number | `14`, `8`, `14`, `8` | Terminal content padding; tab-bar backgrounds remain flush with the client edges. |
-| `opacity` | number | `1` | Accepted but not yet applied: the host never reads this value, so the window is always opaque. |
-| `title` | string | `Dotty` | Accepted but not yet applied: the initial window title is fixed by the host and then follows the active tab title. |
+| `opacity` | number | `1` | Opacity of the default background, 0–1, multiplied by the theme `opacity`. Text, explicit cell backgrounds, selection, cursor, tab bar/chrome and images stay opaque. The alpha framebuffer is a window-creation hint: it is requested only when `config.json` (Lua runs after the window exists) gives an opacity below 1 at startup, so going from opaque to translucent needs a restart; changes between translucent values apply live. X11 needs a compositing manager, Windows DWM composition. Panes with an OSC 11 background override stack their fill over the translucent clear, so they look slightly more opaque. |
+| `title` | string | `Dotty` | Initial window title (blank uses `Dotty`); the title then follows the active tab. Read at startup. |
+| `columns` / `rows` | integer | `0` | Initial grid size in cells; `0` uses 80 × 24, values above 1000 are clamped. Read at startup. |
+| `startMaximized` | boolean | `false` | Maximize the window when it is first shown. Lua: `window.start_maximized`. |
+| `startFullscreen` | boolean | `false` | Enter fullscreen when the window is first shown; wins over `startMaximized`. Lua: `window.start_fullscreen`. |
+| `floating` | boolean | `false` | Keep the window above other windows (always on top); applies live. |
 | `decorations` | string | `custom` | Windows only: `custom` removes the native title bar and draws the tab-bar caption controls; `native` keeps native decorations. Other platforms retain native decorations regardless of this option. The custom caption strip remains visible when `tabBar.show` is false. |
 
 ### `tabBar`
@@ -881,6 +885,7 @@ startup failures, and release smoke requirements.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C12/C13: `window.opacity` and `window.title` are applied; added `window.columns`, `window.rows`, `window.startMaximized`, `window.startFullscreen`, `window.floating`. |
 | 2026-11-01 | W4-C6: `font.family` is the ordered fallback list with an OS default stack; added `font.boldFamily`, `font.italicFamily`, `font.boldItalicFamily`, `font.weight`, `font.features`. |
 | 2026-11-01 | W4-C1: the display scale comes from the OS content scale (fixes unscaled text on Windows/X11 HiDPI); cells are integer device pixels; padding is rounded to device pixels. |
 | 2026-11-01 | W4-C2: `font.size` is in points (was pixels; default 11.25 pt = 15 px at 100 %); added `font.adjustCellWidth`, `font.adjustCellHeight`; half-leading line height. |

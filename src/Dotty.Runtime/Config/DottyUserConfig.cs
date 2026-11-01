@@ -165,11 +165,31 @@ public sealed class WindowUserConfig
     [JsonPropertyName("padding")]
     public PaddingUserConfig Padding { get; set; } = new();
 
+    /// <summary>Default-background opacity, 0-1; text, chrome and images stay opaque. Going from 1 to below 1 needs a restart.</summary>
     [JsonPropertyName("opacity")]
     public double Opacity { get; set; } = 1.0;
 
+    /// <summary>Initial window title; tab titles replace it once a tab reports one.</summary>
     [JsonPropertyName("title")]
     public string Title { get; set; } = "Dotty";
+
+    /// <summary>Initial grid width in cells; 0 or less uses the default (80).</summary>
+    [JsonPropertyName("columns")]
+    public int Columns { get; set; }
+
+    /// <summary>Initial grid height in cells; 0 or less uses the default (24).</summary>
+    [JsonPropertyName("rows")]
+    public int Rows { get; set; }
+
+    [JsonPropertyName("startMaximized")]
+    public bool StartMaximized { get; set; }
+
+    [JsonPropertyName("startFullscreen")]
+    public bool StartFullscreen { get; set; }
+
+    /// <summary>Keep the window above other windows (GLFW floating).</summary>
+    [JsonPropertyName("floating")]
+    public bool Floating { get; set; }
 }
 
 public sealed class PaddingUserConfig

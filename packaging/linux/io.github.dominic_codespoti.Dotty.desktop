@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Dotty
+GenericName=Terminal Emulator
+Comment=GPU-accelerated terminal emulator
+Exec=dotty
+Icon=io.github.dominic_codespoti.Dotty
+Terminal=false
+Categories=System;TerminalEmulator;
+Keywords=terminal;shell;console;command;prompt;
+StartupNotify=true
+StartupWMClass=io.github.dominic_codespoti.Dotty

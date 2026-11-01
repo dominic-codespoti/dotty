@@ -924,6 +924,9 @@ startup failures, and release smoke requirements.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C22: headless `AccessibleTextModel` (trimmed lines, UTF-16 caret/selection offsets, char/word/line moves, coalesced change events) and `UiStrings` for every menu, prompt and chrome label; no new options. |
+| 2026-11-01 | W4-C18: `drop.mode`, `drop.quote` (dropped files paste shell-escaped paths), `mouse.hideWhileTyping`, OSC 22 pointer shapes; the Windows caret-blink preference can keep the cursor steady. |
+| 2026-11-01 | W4-C16: `resize_pane_*`, `zoom_pane`, `equalize_panes` actions; draggable split dividers with a resize pointer. |
 | 2026-11-01 | W4-C6: `font.family` is the ordered fallback list with an OS default stack; added `font.boldFamily`, `font.italicFamily`, `font.boldItalicFamily`, `font.weight`, `font.features`. |
 | 2026-11-01 | W4-C1: the display scale comes from the OS content scale (fixes unscaled text on Windows/X11 HiDPI); cells are integer device pixels; padding is rounded to device pixels. |
 | 2026-11-01 | W4-C2: `font.size` is in points (was pixels; default 11.25 pt = 15 px at 100 %); added `font.adjustCellWidth`, `font.adjustCellHeight`; half-leading line height. |

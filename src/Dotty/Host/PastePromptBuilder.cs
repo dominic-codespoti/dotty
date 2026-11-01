@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Input;
 using Dotty.Runtime.Prompt;
+using Dotty.Runtime.Localization;
 
 namespace Dotty.Silk;
 
@@ -31,11 +31,11 @@ internal static class PastePromptBuilder
 
         var reasonLines = new List<string>(3);
         if ((reasons & PasteRisk.Newlines) != 0)
-            reasonLines.Add("Multiple lines: the shell would run them immediately.");
+            reasonLines.Add(UiStrings.PasteReasonMultiline);
         if ((reasons & PasteRisk.ControlChars) != 0)
-            reasonLines.Add("Control characters will be replaced by spaces.");
+            reasonLines.Add(UiStrings.PasteReasonControl);
         if ((reasons & PasteRisk.EndMarker) != 0)
-            reasonLines.Add("Contains a paste-end marker (possible injection).");
+            reasonLines.Add(UiStrings.PasteReasonEndMarker);
 
         // BuildPreview may append a "... N more lines" row; reserve it so reasons are never dropped.
         int previewLines = Math.Clamp(HostPrompt.MaxLines - 1 - reasonLines.Count, 1, MaxPreviewLines);
@@ -46,17 +46,15 @@ internal static class PastePromptBuilder
         lines.AddRange(reasonLines);
 
         int lineCount = PasteSafety.CountLines(text);
-        string title = string.Create(
-            CultureInfo.InvariantCulture,
-            $"Paste {lineCount:N0} {(lineCount == 1 ? "line" : "lines")}, {text.Length:N0} characters?");
+        string title = UiStrings.PasteTitle(lineCount, text.Length);
 
         return HostPrompt.Build(
             title,
             lines,
             new (string Label, Action Run)[]
             {
-                ("Paste", paste),
-                ("Cancel", static () => { }),
+                (UiStrings.Paste, paste),
+                (UiStrings.Cancel, static () => { }),
             },
             CancelActionIndex,
             onDismissed: null);

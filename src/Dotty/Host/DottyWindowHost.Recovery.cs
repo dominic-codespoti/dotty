@@ -5,6 +5,7 @@ using Dotty.Runtime.Diagnostics;
 using Dotty.Runtime.Prompt;
 using Dotty.Silk.Rendering;
 using Silk.NET.GLFW;
+using Dotty.Runtime.Localization;
 
 namespace Dotty.Silk;
 
@@ -16,8 +17,6 @@ namespace Dotty.Silk;
 /// </summary>
 internal static partial class DottyWindowHost
 {
-    private const string ContextLostWindowTitle = "Dotty — GPU reset, rendering stopped; restart Dotty";
-
     private static RenderRecoveryPolicy _renderRecovery = new();
     private static GlContextResetProbe? _contextResetProbe;
     private static bool _verifyContextAfterRebuild;
@@ -83,7 +82,7 @@ internal static partial class DottyWindowHost
     private static void HandleContextLost(uint status) =>
         ApplyRenderRecovery(
             _renderRecovery.OnContextLost(GetClockMilliseconds()),
-            "OpenGL " + GlContextResetProbe.DescribeStatus(status));
+            UiStrings.RenderFailureOpenGl(GlContextResetProbe.DescribeStatus(status)));
 
     /// <summary>The frame threw. Replaces the former "print and close the window" path.</summary>
     private static void HandleRenderFailure(Exception exception)
@@ -209,7 +208,7 @@ internal static partial class DottyWindowHost
                 $"[render] {reason}: the GPU driver reset and the OpenGL context is lost. Rendering stopped; the " +
                 "shells keep running. Restart Dotty to draw again." +
                 (logPath is null ? string.Empty : $" Crash log: {logPath}"));
-            AssignWindowTitle(ContextLostWindowTitle);
+            AssignWindowTitle(UiStrings.ContextLostWindowTitle);
         }
 
         WaitWithoutRendering();
@@ -229,12 +228,12 @@ internal static partial class DottyWindowHost
             return;
 
         var prompt = HostPrompt.Build(
-            "Dotty could not draw this window",
-            new[] { reason, "Your shells are still running.", "Details were written to stderr." },
+            UiStrings.RenderFailureTitle,
+            new[] { reason, UiStrings.RenderFailureShellsRunning, UiStrings.RenderFailureDetails },
             new (string Label, Action Run)[]
             {
-                ("Try again", RetryRenderingFromPrompt),
-                ("Quit Dotty", static () => _window.Close()),
+                (UiStrings.TryAgain, RetryRenderingFromPrompt),
+                (UiStrings.QuitDotty, static () => _window.Close()),
             },
             initialFocus: 0,
             onDismissed: null);

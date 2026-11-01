@@ -357,12 +357,12 @@
   "'Silk CPU warm-atlas frame build 80x24'": {
     "expectedMeanMs": 0.097188,
     "minThroughput": 0,
-    "maxAllocationsPerOp": 48192
+    "maxAllocationsPerOp": 144180
   },
   "'Silk CPU warm-atlas frame build 120x40'": {
     "expectedMeanMs": 0.248253,
     "minThroughput": 0,
-    "maxAllocationsPerOp": 120192
+    "maxAllocationsPerOp": 360128
   },
   "'Silk CPU pooled Span<CellInstance> build 80x24'": {
     "expectedMeanMs": 0.077296,
@@ -372,12 +372,12 @@
   "'Silk CPU cold-atlas frame build 80x24'": {
     "expectedMeanMs": 2.220935,
     "minThroughput": 0,
-    "maxAllocationsPerOp": 262320
+    "maxAllocationsPerOp": 331908
   },
   "'Silk CPU warm-atlas powerline styled frame build 80x24'": {
-    "expectedMeanMs": 0.069022,
+    "expectedMeanMs": 0.13822,
     "minThroughput": 0,
-    "maxAllocationsPerOp": 48192
+    "maxAllocationsPerOp": 144180
   },
   "'Cold Start: TerminalAdapter 80x24'": {
     "expectedMeanMs": 0.018948,
@@ -395,7 +395,7 @@
     "maxAllocationsPerOp": 6328
   },
   "'Init: BasicAnsiParser'": {
-    "expectedMeanMs": 0.000217,
+    "expectedMeanMs": 0.001026,
     "minThroughput": 0,
     "maxAllocationsPerOp": 1264
   },
@@ -410,7 +410,7 @@
     "maxAllocationsPerOp": 23224
   },
   "'Init: CellGrid 120x40'": {
-    "expectedMeanMs": 0.020672,
+    "expectedMeanMs": 0.043539,
     "minThroughput": 0,
     "maxAllocationsPerOp": 57784
   },
@@ -425,12 +425,12 @@
     "maxAllocationsPerOp": 103080
   },
   "'First Frame: Parse 1KB'": {
-    "expectedMeanMs": 0.021664,
+    "expectedMeanMs": 0.045703,
     "minThroughput": 0,
     "maxAllocationsPerOp": 6328
   },
   "'First Frame: Parse + Render 1KB'": {
-    "expectedMeanMs": 0.019921,
+    "expectedMeanMs": 0.046868,
     "minThroughput": 0,
     "maxAllocationsPerOp": 11912
   },

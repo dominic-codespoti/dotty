@@ -20,6 +20,12 @@ public readonly record struct TextAttributeOptions(float FaintOpacity, bool Blin
 
     public static TextAttributeOptions Default => new(DefaultFaintOpacity, BlinkVisible: true);
 
+    /// <summary>
+    /// <c>text.minimumContrast</c> floor (WCAG ratio) applied to the visible text colour after inverse and faint;
+    /// values at or below <see cref="Gpu.MinimumContrast.Off"/> (including <c>default</c>) are off.
+    /// </summary>
+    public float MinimumContrast { get; init; } = Gpu.MinimumContrast.Off;
+
     /// <summary>Clamps a configured faint opacity to 0-1; non-finite values use <see cref="DefaultFaintOpacity"/>.</summary>
     public static float NormalizeFaintOpacity(double value) =>
         double.IsFinite(value) ? (float)Math.Clamp(value, 0d, 1d) : DefaultFaintOpacity;

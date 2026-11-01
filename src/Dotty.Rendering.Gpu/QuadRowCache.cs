@@ -117,6 +117,9 @@ public sealed class QuadRowCache
                     ClearEntry(ref _entries[i]);
             }
         }
+        // Cached runs hold colours already floored by text.minimumContrast.
+        if (_hasTextOptions && !options.MinimumContrast.Equals(_textOptions.MinimumContrast))
+            InvalidateAll();
         _textOptions = options;
         _hasTextOptions = true;
     }

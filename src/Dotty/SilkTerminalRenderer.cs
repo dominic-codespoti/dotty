@@ -6,7 +6,7 @@ using Dotty.Silk.Rendering;
 
 namespace Dotty.Silk;
 
-public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
+public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindingCache
 {
     private const int FloatsPerInstance = 19;
 
@@ -140,6 +140,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
 
         InitBuffers();
         InitChromeBuffers();
+        InitTextBlendUniforms();
     }
 
     public void SetAtlas(GlyphAtlas atlas) => TextureManager.SetAtlas(atlas);
@@ -358,6 +359,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable, IGlBindingCache
         Uniform1LineHalf(lineHalf);
         BindAtlasTexture(texId);
         Uniform1AtlasSampler();
+        ApplyTextBlendUniforms();
         BindColorAtlasTexture(TextureManager.ColorTextureId);
         if (!_colorAtlasSamplerSet)
         {

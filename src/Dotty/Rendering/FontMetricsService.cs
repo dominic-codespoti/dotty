@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using Dotty.Abstractions.Config;
+using Dotty.Rendering.Gpu;
 using SkiaSharp;
 
 namespace Dotty.Silk.Rendering;
@@ -74,7 +75,7 @@ public static class FontMetricsService
         if (cache.TryGet(key, out CellMetrics cached))
             return cached;
 
-        CellMetrics measured = CellMetricsCalculator.Compute(ReadFontMetrics(typeface, normalized.FontSizePx), normalized);
+        CellMetrics measured = CellMetricsCalculator.Compute(ReadFontMetrics(typeface, normalized.FontSizePx, normalized.Raster), normalized);
         cache.Set(key, measured);
         return measured;
     }
@@ -103,17 +104,11 @@ public static class FontMetricsService
             typeface,
             static face => new TypefaceIdentity(face.FamilyName ?? string.Empty, face.FontWeight, face.FontWidth, face.FontSlant));
 
-    private static FontMetricsInput ReadFontMetrics(SKTypeface typeface, float fontSizePx)
+    private static FontMetricsInput ReadFontMetrics(SKTypeface typeface, float fontSizePx, RasterPolicy raster)
     {
-        using var font = new SKFont(typeface, fontSizePx)
-        {
-            // Keep cell metrics identical to the A8 glyph atlas raster policy.
-            // Subpixel coverage requires RGB channels and cannot be represented
-            // by the single-channel atlas.
-            Subpixel = false,
-            Hinting = SKFontHinting.Full,
-            Edging = SKFontEdging.Antialias,
-        };
+        // The same policy object configures the glyph atlas fonts (GlyphAtlas), so metrics and raster agree.
+        using var font = new SKFont(typeface, fontSizePx);
+        raster.ApplyTo(font);
 
         var fm = font.Metrics;
         float advance = float.IsFinite(fm.AverageCharacterWidth) ? MathF.Max(0.5f, fm.AverageCharacterWidth) : float.NaN;

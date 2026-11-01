@@ -223,6 +223,9 @@ public static class QuadFrameBuilder
             // Faint mixes the visible text colour toward the visible background (after inverse); decorations follow it.
             if (style.Faint)
                 effectiveFg = TextAttributeOptions.MixFaint(effectiveFg, effectiveBg, textOptions.FaintOpacity);
+            // Minimum contrast floors the colour that is finally visible, so it sees inverse and faint already applied.
+            if (textOptions.MinimumContrast > MinimumContrast.Off)
+                effectiveFg = MinimumContrast.Apply(effectiveFg, effectiveBg, textOptions.MinimumContrast);
 
             byte bgA = !style.Background.IsEmpty || style.Inverse ? (byte)255 : (byte)0;
             byte flags = 0;

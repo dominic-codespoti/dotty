@@ -241,9 +241,12 @@ Unused space between tabs and custom caption controls remains draggable.
 and falls back to `SKTypeface.Default`. `MeasureCell` returns `CellMetrics` in
 whole device pixels (cell size, baseline, half-leading `BaselineShift`, underline,
 strikethrough and overline rows and thicknesses; see "Display scale and cell
-metrics" below). It clamps non-finite or out-of-range inputs, uses full hinting
-with antialiasing and subpixel rendering disabled (matching the atlas raster
-policy, without color-channel-dependent subpixel coverage), and pane origins are
+metrics" below). It clamps non-finite or out-of-range inputs and reads the font
+through the shared `RasterPolicy` (`font.hinting`, default full; `font.antialias`,
+default gray; subpixel positioning always off, since the atlas has no colour
+channels for subpixel coverage). The glyph atlas rasterises with the same policy,
+which is also part of the atlas identity in `GlyphAtlasService`, and the metrics
+cache key, so a policy change measures and rasterises afresh. Pane origins are
 rounded to cell indices before instances are emitted, so grid geometry never
 accumulates fractional-pixel drift.
 
@@ -252,7 +255,7 @@ reload, zoom and resize reuse the same `SKTypeface` object, so the glyph atlas
 and the composer row cache keep hitting); a font installed while Dotty runs is
 picked up on the next `font.family` change or restart. `MeasureCell` results
 are cached by value: typeface family name and style (weight, width, slant),
-normalized size, line height, content scale and cell adjustments. Equal inputs never re-measure, separate
+normalized size, line height, content scale, cell adjustments and raster policy. Equal inputs never re-measure, separate
 wrapper objects for the same face share an entry, and the cache is a
 least-recently-used map bounded at 32 entries.
 
@@ -337,6 +340,8 @@ expected to change the row; it is not a release date or a commitment.
 | Bold | Supported | The family's real bold face (`font.boldFamily` for the primary font); synthetic stroke only when the family has no heavier face | |
 | Italic (SGR 3) | Supported | The family's real italic/oblique face (`font.italicFamily`, `font.boldItalicFamily` for the primary font); synthetic skew (`SkewX` −0.25) only when none is installed | |
 | Faint (SGR 2) | Supported | Text colour mixed toward the cell background after inverse, keeping `font.faintOpacity` (default 0.5) of it; decorations follow the text colour | |
+| Hinting and antialiasing | Supported | `font.hinting` (none/slight/normal/full, default full) and `font.antialias` (gray/none, default gray); defaults are the historical raster. No LCD subpixel antialiasing | |
+| Text blending and contrast | Supported | `text.blending`: `native` (default, gamma-space coverage as before), `linear`, `linear-corrected` (+ `text.contrast`), one fragment-shader uniform mirrored by the CPU reference `CoverageCorrection`/`TextBlend` (GL readback test). `native` stays the default until an A/B on real displays. `text.minimumContrast` (WCAG ratio, default 1 = off) floors the visible text colour after inverse and faint, and against the selection colour | |
 | Conceal (SGR 8) | Supported | No glyph; background and decorations stay | |
 | Text blink (SGR 5, 6) | Supported | One rate for both, shared with the cursor blink phase (`cursor.blinkIntervalMs`); the glyph is hidden in the off phase, background and decorations stay; steady while the window is unfocused | |
 | Inverse, strikethrough, overline | Supported | | |
@@ -551,6 +556,7 @@ fails the smoke run.
 
 | Date | Change |
 |------|--------|
+| 2026-11-01 | W4-C5: shared `RasterPolicy` (`font.hinting`, `font.antialias`) for metrics and atlas, part of the atlas identity; `text.blending`/`text.contrast` coverage correction (`uTextBlend`/`uTextContrast`, CPU reference `CoverageCorrection`, readback test); `text.minimumContrast` in `QuadFrameBuilder` and the selection overlay. `native` blending remains the default pending a real-display A/B. |
 | 2026-11-01 | W4-C12: background-only window opacity (premultiplied clear, pane default-background fills scaled). W4-C17: IME preedit wraps/shifts instead of clipping, uses theme colours on an opaque background and hides the cells it covers. |
 | 2026-11-01 | W4-C6/C7/C8: ordered `font.family` fallback chain with OS default stacks, real bold/italic faces, emoji-presentation face selection, per-face colour detection by table tags, atlas layout epoch and rebuild-when-full. |
 | 2026-11-01 | W4-C1/C2: `DisplayScale`/`GridFit` integer device-pixel layout, content-scale callback, `font.size` in points, `CellMetrics` (baseline, half-leading, decoration strokes) and `font.adjustCellWidth/Height`. |

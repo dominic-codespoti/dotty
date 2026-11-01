@@ -182,6 +182,8 @@ trailing commas/comments are accepted by the JSON parser.
 | `boldItalicFamily` | string | `""` | Same for bold italic text. Lua: `font.bold_italic_family`. |
 | `weight` | string | `"regular"` | Weight of regular text: `thin`, `extralight`, `light`, `regular`, `medium`, `semibold`, `bold`, `extrabold`, `black`, or a number 1–1000. Bold text asks for 700 (900 when `weight` is 600 or more). An invalid value prints a warning and uses regular. |
 | `features` | string[] | `[]` | OpenType feature settings kept for shaping: `+calt`, `-liga`, `ss01` (on), `cv01=2`, `liga=off`. A tag is four ASCII letters or digits; a later setting of a tag wins; ranged settings like `[3:5]calt` and malformed entries print a warning and are ignored. No effect until shaping lands (W4-C10/C11). |
+| `hinting` | string | `"full"` | Outline hinting: `none`, `slight`, `normal` or `full`. One raster policy feeds both the cell metrics and the glyph atlas, so cells and glyphs always agree; changing it builds a new atlas. Unknown values mean `full`, the historical raster. |
+| `antialias` | string | `"gray"` | Glyph coverage: `gray` (antialiased) or `none` (aliased, hard 1-bit edges). Subpixel (LCD) antialiasing is not supported: the atlas has one channel. Unknown values mean `gray`. |
 
 `family` is an ordered list and also the fallback order (as in Ghostty): every
 installed family is tried in turn for a glyph, then installed built-in symbol, CJK
@@ -296,6 +298,21 @@ Bells are rate-limited: bells less than 150 ms after the last one that took
 effect produce no attention request and no flash, so a flood of BEL characters
 flashes at most about six times per second. Every bell still reaches the Lua
 `bell` event and the tab marker. All three keys are read live at each bell.
+
+### `text`
+
+How glyph coverage becomes colour, and a contrast floor. All keys are read every frame.
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `blending` | string | `"native"` | `native` blends coverage in gamma space (the look Dotty always had). `linear` picks the blend alpha so the result has the luminance of a linear-light blend: light text on dark gets heavier, dark text on light gets lighter. `linear-corrected` is `linear` plus the `contrast` boost. Unknown values mean `native`. |
+| `contrast` | number | `0.5` | Boost of `linear-corrected`, 0–1: coverage `a` becomes `a + k·a·(1−a)` with `k = contrast × clamp(0.5 + 0.5·(background − foreground luminance))`, so dark text on a light background gets the most. Ignored by the other modes. Clamped; non-finite uses `0.5`. |
+| `minimumContrast` | number | `1` | Minimum WCAG 2 contrast ratio (1–21) of text against its visible background. Text below it is mixed toward white or black, just enough to meet it (or fully, if the floor is unreachable). Applied to the colour that is finally visible: after inverse and faint, and against the selection colour where text is selected. `1` is off. Lua: `text.minimum_contrast`. |
+
+`native` stays the default until an A/B on real displays (dark and light themes,
+low- and high-DPI) shows `linear` or `linear-corrected` is a clear win. The shader
+mirrors the CPU reference `CoverageCorrection`/`TextBlend` (a GL readback test
+compares them), using the cell background as the backdrop luminance.
 
 ### `clipboard`
 
@@ -886,6 +903,7 @@ startup failures, and release smoke requirements.
 | Date | Change |
 |------|--------|
 | 2026-11-01 | W4-C12/C13: `window.opacity` and `window.title` are applied; added `window.columns`, `window.rows`, `window.startMaximized`, `window.startFullscreen`, `window.floating`. |
+| 2026-11-01 | W4-C5: added `font.hinting`, `font.antialias` (defaults keep the historical raster), `text.blending` (default `native`), `text.contrast`, `text.minimumContrast` (default 1 = off). |
 | 2026-11-01 | W4-C6: `font.family` is the ordered fallback list with an OS default stack; added `font.boldFamily`, `font.italicFamily`, `font.boldItalicFamily`, `font.weight`, `font.features`. |
 | 2026-11-01 | W4-C1: the display scale comes from the OS content scale (fixes unscaled text on Windows/X11 HiDPI); cells are integer device pixels; padding is rounded to device pixels. |
 | 2026-11-01 | W4-C2: `font.size` is in points (was pixels; default 11.25 pt = 15 px at 100 %); added `font.adjustCellWidth`, `font.adjustCellHeight`; half-leading line height. |

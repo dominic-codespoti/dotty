@@ -59,6 +59,9 @@ public static class SelectionQuadBuilder
     /// and appends one instance per uncovered selected visible cell at <c>instances[paneInstanceCount..]</c>, in row
     /// then column order. Returns the number appended. <paramref name="instances"/> must have room for
     /// <see cref="CoverageLength"/> appended instances; <paramref name="coverage"/> must be at least that long.
+    /// With <paramref name="minimumContrast"/> above 1, selected text is floored (<see cref="MinimumContrast"/>) against
+    /// the visible selection colour: <paramref name="selectionColor"/> at <paramref name="selectionAlpha"/> over
+    /// <paramref name="background"/>, the pane's default background the selection quad is blended onto.
     /// </summary>
     public static int Apply(
         Span<CellInstance> instances,
@@ -73,7 +76,9 @@ public static class SelectionQuadBuilder
         SgrColorArgb selectionColor,
         byte selectionAlpha,
         SgrColorArgb foreground,
-        Span<bool> coverage)
+        Span<bool> coverage,
+        float minimumContrast = MinimumContrast.Off,
+        SgrColorArgb background = default)
     {
         int visibleRows = GetVisibleRows(range, paneRows, scrollOffset, out int firstLogicalRow, out int lastLogicalRow);
         if (visibleRows == 0 || paneColumns <= 0)
@@ -83,6 +88,10 @@ public static class SelectionQuadBuilder
         coverage = coverage[..coverageLength];
         coverage.Clear();
         int firstViewRow = firstLogicalRow + scrollOffset;
+        bool floorContrast = minimumContrast > MinimumContrast.Off;
+        SgrColorArgb visibleSelection = floorContrast
+            ? TextAttributeOptions.MixFaint(selectionColor, background, selectionAlpha / 255f)
+            : default;
 
         // One pass over the pane's instances: recolour selected cells and remember which ones are covered.
         for (int i = 0; i < paneInstanceCount; i++)
@@ -98,6 +107,15 @@ public static class SelectionQuadBuilder
             instance.BgG = selectionColor.G;
             instance.BgB = selectionColor.B;
             instance.BgA = selectionAlpha;
+            if (floorContrast)
+            {
+                var floored = MinimumContrast.Apply(
+                    new SgrColorArgb(((uint)instance.FgA << 24) | ((uint)instance.FgR << 16) | ((uint)instance.FgG << 8) | instance.FgB),
+                    visibleSelection, minimumContrast);
+                instance.FgR = floored.R;
+                instance.FgG = floored.G;
+                instance.FgB = floored.B;
+            }
             int coverageRow = viewRow - firstViewRow;
             if ((uint)coverageRow < (uint)visibleRows && (uint)column < (uint)paneColumns)
                 coverage[coverageRow * paneColumns + column] = true;

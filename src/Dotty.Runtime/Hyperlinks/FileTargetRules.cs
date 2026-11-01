@@ -52,11 +52,12 @@ internal static class FileTargetRules
             if (decoded.Contains('\\'))
                 return "file path contains backslashes";
 
-            // "/C:/dir/x" -> "C:/dir/x"; the only ':' allowed is the drive colon (anything else is an
-            // alternate data stream or device name).
-            bool drive = decoded.Length >= 3 && decoded[0] == '/' && char.IsAsciiLetter(decoded[1])
-                && decoded[2] == ':' && (decoded.Length == 3 || decoded[3] == '/');
-            string trimmed = drive ? decoded.Substring(1) : decoded;
+            // "C:/dir/x" (Uri.AbsolutePath of file:///C:/dir/x) or "/C:/dir/x" -> "C:/dir/x"; the only ':' allowed
+            // is the drive colon (anything else is an alternate data stream or device name).
+            int driveAt = decoded[0] == '/' ? 1 : 0;
+            bool drive = decoded.Length >= driveAt + 2 && char.IsAsciiLetter(decoded[driveAt])
+                && decoded[driveAt + 1] == ':' && (decoded.Length == driveAt + 2 || decoded[driveAt + 2] == '/');
+            string trimmed = drive ? decoded.Substring(driveAt) : decoded;
             for (int i = 0; i < trimmed.Length; i++)
             {
                 if (trimmed[i] == ':' && !(drive && i == 1))

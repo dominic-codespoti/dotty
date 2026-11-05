@@ -374,6 +374,8 @@ Latency compares the median against `baselineMs * (1 + relativeTolerance) + 0.00
 
 The parser-construction startup benchmark uses 1,024 constructor invocations per iteration rather than the quick job's 12. This gives the sub-microsecond operation a longer timing sample without changing the measured operation, its per-operation allocation accounting, or either regression limit.
 
+The first-frame parse/render benchmark uses 4,096 invocations per iteration to avoid sub-millisecond batches that remain sensitive to warmup and scheduling. Every invocation still creates a fresh adapter/parser, parses the same ANSI input and flushes rendering. `StartupBenchmarks` opts out of the base fixture's 10 MB no-GC region because these batches exceed it; collections remain part of the measured cost. Neither latency nor allocation limits are changed.
+
 Allocation limits compare bytes per operation from BenchmarkDotNet's `GcStats.GetBytesAllocatedPerOperation(BenchmarkCase)` and allow `allowedBytes = ceilingBytes + max(64, ceilingBytes * 0.10)` to absorb small counter variation from pooling and tiering (64 B allows 128 B; 1,000,000 B allows 1,100,000 B). Null BDN allocation data is treated as 0 bytes/op; recalibration continues to store `ceil(measuredBytesPerOp) + 64`.
 
 ### Updating Baselines

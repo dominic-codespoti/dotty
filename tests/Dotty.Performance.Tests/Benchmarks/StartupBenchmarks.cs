@@ -16,6 +16,9 @@ public class StartupBenchmarks : PerformanceTestBase
     private byte[] _ansiText1Kb = null!;
     private TerminalAdapter _resizeAdapter = null!;
 
+    // First-frame batches exceed the base fixture's 10 MB no-GC budget.
+    protected override bool UseNoGcRegion => false;
+
     public override void SetupBenchmark()
     {
         base.SetupBenchmark();
@@ -97,6 +100,9 @@ public class StartupBenchmarks : PerformanceTestBase
     }
 
     [Benchmark(Description = "First Frame: Parse + Render 1KB")]
+    // Each invocation still constructs fresh state. The quick job's 12 calls form
+    // a sub-millisecond sample; this batch allows JIT warmup and meaningful timing.
+    [InvocationCount(4096)]
     public void FirstFrame_ParseAndRender()
     {
         var adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);

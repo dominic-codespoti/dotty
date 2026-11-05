@@ -87,7 +87,7 @@ public sealed class TerminalSmoothScrollTests
     [Fact]
     public void SmoothScrollKeepsIndependentTransformsForSplitPanes()
     {
-        using var tab = new TerminalTab(rows: 4, columns: 8);
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
         var first = tab.ActivePane;
         var second = tab.PaneTree.Split(first, SplitDirection.Vertical);
         using var manager = new TerminalTabManager(SilentPty.Create);

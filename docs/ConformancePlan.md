@@ -204,6 +204,8 @@ Verification: warning-as-error Release build with **zero warnings/errors**; **3,
 
 The follow-up warning-as-error build, whitespace verification, **5,893 application tests** and all **142 Skia tests** passed; the existing application golden-file skip remains. Actual X11 captures exposed and fixed double-applied outgoing-row coordinates during smooth scrolling. Before/after checks now verify ordered, contiguous intermediate rows, region clipping and settled content pixels in both directions, plus an upward disabled-mode jump; the changing scrollbar overlay is excluded from the content-pixel comparison. Regressions also cover independent split-pane transitions, metadata-only dirty ranges, range-capacity growth and clearing completed/disabled transforms. The conformance identity policy above is unchanged.
 
+The cross-platform follow-up isolates the split-pane fixture with the existing silent PTY instead of launching a competing shell. Huge-count REP tests retain `int.MaxValue` input but assert exact retained-window contents, cursor/wrap state and scrollback rather than a five-second wall-clock limit. The native GLFW script keeps `CMAKE_BUILD_TYPE=Release` for Linux/macOS and uses Visual Studio's existing build/install `--config Release` on Windows, removing the unused configure-variable warning.
+
 Batch 10 result and verification are summarized above; temporary local report and GUI artifact paths are omitted. The exact suite-name accounting and disposition of all six remaining failures are recorded above and in the current [conformance status](Conformance.md).
 
 ## Non-negotiable rules

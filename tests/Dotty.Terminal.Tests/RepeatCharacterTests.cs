@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
@@ -99,36 +98,45 @@ public sealed class RepeatCharacterTests
     }
 
     [Fact]
-    public void HugeCount_CompletesPromptlyAndKeepsNaiveCursorParity()
+    public void HugeCount_MatchesAsciiWholeRowReduction()
     {
-        var (adapter, parser) = Create(rows: 24, cols: 80, scrollback: 10000);
-        var sw = Stopwatch.StartNew();
+        // Keep the fixture small and explicit: the huge count must reduce to a bounded
+        // number of rows while preserving ASCII wrap/cursor parity.
+        var (adapter, parser) = Create(rows: 3, cols: 4, scrollback: 5);
         Feed(parser, "x\u001b[2147483647b");
-        sw.Stop();
 
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"REP took {sw.Elapsed}");
+        Assert.Equal(2, adapter.Buffer.CursorRow);
+        Assert.Equal(Cols - 1, adapter.Buffer.CursorCol);
+        Assert.Equal(Scrollback, adapter.Buffer.ScrollbackCount);
+        for (int r = 0; r < Rows; r++)
+            for (int c = 0; c < Cols; c++)
+                Assert.Equal('x', (char)adapter.Buffer.GetCell(r, c).Rune);
 
-        // A naive repeat prints 1 + int.MaxValue characters: every visible row but the last is full of 'x'
-        // and the last holds the remainder, so the cursor column is that remainder (48), not the last column.
-        int lastRowCells = (int)((1L + int.MaxValue) % 80);
-        Assert.NotEqual(0, lastRowCells);
-        Assert.Equal(23, adapter.Buffer.CursorRow);
-        Assert.Equal(lastRowCells, adapter.Buffer.CursorCol);
-        Assert.Equal('x', (char)adapter.Buffer.GetCell(0, 0).Rune);
-        Assert.Equal('x', (char)adapter.Buffer.GetCell(22, 79).Rune);
-        Assert.Equal('x', (char)adapter.Buffer.GetCell(23, lastRowCells - 1).Rune);
-        Assert.Equal(10000, adapter.Buffer.ScrollbackCount);
+        var (naive, naiveParser) = Create();
+        Feed(naiveParser, new string('x', Window + int.MaxValue % Cols + 1));
+        // A following character also observes the pending-wrap state, not just the cursor coordinates.
+        Feed(parser, "Z");
+        Feed(naiveParser, "Z");
+        Assert.Equal(Dump(naive), Dump(adapter));
     }
 
     [Fact]
-    public void HugeCount_NonAscii_CompletesPromptly()
+    public void HugeCount_NonAscii_IsBoundedToRetainedWindow()
     {
-        var (adapter, parser) = Create(rows: 24, cols: 80, scrollback: 10000);
-        var sw = Stopwatch.StartNew();
+        var (adapter, parser) = Create(rows: 3, cols: 4, scrollback: 5);
         Feed(parser, "é\u001b[2147483647b");
-        sw.Stop();
 
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"REP took {sw.Elapsed}");
+        Assert.Equal(2, adapter.Buffer.CursorRow);
+        Assert.Equal(1, adapter.Buffer.CursorCol);
+        Assert.Equal('é', (char)adapter.Buffer.GetCell(2, 0).Rune);
+        Assert.Equal(Scrollback, adapter.Buffer.ScrollbackCount);
+
+        // Non-ASCII repetition retains at most one screen/history window, including its wrap guard row.
+        var (naive, naiveParser) = Create();
+        Feed(naiveParser, new string('é', Window + 1));
+        Feed(parser, "Z");
+        Feed(naiveParser, "Z");
+        Assert.Equal(Dump(naive), Dump(adapter));
     }
 
     [Fact]

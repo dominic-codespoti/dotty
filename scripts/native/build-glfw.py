@@ -53,12 +53,11 @@ def main() -> int:
         "-DBUILD_SHARED_LIBS=ON",
         "-DGLFW_BUILD_EXAMPLES=OFF", "-DGLFW_BUILD_TESTS=OFF", "-DGLFW_BUILD_DOCS=OFF",
         "-DGLFW_INSTALL=ON",
-        "-DCMAKE_BUILD_TYPE=Release",
     ]
     if host_os == "Linux":
-        configure.extend(["-DGLFW_BUILD_X11=ON", "-DGLFW_BUILD_WAYLAND=ON"])
+        configure.extend(["-DCMAKE_BUILD_TYPE=Release", "-DGLFW_BUILD_X11=ON", "-DGLFW_BUILD_WAYLAND=ON"])
     if host_os == "Darwin":
-        configure.append(f"-DCMAKE_OSX_ARCHITECTURES={host_arch}")
+        configure.extend(["-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_OSX_ARCHITECTURES={host_arch}"])
     if host_os == "Windows":
         configure.extend(["-A", "ARM64" if host_arch == "aarch64" else "x64"])
     run(configure)

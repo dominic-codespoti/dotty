@@ -1,12 +1,11 @@
 using System;
 using System.Text;
-using Dotty.Terminal.Adapter;
 
 namespace Dotty.Runtime.Input;
 
 /// <summary>
-/// Encodes terminal keyboard and mouse events into byte sequences following
-/// standard xterm legacy sequences, Kitty keyboard protocol, and SGR/X10 mouse protocols.
+/// Encodes terminal keyboard events into byte sequences following standard xterm legacy
+/// sequences and the Kitty keyboard protocol. Mouse reports are <see cref="MouseEncoder"/>'s.
 /// </summary>
 public class TerminalInputEncoder
 {
@@ -22,32 +21,78 @@ public class TerminalInputEncoder
         bool keypadApplicationMode = false,
         bool applicationCursorKeys = false,
         int shiftedCodepoint = 0,
-        int baseCodepoint = 0)
+        int baseCodepoint = 0,
+        bool backarrowSendsBackspace = false,
+        bool newLineMode = false)
     {
-        int modifier = GetModifier(modifiers);
-        bool keypadMapped = TryGetKeypadCode(key, out int codepoint);
-        bool mapped = keypadMapped || TryGetKittyCodepoint(key, out codepoint);
+        // Section references are to the kitty keyboard protocol specification
+        // (https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
+        bool reportAllKeys = (kittyFlags & 8) != 0;
+        bool disambiguate = (kittyFlags & 1) != 0;
+        // K6(b), "Report all keys as escape codes": only this enhancement reports modifier (and lock) key events.
+        if (!reportAllKeys && IsModifierOrLockKey(key))
+            return 0;
+        // K6(a), "Report event types": Enter, Tab and Backspace get no release events without report-all-keys.
+        if (!reportAllKeys && eventType == TerminalKeyEventType.Release &&
+            key is TerminalKey.Enter or TerminalKey.Tab or TerminalKey.Backspace)
+            return 0;
+
+        TerminalKeyModifiers active = modifiers &
+            (TerminalKeyModifiers.Shift | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Control | TerminalKeyModifiers.Meta);
         bool reportText = (kittyFlags & 16) != 0 && eventType != TerminalKeyEventType.Release &&
             ContainsReportableText(associatedText);
         bool unknownTextEvent = key == TerminalKey.Unknown && primaryCodepoint == 0 &&
             (kittyFlags & (8 | 16)) == (8 | 16) && eventType != TerminalKeyEventType.Release && reportText;
+
+        // "Functional key definitions": keys with a legacy form keep it (CSI 1;m A, CSI 2;m ~, ...).
+        if (!unknownTextEvent && TryGetFunctionalForm(key, out int functionalNumber, out byte functionalFinal))
+        {
+            if (!reportAllKeys && !disambiguate)
+                return eventType == TerminalKeyEventType.Release ? 0 : Encode(key, modifiers, destination,
+                    keypadApplicationMode, applicationCursorKeys, modifyOtherKeysLevel: 0,
+                    backarrowSendsBackspace: backarrowSendsBackspace, newLineMode: newLineMode);
+            return WriteFunctionalKey(destination, functionalNumber, functionalFinal, GetModifier(modifiers),
+                eventType, kittyFlags);
+        }
+
+        bool keypadMapped = TryGetKeypadCode(key, out int codepoint);
+        bool mapped = keypadMapped || TryGetKittyCodepoint(key, out codepoint);
         if (primaryCodepoint > 0 && !keypadMapped)
             codepoint = primaryCodepoint;
         else if (!mapped && !unknownTextEvent)
-            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys);
+            return eventType == TerminalKeyEventType.Release ? 0 : Encode(key, modifiers, destination,
+                keypadApplicationMode, applicationCursorKeys, modifyOtherKeysLevel: 0,
+                backarrowSendsBackspace: backarrowSendsBackspace, newLineMode: newLineMode);
 
-        bool selected = unknownTextEvent || (kittyFlags & 8) != 0 ||
-            ((kittyFlags & 1) != 0 && (IsDisambiguationKey(key) || modifier != 1));
+        // "Disambiguate escape codes": Esc, alt/ctrl/ctrl+alt/shift+alt + key and non-text keypad keys become
+        // CSI u; Enter, Tab and Backspace keep their legacy bytes unless modified (K6(a)); text keys with no
+        // modifier other than Shift and the lock keys (K6(c)) stay text.
+        bool textKey = !unknownTextEvent && IsTextProducingKey(key, codepoint);
+        bool selected = unknownTextEvent || reportAllKeys || (disambiguate && (
+            textKey ? (active & ~TerminalKeyModifiers.Shift) != 0
+            : key is TerminalKey.Enter or TerminalKey.Tab or TerminalKey.Backspace ? active != TerminalKeyModifiers.None
+            : true));
         if (!selected)
-            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys);
+        {
+            if (eventType == TerminalKeyEventType.Release || (textKey && keypadMapped))
+                return 0;
+            return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys,
+                modifyOtherKeysLevel: 0, backarrowSendsBackspace: backarrowSendsBackspace, newLineMode: newLineMode);
+        }
+
+        // K6(c), "Disambiguate escape codes": lock modifiers are not reported for text-producing keys unless
+        // report-all-keys is set.
+        int modifier = GetModifier(textKey && !reportAllKeys ? active : modifiers);
+        // K6(d), "Key codes": the shifted key is present whenever (and only when) Shift is in the modifiers.
+        int shifted = (active & TerminalKeyModifiers.Shift) != 0 && shiftedCodepoint != codepoint ? shiftedCodepoint : 0;
 
         int offset = WriteLiteral(destination, "\x1b[");
         offset = WriteNumber(destination, offset, codepoint);
-        if (!unknownTextEvent && (kittyFlags & 4) != 0 && (shiftedCodepoint > 0 || baseCodepoint > 0))
+        if (!unknownTextEvent && (kittyFlags & 4) != 0 && (shifted > 0 || baseCodepoint > 0))
         {
             destination[offset++] = (byte)':';
-            if (shiftedCodepoint > 0)
-                offset = WriteNumber(destination, offset, shiftedCodepoint);
+            if (shifted > 0)
+                offset = WriteNumber(destination, offset, shifted);
             if (baseCodepoint > 0)
             {
                 destination[offset++] = (byte)':';
@@ -89,6 +134,81 @@ public class TerminalInputEncoder
         return offset;
     }
 
+    // CSI number ; modifier[:event] final. The number 1 of the letter forms and the whole parameter list are
+    // omitted when there are no modifiers and no event type to report.
+    private static int WriteFunctionalKey(Span<byte> destination, int number, byte final, int modifier,
+        TerminalKeyEventType eventType, int kittyFlags)
+    {
+        int offset = WriteLiteral(destination, "\x1b[");
+        bool reportEvent = (kittyFlags & 2) != 0;
+        if (modifier != 1 || reportEvent)
+        {
+            offset = WriteNumber(destination, offset, number);
+            destination[offset++] = (byte)';';
+            offset = WriteNumber(destination, offset, modifier);
+            if (reportEvent)
+            {
+                destination[offset++] = (byte)':';
+                offset = WriteNumber(destination, offset, (int)eventType);
+            }
+        }
+        else if (final == (byte)'~')
+        {
+            offset = WriteNumber(destination, offset, number);
+        }
+        destination[offset++] = final;
+        return offset;
+    }
+
+    // Spec "Functional key definitions": keys whose escape code is CSI 1 letter or CSI number ~.
+    private static bool TryGetFunctionalForm(TerminalKey key, out int number, out byte final)
+    {
+        (number, final) = key switch
+        {
+            TerminalKey.Insert => (2, (byte)'~'),
+            TerminalKey.Delete => (3, (byte)'~'),
+            TerminalKey.PageUp => (5, (byte)'~'),
+            TerminalKey.PageDown => (6, (byte)'~'),
+            TerminalKey.Up => (1, (byte)'A'),
+            TerminalKey.Down => (1, (byte)'B'),
+            TerminalKey.Right => (1, (byte)'C'),
+            TerminalKey.Left => (1, (byte)'D'),
+            TerminalKey.KeypadBegin => (1, (byte)'E'),
+            TerminalKey.Home => (1, (byte)'H'),
+            TerminalKey.End => (1, (byte)'F'),
+            TerminalKey.F1 => (1, (byte)'P'),
+            TerminalKey.F2 => (1, (byte)'Q'),
+            TerminalKey.F3 => (13, (byte)'~'),
+            TerminalKey.F4 => (1, (byte)'S'),
+            TerminalKey.F5 => (15, (byte)'~'),
+            TerminalKey.F6 => (17, (byte)'~'),
+            TerminalKey.F7 => (18, (byte)'~'),
+            TerminalKey.F8 => (19, (byte)'~'),
+            TerminalKey.F9 => (20, (byte)'~'),
+            TerminalKey.F10 => (21, (byte)'~'),
+            TerminalKey.F11 => (23, (byte)'~'),
+            TerminalKey.F12 => (24, (byte)'~'),
+            _ => (0, (byte)0)
+        };
+        return number != 0;
+    }
+
+    private static bool IsModifierOrLockKey(TerminalKey key) => key is
+        TerminalKey.ShiftLeft or TerminalKey.ShiftRight or TerminalKey.ControlLeft or TerminalKey.ControlRight or
+        TerminalKey.AltLeft or TerminalKey.AltRight or TerminalKey.SuperLeft or TerminalKey.SuperRight or
+        TerminalKey.CapsLock or TerminalKey.NumLock or TerminalKey.ScrollLock;
+
+    // Keys whose plain press produces text: printable codepoints outside the private-use functional range and the
+    // keypad keys that type characters. Esc, Enter, Tab, Backspace and the keypad Enter/navigation keys do not.
+    private static bool IsTextProducingKey(TerminalKey key, int codepoint)
+    {
+        if (key is >= TerminalKey.Keypad0 and <= TerminalKey.KeypadEqual)
+            return key != TerminalKey.KeypadEnter;
+        if (key is >= TerminalKey.KeypadHome and <= TerminalKey.KeypadDelete)
+            return false;
+        return codepoint >= 32 && codepoint != 127 && codepoint is < 57344 or > 63743;
+    }
+
     private static bool ContainsReportableText(ReadOnlySpan<char> text)
     {
         int index = 0;
@@ -102,55 +222,6 @@ public class TerminalInputEncoder
 
     private static bool IsControlScalar(int scalar) => scalar <= 0x1F || scalar is >= 0x7F and <= 0x9F;
 
-    /// <summary>Encodes a mouse event into caller-owned storage.</summary>
-
-    public int EncodeMouseEvent(
-        TerminalAdapter.MouseMode mode,
-        TerminalAdapter.MouseEncoding encoding,
-        int button,
-        int row,
-        int column,
-        bool isPress,
-        bool isMove,
-        TerminalKeyModifiers modifiers,
-        Span<byte> destination)
-    {
-        if (mode == TerminalAdapter.MouseMode.None) return 0;
-        if (isMove && mode != TerminalAdapter.MouseMode.ButtonEvent && mode != TerminalAdapter.MouseMode.AnyEvent) return 0;
-        if (isMove && button == 3 && mode != TerminalAdapter.MouseMode.AnyEvent) return 0;
-
-        int cb = button;
-        if (!isPress && !isMove && encoding != TerminalAdapter.MouseEncoding.SGR) cb = 3;
-        if (isMove) cb += 32;
-        if ((modifiers & TerminalKeyModifiers.Shift) != 0) cb += 4;
-        if ((modifiers & TerminalKeyModifiers.Alt) != 0) cb += 8;
-        if ((modifiers & TerminalKeyModifiers.Control) != 0) cb += 16;
-        int x = column + 1;
-        int y = row + 1;
-
-        int offset = 0;
-        destination[offset++] = 0x1b;
-        destination[offset++] = (byte)'[';
-        if (encoding == TerminalAdapter.MouseEncoding.SGR)
-        {
-            destination[offset++] = (byte)'<';
-            offset = WriteNumber(destination, offset, cb);
-            destination[offset++] = (byte)';';
-            offset = WriteNumber(destination, offset, x);
-            destination[offset++] = (byte)';';
-            offset = WriteNumber(destination, offset, y);
-            destination[offset++] = (byte)((isPress || isMove) ? 'M' : 'm');
-            return offset;
-        }
-
-        if (x > 223 || y > 223) return 0;
-        destination[offset++] = (byte)'M';
-        destination[offset++] = (byte)(cb + 32);
-        destination[offset++] = (byte)(x + 32);
-        destination[offset++] = (byte)(y + 32);
-        return offset;
-    }
-
     /// <summary>Writes a key sequence into caller-owned storage. Returns zero for unsupported keys.</summary>
     public int Encode(
         TerminalKey key,
@@ -158,93 +229,66 @@ public class TerminalInputEncoder
         Span<byte> destination,
         bool keypadApplicationMode = false,
         bool applicationCursorKeys = false,
-        int modifyOtherKeysLevel = 0)
+        int modifyOtherKeysLevel = 0,
+        bool backarrowSendsBackspace = false,
+        bool newLineMode = false)
     {
-        if (TryEncodeKeypad(key, modifiers, keypadApplicationMode, destination, out int keypadLength))
+        // Lock state never changes a legacy encoding (kitty spec, "Legacy functional keys").
+        modifiers &= TerminalKeyModifiers.Shift | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Control | TerminalKeyModifiers.Meta;
+        if (TryEncodeKeypad(key, modifiers, keypadApplicationMode, newLineMode, destination, out int keypadLength))
             return keypadLength;
+        key = KeypadNavigationTarget(key);
 
         bool ctrl = (modifiers & TerminalKeyModifiers.Control) != 0;
         bool alt = (modifiers & TerminalKeyModifiers.Alt) != 0;
         bool shift = (modifiers & TerminalKeyModifiers.Shift) != 0;
-        int mod = GetModifier(modifiers & (TerminalKeyModifiers.Shift | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Control | TerminalKeyModifiers.Meta));
+        int mod = GetModifier(modifiers);
 
         if (key == TerminalKey.Backspace)
         {
             if (ctrl && alt) return WriteLiteral(destination, "\x1b\x17");
             if (ctrl) return WriteLiteral(destination, "\x17");
-            if (alt) return WriteLiteral(destination, "\x1b\x7f");
-            return WriteLiteral(destination, "\x7f");
-        }
-        if (key == TerminalKey.Delete)
-        {
-            if (ctrl && alt) return WriteLiteral(destination, "\x1b[3;7~");
-            if (ctrl) return WriteLiteral(destination, "\x1b[3;5~");
-            if (alt) return WriteLiteral(destination, "\x1b[3;3~");
-            if (shift) return WriteLiteral(destination, "\x1b[3;2~");
-            return WriteLiteral(destination, "\x1b[3~");
+            // DECBKM (mode 67) only swaps the plain/Alt forms; Ctrl+Backspace stays word-erase.
+            if (alt) return WriteLiteral(destination, backarrowSendsBackspace ? "\x1b\x08" : "\x1b\x7f");
+            return WriteLiteral(destination, backarrowSendsBackspace ? "\x08" : "\x7f");
         }
         if (key == TerminalKey.Tab)
         {
-            if (shift) return WriteLiteral(destination, "\x1b[Z");
+            if (shift) return WriteLiteral(destination, alt ? "\x1b\x1b[Z" : "\x1b[Z");
             if (alt) return WriteLiteral(destination, "\x1b\x09");
             return WriteLiteral(destination, "\x09");
         }
-        if (key == TerminalKey.Enter) return alt ? WriteLiteral(destination, "\x1b\x0d") : WriteLiteral(destination, "\x0d");
+        if (key == TerminalKey.Enter)
+            return alt ? WriteLiteral(destination, "\x1b\x0d") : newLineMode && modifiers == TerminalKeyModifiers.None ? WriteLiteral(destination, "\x0d\x0a") : WriteLiteral(destination, "\x0d");
         if (key == TerminalKey.Escape) return alt ? WriteLiteral(destination, "\x1b\x1b") : WriteLiteral(destination, "\x1b");
 
-        if (key is TerminalKey.Up or TerminalKey.Down or TerminalKey.Right or TerminalKey.Left
-            or TerminalKey.Home or TerminalKey.End or TerminalKey.PageUp or TerminalKey.PageDown or TerminalKey.Insert)
+        if (TryGetLegacyEditingKey(key, out byte final, out int code))
         {
-            if (mod > 1)
+            if (final != 0)
             {
-                byte final = key switch
+                // Cursor keys, Home/End and keypad Begin: SS3 in DECCKM when unmodified, CSI 1;m otherwise.
+                if (mod > 1)
                 {
-                    TerminalKey.Up => (byte)'A',
-                    TerminalKey.Down => (byte)'B',
-                    TerminalKey.Right => (byte)'C',
-                    TerminalKey.Left => (byte)'D',
-                    TerminalKey.Home => (byte)'H',
-                    TerminalKey.End => (byte)'F',
-                    _ => 0
-                };
-                int code = key switch
-                {
-                    TerminalKey.PageUp => 5,
-                    TerminalKey.PageDown => 6,
-                    TerminalKey.Insert => 2,
-                    _ => 0
-                };
-                int offset = WriteLiteral(destination, "\x1b[");
-                if (code == 0)
-                {
-                    destination[offset++] = (byte)'1';
-                    destination[offset++] = (byte)';';
+                    int offset = WriteLiteral(destination, "\x1b[1;");
                     offset = WriteNumber(destination, offset, mod);
                     destination[offset++] = final;
+                    return offset;
                 }
-                else
-                {
-                    offset = WriteNumber(destination, offset, code);
-                    destination[offset++] = (byte)';';
-                    offset = WriteNumber(destination, offset, mod);
-                    destination[offset++] = (byte)'~';
-                }
-                return offset;
+                destination[0] = 0x1b;
+                destination[1] = applicationCursorKeys ? (byte)'O' : (byte)'[';
+                destination[2] = final;
+                return 3;
             }
 
-            return key switch
+            int tildeOffset = WriteLiteral(destination, "\x1b[");
+            tildeOffset = WriteNumber(destination, tildeOffset, code);
+            if (mod > 1)
             {
-                TerminalKey.Up => WriteLiteral(destination, applicationCursorKeys ? "\x1bOA" : "\x1b[A"),
-                TerminalKey.Down => WriteLiteral(destination, applicationCursorKeys ? "\x1bOB" : "\x1b[B"),
-                TerminalKey.Right => WriteLiteral(destination, applicationCursorKeys ? "\x1bOC" : "\x1b[C"),
-                TerminalKey.Left => WriteLiteral(destination, applicationCursorKeys ? "\x1bOD" : "\x1b[D"),
-                TerminalKey.Home => WriteLiteral(destination, "\x1b[H"),
-                TerminalKey.End => WriteLiteral(destination, "\x1b[F"),
-                TerminalKey.PageUp => WriteLiteral(destination, "\x1b[5~"),
-                TerminalKey.PageDown => WriteLiteral(destination, "\x1b[6~"),
-                TerminalKey.Insert => WriteLiteral(destination, "\x1b[2~"),
-                _ => 0
-            };
+                destination[tildeOffset++] = (byte)';';
+                tildeOffset = WriteNumber(destination, tildeOffset, mod);
+            }
+            destination[tildeOffset++] = (byte)'~';
+            return tildeOffset;
         }
 
         if ((key >= TerminalKey.F1 && key <= TerminalKey.F24) || key == TerminalKey.F25)
@@ -262,11 +306,11 @@ public class TerminalInputEncoder
                 destination[0] = 0x1b; destination[1] = (byte)'O'; destination[2] = (byte)('P' + fNum - 1);
                 return 3;
             }
-            int code = FunctionCode(fNum);
-            if (code > 0)
+            int functionCode = FunctionCode(fNum);
+            if (functionCode > 0)
             {
                 int offset = WriteLiteral(destination, "\x1b[");
-                offset = WriteNumber(destination, offset, code);
+                offset = WriteNumber(destination, offset, functionCode);
                 if (mod > 1)
                 {
                     destination[offset++] = (byte)';';
@@ -287,65 +331,24 @@ public class TerminalInputEncoder
                 return WriteModifyOtherKeys(destination, modifiers, codepoint);
         }
 
-        if (ctrl && !alt)
+        if (ctrl)
         {
-            if (key >= TerminalKey.A && key <= TerminalKey.Z)
+            int control = LegacyControlByte(key);
+            if (control >= 0)
             {
-                destination[0] = (byte)((key - TerminalKey.A) + 1);
-                return 1;
+                int offset = 0;
+                if (alt)
+                    destination[offset++] = 0x1b;
+                destination[offset++] = (byte)control;
+                return offset;
             }
-            byte control = key switch
-            {
-                TerminalKey.Space => 0x00,
-                TerminalKey.LeftBracket => 0x1b,
-                TerminalKey.BackSlash => 0x1c,
-                TerminalKey.RightBracket => 0x1d,
-                TerminalKey.GraveAccent => 0x1e,
-                TerminalKey.Minus or TerminalKey.Slash => 0x1f,
-                _ => 0
-            };
-            if (key == TerminalKey.Space || key is TerminalKey.LeftBracket or TerminalKey.BackSlash or TerminalKey.RightBracket
-                or TerminalKey.GraveAccent or TerminalKey.Minus or TerminalKey.Slash)
-            {
-                destination[0] = control;
-                return 1;
-            }
-            int fallback = EncodeModifyOtherKeysFallback(key, modifiers, modifyOtherKeysLevel, destination);
-            if (fallback != 0)
-                return fallback;
-            return 0;
+            return alt ? 0 : EncodeModifyOtherKeysFallback(key, modifiers, modifyOtherKeysLevel, destination);
         }
 
-        if (alt && !ctrl)
+        if (alt)
         {
-            if (key >= TerminalKey.A && key <= TerminalKey.Z)
-            {
-                destination[0] = 0x1b;
-                destination[1] = (byte)(shift ? 'A' + (key - TerminalKey.A) : 'a' + (key - TerminalKey.A));
-                return 2;
-            }
-            if (key >= TerminalKey.Number0 && key <= TerminalKey.Number9)
-            {
-                destination[0] = 0x1b;
-                destination[1] = (byte)('0' + (key - TerminalKey.Number0));
-                return 2;
-            }
-            char altChar = key switch
-            {
-                TerminalKey.Space => ' ',
-                TerminalKey.Minus => shift ? '_' : '-',
-                TerminalKey.Equal => shift ? '+' : '=',
-                TerminalKey.LeftBracket => shift ? '{' : '[',
-                TerminalKey.RightBracket => shift ? '}' : ']',
-                TerminalKey.BackSlash => shift ? '|' : '\\',
-                TerminalKey.Semicolon => shift ? ':' : ';',
-                TerminalKey.Quote => shift ? '"' : '\'',
-                TerminalKey.GraveAccent => shift ? '~' : '`',
-                TerminalKey.Comma => shift ? '<' : ',',
-                TerminalKey.Period => shift ? '>' : '.',
-                TerminalKey.Slash => shift ? '?' : '/',
-                _ => '\0'
-            };
+            // US-layout fallback for the physical key; the dispatcher prefers the layout's character.
+            char altChar = UsLayoutCharacter(key, shift);
             if (altChar != '\0')
             {
                 destination[0] = 0x1b;
@@ -353,31 +356,90 @@ public class TerminalInputEncoder
                 return 2;
             }
         }
-
-        if (ctrl && alt)
-        {
-            if (key >= TerminalKey.A && key <= TerminalKey.Z)
-            {
-                destination[0] = 0x1b;
-                destination[1] = (byte)((key - TerminalKey.A) + 1);
-                return 2;
-            }
-            byte control = key switch
-            {
-                TerminalKey.Space => 0x00,
-                TerminalKey.LeftBracket => 0x1b,
-                TerminalKey.BackSlash => 0x1c,
-                TerminalKey.RightBracket => 0x1d,
-                _ => 0xff
-            };
-            if (control != 0xff)
-            {
-                destination[0] = 0x1b;
-                destination[1] = control;
-                return 2;
-            }
-        }
         return 0;
+    }
+
+    private static TerminalKey KeypadNavigationTarget(TerminalKey key) => key switch
+    {
+        TerminalKey.KeypadHome => TerminalKey.Home,
+        TerminalKey.KeypadUp => TerminalKey.Up,
+        TerminalKey.KeypadPageUp => TerminalKey.PageUp,
+        TerminalKey.KeypadLeft => TerminalKey.Left,
+        TerminalKey.KeypadRight => TerminalKey.Right,
+        TerminalKey.KeypadEnd => TerminalKey.End,
+        TerminalKey.KeypadDown => TerminalKey.Down,
+        TerminalKey.KeypadPageDown => TerminalKey.PageDown,
+        TerminalKey.KeypadInsert => TerminalKey.Insert,
+        TerminalKey.KeypadDelete => TerminalKey.Delete,
+        _ => key,
+    };
+
+    // Editing/cursor keys: either a final letter (CSI/SS3 letter forms) or a CSI number ~ code.
+    private static bool TryGetLegacyEditingKey(TerminalKey key, out byte final, out int code)
+    {
+        final = key switch
+        {
+            TerminalKey.Up => (byte)'A',
+            TerminalKey.Down => (byte)'B',
+            TerminalKey.Right => (byte)'C',
+            TerminalKey.Left => (byte)'D',
+            TerminalKey.KeypadBegin => (byte)'E',
+            TerminalKey.Home => (byte)'H',
+            TerminalKey.End => (byte)'F',
+            _ => 0
+        };
+        code = key switch
+        {
+            TerminalKey.Insert => 2,
+            TerminalKey.Delete => 3,
+            TerminalKey.PageUp => 5,
+            TerminalKey.PageDown => 6,
+            _ => 0
+        };
+        return final != 0 || code != 0;
+    }
+
+    // Legacy Ctrl mapping of ASCII keys (kitty spec table "Legacy ctrl mapping of ASCII keys"; VT100 Table 3-5),
+    // by US key position. Returns -1 for keys Ctrl leaves untouched.
+    private static int LegacyControlByte(TerminalKey key)
+    {
+        if (key >= TerminalKey.A && key <= TerminalKey.Z)
+            return (key - TerminalKey.A) + 1;
+        return key switch
+        {
+            TerminalKey.Space or TerminalKey.Number2 => 0x00,
+            TerminalKey.LeftBracket or TerminalKey.Number3 => 0x1b,
+            TerminalKey.BackSlash or TerminalKey.Number4 => 0x1c,
+            TerminalKey.RightBracket or TerminalKey.Number5 => 0x1d,
+            TerminalKey.GraveAccent or TerminalKey.Number6 => 0x1e,
+            TerminalKey.Minus or TerminalKey.Slash or TerminalKey.Number7 => 0x1f,
+            TerminalKey.Number8 => 0x7f,
+            _ => -1
+        };
+    }
+
+    private static char UsLayoutCharacter(TerminalKey key, bool shift)
+    {
+        if (key >= TerminalKey.A && key <= TerminalKey.Z)
+            return (char)((shift ? 'A' : 'a') + (key - TerminalKey.A));
+        if (key >= TerminalKey.Number0 && key <= TerminalKey.Number9)
+            return shift ? ")!@#$%^&*("[key - TerminalKey.Number0] : (char)('0' + (key - TerminalKey.Number0));
+        return key switch
+        {
+            TerminalKey.Space => ' ',
+            TerminalKey.Minus => shift ? '_' : '-',
+            TerminalKey.Equal => shift ? '+' : '=',
+            TerminalKey.LeftBracket => shift ? '{' : '[',
+            TerminalKey.RightBracket => shift ? '}' : ']',
+            TerminalKey.BackSlash => shift ? '|' : '\\',
+            TerminalKey.Semicolon => shift ? ':' : ';',
+            TerminalKey.Quote => shift ? '"' : '\'',
+            TerminalKey.GraveAccent => shift ? '~' : '`',
+            TerminalKey.Comma => shift ? '<' : ',',
+            TerminalKey.Period => shift ? '>' : '.',
+            TerminalKey.Slash => shift ? '?' : '/',
+            _ => '\0'
+        };
     }
 
     private static int WriteLiteral(Span<byte> destination, ReadOnlySpan<char> text) =>
@@ -435,24 +497,6 @@ public class TerminalInputEncoder
         };
     }
 
-    private static bool IsDisambiguationKey(TerminalKey key) => key is
-        TerminalKey.Escape or TerminalKey.Enter or TerminalKey.Tab or TerminalKey.Backspace or
-        TerminalKey.Delete or TerminalKey.Insert or TerminalKey.Home or TerminalKey.End or
-        TerminalKey.PageUp or TerminalKey.PageDown or TerminalKey.Up or TerminalKey.Down or
-        TerminalKey.Left or TerminalKey.Right or TerminalKey.F1 or TerminalKey.F2 or TerminalKey.F3 or TerminalKey.F4 or
-        TerminalKey.F5 or TerminalKey.F6 or TerminalKey.F7 or TerminalKey.F8 or TerminalKey.F9 or TerminalKey.F10 or
-        TerminalKey.F11 or TerminalKey.F12 or TerminalKey.F13 or TerminalKey.F14 or TerminalKey.F15 or TerminalKey.F16 or
-        TerminalKey.F17 or TerminalKey.F18 or TerminalKey.F19 or TerminalKey.F20 or TerminalKey.F21 or TerminalKey.F22 or
-        TerminalKey.F23 or TerminalKey.F24 or TerminalKey.Keypad0 or TerminalKey.Keypad1 or TerminalKey.Keypad2 or
-        TerminalKey.F25 or
-        TerminalKey.Keypad3 or TerminalKey.Keypad4 or TerminalKey.Keypad5 or TerminalKey.Keypad6 or TerminalKey.Keypad7 or
-        TerminalKey.Keypad8 or TerminalKey.Keypad9 or TerminalKey.KeypadDecimal or TerminalKey.KeypadDivide or
-        TerminalKey.KeypadMultiply or TerminalKey.KeypadSubtract or TerminalKey.KeypadAdd or TerminalKey.KeypadEnter or
-        TerminalKey.KeypadEqual or TerminalKey.ShiftLeft or TerminalKey.ShiftRight or TerminalKey.ControlLeft or
-        TerminalKey.ControlRight or TerminalKey.AltLeft or TerminalKey.AltRight or TerminalKey.SuperLeft or
-        TerminalKey.SuperRight or TerminalKey.CapsLock or TerminalKey.ScrollLock or TerminalKey.NumLock or
-        TerminalKey.PrintScreen or TerminalKey.Pause or TerminalKey.Menu;
-
     private static bool TryGetKeypadCode(TerminalKey key, out int codepoint)
     {
         codepoint = key switch
@@ -474,6 +518,16 @@ public class TerminalInputEncoder
             TerminalKey.KeypadAdd => 57413,
             TerminalKey.KeypadEnter => 57414,
             TerminalKey.KeypadEqual => 57415,
+            TerminalKey.KeypadLeft => 57417,
+            TerminalKey.KeypadRight => 57418,
+            TerminalKey.KeypadUp => 57419,
+            TerminalKey.KeypadDown => 57420,
+            TerminalKey.KeypadPageUp => 57421,
+            TerminalKey.KeypadPageDown => 57422,
+            TerminalKey.KeypadHome => 57423,
+            TerminalKey.KeypadEnd => 57424,
+            TerminalKey.KeypadInsert => 57425,
+            TerminalKey.KeypadDelete => 57426,
             _ => 0
         };
         return codepoint != 0;
@@ -485,7 +539,7 @@ public class TerminalInputEncoder
         {
             >= TerminalKey.A and <= TerminalKey.Z => 'a' + (key - TerminalKey.A),
             >= TerminalKey.Number0 and <= TerminalKey.Number9 => '0' + (key - TerminalKey.Number0),
-            >= TerminalKey.F1 and <= TerminalKey.F24 => 57364 + (key - TerminalKey.F1),
+            >= TerminalKey.F13 and <= TerminalKey.F24 => 57376 + (key - TerminalKey.F13),
             TerminalKey.F25 => 57388,
             TerminalKey.Space => 32,
             TerminalKey.Minus => '-',
@@ -503,16 +557,6 @@ public class TerminalInputEncoder
             TerminalKey.Enter => 13,
             TerminalKey.Tab => 9,
             TerminalKey.Backspace => 127,
-            TerminalKey.Insert => 57348,
-            TerminalKey.Delete => 57349,
-            TerminalKey.Left => 57350,
-            TerminalKey.Down => 57351,
-            TerminalKey.Up => 57352,
-            TerminalKey.Right => 57353,
-            TerminalKey.PageUp => 57354,
-            TerminalKey.PageDown => 57355,
-            TerminalKey.Home => 57356,
-            TerminalKey.End => 57357,
             TerminalKey.CapsLock => 57358,
             TerminalKey.ScrollLock => 57359,
             TerminalKey.NumLock => 57360,
@@ -569,6 +613,7 @@ public class TerminalInputEncoder
         TerminalKey key,
         TerminalKeyModifiers modifiers,
         bool applicationMode,
+        bool newLineMode,
         Span<byte> destination,
         out int length)
     {
@@ -613,7 +658,7 @@ public class TerminalInputEncoder
                 TerminalKey.KeypadMultiply => "*",
                 TerminalKey.KeypadSubtract => "-",
                 TerminalKey.KeypadAdd => "+",
-                TerminalKey.KeypadEnter => "\r",
+                TerminalKey.KeypadEnter => newLineMode && modifiers == TerminalKeyModifiers.None ? "\r\n" : "\r",
                 TerminalKey.KeypadEqual => "=",
                 _ => null
             };

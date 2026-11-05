@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Dotty icon master. Rasterised by scripts/dist/gen-icons.py, which reads only this subset:
+     <rect x y width height rx fill>, <polyline points stroke stroke-width> (round caps and joins),
+     <circle cx cy r fill>. Colours are #RRGGBB. Regenerate the PNG/ICO/ICNS set after editing. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect x="16" y="16" width="224" height="224" rx="48" fill="#1E1E2E"/>
+  <polyline points="70,86 118,128 70,170" stroke="#89B4FA" stroke-width="22"/>
+  <circle cx="150" cy="170" r="13" fill="#F5C2E7"/>
+  <circle cx="190" cy="170" r="13" fill="#CDD6F4"/>
+</svg>

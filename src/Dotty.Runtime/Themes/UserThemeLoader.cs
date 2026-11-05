@@ -96,19 +96,26 @@ public sealed class UserThemeLoader
 
         var json = File.ReadAllText(filePath);
 
-        // First, try to deserialize as ThemeDefinition directly (single theme file)
+        // First, try to deserialize as ThemeDefinition directly (single theme file).
         var theme = TryDeserializeSingleTheme(json);
-        if (theme != null)
+        if (theme?.Colors != null)
         {
             return ValidateAndFixTheme(theme, filePath);
         }
 
-        // If that fails, try as ThemeRoot (file with "themes" array)
+        // A ThemeRoot also deserializes as a ThemeDefinition because unknown properties are ignored.
+        // Only fall back to the root shape when the direct definition has no colors.
         var root = TryDeserializeThemeRoot(json);
         if (root?.Themes?.Length > 0)
         {
-            // For ThemeRoot format, return the first theme (multi-theme files not fully supported)
+            // For ThemeRoot format, return the first theme (multi-theme files not fully supported).
             return ValidateAndFixTheme(root.Themes[0], filePath);
+        }
+
+        if (theme != null)
+        {
+            // Preserve the existing handling of a single theme without colors.
+            return ValidateAndFixTheme(theme, filePath);
         }
 
         throw new JsonException($"Failed to deserialize theme from '{filePath}'. Expected ThemeDefinition or ThemeRoot format.");

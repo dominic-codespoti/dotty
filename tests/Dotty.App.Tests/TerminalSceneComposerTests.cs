@@ -3,6 +3,7 @@ using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using Dotty.Runtime.Config;
+using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Themes;
 using Dotty.Rendering.Gpu;
 using Dotty.Runtime.ContextMenu;
@@ -63,6 +64,43 @@ public sealed class TerminalSceneComposerTests
 
         Assert.True(frame.InstanceCount > 0);
         Assert.Contains(frame.Instances.AsSpan(0, frame.InstanceCount).ToArray(), instance => instance.Row == 0);
+    }
+
+    [Fact]
+    public void Compose_RefreshesCachedRowsWhenPaneSpecialColorsChange()
+    {
+        using var tab = new TerminalTab(rows: 2, columns: 8);
+        var pane = tab.ActivePane;
+        pane.Session.Parser.Feed("\x1b[1mX\x1b[0m"u8);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var noSearch = new SearchOverlayRenderState(false, string.Empty, -1, 0, null);
+
+        CellInstance[] Render()
+        {
+            var frame = composer.Compose(
+                tab, manager, theme, new SgrColorArgb(theme.Foreground), new SgrColorArgb(0x803385DB),
+                80, 40, 10, 20, 1, 2, 8, NoPadding(), showTabBar: false, cursorVisible: false,
+                scrollbarHovered: false, scrollbarDragging: false, searchOverlay: noSearch, activeContextMenu: null);
+            return frame.AsSpan().ToArray();
+        }
+
+        CellInstance FindText(CellInstance[] instances)
+        {
+            foreach (var instance in instances)
+                if (instance.Row == 0 && instance.Col == 0 && instance.GlyphW > 0)
+                    return instance;
+            throw new Xunit.Sdk.XunitException("Text cell was not rendered.");
+        }
+
+        var before = FindText(Render());
+        pane.Session.Parser.Feed("\x1b]4;256;#ff0000\x1b\\\x1b]6;0;1\x1b\\"u8);
+        var after = FindText(Render());
+
+        Assert.NotEqual((before.FgR, before.FgG, before.FgB), (after.FgR, after.FgG, after.FgB));
+        Assert.Equal(((byte)255, (byte)0, (byte)0), (after.FgR, after.FgG, after.FgB));
     }
 
     [Fact]
@@ -564,6 +602,41 @@ public sealed class TerminalSceneComposerTests
 
         Assert.Equal(1, highlightCount);
     }
+    [Fact]
+    public void Compose_SearchHighlightRecoloursMatchedGlyphsWithoutStainingCachedRows()
+    {
+        using var tab = new TerminalTab(rows: 2, columns: 80);
+        tab.Session.Adapter.Buffer.SetCursor(0, 0);
+        tab.Session.Adapter.Buffer.WriteText("alphaX".AsSpan(), CellAttributes.Default);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var matches = new[] { new RuntimeSearchMatch(0, 0, 5, IsActive: true) };
+
+        TerminalSceneFrame Compose(IReadOnlyList<RuntimeSearchMatch>? searchMatches) => composer.Compose(
+            tab, manager, theme, new SgrColorArgb(theme.Foreground), new SgrColorArgb(0x803385DB),
+            800, 40, 10, 20, 1, 2, 80, NoPadding(), false, false, false, false,
+            new SearchOverlayRenderState(searchMatches != null, "alpha", 0, searchMatches?.Count ?? 0, searchMatches),
+            null);
+
+        CellInstance GlyphAt(TerminalSceneFrame frame, int column) => Assert.Single(
+            frame.AsSpan().ToArray(),
+            instance => instance.Row == 0 && instance.Col == column && instance.GlyphW > 0 && instance.GlyphH > 0);
+
+        var highlighted = Compose(matches);
+        var matched = GlyphAt(highlighted, 0);
+        var adjacent = GlyphAt(highlighted, 5);
+        var normalForeground = new SgrColorArgb(theme.Foreground);
+        var normalRgb = (normalForeground.R, normalForeground.G, normalForeground.B);
+
+        Assert.Equal(((byte)0, (byte)0, (byte)0), (matched.FgR, matched.FgG, matched.FgB));
+        Assert.Equal(normalRgb, (adjacent.FgR, adjacent.FgG, adjacent.FgB));
+
+        var restoredMatch = GlyphAt(Compose(null), 0);
+        Assert.Equal(normalRgb, (restoredMatch.FgR, restoredMatch.FgG, restoredMatch.FgB));
+    }
+
 
     [Fact]
     public void Compose_SelectionOverlayUsesProvidedTranslucentColor()
@@ -727,6 +800,198 @@ public sealed class TerminalSceneComposerTests
     }
 
     [Fact]
+    public void Compose_SplitTabEmitsConfiguredDividerAsUnderlayChrome()
+    {
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var panes = UserConfigService.Current.Panes;
+        const float scale = 1.5f;
+        float thickness = Dotty.Runtime.Rendering.PaneDecorationBuilder.ResolveThickness(panes.DividerThickness, scale);
+
+        TerminalSceneFrame Compose() => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            new SgrColorArgb(0x803385DB),
+            framebufferWidth: 480,
+            framebufferHeight: 160,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: scale,
+            rows: 4,
+            columns: 32,
+            padding: NoPadding(),
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
+            activeContextMenu: null);
+
+        Assert.Equal(0, Compose().UnderlayChromeCount);
+
+        var left = tab.ActivePane;
+        var right = tab.PaneTree.Split(left, SplitDirection.Vertical);
+        var frame = Compose();
+
+        var split = (SplitPaneNode)tab.PaneTree.Root;
+        Assert.Equal(thickness, split.DividerBounds.Width);
+        Assert.Equal(thickness, right.Bounds.X - left.Bounds.Right);
+        if (thickness == 0f)
+        {
+            Assert.Equal(0, frame.UnderlayChromeCount);
+            return;
+        }
+
+        int expectedQuads = panes.ActiveBorder ? 2 : 1;
+        Assert.Equal(expectedQuads, frame.UnderlayChromeCount);
+        Assert.InRange(frame.UnderlayChromeCount, 0, frame.ChromeQuadCount);
+        var divider = frame.ChromeQuads[0];
+        Assert.Equal(MathF.Floor(split.DividerBounds.X + 0.5f), divider.X);
+        Assert.Equal(thickness, divider.W);
+        Assert.Equal(160f, divider.H);
+    }
+
+    private static TerminalSceneFrame ComposePlain(
+        TerminalSceneComposer composer, TerminalTab tab, TerminalTabManager manager, IColorScheme theme,
+        int width, int height, int rows, int columns) => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            new SgrColorArgb(0x803385DB),
+            framebufferWidth: width,
+            framebufferHeight: height,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: 1,
+            rows: rows,
+            columns: columns,
+            padding: NoPadding(),
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
+            activeContextMenu: null);
+
+    private static void FeedVt(LeafPane pane, string text) =>
+        pane.Session.Parser.Feed(System.Text.Encoding.UTF8.GetBytes(text));
+
+    private static bool HasRgb(ChromeQuadInstance quad, uint rgb) =>
+        quad.TopR == ((rgb >> 16) & 0xFF) / 255f
+        && quad.TopG == ((rgb >> 8) & 0xFF) / 255f
+        && quad.TopB == (rgb & 0xFF) / 255f
+        && quad.TopA == 1f;
+
+    private static int CountUnderlay(TerminalSceneFrame frame, uint rgb)
+    {
+        int count = 0;
+        for (int i = 0; i < frame.UnderlayChromeCount; i++)
+        {
+            if (HasRgb(frame.ChromeQuads[i], rgb))
+                count++;
+        }
+        return count;
+    }
+
+    [Fact]
+    public void Compose_Osc11PaintsOnlyItsOwnPaneBackgroundUntilOsc111()
+    {
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 8);
+        var first = tab.ActivePane;
+        var second = tab.PaneTree.Split(first, SplitDirection.Vertical);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        const uint paneBackground = 0x204060;
+
+        var plain = ComposePlain(composer, tab, manager, theme, 160, 80, 4, 16);
+        Assert.Equal(0, CountUnderlay(plain, paneBackground));
+        int decorationQuads = plain.UnderlayChromeCount;
+
+        FeedVt(second, "\u001b]11;#204060\u0007");
+        var frame = ComposePlain(composer, tab, manager, theme, 160, 80, 4, 16);
+
+        Assert.Equal(1, CountUnderlay(frame, paneBackground));
+        Assert.Equal(decorationQuads + 1, frame.UnderlayChromeCount);
+        ChromeQuadInstance quad = default;
+        for (int i = 0; i < frame.UnderlayChromeCount; i++)
+        {
+            if (HasRgb(frame.ChromeQuads[i], paneBackground))
+                quad = frame.ChromeQuads[i];
+        }
+        // Covers the second pane (and its cell grid), never a cell of the first pane.
+        Assert.True(quad.X <= second.Bounds.X);
+        Assert.True(quad.X >= first.Bounds.X + first.Columns * 10f);
+        Assert.True(quad.X + quad.W >= second.Bounds.Right - 0.5f);
+        Assert.Equal(0f, quad.Y);
+        Assert.Equal(80f, quad.H);
+        // Pane backgrounds come first so dividers and the active ring stay visible on top of them.
+        Assert.True(HasRgb(frame.ChromeQuads[0], paneBackground));
+
+        FeedVt(second, "\u001b]111\u0007");
+        var reset = ComposePlain(composer, tab, manager, theme, 160, 80, 4, 16);
+        Assert.Equal(0, CountUnderlay(reset, paneBackground));
+        Assert.Equal(decorationQuads, reset.UnderlayChromeCount);
+    }
+
+    [Fact]
+    public void Compose_ReverseVideoSwapsEffectiveDefaultColorsIncludingOscOverrides()
+    {
+        using var tab = new TerminalTab(ptyFactory: SilentPty.Create, rows: 4, columns: 20);
+        var pane = tab.ActivePane;
+        pane.Session.Adapter.Buffer.SetCursor(0, 0);
+        pane.Session.Adapter.Buffer.WriteText("hi".AsSpan(), CellAttributes.Default);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        uint themeForeground = theme.Foreground & 0xFFFFFF;
+        uint themeBackground = theme.Background & 0xFFFFFF;
+        Assert.NotEqual(themeForeground, themeBackground);
+
+        CellInstance GlyphAtOrigin(TerminalSceneFrame frame)
+        {
+            foreach (var instance in frame.AsSpan())
+            {
+                if (instance.Row == 0 && instance.Col == 0)
+                    return instance;
+            }
+            throw new Xunit.Sdk.XunitException("no instance at (0, 0)");
+        }
+
+        static uint Fg(CellInstance instance) => (uint)(instance.FgR << 16 | instance.FgG << 8 | instance.FgB);
+
+        var normal = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.Equal(0, normal.UnderlayChromeCount);
+        Assert.Equal(themeForeground, Fg(GlyphAtOrigin(normal)));
+
+        FeedVt(pane, "\u001b[?5h");
+        var reversed = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.Equal(1, reversed.UnderlayChromeCount);
+        Assert.True(HasRgb(reversed.ChromeQuads[0], themeForeground));
+        Assert.Equal(new[] { 0f, 0f, 200f, 80f },
+            new[] { reversed.ChromeQuads[0].X, reversed.ChromeQuads[0].Y, reversed.ChromeQuads[0].W, reversed.ChromeQuads[0].H });
+        Assert.Equal(themeBackground, Fg(GlyphAtOrigin(reversed)));
+
+        FeedVt(pane, "\u001b]10;#102030\u0007\u001b]11;#405060\u0007");
+        var overridden = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.True(HasRgb(overridden.ChromeQuads[0], 0x102030));
+        Assert.Equal(0x405060u, Fg(GlyphAtOrigin(overridden)));
+
+        FeedVt(pane, "\u001b[?5l");
+        var restored = ComposePlain(composer, tab, manager, theme, 200, 80, 4, 20);
+        Assert.True(HasRgb(restored.ChromeQuads[0], 0x405060));
+        Assert.Equal(0x102030u, Fg(GlyphAtOrigin(restored)));
+    }
+
+    [Fact]
     public void Compose_HoveredScrollbarAddsTrackAndAccentChrome()
     {
         using var tab = new TerminalTab(rows: 4, columns: 20);
@@ -818,64 +1083,80 @@ public sealed class TerminalSceneComposerTests
     }
 
 
-    [Fact]
-    public void Compose_PreeditRendersGraphemeClustersAndClipsAtPaneEdgeWithoutChangingTerminal()
+    [Theory]
+    [InlineData("DarkPlus")]
+    [InlineData("LightPlus")]
+    public void Compose_PreeditRendersOpaqueThemeColouredCellsWrapsAndShiftsWithoutChangingTerminal(string themeName)
     {
         using var tab = new TerminalTab(rows: 4, columns: 10);
         using var manager = new TerminalTabManager(SilentPty.Create);
         using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
-        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
-        var theme = BuiltInThemes.DarkPlus;
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f)
+        {
+            CellMetrics = new CellMetrics(10, 20, 15, 12, 4, 3, 17, 1, 10, 1, 0, 1),
+        };
+        var theme = themeName == "DarkPlus" ? BuiltInThemes.DarkPlus : BuiltInThemes.LightPlus;
+        var selection = new SgrColorArgb(0x803385DB);
         tab.Session.Adapter.Buffer.SetCursor(0, 2);
 
         TerminalSceneFrame Compose(ImePreeditState? preedit) => composer.Compose(
-            tab, manager, theme, new SgrColorArgb(theme.Foreground), new SgrColorArgb(0x803385DB),
+            tab, manager, theme, new SgrColorArgb(theme.Foreground), selection,
             framebufferWidth: 100, framebufferHeight: 80, cellWidth: 10, cellHeight: 20, scale: 1,
             rows: 4, columns: 10, padding: NoPadding(), showTabBar: false, cursorVisible: false,
             scrollbarHovered: false, scrollbarDragging: false,
             searchOverlay: new SearchOverlayRenderState(false, string.Empty, -1, 0, null),
             activeContextMenu: null, preeditState: preedit);
 
+        // The empty terminal has no opaque cell backgrounds, so BgA == 255 identifies the preedit cells.
+        static (int Col, int Row)[] PreeditCells(TerminalSceneFrame frame) =>
+            frame.AsSpan().ToArray().Where(i => i.BgA == 255).Select(i => ((int)i.Col, (int)i.Row)).ToArray();
+
+        // Focused clause 界 (UTF-16 1..2) in selection colours; the rest underlined in the theme colours.
         var composed = new ImePreeditState("A界e\u0301🙂", 4, 1, 1);
         var frame = Compose(composed);
-        ReadOnlySpan<CellInstance> instances = frame.AsSpan();
-        Span<ushort> columns = stackalloc ushort[4];
-        Span<CellInstance> preeditCells = stackalloc CellInstance[4];
-        int count = 0;
-        for (int i = 0; i < instances.Length; i++)
-        {
-            if ((instances[i].Flags & CellFlags.Underline) == 0)
-                continue;
-            columns[count] = instances[i].Col;
-            preeditCells[count++] = instances[i];
-        }
+        var cells = frame.AsSpan().ToArray().Where(i => i.BgA == 255).ToArray();
+        // Unfocused preedit cells are underlined by a cell-wide underline sprite (the terminal itself is blank).
+        var underlines = frame.AsSpan().ToArray().Where(i => (i.Flags & CellFlags.Decoration) != 0).ToArray();
 
-        Assert.Equal(4, count);
-        Assert.Equal(new ushort[] { 2, 3, 5, 6 }, columns.ToArray());
-        Assert.True((preeditCells[1].Flags & CellFlags.WideCell) != 0);
-        Assert.True((preeditCells[3].Flags & CellFlags.WideCell) != 0);
-        Assert.Equal((byte)255, preeditCells[1].BgA);
+        Assert.Equal(new[] { (2, 0), (3, 0), (5, 0), (6, 0) }, PreeditCells(frame));
+        var foreground = new SgrColorArgb(theme.Foreground);
+        var background = new SgrColorArgb(theme.Background);
+        Assert.All(cells, c => Assert.Equal((foreground.R, foreground.G, foreground.B, (byte)255), (c.FgR, c.FgG, c.FgB, c.FgA)));
+        Assert.Equal((selection.R, selection.G, selection.B), (cells[1].BgR, cells[1].BgG, cells[1].BgB));
+        Assert.DoesNotContain(underlines, u => u.Col == cells[1].Col && u.Row == cells[1].Row);
+        Assert.Equal(3, underlines.Length);
+        Assert.All(new[] { cells[0], cells[2], cells[3] }, c =>
+        {
+            Assert.Equal((background.R, background.G, background.B), (c.BgR, c.BgG, c.BgB));
+            var underline = Assert.Single(underlines, u => u.Col == c.Col && u.Row == c.Row);
+            Assert.Equal((c.Flags & CellFlags.WideCell) != 0 ? (short)20 : (short)10, underline.GlyphW);
+            Assert.Equal((foreground.R, foreground.G, foreground.B, (byte)255), (underline.FgR, underline.FgG, underline.FgB, underline.FgA));
+        });
+        Assert.True((cells[1].Flags & CellFlags.WideCell) != 0);
+        Assert.True((cells[3].Flags & CellFlags.WideCell) != 0);
         Assert.Equal(2, tab.Session.Adapter.Buffer.CursorCol);
         Assert.True(frame.ImeCaretBoundsValid);
         Assert.Equal(60f, frame.ImeCaretBounds.Left);
 
+        // At the row end the text wraps onto the next row instead of being clipped.
         tab.Session.Adapter.Buffer.SetCursor(0, 8);
-        frame = Compose(new ImePreeditState("A界B", 0, 0, 0));
-        instances = frame.AsSpan();
-        count = 0;
-        for (int i = 0; i < instances.Length; i++)
-        {
-            if ((instances[i].Flags & CellFlags.Underline) != 0)
-            {
-                Assert.Equal((ushort)8, instances[i].Col);
-                count++;
-            }
-        }
-        Assert.Equal(1, count);
+        frame = Compose(new ImePreeditState("A界B", 3, 0, 0));
+        Assert.Equal(new[] { (8, 0), (0, 1), (2, 1) }, PreeditCells(frame));
+        Assert.Equal(new[] { (8, 0), (0, 1), (2, 1) },
+            frame.AsSpan().ToArray().Where(i => (i.Flags & CellFlags.Decoration) != 0).Select(i => ((int)i.Col, (int)i.Row)).ToArray());
+        Assert.Equal((30f, 20f), (frame.ImeCaretBounds.Left, frame.ImeCaretBounds.Top));
         Assert.Equal(8, tab.Session.Adapter.Buffer.CursorCol);
 
+        // On the last row the wrapped text is shifted up over the previous row.
+        tab.Session.Adapter.Buffer.SetCursor(3, 8);
+        frame = Compose(new ImePreeditState("A界B", 3, 0, 0));
+        Assert.Equal(new[] { (8, 2), (0, 3), (2, 3) }, PreeditCells(frame));
+        Assert.Equal((30f, 60f), (frame.ImeCaretBounds.Left, frame.ImeCaretBounds.Top));
+        Assert.Equal(3, tab.Session.Adapter.Buffer.CursorRow);
+
         frame = Compose(null);
-        Assert.DoesNotContain(frame.AsSpan().ToArray(), instance => (instance.Flags & CellFlags.Underline) != 0);
+        Assert.Empty(PreeditCells(frame));
+        Assert.DoesNotContain(frame.AsSpan().ToArray(), instance => (instance.Flags & CellFlags.Decoration) != 0);
         Assert.True(frame.ImeCaretBoundsValid);
         Assert.Equal(80f, frame.ImeCaretBounds.Left);
     }

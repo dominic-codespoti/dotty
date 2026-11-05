@@ -1003,11 +1003,11 @@ public class AdvancedEdgeCaseTests
         for (int cycle = 0; cycle < 50; cycle++)
         {
             // CUP to bottom of region (0-based row 71)
-            tb.MoveCursorTo(71, 0);
+            tb.SetCursor(71, 0);
             // LF scrolls the region
             tb.LineFeed();
             // Write new content at the (now blank) bottom
-            tb.MoveCursorTo(71, 0);
+            tb.SetCursor(71, 0);
             tb.WriteText($"CYCLE-{cycle:D4}-bottom".AsSpan(), CellAttributes.Default);
 
             // Verify: bottom row has the new content

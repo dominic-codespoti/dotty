@@ -38,6 +38,9 @@ internal sealed class SilentPty : IPty
         remove { }
     }
 
+    /// <summary>Working directory passed to the most recent <see cref="Start"/> call.</summary>
+    public string? StartedWorkingDirectory { get; private set; }
+
     public byte[] WrittenBytes() => _input.ToArray();
 
     public void Start(
@@ -47,10 +50,47 @@ internal sealed class SilentPty : IPty
         string? workingDirectory = null,
         IDictionary<string, string>? environmentVariables = null,
         IReadOnlyList<string>? command = null,
-        bool shellIsExecutable = false) => IsRunning = true;
-
-    public void Resize(int columns, int rows)
+        bool shellIsExecutable = false,
+        int initialPixelWidth = 0,
+        int initialPixelHeight = 0)
     {
+        StartedWorkingDirectory = workingDirectory;
+        StartedPixelSize = (initialPixelWidth, initialPixelHeight);
+        StartedShell = shell;
+        StartedEnvironment = environmentVariables;
+        StartedCommand = command;
+        StartedShellIsExecutable = shellIsExecutable;
+        IsRunning = true;
+    }
+
+    /// <summary>The <c>shell</c> argument of the last <see cref="Start"/> call.</summary>
+    public string? StartedShell { get; private set; }
+
+    /// <summary>The <c>environmentVariables</c> argument of the last <see cref="Start"/> call.</summary>
+    public IDictionary<string, string>? StartedEnvironment { get; private set; }
+
+    /// <summary>The <c>command</c> argument of the last <see cref="Start"/> call.</summary>
+    public IReadOnlyList<string>? StartedCommand { get; private set; }
+
+    /// <summary>The <c>shellIsExecutable</c> argument of the last <see cref="Start"/> call.</summary>
+    public bool StartedShellIsExecutable { get; private set; }
+
+    private readonly List<(int Columns, int Rows, int PixelWidth, int PixelHeight)> _resizes = new();
+
+    /// <summary>Copy of every <see cref="Resize"/> call received so far, in order.</summary>
+    public (int Columns, int Rows, int PixelWidth, int PixelHeight)[] Resizes()
+    {
+        lock (_resizes)
+            return _resizes.ToArray();
+    }
+
+    /// <summary>Pixel size passed to the most recent <see cref="Start"/> call.</summary>
+    public (int Width, int Height) StartedPixelSize { get; private set; }
+
+    public void Resize(int columns, int rows, int pixelWidth, int pixelHeight)
+    {
+        lock (_resizes)
+            _resizes.Add((columns, rows, pixelWidth, pixelHeight));
     }
 
     public void Kill(bool force = false)

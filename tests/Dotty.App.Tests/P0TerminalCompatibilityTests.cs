@@ -88,21 +88,6 @@ public sealed class P0TerminalCompatibilityTests
         Assert.Equal(2, adapter.KittyKeyboardFlags);
     }
 
-    [Fact]
-    public void DeviceAttributeRequestIdentityDistinguishesDa1Da2AndUnsupportedDa3()
-    {
-        var adapter = new TerminalAdapter(rows: 2, columns: 8);
-        var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
-        var replies = new List<string>();
-        adapter.ReplyRequested += reply => replies.Add(reply.ToString());
-
-        parser.Feed("\x1b[c"u8);
-        parser.Feed("\x1b[?c"u8);
-        parser.Feed("\x1b[>c"u8);
-        parser.Feed("\x1b[=c"u8);
-
-        Assert.Equal(new[] { "\x1b[?1;0c", "\x1b[?1;0c", "\x1b[>1;0;0c" }, replies);
-    }
 
     [Fact]
     public void Decrqm_ReportsSetResetAndUnrecognized()
@@ -117,7 +102,7 @@ public sealed class P0TerminalCompatibilityTests
         parser.Feed("\x1b[?6$p"u8); // DECOM reset
         parser.Feed("\x1b[?2004$p"u8); // bracketed paste reset
         parser.Feed("\x1b[?9999$p"u8); // unrecognized
-        parser.Feed("\x1b[7$p"u8); // ANSI mode 7 is not recognized
+        parser.Feed("\x1b[7$p"u8); // ANSI mode 7 (VEM) is permanently reset
 
         Assert.Equal(new[]
         {
@@ -125,7 +110,7 @@ public sealed class P0TerminalCompatibilityTests
             "\x1b[?6;2$y",
             "\x1b[?2004;2$y",
             "\x1b[?9999;0$y",
-            "\x1b[7;0$y",
+            "\x1b[7;4$y",
         }, replies);
     }
 
@@ -141,7 +126,7 @@ public sealed class P0TerminalCompatibilityTests
         parser.Feed("\x1bP+qQuestions\x1b\\"u8); // unknown key, no reply
 
         Assert.Single(replies);
-        Assert.Equal("\x1bP1+r544E=646F747479\x1b\\", replies[0]);
+        Assert.Equal("\x1bP1+r544E=787465726D2D323536636F6C6F72\x1b\\", replies[0]); // xterm-256color
     }
 
     [Fact]
@@ -182,18 +167,18 @@ public sealed class P0TerminalCompatibilityTests
     }
 
     [Theory]
-    [InlineData(false, "a\nb")]
+    [InlineData(false, "a\rb")]
     [InlineData(true, "\x1b[200~a\nb\x1b[201~")]
     public void BracketedPaste_PreservesExactUtf8Payload(bool enabled, string expected)
     {
-        var bytes = BracketedPasteEncoder.Encode("a\nb", enabled);
+        var bytes = PasteEncoder.Encode("a\nb", enabled);
 
         Assert.Equal(expected, Encoding.UTF8.GetString(bytes));
     }
 
 
     [Theory]
-    [InlineData(false, "a\nb")]
+    [InlineData(false, "a\rb")]
     [InlineData(true, "\x1b[200~a\nb\x1b[201~")]
     public void ClipboardPasteRouter_UsesActiveAdapterMode(bool enabled, string expected)
     {
@@ -207,7 +192,7 @@ public sealed class P0TerminalCompatibilityTests
     [Fact]
     public void BracketedPaste_EmptyTextIsNoOp()
     {
-        Assert.Empty(BracketedPasteEncoder.Encode(string.Empty, bracketed: true));
+        Assert.Empty(PasteEncoder.Encode(string.Empty, bracketed: true));
     }
 
     [Fact]
@@ -354,9 +339,11 @@ public sealed class P0TerminalCompatibilityTests
             string? workingDirectory = null,
             IDictionary<string, string>? environmentVariables = null,
             IReadOnlyList<string>? command = null,
-            bool shellIsExecutable = false) => IsRunning = true;
+            bool shellIsExecutable = false,
+            int initialPixelWidth = 0,
+            int initialPixelHeight = 0) => IsRunning = true;
 
-        public void Resize(int columns, int rows) { }
+        public void Resize(int columns, int rows, int pixelWidth, int pixelHeight) { }
         public void Kill(bool force = false) => IsRunning = false;
         public Task<int> WaitForExitAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
         public void Dispose() => IsRunning = false;

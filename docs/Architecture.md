@@ -22,10 +22,10 @@ Silk.NET window / GLFW / OpenGL 3.3
 | Project | Responsibility |
 |---|---|
 | `Dotty.Abstractions` | Platform-neutral configuration, theme, input, and PTY contracts. |
-| `Dotty.Terminal` | ANSI parsing, terminal buffer, cursor state, scrollback, reflow, and render snapshots. |
+| `Dotty.Terminal` | ANSI parsing, terminal buffer, cursor state, scrollback, reflow, render snapshots, and the Kitty graphics protocol core (controller, per-screen image stores, placeholder resolver; no SkiaSharp reference). |
 | `Dotty.NativePty` | `IPty` implementations: POSIX `pty-helper` and Windows ConPTY. |
 | `Dotty.Runtime` | Sessions, tabs, panes, selection, clipboard, themes, Lua hooks, configuration, and input actions. |
-| `Dotty.Rendering.Gpu` | Font fallback, glyph atlas, shaping, quad generation, and render caches. |
+| `Dotty.Rendering.Gpu` | Font fallback, glyph atlas, shaping, quad generation, render caches, and image quad building plus the SkiaSharp PNG decoder (`SkiaImageDecoder`, behind `IImageDecoder`). |
 | `Dotty` | Silk.NET/GLFW window lifecycle, OpenGL renderer, keyboard/mouse integration, and desktop smoke control server. |
 
 ## Terminal data flow
@@ -39,11 +39,53 @@ Silk.NET window / GLFW / OpenGL 3.3
    glyph/background/tab/pane quads, and submits them to OpenGL.
 5. Keyboard text and key events are encoded by `TerminalKeyboardDispatcher`
    using the adapter's application and Kitty modes.
-6. Resize events update all sessions and the PTY backend before the next frame.
+6. Resize events update all sessions and the PTY backend (columns, rows, and the
+   text-area size in physical pixels) before the next frame.
 
 The buffer itself is not thread-safe. PTY consumers write under its sync root;
 rendering and user operations use bounded snapshot/copy sections so sustained
 output cannot hold the UI for a whole raster pass.
+
+Scrollback capacity is a per-session `ScrollbackPolicy` (line cap plus raw-byte
+cap, from the `scrollback` configuration) held by `ScreenManager`; every resize
+recomputes the ring capacity for the new size and reflows history into it.
+Cell arenas are lazily committed reserved memory. Search does not use the
+per-frame capture: `TerminalBuffer.CaptureRenderSnapshotForSearch` takes a
+separate compact copy of the scrollback rows, once per search keystroke. See
+[Rendering](Rendering.md#lazily-committed-cell-arenas) and
+[Configuration](Configuration.md#scrollback).
+
+## Kitty graphics state
+
+Details are in [Kitty graphics](KittyGraphics.md); the ownership rules are:
+
+- **Per-screen image stores.** `ScreenManager` owns one `KittyImageStore` for the
+  main screen and one for the alternate screen, created on first use and
+  independent of the `Screen` ring objects a reflow swaps. Ids, image numbers,
+  placements and the storage quota are per screen; the alternate store is cleared
+  when that screen is entered and left. `TerminalAdapter` owns the
+  `KittyGraphicsController` (created by the first `ConfigureGraphics` call that
+  enables the protocol) and routes the parser's APC callbacks to it.
+- **Pixels.** `ImagePixels` is a reference-counted native buffer written once and
+  immutable afterwards. Stores, snapshots, and the GL texture cache each hold
+  their own reference, so freeing an image never frees pixels a frame still uses.
+- **Snapshot capture.** `TerminalBuffer.CaptureGraphics` runs inside the snapshot
+  capture's lock hold: it advances playing animations, then copies the visible
+  placements into a pooled `KittyRenderSnapshot`, taking a lease per placement.
+  It is free when the screen has no placements. The render thread resolves
+  placeholders and builds quads from the copy outside the lock.
+- **Lock-release rule.** Heavy work (inflate, PNG decode, premultiply of 256 KiB
+  or more, and every file or shared-memory read) runs on the PTY consumer thread
+  with `SyncRoot` released through `TerminalBuffer.ReleaseSyncRootForBlockingWork`.
+  Only the consumer thread uses it, only when it holds exactly one recursion level
+  (otherwise nothing is released), and after re-acquiring the lock nothing read
+  before is trusted: disposal, cancellation, a changed configuration and the live
+  quota are re-checked, and the result is committed to the store of the screen
+  that is active at that moment. `ConfigureGraphics`, `ClearImages`, and
+  `Dispose` may run in that window; `KittyTransfer.Busy` stops them from freeing
+  buffers the consumer is using.
+- **Layering.** `Dotty.Terminal` cannot decode PNG itself; the host injects an
+  `IImageDecoder` (`SkiaImageDecoder`) through `ConfigureGraphics`.
 
 ## Native PTY selection
 
@@ -71,6 +113,40 @@ The host requests OpenGL 3.3 core. It checks the active driver version before
 creating renderer resources and reports initialization failures before closing
 the window. Framebuffer scale changes recompute font metrics, rebuild the glyph
 atlas when required, update renderer resources, and resize sessions.
+
+## Host prompts, paste, clipboard, and links
+
+Decisions that need the user (risky paste, OSC 52 clipboard read, risky or
+blocked link) are shown as host-owned prompts, drawn by the same renderer as the
+context menu and never produced by terminal output.
+
+| Piece | Project | Role |
+|---|---|---|
+| `HostPrompt` | `Dotty.Runtime` (`Prompt/`) | Builds a `ContextMenuModel`: a disabled title row, at most `MaxLines` = 8 disabled body rows of at most `MaxLineChars` = 60 characters, then one row per action (`Build`) or a single Dismiss row (`BuildNotice`). Every untrusted string goes through `SanitizeLine` (controls become visible `\xNN` escapes, bidi marks `\u{XXXX}`, truncation with an ellipsis), and the safe action (Deny/Cancel) is the initially focused row. |
+| `ContextMenuModel.Dismissed` | `Dotty.Runtime` | Callback fired at most once when a visible menu closes without any item action running (Escape, click outside, replaced by another menu), then cleared. `Close()` is idempotent. |
+| `PastePromptBuilder`, `ClipboardReadPromptBuilder`, `HyperlinkPromptBuilder` | `Dotty` (`Host/`) | Assemble the three prompts on top of `HostPrompt`. Link and paste prompts are placed at the pointer; the OSC 52 read prompt is centered in the window. |
+| `PasteSafety`, `PasteEncoder` | `Dotty.Runtime` (`Input/`) | Pure classification (newlines, controls, paste-end marker), preview building, and sanitizing/bracketing of the bytes written to the PTY. |
+| `ClipboardPasteRouter` | `Dotty` | Single funnel for Ctrl+Shift+V, middle click, and the context-menu Paste: reads the clipboard, evaluates `PasteSafety` against `clipboard.confirmPaste`/`bracketedPasteIsSafe` and the pane's bracketed-paste mode, then writes immediately or shows the prompt. It re-checks pane liveness and bracketed-paste state when the user confirms. |
+| `ClipboardReadService`, `ClipboardReadQueue`, `Osc52Reply` | `Dotty` / `Dotty.Runtime` (`Clipboard/`) | OSC 52 read policy and flow. The queue (1 per session, 4 total, 30 s expiry) is filled on PTY consumer threads under a private lock and drained on the UI thread by the host loop; `Osc52Reply` encodes the reply. |
+| `HyperlinkScanner` → `HyperlinkActivator` → `HyperlinkPolicy` (+ `FileTargetRules`, `HyperlinkTextMismatch`) → `SystemHyperlinkOpener` | `Dotty.Runtime` (`Hyperlinks/`) | Hit-testing, activation decision, policy, and the platform launch (`HyperlinkLauncher` builds the `ProcessStartInfo`). `Activate` does no I/O; opening is a separate asynchronous step so a prompt can intervene. This replaces the former `IHyperlinkHandler`/`DefaultHyperlinkHandler`. |
+
+The context-menu slot (`ActiveContextMenu`) is a single shared slot. Setting it
+to a different menu closes the previous visible menu **after** the swap, so a
+`Dismissed` callback may install a follow-up prompt without being overwritten.
+The mouse and keyboard handlers therefore clear the slot only when it still holds
+the menu they just acted on (`ReferenceEquals` guard), because an item action or
+`Dismissed` callback may already have replaced it.
+
+Threading: the parser and adapter run on the PTY consumer thread and only raise
+events (`ClipboardWriteRequested`, `ClipboardReadRequested`); policy, prompts, and
+clipboard access run on the window thread. Render snapshots share the buffer's
+append-only hyperlink table by reference, so activation resolves a link from the
+snapshot it was drawn from without taking the buffer lock.
+
+These flows are covered by unit tests of the pure pieces (see
+[Testing](Testing.md)); prompt rendering, focus behavior, and native link
+opening have no automated GUI coverage and are verified manually
+([E2E Testing](E2ETesting.md#manual-smoke-osc-52-read-paste-confirm-and-link-confirm)).
 
 ## Configuration and control seams
 

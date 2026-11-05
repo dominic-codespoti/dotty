@@ -20,9 +20,10 @@ targets. See [Platform Support](PlatformSupport.md) and the
 IPty exposes process state and streams, a ProcessExited event, and operations to
 start, resize, terminate, and await the child process. Start accepts an optional
 shell or command argv, initial dimensions, working directory, environment
-variables, and a shellIsExecutable flag. See the complete current declaration
-in [IPty.cs](../src/Dotty.Abstractions/Pty/IPty.cs); the excerpt below summarizes
-its method shapes:
+variables, a shellIsExecutable flag, and the initial text-area size in physical
+pixels. Resize takes the grid size and the pixel size. See the complete current
+declaration in [IPty.cs](../src/Dotty.Abstractions/Pty/IPty.cs); the excerpt below
+summarizes its method shapes:
 
 ```csharp
 void Start(
@@ -32,8 +33,10 @@ void Start(
     string? workingDirectory = null,
     IDictionary<string, string>? environmentVariables = null,
     IReadOnlyList<string>? command = null,
-    bool shellIsExecutable = false);
-void Resize(int columns, int rows);
+    bool shellIsExecutable = false,
+    int initialPixelWidth = 0,
+    int initialPixelHeight = 0);
+void Resize(int columns, int rows, int pixelWidth, int pixelHeight);
 void Kill(bool force = false);
 Task<int> WaitForExitAsync(CancellationToken cancellationToken = default);
 ```
@@ -50,8 +53,7 @@ var pty = PtyFactory.CreateAndStart(shell: "/bin/bash", columns: 120, rows: 30);
 UnixPty launches the packaged pty-helper and redirects its standard streams.
 The helper allocates a pseudoterminal with posix_openpt/grantpt/unlockpt,
 creates the child session and controlling terminal, proxies terminal I/O, and
-accepts resize JSON over a Unix-domain socket. Published Unix apps resolve the
-helper beside the application before development locations or PATH. See the
+accepts resize JSON over a Unix-domain socket. See the
 [helper README](../src/Dotty.NativePty/Readme.md) for its direct invocation and
 build instructions.
 
@@ -61,6 +63,60 @@ Build the helper and app from the repository root:
 make -C src/Dotty.NativePty
 dotnet build Dotty.slnx -c Release
 ```
+
+### Locating the helper
+
+`PtyHelperLocator.Resolve` (pure; `ResolveForCurrentProcess` supplies the real
+environment, `AppContext.BaseDirectory` and file system) picks the first match:
+
+1. `DOTTY_PTY_HELPER`: the exact helper path. When it is set but names no
+   existing file, resolution stops there and reports that path; it never falls
+   back to another helper.
+2. `<base>/pty-helper` (the flat published layout, for example `/usr/lib/dotty`).
+3. `<base>/../libexec/dotty/pty-helper`.
+4. `<base>/../lib/dotty/pty-helper` (executable in `<prefix>/bin`, helper in
+   `<prefix>/lib/dotty`).
+5. Development builds only: `src/Dotty.NativePty/bin/pty-helper` or
+   `Dotty.NativePty/bin/pty-helper` in the base directory and up to 15 parents,
+   then each `PATH` entry.
+
+"Development builds" are all builds except `dotnet publish -c Release` (the
+`DOTTY_PUBLISHED_LAYOUT` constant in `Dotty.NativePty.csproj`), so Release-
+configuration test and CI builds keep finding the source-tree helper while
+shipped artifacts never execute a `pty-helper` found on `PATH`. A missing helper
+fails with an error that lists every probed path; `PtyFactory.GetCapabilities`
+reports the same list.
+
+### Environment contract
+
+`TerminalSession` builds the environment passed to `IPty.Start` on every backend: `TERM_PROGRAM=dotty`, `TERM_PROGRAM_VERSION` (the `dotty --version` string), `DOTTY_SURFACE_ID` (a per-session identifier that is also the owning pane's `Id`) and, when the `term` entry exists only in the shipped `terminfo` directory, `TERMINFO_DIRS` first, then the caller's variables, which win on a name clash, and last `TERM` (the resolved [`term`](Configuration.md#term) setting), which the caller cannot override. The caller's dictionary is not modified; names compare case-insensitively on Windows and case-sensitively elsewhere. Both backends then force `COLORTERM=truecolor` and set `TERM` to the supplied value, or `xterm-256color` when none is supplied; the `TERM` inherited from Dotty's own environment never reaches the child. See [Configuration](Configuration.md#session-launch-context).
+
+On Unix the host passes the helper its own protocol variables, `DOTTY_CONTROL_SOCKET`, `DOTTY_INITIAL_COLS`, `DOTTY_INITIAL_ROWS`, `DOTTY_INITIAL_XPIXEL`, and `DOTTY_INITIAL_YPIXEL`. The helper consumes them and calls `unsetenv` on all five after closing its descriptors and immediately before `exec`, so the user's shell or command never sees them. `UnixPty_DoesNotLeakHelperProtocolVariablesIntoCommand` covers this on Unix runners; the Windows ConPTY backend has no helper and never sets them.
+
+### Pixel sizes
+
+Graphics clients size images from the pixel size of the terminal, so the PTY
+carries it next to the grid size:
+
+- `IPty.Start(..., initialPixelWidth, initialPixelHeight)` and
+  `IPty.Resize(columns, rows, pixelWidth, pixelHeight)`; `0` means unknown.
+  `TerminalTabManager` computes the size of a new tab from the latest layout's cell
+  size times the grid (unknown, so `0`, before the first layout) and
+  `TerminalSession.Resize` forwards a pixel-only change (zoom, DPI) even when the
+  grid is unchanged.
+- On Unix the helper receives `DOTTY_INITIAL_XPIXEL`/`DOTTY_INITIAL_YPIXEL`
+  (clamped to `0..65535`, the `unsigned short` of `struct winsize`) and fills
+  `ws_xpixel`/`ws_ypixel`, so the child's first `TIOCGWINSZ` already reports them.
+  Later resizes use the control-socket line
+  `{"type":"resize","cols":N,"rows":M,"xpixel":W,"ypixel":H}`; `xpixel` and
+  `ypixel` are optional for older senders and default to `0`.
+- ConPTY has no pixel channel: `WindowsPty` ignores the pixel arguments. See
+  [Windows ConPTY](WindowsConPty.md#kitty-graphics-passthrough).
+- `PtyFactory.Create(windowsGraphicsPassthrough)` carries the experimental
+  `graphics.windowsPassthrough` flag to `WindowsPty`; it is ignored on Unix.
+
+Whether child programs see the right values on every platform `needs runtime
+verification` (`UnixPtyPixelTests` covers it on Unix runners).
 
 ## Windows backend
 

@@ -14,6 +14,7 @@ public sealed partial class LuaScriptHost
         String,
         Number,
         Integer,
+        Long,
         Boolean,
         Map,
         StringList,
@@ -26,9 +27,14 @@ public sealed partial class LuaScriptHost
 
     private static readonly Dictionary<string, ConfigField> ConfigFields = CreateConfigFields();
 
+    /// <summary>Canonical Lua config keys; the drift guard in ConfigCatalogTests compares them with the option catalog.</summary>
+    internal static IReadOnlyCollection<string> ConfigFieldKeys => ConfigFields.Keys;
+
     private static Dictionary<string, ConfigField> CreateConfigFields() => new(StringComparer.Ordinal)
     {
         ["theme"] = new(ConfigValueKind.String, c => c.Theme, (c, v) => c.Theme = (string)v!),
+        ["shell_integration"] = new(ConfigValueKind.String, c => c.ShellIntegration, (c, v) => c.ShellIntegration = (string)v!),
+        ["term"] = new(ConfigValueKind.String, c => c.Term, (c, v) => c.Term = (string)v!),
         ["theme_light"] = new(ConfigValueKind.String, c => c.ThemeLight, (c, v) => c.ThemeLight = (string?)v),
         ["theme_dark"] = new(ConfigValueKind.String, c => c.ThemeDark, (c, v) => c.ThemeDark = (string?)v),
         ["theme_auto"] = new(ConfigValueKind.Boolean, c => c.ThemeAuto, (c, v) => c.ThemeAuto = (bool)v!),
@@ -36,10 +42,27 @@ public sealed partial class LuaScriptHost
         ["font.family"] = new(ConfigValueKind.String, c => c.Font.Family, (c, v) => c.Font.Family = (string)v!),
         ["font.size"] = new(ConfigValueKind.Number, c => c.Font.Size, (c, v) => c.Font.Size = (double)v!),
         ["font.line_height"] = new(ConfigValueKind.Number, c => c.Font.LineHeight, (c, v) => c.Font.LineHeight = (double)v!),
+        ["font.adjust_cell_width"] = new(ConfigValueKind.String, c => c.Font.AdjustCellWidth, (c, v) => c.Font.AdjustCellWidth = (string)v!),
+        ["font.adjust_cell_height"] = new(ConfigValueKind.String, c => c.Font.AdjustCellHeight, (c, v) => c.Font.AdjustCellHeight = (string)v!),
         ["font.symbol_map"] = new(ConfigValueKind.StringList, c => c.Font.SymbolMap, (c, v) => c.Font.SymbolMap = (System.Collections.Generic.List<string>)v!),
+        ["font.faint_opacity"] = new(ConfigValueKind.Number, c => c.Font.FaintOpacity, (c, v) => c.Font.FaintOpacity = (double)v!),
+        ["font.builtin_glyphs"] = new(ConfigValueKind.Boolean, c => c.Font.BuiltinGlyphs, (c, v) => c.Font.BuiltinGlyphs = (bool)v!),
+        ["font.bold_family"] = new(ConfigValueKind.String, c => c.Font.BoldFamily, (c, v) => c.Font.BoldFamily = (string)v!),
+        ["font.italic_family"] = new(ConfigValueKind.String, c => c.Font.ItalicFamily, (c, v) => c.Font.ItalicFamily = (string)v!),
+        ["font.bold_italic_family"] = new(ConfigValueKind.String, c => c.Font.BoldItalicFamily, (c, v) => c.Font.BoldItalicFamily = (string)v!),
+        ["font.weight"] = new(ConfigValueKind.String, c => c.Font.Weight, (c, v) => c.Font.Weight = (string)v!),
+        ["font.features"] = new(ConfigValueKind.StringList, c => c.Font.Features, (c, v) => c.Font.Features = (System.Collections.Generic.List<string>)v!),
+        ["font.ligatures"] = new(ConfigValueKind.String, c => c.Font.Ligatures, (c, v) => c.Font.Ligatures = (string)v!),
+        ["font.hinting"] = new(ConfigValueKind.String, c => c.Font.Hinting, (c, v) => c.Font.Hinting = (string)v!),
+        ["font.antialias"] = new(ConfigValueKind.String, c => c.Font.Antialias, (c, v) => c.Font.Antialias = (string)v!),
         ["window.opacity"] = new(ConfigValueKind.Number, c => c.Window.Opacity, (c, v) => c.Window.Opacity = (double)v!),
         ["window.decorations"] = new(ConfigValueKind.String, c => c.Window.Decorations, (c, v) => c.Window.Decorations = (string)v!),
         ["window.title"] = new(ConfigValueKind.String, c => c.Window.Title, (c, v) => c.Window.Title = (string)v!),
+        ["window.columns"] = new(ConfigValueKind.Integer, c => c.Window.Columns, (c, v) => c.Window.Columns = (int)v!),
+        ["window.rows"] = new(ConfigValueKind.Integer, c => c.Window.Rows, (c, v) => c.Window.Rows = (int)v!),
+        ["window.start_maximized"] = new(ConfigValueKind.Boolean, c => c.Window.StartMaximized, (c, v) => c.Window.StartMaximized = (bool)v!),
+        ["window.start_fullscreen"] = new(ConfigValueKind.Boolean, c => c.Window.StartFullscreen, (c, v) => c.Window.StartFullscreen = (bool)v!),
+        ["window.floating"] = new(ConfigValueKind.Boolean, c => c.Window.Floating, (c, v) => c.Window.Floating = (bool)v!),
         ["window.padding.left"] = new(ConfigValueKind.Number, c => c.Window.Padding.Left, (c, v) => c.Window.Padding.Left = (double)v!),
         ["window.padding.top"] = new(ConfigValueKind.Number, c => c.Window.Padding.Top, (c, v) => c.Window.Padding.Top = (double)v!),
         ["window.padding.right"] = new(ConfigValueKind.Number, c => c.Window.Padding.Right, (c, v) => c.Window.Padding.Right = (double)v!),
@@ -50,10 +73,56 @@ public sealed partial class LuaScriptHost
         ["cursor.shape"] = new(ConfigValueKind.String, c => c.Cursor.Shape, (c, v) => c.Cursor.Shape = (string)v!),
         ["cursor.blink"] = new(ConfigValueKind.Boolean, c => c.Cursor.Blink, (c, v) => c.Cursor.Blink = (bool)v!),
         ["cursor.blink_interval_ms"] = new(ConfigValueKind.Integer, c => c.Cursor.BlinkIntervalMs, (c, v) => c.Cursor.BlinkIntervalMs = (int)v!),
+        ["cursor.unfocused_style"] = new(ConfigValueKind.String, c => c.Cursor.UnfocusedStyle, (c, v) => c.Cursor.UnfocusedStyle = (string)v!),
+        ["cursor.text"] = new(ConfigValueKind.String, c => c.Cursor.Text, (c, v) => c.Cursor.Text = (string)v!),
         ["panes.divider_thickness"] = new(ConfigValueKind.Number, c => c.Panes.DividerThickness, (c, v) => c.Panes.DividerThickness = (double)v!),
         ["panes.active_border"] = new(ConfigValueKind.Boolean, c => c.Panes.ActiveBorder, (c, v) => c.Panes.ActiveBorder = (bool)v!),
+        ["bell.attention"] = new(ConfigValueKind.Boolean, c => c.Bell.Attention, (c, v) => c.Bell.Attention = (bool)v!),
+        ["bell.visual"] = new(ConfigValueKind.Boolean, c => c.Bell.Visual, (c, v) => c.Bell.Visual = (bool)v!),
+        ["bell.audible"] = new(ConfigValueKind.Boolean, c => c.Bell.Audible, (c, v) => c.Bell.Audible = (bool)v!),
+        ["search.regex"] = new(ConfigValueKind.Boolean, c => c.Search.Regex, (c, v) => c.Search.Regex = (bool)v!),
+        ["search.case_sensitive"] = new(ConfigValueKind.Boolean, c => c.Search.CaseSensitive, (c, v) => c.Search.CaseSensitive = (bool)v!),
+        ["search.whole_word"] = new(ConfigValueKind.Boolean, c => c.Search.WholeWord, (c, v) => c.Search.WholeWord = (bool)v!),
+        ["text.blending"] = new(ConfigValueKind.String, c => c.Text.Blending, (c, v) => c.Text.Blending = (string)v!),
+        ["text.contrast"] = new(ConfigValueKind.Number, c => c.Text.Contrast, (c, v) => c.Text.Contrast = (double)v!),
+        ["text.minimum_contrast"] = new(ConfigValueKind.Number, c => c.Text.MinimumContrast, (c, v) => c.Text.MinimumContrast = (double)v!),
         ["keybindings"] = new(ConfigValueKind.Map, c => c.Keybindings, (c, v) => c.Keybindings = (Dictionary<string, string>)v!),
-        ["clipboard.allow_osc52_write"] = new(ConfigValueKind.Boolean, c => c.Clipboard.AllowOsc52Write, (c, v) => c.Clipboard.AllowOsc52Write = (bool)v!)
+        ["keyboard.left_alt"] = new(ConfigValueKind.String, c => c.Keyboard.LeftAlt, (c, v) => c.Keyboard.LeftAlt = (string)v!),
+        ["keyboard.right_alt"] = new(ConfigValueKind.String, c => c.Keyboard.RightAlt, (c, v) => c.Keyboard.RightAlt = (string)v!),
+        ["clipboard.allow_osc52_write"] = new(ConfigValueKind.Boolean, c => c.Clipboard.AllowOsc52Write, (c, v) => c.Clipboard.AllowOsc52Write = (bool)v!),
+        ["clipboard.osc52_read"] = new(ConfigValueKind.String, c => c.Clipboard.Osc52Read, (c, v) => c.Clipboard.Osc52Read = (string)v!),
+        ["clipboard.osc52_read_limit_bytes"] = new(ConfigValueKind.Integer, c => c.Clipboard.Osc52ReadLimitBytes, (c, v) => c.Clipboard.Osc52ReadLimitBytes = (int)v!),
+        ["clipboard.confirm_paste"] = new(ConfigValueKind.Boolean, c => c.Clipboard.ConfirmPaste, (c, v) => c.Clipboard.ConfirmPaste = (bool)v!),
+        ["clipboard.bracketed_paste_is_safe"] = new(ConfigValueKind.Boolean, c => c.Clipboard.BracketedPasteIsSafe, (c, v) => c.Clipboard.BracketedPasteIsSafe = (bool)v!),
+        ["printing.output_file"] = new(ConfigValueKind.String, c => c.Printing.OutputFile, (c, v) => c.Printing.OutputFile = (string?)v),
+        ["hyperlinks.osc8"] = new(ConfigValueKind.Boolean, c => c.Hyperlinks.Osc8, (c, v) => c.Hyperlinks.Osc8 = (bool)v!),
+        ["hyperlinks.confirm"] = new(ConfigValueKind.String, c => c.Hyperlinks.Confirm, (c, v) => c.Hyperlinks.Confirm = (string)v!),
+        ["hyperlinks.allowed_schemes"] = new(ConfigValueKind.StringList, c => c.Hyperlinks.AllowedSchemes, (c, v) => c.Hyperlinks.AllowedSchemes = (System.Collections.Generic.List<string>)v!),
+        ["vt.checksum_report_enabled"] = new(ConfigValueKind.Boolean, c => c.Vt.ChecksumReportEnabled, (c, v) => c.Vt.ChecksumReportEnabled = (bool)v!),
+        ["vt.title_report_enabled"] = new(ConfigValueKind.Boolean, c => c.Vt.TitleReportEnabled, (c, v) => c.Vt.TitleReportEnabled = (bool)v!),
+        ["vt.window_resize_allowed"] = new(ConfigValueKind.Boolean, c => c.Vt.WindowResizeAllowed, (c, v) => c.Vt.WindowResizeAllowed = (bool)v!),
+        ["vt.window_control_allowed"] = new(ConfigValueKind.Boolean, c => c.Vt.WindowControlAllowed, (c, v) => c.Vt.WindowControlAllowed = (bool)v!),
+        ["scrollback.limit_lines"] = new(ConfigValueKind.Integer, c => c.Scrollback.LimitLines, (c, v) => c.Scrollback.LimitLines = (int)v!),
+        ["scrollback.limit_bytes"] = new(ConfigValueKind.Long, c => c.Scrollback.LimitBytes, (c, v) => c.Scrollback.LimitBytes = (long)v!),
+        ["graphics.kitty_protocol"] = new(ConfigValueKind.Boolean, c => c.Graphics.KittyProtocol, (c, v) => c.Graphics.KittyProtocol = (bool)v!),
+        ["graphics.image_storage_limit_mib"] = new(ConfigValueKind.Integer, c => c.Graphics.ImageStorageLimitMiB, (c, v) => c.Graphics.ImageStorageLimitMiB = (int)v!),
+        ["graphics.max_payload_mib"] = new(ConfigValueKind.Integer, c => c.Graphics.MaxPayloadMiB, (c, v) => c.Graphics.MaxPayloadMiB = (int)v!),
+        ["graphics.allow_file_transfer"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowFileTransfer, (c, v) => c.Graphics.AllowFileTransfer = (bool)v!),
+        ["graphics.allow_temp_file_transfer"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowTempFileTransfer, (c, v) => c.Graphics.AllowTempFileTransfer = (bool)v!),
+        ["graphics.allow_shared_memory"] = new(ConfigValueKind.Boolean, c => c.Graphics.AllowSharedMemory, (c, v) => c.Graphics.AllowSharedMemory = (bool)v!),
+        ["graphics.windows_passthrough"] = new(ConfigValueKind.Boolean, c => c.Graphics.WindowsPassthrough, (c, v) => c.Graphics.WindowsPassthrough = (bool)v!),
+        ["mouse.copy_on_select"] = new(ConfigValueKind.String, c => c.Mouse.CopyOnSelect, (c, v) => c.Mouse.CopyOnSelect = (string)v!),
+        ["mouse.scroll_multiplier"] = new(ConfigValueKind.Number, c => c.Mouse.ScrollMultiplier, (c, v) => c.Mouse.ScrollMultiplier = (double)v!),
+        ["mouse.alternate_scroll"] = new(ConfigValueKind.String, c => c.Mouse.AlternateScroll, (c, v) => c.Mouse.AlternateScroll = (string)v!),
+        ["mouse.report_bypass_modifier"] = new(ConfigValueKind.String, c => c.Mouse.ReportBypassModifier, (c, v) => c.Mouse.ReportBypassModifier = (string)v!),
+        ["mouse.hide_while_typing"] = new(ConfigValueKind.Boolean, c => c.Mouse.HideWhileTyping, (c, v) => c.Mouse.HideWhileTyping = (bool)v!),
+        ["drop.mode"] = new(ConfigValueKind.String, c => c.Drop.Mode, (c, v) => c.Drop.Mode = (string)v!),
+        ["drop.quote"] = new(ConfigValueKind.String, c => c.Drop.Quote, (c, v) => c.Drop.Quote = (string)v!),
+        ["mouse.middle_click_action"] = new(ConfigValueKind.String, c => c.Mouse.MiddleClickAction, (c, v) => c.Mouse.MiddleClickAction = (string)v!),
+        ["selection.word_chars"] = new(ConfigValueKind.String, c => c.Selection.WordChars, (c, v) => c.Selection.WordChars = (string)v!),
+        ["selection.clear_on_copy"] = new(ConfigValueKind.Boolean, c => c.Selection.ClearOnCopy, (c, v) => c.Selection.ClearOnCopy = (bool)v!),
+        ["selection.clear_on_typing"] = new(ConfigValueKind.Boolean, c => c.Selection.ClearOnTyping, (c, v) => c.Selection.ClearOnTyping = (bool)v!),
+        ["selection.rectangle_modifier"] = new(ConfigValueKind.String, c => c.Selection.RectangleModifier, (c, v) => c.Selection.RectangleModifier = (string)v!)
     };
 
     private unsafe partial void RegisterConfig(Lua lua, int dottyIndex)
@@ -96,7 +165,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "search" or "keyboard" or "text")
         {
             host.PushConfigProxyTable(lua, key);
             return 1;
@@ -131,7 +200,7 @@ public sealed partial class LuaScriptHost
             key = "cursor.blink_interval_ms";
         }
 
-        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard")
+        if (key is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "search" or "keyboard" or "text")
         {
             if (lua.Type(3) != LuaType.Table)
             {
@@ -174,7 +243,7 @@ public sealed partial class LuaScriptHost
         }
 
         string path = NormalizeConfigKey(parent + "." + key);
-        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard")
+        if (path is "window.padding" or "font" or "window" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "search" or "keyboard" or "text")
         {
             host.PushConfigProxyTable(lua, path);
             return 1;
@@ -226,6 +295,9 @@ public sealed partial class LuaScriptHost
                 break;
             case ConfigValueKind.Integer:
                 lua.PushInteger((int)value!);
+                break;
+            case ConfigValueKind.Long:
+                lua.PushInteger((long)value!);
                 break;
             case ConfigValueKind.Boolean:
                 lua.PushBoolean((bool)value!);
@@ -285,7 +357,16 @@ public sealed partial class LuaScriptHost
                 valid = type == LuaType.Number;
                 if (valid)
                 {
-                    value = (int)lua.ToInteger(index);
+                    // Saturate instead of wrapping: 2^32 must not read as 0 (clamped limits would silently collapse to their minimum).
+                    value = (int)Math.Clamp(lua.ToInteger(index), int.MinValue, int.MaxValue);
+                }
+
+                break;
+            case ConfigValueKind.Long:
+                valid = type == LuaType.Number;
+                if (valid)
+                {
+                    value = lua.ToInteger(index);
                 }
 
                 break;
@@ -336,7 +417,7 @@ public sealed partial class LuaScriptHost
             {
                 string path = NormalizeConfigKey((prefix.Length == 0 ? "" : prefix + ".") + key);
                 if (lua.Type(-1) == LuaType.Table
-                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard"))
+                    && (path is "font" or "window" or "window.padding" or "tab_bar" or "cursor" or "panes" or "clipboard" or "hyperlinks" or "vt" or "mouse" or "selection" or "scrollback" or "graphics" or "bell" or "search" or "keyboard" or "text"))
                 {
                     ApplyConfigTable(lua, -1, path);
                 }

@@ -66,7 +66,7 @@ public class UnixPtyTests : IDisposable
     [ConditionalFacts.UnixOnlyFact]
     public void UnixPty_HelperDiscoveryFindsExecutable()
     {
-        var helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+        var helper = Unix.PtyHelperLocator.ResolveForCurrentProcess().Path;
 
         helper.Should().NotBeNullOrWhiteSpace();
         File.Exists(helper!).Should().BeTrue();
@@ -91,6 +91,25 @@ public class UnixPtyTests : IDisposable
 
         Assert.Equal(0, exitCode);
         Assert.Equal("<tag><><-n>", output);
+    }
+
+    [ConditionalFacts.UnixOnlyFact]
+    public async Task UnixPty_DoesNotLeakHelperProtocolVariablesIntoCommand()
+    {
+        _pty = new Unix.UnixPty();
+        _pty.Start(
+            workingDirectory: Path.GetTempPath(),
+            command: ["/bin/sh", "-c", "printf 'X%s%s%s%s%sY' \"${DOTTY_CONTROL_SOCKET-}\" \"${DOTTY_INITIAL_COLS-}\" \"${DOTTY_INITIAL_ROWS-}\" \"${DOTTY_INITIAL_XPIXEL-}\" \"${DOTTY_INITIAL_YPIXEL-}\""],
+            initialPixelWidth: 640, initialPixelHeight: 384);
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var reader = new StreamReader(_pty.OutputStream!);
+        Task<string> outputTask = reader.ReadToEndAsync(timeout.Token);
+        int exitCode = await _pty.WaitForExitAsync(timeout.Token);
+        string output = await outputTask;
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal("XY", output);
     }
     #region Start() Tests
 
@@ -391,7 +410,7 @@ public class UnixPtyTests : IDisposable
         Thread.Sleep(500);
 
         // Act & Assert - should not throw
-        var exception = Record.Exception(() => _pty.Resize(120, 30));
+        var exception = Record.Exception(() => _pty.Resize(120, 30, 0, 0));
         // Note: On Unix, resize might silently fail if control socket not ready
         // The implementation handles this gracefully
         exception.Should().BeNull("Resize should not throw");
@@ -475,7 +494,7 @@ public class UnixPtyTests : IDisposable
 
         foreach (var (cols, rows) in dimensions)
         {
-            var exception = Record.Exception(() => _pty.Resize(cols, rows));
+            var exception = Record.Exception(() => _pty.Resize(cols, rows, 0, 0));
             exception.Should().BeNull($"Resize to {cols}x{rows} should not throw");
         }
     }
@@ -491,7 +510,7 @@ public class UnixPtyTests : IDisposable
         pty.Dispose();
 
         // Act & Assert
-        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24));
+        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24, 0, 0));
     }
 
     #endregion
@@ -570,7 +589,7 @@ public class UnixPtyTests : IDisposable
     [ConditionalFacts.UnixOnlyFact]
     public async Task UnixPty_Helper_NaturalExitDrainsOutputAndCleansUp()
     {
-        var helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+        var helper = Unix.PtyHelperLocator.ResolveForCurrentProcess().Path;
         helper.Should().NotBeNullOrWhiteSpace();
 
         var socketPath = Path.Combine(Path.GetTempPath(), $"dotty-pty-test-{Guid.NewGuid():N}.sock");
@@ -824,7 +843,7 @@ public class UnixPtyTests : IDisposable
         Thread.Sleep(500); // Give time for socket setup
 
         // Assert - resize should not throw (may silently fail if not ready)
-        var exception = Record.Exception(() => _pty.Resize(100, 40));
+        var exception = Record.Exception(() => _pty.Resize(100, 40, 0, 0));
         exception.Should().BeNull();
     }
 
@@ -833,7 +852,7 @@ public class UnixPtyTests : IDisposable
     #region Helper Tests
 
     /// <summary>
-    /// Verifies that FindHelperExecutable locates the helper.
+    /// Verifies that PtyHelperLocator locates the helper.
     /// This is tested indirectly through successful Start() calls.
     /// </summary>
     [ConditionalFacts.UnixOnlyFact]

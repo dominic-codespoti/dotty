@@ -26,6 +26,10 @@ public static class SearchQuadBuilder
     public static readonly SgrColorArgb OverlayButtonBg = SgrColorArgb.FromRgb(45, 45, 45);
     public static readonly SgrColorArgb OverlayTextFg = SgrColorArgb.FromRgb(204, 204, 204);
     public static readonly SgrColorArgb OverlayMutedFg = SgrColorArgb.FromRgb(150, 150, 150);
+    /// <summary>A toggle that is on.</summary>
+    public static readonly SgrColorArgb OverlayToggleOnFg = SgrColorArgb.FromRgb(86, 182, 255);
+    /// <summary>The regex toggle while the pattern does not compile.</summary>
+    public static readonly SgrColorArgb OverlayInvalidFg = SgrColorArgb.FromRgb(244, 71, 71);
 
     /// <summary>
     /// Emits highlight quads for search matches visible on the terminal grid.
@@ -162,29 +166,32 @@ public static class SearchQuadBuilder
         int inputRow = (int)(layout.InputBoxRect.Y / cellHeight);
         int inputColCount = (int)(layout.InputBoxRect.Width / cellWidth);
 
+        // One cell per grapheme cluster, matching the caret column the composer derives from the editor.
         string query = layout.Query;
         if (!string.IsNullOrEmpty(query))
         {
-            int queryLen = Math.Min(query.Length, inputColCount);
-            ReadOnlySpan<char> querySpan = query.AsSpan(0, queryLen);
-            for (int i = 0; i < queryLen; i++)
+            int index = 0;
+            for (int column = 0; column < inputColCount && index < query.Length; column++)
             {
                 if (written >= destination.Length)
                     return written;
 
+                int length = System.Globalization.StringInfo.GetNextTextElementLength(query.AsSpan(index));
                 EmitTextGlyph(
                     destination,
                     ref written,
-                    querySpan,
-                    i,
-                    inputStartCol + i,
+                    query.AsSpan(),
+                    index,
+                    inputStartCol + column,
                     inputRow,
                     OverlayTextFg,
                     OverlayInputBg,
                     typeface,
                     textSize,
                     atlas,
-                    dirtyAtlasRows);
+                    dirtyAtlasRows,
+                    length);
+                index += length;
             }
         }
         // 3. Render match count badge (e.g. "3/42")
@@ -216,7 +223,17 @@ public static class SearchQuadBuilder
             }
         }
 
-        // 4. Render control buttons: Prev (▲), Next (▼), Close (×)
+        // 4. Toggles: .* (red while the pattern is invalid), Aa, W; highlighted when on.
+        var flags = layout.Flags;
+        SgrColorArgb regexFg = (flags & SearchOverlayFlags.InvalidRegex) != 0 ? OverlayInvalidFg
+            : (flags & SearchOverlayFlags.Regex) != 0 ? OverlayToggleOnFg : OverlayMutedFg;
+        RenderToggleText(destination, ref written, layout.RegexToggleRect, ".*", regexFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
+        RenderToggleText(destination, ref written, layout.CaseToggleRect, "Aa",
+            (flags & SearchOverlayFlags.CaseSensitive) != 0 ? OverlayToggleOnFg : OverlayMutedFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
+        RenderToggleText(destination, ref written, layout.WordToggleRect, "W",
+            (flags & SearchOverlayFlags.WholeWord) != 0 ? OverlayToggleOnFg : OverlayMutedFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
+
+        // 5. Render control buttons: Prev (▲), Next (▼), Close (×)
 
         RenderButtonGlyph(destination, ref written, layout.PrevButtonRect, "▲", OverlayTextFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
         RenderButtonGlyph(destination, ref written, layout.NextButtonRect, "▼", OverlayTextFg, cellWidth, cellHeight, typeface, textSize, atlas, dirtyAtlasRows);
@@ -236,10 +253,11 @@ public static class SearchQuadBuilder
         SKTypeface typeface,
         float textSize,
         GlyphAtlas atlas,
-        HashSet<int>? dirtyAtlasRows)
+        HashSet<int>? dirtyAtlasRows,
+        int length = 1)
     {
-        string grapheme = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(text, index, 1);
-        var key = new GlyphKey(grapheme, typeface, textSize, false);
+        string grapheme = global::Dotty.Runtime.Tabs.TabBarQuadBuilder.GlyphTextCache.Get(text, index, length);
+        var key = new GlyphKey(grapheme, typeface, textSize, GlyphStyle.Regular);
         int countBefore = atlas.EntryCount;
         bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
         if (!glyphOk)
@@ -255,7 +273,7 @@ public static class SearchQuadBuilder
             Col = (ushort)col,
             Row = (ushort)row,
             OffX = (short)glyphInfo.LeftBearing,
-            OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+            OffY = QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
             GlyphX = (short)glyphInfo.X,
             GlyphY = (short)glyphInfo.Y,
             GlyphW = (short)glyphInfo.Width,
@@ -269,6 +287,31 @@ public static class SearchQuadBuilder
             BgB = bg.B,
             BgA = 255
         };
+    }
+
+    private static void RenderToggleText(
+        Span<CellInstance> destination,
+        ref int written,
+        OverlayRect rect,
+        string text,
+        SgrColorArgb fg,
+        float cellWidth,
+        float cellHeight,
+        SKTypeface typeface,
+        float textSize,
+        GlyphAtlas atlas,
+        HashSet<int>? dirtyAtlasRows)
+    {
+        int col = (int)(rect.X / cellWidth);
+        int row = (int)(rect.Y / cellHeight);
+        int columns = Math.Max(1, (int)(rect.Width / cellWidth));
+        for (int i = 0; i < text.Length && i < columns; i++)
+        {
+            if (written >= destination.Length)
+                return;
+            EmitTextGlyph(destination, ref written, text.AsSpan(), i, col + i, row, fg, OverlayButtonBg,
+                typeface, textSize, atlas, dirtyAtlasRows);
+        }
     }
 
     private static void RenderButtonGlyph(
@@ -290,7 +333,7 @@ public static class SearchQuadBuilder
         int col = (int)(rect.X / cellWidth);
         int row = (int)(rect.Y / cellHeight);
 
-        var key = new GlyphKey(glyphText, typeface, textSize, false);
+        var key = new GlyphKey(glyphText, typeface, textSize, GlyphStyle.Regular);
         int countBefore = atlas.EntryCount;
         bool glyphOk = atlas.EnsureGlyph(key, out var glyphInfo);
         if (!glyphOk)
@@ -305,7 +348,7 @@ public static class SearchQuadBuilder
                 Col = (ushort)col,
                 Row = (ushort)row,
                 OffX = (short)glyphInfo.LeftBearing,
-                OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
+                OffY = QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing),
                 GlyphX = (short)glyphInfo.X,
                 GlyphY = (short)glyphInfo.Y,
                 GlyphW = (short)glyphInfo.Width,

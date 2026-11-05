@@ -224,22 +224,24 @@ public class WindowsPtyTests : IDisposable
     [InlineData(true)]
     public async Task WindowsPty_Start_AdvertisesTerminalCapabilities(bool withOverrides)
     {
+        // TERM defaults to xterm-256color and otherwise is the caller's (the session passes its resolved
+        // `term`); COLORTERM is forced either way.
         IDictionary<string, string>? environment = withOverrides
             ? new Dictionary<string, string>
             {
-                ["term"] = "dumb",
+                ["term"] = "xterm-dotty",
                 ["colorterm"] = "monochrome",
                 ["DOTTY_ENV_TEST_VALUE"] = "custom"
             }
             : null;
         string fields = "%TERM%,%COLORTERM%" + (withOverrides ? ",%DOTTY_ENV_TEST_VALUE%" : string.Empty);
-        string marker = "DOTTY_ENV=xterm-256color,truecolor" + (withOverrides ? ",custom" : string.Empty);
+        string marker = withOverrides ? "DOTTY_ENV=xterm-dotty,truecolor,custom" : "DOTTY_ENV=xterm-256color,truecolor";
 
         await StartShellAndReadOutput($"cmd.exe /d /c echo DOTTY_ENV={fields}", marker, environment);
 
         if (environment != null)
         {
-            environment["term"].Should().Be("dumb");
+            environment["term"].Should().Be("xterm-dotty");
             environment["colorterm"].Should().Be("monochrome");
         }
     }
@@ -457,7 +459,7 @@ public class WindowsPtyTests : IDisposable
         _pty.Start(columns: 80, rows: 24);
 
         // Act & Assert - should not throw
-        var exception = Record.Exception(() => _pty.Resize(120, 30));
+        var exception = Record.Exception(() => _pty.Resize(120, 30, 0, 0));
         exception.Should().BeNull("Resize should not throw");
     }
 
@@ -485,7 +487,7 @@ public class WindowsPtyTests : IDisposable
 
         foreach (var (cols, rows) in dimensions)
         {
-            var exception = Record.Exception(() => _pty.Resize(cols, rows));
+            var exception = Record.Exception(() => _pty.Resize(cols, rows, 0, 0));
             exception.Should().BeNull($"Resize to {cols}x{rows} should not throw");
         }
     }
@@ -500,7 +502,7 @@ public class WindowsPtyTests : IDisposable
         using var pty = new Windows.WindowsPty();
 
         // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => pty.Resize(80, 24));
+        Assert.Throws<InvalidOperationException>(() => pty.Resize(80, 24, 0, 0));
     }
 
     /// <summary>
@@ -514,7 +516,7 @@ public class WindowsPtyTests : IDisposable
         pty.Dispose();
 
         // Act & Assert
-        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24));
+        Assert.Throws<ObjectDisposedException>(() => pty.Resize(80, 24, 0, 0));
     }
 
     [Fact]
@@ -866,6 +868,109 @@ public class WindowsPtyTests : IDisposable
         var exception = Assert.Throws<PtyException>(() => 
             _pty.Start(shell: "nonexistent_shell.exe"));
         exception.Message.Should().NotBeNullOrEmpty();
+    }
+
+    #endregion
+
+    #region Graphics passthrough (WI-4.4)
+
+    [Theory]
+    [InlineData(false, 0u)]
+    [InlineData(true, 8u)]
+    public void ResolvePseudoConsoleFlags_MapsPassthrough(bool passthrough, uint expected)
+    {
+        Windows.WindowsPty.ResolvePseudoConsoleFlags(passthrough).Should().Be(expected);
+    }
+
+    [Fact]
+    public void CreateWithFallback_NotRequested_UsesZeroFlagsOnce()
+    {
+        var seen = new List<uint>();
+        int hr = Windows.WindowsPty.CreateWithFallback(false, f => { seen.Add(f); return 0; }, out bool active);
+
+        hr.Should().Be(0);
+        active.Should().BeFalse();
+        seen.Should().Equal(0u);
+    }
+
+    [Fact]
+    public void CreateWithFallback_RequestedAndAccepted_IsActive()
+    {
+        var seen = new List<uint>();
+        int hr = Windows.WindowsPty.CreateWithFallback(true, f => { seen.Add(f); return 0; }, out bool active);
+
+        hr.Should().Be(0);
+        active.Should().BeTrue();
+        seen.Should().Equal(8u);
+    }
+
+    [Fact]
+    public void CreateWithFallback_HresultFailure_RetriesWithZero()
+    {
+        var seen = new List<uint>();
+        int hr = Windows.WindowsPty.CreateWithFallback(true, f => { seen.Add(f); return f == 8u ? unchecked((int)0x80070057) : 0; }, out bool active);
+
+        hr.Should().Be(0);
+        active.Should().BeFalse();
+        seen.Should().Equal(8u, 0u);
+    }
+
+    [Fact]
+    public void CreateWithFallback_ExceptionOnPassthrough_RetriesWithZero()
+    {
+        var seen = new List<uint>();
+        int hr = Windows.WindowsPty.CreateWithFallback(true, f =>
+        {
+            seen.Add(f);
+            if (f == 8u) throw new EntryPointNotFoundException();
+            return 0;
+        }, out bool active);
+
+        hr.Should().Be(0);
+        active.Should().BeFalse();
+        seen.Should().Equal(8u, 0u);
+    }
+
+    [Fact]
+    public void CreateWithFallback_FailureOfPlainAttempt_ReturnsItsHresult()
+    {
+        int hr = Windows.WindowsPty.CreateWithFallback(true, _ => 5, out bool active);
+
+        hr.Should().Be(5);
+        active.Should().BeFalse();
+    }
+
+    [Fact]
+    public void CreateWithFallback_NotRequestedFailure_DoesNotRetry()
+    {
+        int calls = 0;
+        int hr = Windows.WindowsPty.CreateWithFallback(false, _ => { calls++; return 5; }, out _);
+
+        hr.Should().Be(5);
+        calls.Should().Be(1);
+    }
+
+    [Fact]
+    public void WindowsPty_DefaultsToNoPassthrough()
+    {
+        using var pty = new Windows.WindowsPty();
+        pty.GraphicsPassthroughRequested.Should().BeFalse();
+        pty.GraphicsPassthroughActive.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Start_WithPassthroughRequested_StartsAndReportsCapability()
+    {
+        Assert.SkipUnless(PtyPlatform.IsConPtySupported, "ConPTY not supported");
+
+        var pty = new Windows.WindowsPty(requestGraphicsPassthrough: true);
+        _pty = pty;
+        pty.Start(shell: "cmd.exe", columns: 80, rows: 24);
+
+        pty.IsRunning.Should().BeTrue();
+        pty.GraphicsPassthroughRequested.Should().BeTrue();
+        // Either the host accepted the flag or the fallback produced a plain console; both must run a shell.
+        pty.ProcessId.Should().BeGreaterThan(0);
     }
 
     #endregion

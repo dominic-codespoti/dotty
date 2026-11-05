@@ -87,6 +87,19 @@ public sealed partial class LuaScriptHost : IDisposable
         return File.Exists(initLua) ? initLua : configLua;
     }
 
+    /// <summary>
+    /// Compiles <paramref name="source"/> without running it, in a bare Lua state with no libraries.
+    /// Returns null when it compiles, else Lua's message (<c>chunkName:line: text</c> for syntax errors).
+    /// </summary>
+    public static string? CheckSyntax(string source, string chunkName)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(chunkName);
+        using var lua = new Lua(openLibs: false) { Encoding = System.Text.Encoding.UTF8 };
+        LuaStatus status = lua.LoadString(source, chunkName);
+        return status == LuaStatus.OK ? null : lua.ToString(-1) ?? status.ToString();
+    }
+
     /// <summary>Evaluates the configuration script in a fresh Lua state.</summary>
     public bool Evaluate(DottyUserConfig config, string? scriptPath)
     {
@@ -522,13 +535,12 @@ public sealed partial class LuaScriptHost : IDisposable
         else if (lua.Type(valueIndex) == LuaType.String)
         {
             string? name = lua.ToString(valueIndex);
-            if (!Enum.TryParse(name, true, out Dotty.Abstractions.Config.TerminalAction action)
-                || !Enum.IsDefined(typeof(Dotty.Abstractions.Config.TerminalAction), action))
+            if (!Dotty.Abstractions.Config.ActionRegistry.TryParse(name, out var action, out string? error))
             {
-                throw new InvalidOperationException($"Unknown terminal action '{name}'.");
+                throw new InvalidOperationException($"Invalid action '{name}': {error}.");
             }
 
-            if (action == Dotty.Abstractions.Config.TerminalAction.None)
+            if (action.Action == Dotty.Abstractions.Config.TerminalAction.None)
             {
                 Keybinds.Unbind(chord);
             }
@@ -1058,7 +1070,7 @@ public sealed partial class LuaScriptHost : IDisposable
         }
     }
 
-    internal bool TryExecuteAction(Dotty.Abstractions.Config.TerminalAction action)
+    internal bool TryExecuteAction(Dotty.Abstractions.Config.BoundAction action)
     {
         return _services.TryExecuteAction(action);
     }

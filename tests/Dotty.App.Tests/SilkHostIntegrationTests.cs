@@ -244,7 +244,7 @@ public class TerminalTabManagerTests
         var tab0 = manager.CreateTab(cols: 80, rows: 24);
         var tab1 = manager.CreateTab(cols: 80, rows: 24);
 
-        manager.ResizeAll(120, 40);
+        manager.ResizeAll(120, 40, 0, 0);
 
         Assert.Equal(120, tab0.Session.Adapter.Buffer.Columns);
         Assert.Equal(40, tab0.Session.Adapter.Buffer.Rows);
@@ -301,10 +301,12 @@ public class LeafPaneSelectionOwnershipTests
 
 public class TextSelectionServiceTests
 {
+    private static TextSelectionService NewService() => new(new TerminalBuffer(rows: 10, columns: 80));
+
     [Fact]
     public void CharacterSelection_ProducesNormalizedRange()
     {
-        var service = new TextSelectionService();
+        var service = NewService();
         service.StartSelection(row: 5, col: 10, SelectionMode.Character);
         service.UpdateSelection(row: 2, col: 4);
 
@@ -322,7 +324,7 @@ public class TextSelectionServiceTests
     [Fact]
     public void BlockSelection_ProducesBoxRange()
     {
-        var service = new TextSelectionService();
+        var service = NewService();
         service.StartSelection(row: 5, col: 20, SelectionMode.Block);
         service.UpdateSelection(row: 2, col: 10);
 
@@ -346,18 +348,18 @@ public class TextSelectionServiceTests
         buffer.SetCursor(1, 0);
         buffer.WriteText("Second Line".AsSpan(), CellAttributes.Default);
 
-        var service = new TextSelectionService();
+        var service = new TextSelectionService(buffer);
         service.StartSelection(row: 0, col: 6, SelectionMode.Character);
         service.UpdateSelection(row: 0, col: 10);
 
-        var selected = service.GetSelectedText(buffer);
+        var selected = service.GetSelectedText();
         Assert.Equal("World", selected);
     }
     [Fact]
     public void SelectLine_SelectsEntireRowFromFirstToLastColumn()
     {
-        var service = new TextSelectionService();
-        service.SelectLine(row: 3, totalColumns: 80);
+        var service = NewService();
+        service.SelectLine(row: 3);
 
         Assert.True(service.HasSelection);
         Assert.Equal(SelectionMode.Line, service.Mode);
@@ -376,11 +378,11 @@ public class TextSelectionServiceTests
     }
 
     [Fact]
-    public void UpdateLineSelection_DraggingDownwards_SpansMultipleFullRows()
+    public void LineSelection_DraggingDownwards_SpansMultipleFullRows()
     {
-        var service = new TextSelectionService();
-        service.SelectLine(row: 2, totalColumns: 80);
-        service.UpdateLineSelection(row: 4, totalColumns: 80);
+        var service = NewService();
+        service.SelectLine(row: 2);
+        service.UpdateSelection(row: 4, col: 0);
 
         var range = service.GetNormalizedRange();
         Assert.Equal(2, range.StartRow);
@@ -398,7 +400,7 @@ public class TextSelectionServiceTests
     [Fact]
     public void IsCellSelected_CorrectlyIdentifiesCells()
     {
-        var service = new TextSelectionService();
+        var service = NewService();
         // Character mode test
         service.StartSelection(row: 1, col: 5, SelectionMode.Character);
         service.UpdateSelection(row: 2, col: 10);
@@ -428,15 +430,15 @@ public class TextSelectionServiceTests
     public void SelectWord_SelectsWordAndPunctuationRuns()
     {
         var buffer = new TerminalBuffer(rows: 1, columns: 24);
-        buffer.WriteText("echo foo.bar".AsSpan(), CellAttributes.Default);
-        var service = new TextSelectionService();
+        buffer.WriteText("echo foo.bar,,baz".AsSpan(), CellAttributes.Default);
+        var service = new TextSelectionService(buffer);
 
-        service.SelectWord(buffer, row: 0, col: 6);
+        service.SelectWord(row: 0, col: 6);
         Assert.Equal(SelectionMode.Word, service.Mode);
-        Assert.Equal("foo", service.GetSelectedText(buffer));
+        Assert.Equal("foo.bar", service.GetSelectedText());
 
-        service.SelectWord(buffer, row: 0, col: 8);
-        Assert.Equal(".", service.GetSelectedText(buffer));
+        service.SelectWord(row: 0, col: 12);
+        Assert.Equal(",,", service.GetSelectedText());
     }
 
     [Fact]
@@ -444,27 +446,27 @@ public class TextSelectionServiceTests
     {
         var buffer = new TerminalBuffer(rows: 2, columns: 5);
         buffer.WriteText("ab  cd".AsSpan(), CellAttributes.Default);
-        var service = new TextSelectionService();
+        var service = new TextSelectionService(buffer);
         service.StartSelection(0, 0);
         service.UpdateSelection(1, 0);
 
-        Assert.Equal("ab  cd", service.GetSelectedText(buffer));
+        Assert.Equal("ab  cd", service.GetSelectedText());
     }
 
     [Fact]
-    public void BlockCopy_PreservesRequestedCellWidth()
+    public void BlockCopy_TrimsTrailingBlanksPerRow()
     {
         var buffer = new TerminalBuffer(rows: 2, columns: 5);
         buffer.SetCursor(0, 0);
         buffer.WriteText("x".AsSpan(), CellAttributes.Default);
         buffer.SetCursor(1, 0);
         buffer.WriteText("y".AsSpan(), CellAttributes.Default);
-        var service = new TextSelectionService();
+        var service = new TextSelectionService(buffer);
         service.StartSelection(0, 0, SelectionMode.Block);
         service.UpdateSelection(1, 3);
 
         // Copied text uses the platform line ending (CRLF on Windows clipboards).
-        Assert.Equal("x   " + Environment.NewLine + "y   ", service.GetSelectedText(buffer));
+        Assert.Equal("x" + Environment.NewLine + "y", service.GetSelectedText());
     }
 }
 

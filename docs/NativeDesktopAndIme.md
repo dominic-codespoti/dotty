@@ -64,9 +64,16 @@ archive from Dotty's checked-in ownership and scalar-caret patches.
 Preedit text, caret, and selected clause are kept as ephemeral composition state.
 Native Unicode scalar offsets are converted to UTF-16 offsets at the managed
 boundary. The scene composer uses the terminal's canonical grapheme width rules
-and configured font fallback, clips composition at the active pane boundary, and
-draws underlining, clause selection, and the composition caret without writing
-preedit characters into the terminal buffer. Stable composition frames reuse
+and configured font fallback. `PreeditLayout` places the composition from the
+cursor and wraps it onto the next rows of the active pane (a wide grapheme never
+straddles the right edge); on the last rows it is shifted up over the previous
+rows, and when it is taller than the pane, earlier rows scroll away so the caret
+row stays visible (the one-row search input therefore shifts left). Cells are
+drawn opaque in the pane's default foreground/background, the focused clause in
+the theme selection colour and the other clauses underlined with a single-underline
+decoration sprite in the text colour; the terminal cells
+under the composition are hidden for that frame. Nothing is written to the
+terminal buffer. Stable composition frames reuse
 their emitted instances rather than repeatedly allocating grapheme strings.
 
 After composition, the host converts the completed frame's framebuffer caret
@@ -95,6 +102,38 @@ substitutes for that qualification.
 Windows and macOS interactive qualification requires the real desktop sessions
 listed above. It remains explicitly blocked when those hosts are unavailable;
 Linux results must not be represented as Windows/macOS passes.
+
+## Manual lanes for selection, window reports, and injection
+
+Interactive checks that no automated lane covers, to run on each native desktop session before a release (recipes in [E2E Testing](E2ETesting.md#manual-smoke-x11-primary-selection-copy-on-select-and-middle-click)):
+
+- **X11 PRIMARY selection** (`mouse.copyOnSelect`, `mouse.middleClickAction`, OSC 52 `p`/`s`): interoperation with another X11 application is checked on an X11 session only. On Wayland, macOS, and Windows the selection is an in-process buffer, so the manual check is that it is *not* visible to other applications.
+- **Window position, screen size, and visibility reports** (`CSI 13/15 t`, mode 2033, `CSI ? 998 n`): depend on GLFW; minimize is not observable on Wayland.
+- **`CSI 8 t` resize** with `vt.windowResizeAllowed`: the window manager or compositor can still constrain the size.
+- **Shell-integration injection** for bash, zsh, fish, and PowerShell through a real Dotty window, including the Nix/`ZDOTDIR` situation described in [Shell Integration](ShellIntegration.md#automatic-injection).
+- **Windows ConPTY** passthrough of the window, cursor-position, checksum, and visibility queries is unverified.
+
+Linux results must not be represented as Windows or macOS passes.
+
+## Input, IME, and accessibility support matrix
+
+"Implemented" means the code path exists; "qualified" means it was exercised on
+that platform with a real session as described below. "Planned" names the Wave 4
+item expected to change the row; it is not a release date.
+
+| Feature | Linux Wayland | Linux X11 | Windows | macOS | Planned |
+|---|---|---|---|---|---|
+| Committed Unicode text, Kitty keyboard protocol, legacy encoding | Implemented; qualified (IME commit under Kitty flags 0 and 31) | Implemented; not qualified | Implemented; not qualified | Implemented; not qualified | W4-B13 to W4-B16, W4-D1 |
+| IME preedit and candidate placement | Implemented (text-input-v3); qualified with Fcitx/Rime | Implemented (XIM); not qualified | Implemented (IMM32); not qualified | Implemented (Cocoa marked text); not qualified | W4-C17, W4-D1 |
+| AltGr (Right Alt) text | Implemented (`keyboard.rightAlt` `auto`: AltGr/ISO Level 3 composes, Right Alt on a layout without AltGr is Meta); headless replay only, not qualified | Same | Same (AltGr = Ctrl+Alt) | Right Option composes by default; headless replay only, not qualified | W4-D1 |
+| Left Alt / Option composing text | Left Alt is Meta by default (`ESC` + the layout character, Shift kept); `keyboard.leftAlt` `compose` makes it type text; not qualified | Same | Same | Left Option composes by default (`@`, `é`); `keyboard.leftAlt` `meta` makes it Meta; not qualified | W4-D1 |
+| PRIMARY selection | In-process only | System PRIMARY | In-process only | In-process only | |
+| File drag and drop | Not supported | Not supported | Not supported | Not supported | W4-C18 |
+| Screen-reader accessibility | Not supported | Not supported | Not supported | Not supported | W4-C22 (portable model), W4-D4 (Windows UIA, then macOS); Linux AT-SPI is not planned |
+
+Bidirectional (RTL) text is not supported on any platform; see
+[Rendering](Rendering.md#text-and-rendering-support-matrix).
+
 ## Current qualification status
 
 The final portable-AOT publish and full multi-target test suite completed with
@@ -118,3 +157,9 @@ native IME attempt showed no preedit because its isolated run lacked system XKB
 data; the successful retry used a private read-only XKB-data mount and an
 explicitly activated private D-Bus input-method service. That initial failure was
 an environment setup issue, not evidence of a native bridge defect.
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C17: preedit wraps/shifts instead of clipping, theme colours on an opaque background, per-clause styles, covered cells hidden. |

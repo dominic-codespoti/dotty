@@ -16,6 +16,7 @@ public sealed class TerminalPalette
     }
 
     public ReadOnlySpan<uint> BaselineAnsi16 => _baseline;
+    public ReadOnlySpan<uint> EffectiveColors => _effective;
     public ReadOnlySpan<uint> EffectiveAnsi16 => _effective.AsSpan(0, 16);
     public uint this[int index] => (uint)index < 256 ? _effective[index] : 0;
     public bool IsOverridden(int index) => (uint)index < 256 && _overridden[index];

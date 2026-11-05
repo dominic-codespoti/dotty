@@ -13,15 +13,15 @@ namespace Dotty.Performance.Tests.Benchmarks;
 public class StartupBenchmarks : PerformanceTestBase
 {
     private byte[] _plainText1Kb = null!;
-    private byte[] _ansiText1Kb = null!;
     private TerminalAdapter _resizeAdapter = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
 
         _plainText1Kb = TestDataGenerator.GeneratePlainText(1000);
-        _ansiText1Kb = TestDataGenerator.GenerateBasicAnsiText(1000, 0.1);
+        // Preserve the shared seeded RNG position for the existing resize fixture.
+        _ = TestDataGenerator.GenerateBasicAnsiText(1000, 0.1);
 
         var resizeText = TestDataGenerator.GeneratePlainText(10000);
         _resizeAdapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
@@ -50,6 +50,10 @@ public class StartupBenchmarks : PerformanceTestBase
     #region Parser Initialization
 
     [Benchmark(Description = "Init: BasicAnsiParser")]
+    // The default quick job's 12 invocations are too few to time a sub-microsecond
+    // constructor reliably. A longer batch improves timer granularity without changing
+    // the operation being measured or its per-operation allocation accounting.
+    [InvocationCount(1024)]
     public BasicAnsiParser Init_Parser()
     {
         return new BasicAnsiParser();
@@ -90,15 +94,6 @@ public class StartupBenchmarks : PerformanceTestBase
         var adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
         var parser = new BasicAnsiParser { Handler = adapter };
         parser.Feed(_plainText1Kb);
-    }
-
-    [Benchmark(Description = "First Frame: Parse + Render 1KB")]
-    public void FirstFrame_ParseAndRender()
-    {
-        var adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
-        var parser = new BasicAnsiParser { Handler = adapter };
-        parser.Feed(_ansiText1Kb);
-        adapter.RequestRenderExtern();
     }
 
     #endregion

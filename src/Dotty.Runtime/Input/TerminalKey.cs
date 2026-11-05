@@ -143,5 +143,18 @@ public enum TerminalKey
     Menu,
 
     // Host function-key range extends through F25; append to preserve existing enum values.
-    F25
+    F25,
+
+    // Keypad keys with Num Lock off (the navigation level of the keypad); appended to preserve existing values.
+    KeypadHome,
+    KeypadUp,
+    KeypadPageUp,
+    KeypadLeft,
+    KeypadBegin,
+    KeypadRight,
+    KeypadEnd,
+    KeypadDown,
+    KeypadPageDown,
+    KeypadInsert,
+    KeypadDelete
 }

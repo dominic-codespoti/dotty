@@ -38,8 +38,10 @@ Example (used by GUI):
 Integration
 -----------
 `Dotty.NativePty` selects `UnixPty` on Linux/macOS and `WindowsPty` through
-ConPTY on Windows. The host resolves a packaged Unix helper beside the
-application before checking development paths or `PATH`.
+ConPTY on Windows. The host uses `DOTTY_PTY_HELPER` when set, otherwise a
+packaged helper beside the application (then `../libexec/dotty/` and
+`../lib/dotty/`); development builds also check this directory's `bin/` and
+`PATH` (see `PtyHelperLocator`).
 
 For the full backend contract, current platform matrix, and capability
 diagnostics, see [Native PTY Integration](../../docs/NativePty.md).

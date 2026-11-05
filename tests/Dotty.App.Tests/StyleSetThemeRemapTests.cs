@@ -7,29 +7,21 @@ namespace Dotty.App.Tests;
 public class StyleSetThemeRemapTests
 {
     [Fact]
-    public void RemapAnsiPalette_UpdatesExistingAnsiBackedStyles()
+    public void RemapPalette_UpdatesExistingIndexedStylesOnly()
     {
         var styleSet = new StyleSet();
-        var attributes = new CellAttributes
-        {
-            Foreground = new SgrColorArgb(0xFF010101),
-            Background = new SgrColorArgb(0xFF020202),
-            UnderlineColor = new SgrColorArgb(0xFF030303),
-            Bold = true,
-        };
-
+        var attributes = new CellAttributes { Bold = true };
+        attributes.SetForegroundIndexed(0, new SgrColorArgb(0xFF010101));
+        attributes.SetBackgroundIndexed(1, new SgrColorArgb(0xFF020202));
+        attributes.SetUnderlineColorIndexed(2, new SgrColorArgb(0xFF030303));
         ushort styleId = styleSet.GetOrCreateId(attributes);
 
-        var previousPalette = new uint[16];
-        var currentPalette = new uint[16];
-        previousPalette[0] = 0xFF010101;
-        previousPalette[1] = 0xFF020202;
-        previousPalette[2] = 0xFF030303;
-        currentPalette[0] = 0xFF111111;
-        currentPalette[1] = 0xFF222222;
-        currentPalette[2] = 0xFF333333;
+        var colors = new uint[256];
+        colors[0] = 0xFF111111;
+        colors[1] = 0xFF222222;
+        colors[2] = 0xFF333333;
 
-        Assert.True(styleSet.RemapAnsiPalette(previousPalette, currentPalette));
+        Assert.True(styleSet.RemapPalette(colors));
 
         ref readonly var remapped = ref styleSet.GetStyle(styleId);
         Assert.Equal(0xFF111111u, remapped.Foreground.Argb);
@@ -39,7 +31,7 @@ public class StyleSetThemeRemapTests
     }
 
     [Fact]
-    public void RemapAnsiPalette_LeavesNonPaletteColorsUntouched()
+    public void RemapPalette_LeavesExplicitRgbColorsUntouchedEvenWhenTheyMatch()
     {
         var styleSet = new StyleSet();
         var attributes = new CellAttributes
@@ -50,12 +42,11 @@ public class StyleSetThemeRemapTests
 
         ushort styleId = styleSet.GetOrCreateId(attributes);
 
-        var previousPalette = new uint[16];
-        var currentPalette = new uint[16];
-        previousPalette[0] = 0xFF010101;
-        currentPalette[0] = 0xFF111111;
+        var colors = new uint[256];
+        colors[0] = 0xFFABCDEF;
+        colors[1] = 0xFF111111;
 
-        Assert.False(styleSet.RemapAnsiPalette(previousPalette, currentPalette));
+        Assert.False(styleSet.RemapPalette(colors));
 
         ref readonly var remapped = ref styleSet.GetStyle(styleId);
         Assert.Equal(attributes.Foreground.Argb, remapped.Foreground.Argb);
@@ -77,22 +68,17 @@ public class StyleSetThemeRemapTests
     }
 
     [Fact]
-    public void RemapAnsiPalette_PreservesPublishedIdTableConsistency()
+    public void RemapPalette_PreservesPublishedIdTableConsistency()
     {
         var styleSet = new StyleSet();
-        var attributes = new CellAttributes
-        {
-            Foreground = new SgrColorArgb(0xFF010101),
-            Bold = true,
-        };
+        var attributes = new CellAttributes { Bold = true };
+        attributes.SetForegroundIndexed(0, new SgrColorArgb(0xFF010101));
         ushort styleId = styleSet.GetOrCreateId(attributes);
 
-        var previousPalette = new uint[16];
-        var currentPalette = new uint[16];
-        previousPalette[0] = 0xFF010101;
-        currentPalette[0] = 0xFF111111;
+        var colors = new uint[256];
+        colors[0] = 0xFF111111;
 
-        Assert.True(styleSet.RemapAnsiPalette(previousPalette, currentPalette));
+        Assert.True(styleSet.RemapPalette(colors));
 
         var published = styleSet.CaptureStyles();
         var remapped = styleSet.GetStyle(styleId);

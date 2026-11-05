@@ -27,13 +27,46 @@ parser. ConPTY supplies the pseudoterminal process and streams.
 
 Child environments preserve inherited variables and apply caller overrides
 case-insensitively, without modifying the caller's dictionary. As on Unix,
-`TERM=xterm-256color` and `COLORTERM=truecolor` are then forced to advertise
-Dotty's terminal capabilities, even when the parent or caller supplies
-`TERM=dumb`. This allows shells and prompts to enable their VT/color support.
+`COLORTERM=truecolor` is then forced, and `TERM` is the caller's value or
+`xterm-256color` when the caller passes none; the parent's own `TERM` (for
+example `dumb`) is never inherited. Sessions always pass the TERM resolved from
+the `term` setting (see [Configuration](Configuration.md#term)), so shells and
+prompts enable their VT/color support.
 
 The Unicode environment block is sorted case-insensitively and double-NUL
 terminated. Its allocation uses `Marshal.StringToHGlobalUni`, paired with
 `Marshal.FreeHGlobal` after `CreateProcess`, including failed launches.
+
+## Kitty graphics passthrough
+
+ConPTY re-emits only the sequences it understands, so the APC strings of the
+[Kitty graphics protocol](KittyGraphics.md) are dropped by default
+[INFERENCE, not verified]. The experimental `graphics.windowsPassthrough`
+setting (default `false`) makes `WindowsPty` request
+`PSEUDOCONSOLE_PASSTHROUGH_MODE` (`0x8`) from `CreatePseudoConsole`:
+
+- `PtyFactory.Create(windowsGraphicsPassthrough)` passes the flag; the
+  `WindowsPty(requestGraphicsPassthrough)` constructor stores it as
+  `GraphicsPassthroughRequested`.
+- If the flagged call fails (non-zero HRESULT or an exception, for example an
+  older conhost), it is retried once with no flags. `GraphicsPassthroughActive`
+  is `true` only when the flagged call succeeded. A Windows build that silently
+  ignores the flag would still report `true`, so whether APC really arrives is
+  observable only at runtime.
+- The setting is read when the PTY is created: it affects new tabs and panes,
+  not running ones. Passthrough may change how ConPTY forwards other VT output
+  (for example the window-report and DECRQCRA replies this page does not
+  verify); check on Windows before relying on it.
+- ConPTY has no pixel-size channel: `Start` ignores the initial pixel size and
+  `Resize` ignores the pixel arguments (the Unix helper path uses them; see
+  [Native PTY](NativePty.md#pixel-sizes)).
+- `t=s` (shared memory) uses a named file mapping on Windows; `t=f`/`t=t` deny UNC
+  and device paths.
+
+None of this has been run on Windows (`needs runtime verification`).
+`WindowsPtyTests` covers the flag mapping and the fallback through an injected
+create function, and starts a real ConPTY with passthrough requested only on
+Windows.
 
 ## Build and verification
 

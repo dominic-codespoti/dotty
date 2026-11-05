@@ -27,45 +27,70 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         Default = 0,
         UTF8 = 1005,
         SGR = 1006,
-        URXVT = 1015
+        URXVT = 1015,
+        SGRPixels = 1016
     }
 
     private readonly TerminalBuffer _buffer;
+    private int _conformanceLevel = 5;
     private TerminalPalette _palette = new();
     private readonly object _paletteSync = new();
+    private SpecialColorSettings _specialColors = new(0xFFCCCCCCu, 0xFFCCCCCCu, 0xFFCCCCCCu, 0xFFCCCCCCu, 0xFFCCCCCCu, 0);
+    private uint _specialColorDefaultArgb = 0xFFCCCCCCu;
+    private byte _specialColorOverrides;
     private CellAttributes _currentAttributes = CellAttributes.Default;
-    private CellAttributes _savedAttributes = CellAttributes.Default;
+    private CellAttributes _savedMainAttributes = CellAttributes.Default;
+    private CellAttributes _savedAlternateAttributes = CellAttributes.Default;
     private int _defaultForegroundOverrideArgb;
     private string _defaultFgHex = "#CCCCCC";
     private int _defaultBackgroundOverrideArgb;
     private string _defaultBgHex = "#1E1E1E";
     private string _da2Response = "\u001b[>1;0;0c";
-    private int _windowPixelHeight = 600;
-    private bool _hasSavedAttributes;
-    private int _windowPixelWidth = 800;
+    private string _xtVersionReply = "\u001bP>|Dotty\u001b\\";
+    private string _termName = DefaultTermName;
     private string? _windowTitle;
     private char _lastPrintedChar;
 
     public int CursorShape { get; private set; }
     public bool KeypadApplicationMode { get; private set; }
     public bool ApplicationCursorKeysEnabled { get; private set; }
+    public bool NewLineMode => _buffer.NewLineMode;
+    public bool MoreFixEnabled { get; private set; }
     public MouseMode CurrentMouseMode { get; private set; } = MouseMode.None;
     public MouseEncoding CurrentMouseEncoding { get; private set; } = MouseEncoding.Default;
     public bool MouseReportingEnabled => CurrentMouseMode != MouseMode.None;
 
-    public TerminalAdapter(int rows = 24, int columns = 80, int scrollbackCapacity = 10000, TimeProvider? timeProvider = null)
+    /// <summary>
+    /// Alternate scroll (DECSET 1007): while the alternate screen is shown and no mouse mode is set, the wheel sends
+    /// cursor up/down. Set at power-on and after RIS (kitty/foot/Alacritty behaviour); the <c>mouse.alternateScroll</c>
+    /// setting can disable the translation in the host.
+    /// </summary>
+    public bool AlternateScrollMode { get; private set; } = true;
+
+    public TerminalAdapter(int rows = 24, int columns = 80, TimeProvider? timeProvider = null)
+        : this(rows, columns, ScrollbackPolicy.Default, timeProvider)
     {
-        _buffer = new TerminalBuffer(rows, columns, scrollbackCapacity);
+    }
+
+    public TerminalAdapter(int rows, int columns, int scrollbackCapacity, TimeProvider? timeProvider = null)
+        : this(rows, columns, ScrollbackPolicy.Fixed(scrollbackCapacity), timeProvider)
+    {
+    }
+
+    public TerminalAdapter(int rows, int columns, ScrollbackPolicy scrollbackPolicy, TimeProvider? timeProvider = null)
+    {
+        _buffer = new TerminalBuffer(rows, columns, scrollbackPolicy);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _buffer.GraphicsClock = _timeProvider;
     }
 
     public event Action<string>? RenderRequested;
-    public event Action<string>? ClipboardWriteRequested;
+    public event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
     public event Action<string>? TitleChanged;
     public event Action? PaletteChanged;
     public event Action? Bell;
 
-    public void OnHyperlink(string uri) => _currentAttributes.HyperlinkId = _buffer.GetOrCreateHyperlinkId(uri);
+    public void OnHyperlink(string uri) => SetActiveHyperlink(uri.AsSpan());
 
     public event TerminalReplyHandler? ReplyRequested;
     private void SendTwoNumberReply(ReadOnlySpan<char> prefix, int first, int second, char suffix)
@@ -115,6 +140,13 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public string? WindowTitle => _windowTitle;
     public uint? DefaultForegroundOverrideArgb => ReadColorOverride(ref _defaultForegroundOverrideArgb);
     public uint? DefaultBackgroundOverrideArgb => ReadColorOverride(ref _defaultBackgroundOverrideArgb);
+    public SpecialColorSettings SpecialColors
+    {
+        get
+        {
+            lock (_paletteSync) return _specialColors;
+        }
+    }
     private string DefaultForegroundThemeHex => Volatile.Read(ref _defaultFgHex);
     private string DefaultBackgroundThemeHex => Volatile.Read(ref _defaultBgHex);
     private static uint? ReadColorOverride(ref int value)
@@ -131,12 +163,10 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         {
             TerminalPalette currentPalette = Volatile.Read(ref _palette);
             if (ansi16.SequenceEqual(currentPalette.BaselineAnsi16)) return;
-            Span<uint> previous = stackalloc uint[16];
-            currentPalette.EffectiveAnsi16.CopyTo(previous);
             var replacement = new TerminalPalette();
             replacement.SetBaseline(ansi16);
             Volatile.Write(ref _palette, replacement);
-            RemapAnsiStyles(previous);
+            RemapPaletteStyles();
             _buffer.InvalidateRowsForPaletteChange();
             PaletteChanged?.Invoke();
             RequestRender();
@@ -149,66 +179,73 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     /// </summary>
     public void SetDefaultColors(string fgHex, string bgHex)
     {
-        uint oldForeground = DefaultForegroundOverrideArgb ?? ParseHexDefault(DefaultForegroundThemeHex);
-        uint oldBackground = DefaultBackgroundOverrideArgb ?? ParseHexDefault(DefaultBackgroundThemeHex);
-        if (!string.IsNullOrWhiteSpace(fgHex))
+        lock (_paletteSync)
         {
-            string value = fgHex.StartsWith('#') ? fgHex : "#" + fgHex;
-            if (!string.Equals(Volatile.Read(ref _defaultFgHex), value, StringComparison.Ordinal))
-                Volatile.Write(ref _defaultFgHex, value);
+            uint oldForeground = DefaultForegroundOverrideArgb ?? ParseHexDefault(DefaultForegroundThemeHex);
+            uint oldBackground = DefaultBackgroundOverrideArgb ?? ParseHexDefault(DefaultBackgroundThemeHex);
+            if (!string.IsNullOrWhiteSpace(fgHex))
+            {
+                string value = fgHex.StartsWith('#') ? fgHex : "#" + fgHex;
+                if (!string.Equals(Volatile.Read(ref _defaultFgHex), value, StringComparison.Ordinal))
+                    Volatile.Write(ref _defaultFgHex, value);
+            }
+            if (!string.IsNullOrWhiteSpace(bgHex))
+            {
+                string value = bgHex.StartsWith('#') ? bgHex : "#" + bgHex;
+                if (!string.Equals(Volatile.Read(ref _defaultBgHex), value, StringComparison.Ordinal))
+                    Volatile.Write(ref _defaultBgHex, value);
+            }
+            uint foreground = ParseHexDefault(DefaultForegroundThemeHex);
+            bool specialChanged = RefreshSpecialColorDefaults(foreground);
+            if (specialChanged || oldForeground != (DefaultForegroundOverrideArgb ?? foreground) ||
+                oldBackground != (DefaultBackgroundOverrideArgb ?? ParseHexDefault(DefaultBackgroundThemeHex)))
+                NotifyPaletteChanged();
         }
-        if (!string.IsNullOrWhiteSpace(bgHex))
-        {
-            string value = bgHex.StartsWith('#') ? bgHex : "#" + bgHex;
-            if (!string.Equals(Volatile.Read(ref _defaultBgHex), value, StringComparison.Ordinal))
-                Volatile.Write(ref _defaultBgHex, value);
-        }
-        if (oldForeground != (DefaultForegroundOverrideArgb ?? ParseHexDefault(DefaultForegroundThemeHex)) ||
-            oldBackground != (DefaultBackgroundOverrideArgb ?? ParseHexDefault(DefaultBackgroundThemeHex)))
-            NotifyPaletteChanged();
     }
+
+    /// <summary>TERM value assumed until <see cref="SetTerminalIdentity"/> reports the one the child received.</summary>
+    public const string DefaultTermName = "xterm-256color";
 
     /// <summary>
-    /// Sets the DA2 (Secondary Device Attributes) response string, e.g.
-    /// "\x1b[>1;300;0c" for Dotty 0.3.0. Called by the app layer on startup.
+    /// Sets the identity reported to applications: DA2 (<c>CSI &gt; c</c> → <c>CSI &gt; 1 ; Pv ; 0 c</c> with
+    /// Pv = major·10000 + minor·100 + patch), XTVERSION (<c>CSI &gt; q</c> → <c>DCS &gt; | Dotty &lt;version&gt; ST</c>)
+    /// and the XTGETTCAP <c>TN</c> name (the TERM value the child process was given). Called by the session
+    /// before the PTY starts; blank arguments keep the previous value.
     /// </summary>
-    public void SetTerminalIdentity(string da2Response)
+    public void SetTerminalIdentity(string version, string termName)
     {
-        if (!string.IsNullOrWhiteSpace(da2Response)) _da2Response = da2Response;
-    }
-
-    /// <summary>
-    /// Sets the window pixel dimensions for CSI 14 t queries.
-    /// Called by the app layer when the window is resized.
-    /// </summary>
-    public void SetWindowPixelSize(int width, int height)
-    {
-        _windowPixelWidth = Math.Max(1, width);
-        _windowPixelHeight = Math.Max(1, height);
-    }
-
-    public void OnWindowReport(int command)
-    {
-        switch (command)
+        if (!string.IsNullOrWhiteSpace(version))
         {
-            case 14:
-                // CSI 14 t → report window pixel size: CSI 4 ; height ; width t
-                SendTwoNumberReply("\x1b[4;".AsSpan(), _windowPixelHeight, _windowPixelWidth, 't');
-                break;
-            case 18:
-                // CSI 18 t → report window cell size: CSI 8 ; rows ; cols t
-                SendTwoNumberReply("\x1b[8;".AsSpan(), _buffer.Rows, _buffer.Columns, 't');
-                break;
-            case 20:
-            case 21:
-                // Icon title (20) / window title (21) — respond with empty for now.
-                ReplyRequested?.Invoke("\x1b]0;\x1b\\".AsSpan());
+            _da2Response = $"\u001b[>1;{Da2VersionNumber(version)};0c";
+            _xtVersionReply = $"\u001bP>|Dotty {version}\u001b\\";
+        }
+        if (!string.IsNullOrWhiteSpace(termName)) _termName = termName;
+    }
+
+    /// <summary>The TERM name answered for XTGETTCAP <c>TN</c>.</summary>
+    public string TermName => _termName;
+
+    // major.minor.patch from the leading numeric core ("0.4.0-beta.1" → 400); missing parts are 0.
+    internal static int Da2VersionNumber(ReadOnlySpan<char> version)
+    {
+        Span<int> parts = stackalloc int[3];
+        int index = 0;
+        foreach (char c in version)
+        {
+            if (char.IsAsciiDigit(c))
+                parts[index] = Math.Min(parts[index] * 10 + (c - '0'), 99_999);
+            else if (c == '.' && index < 2)
+                index++;
+            else
                 break;
         }
+        return parts[0] * 10_000 + Math.Min(parts[1], 99) * 100 + Math.Min(parts[2], 99);
     }
 
     public void ResizeBuffer(int rows, int columns)
     {
+        if (SmoothScrollEnabled && (rows != _buffer.Rows || columns != _buffer.Columns))
+            ResetSmoothScrollAnimation();
         try
         {
             _buffer.Resize(rows, columns);
@@ -243,50 +280,33 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     }
 
 
+    /// <summary>Longest window or icon title retained from OSC 0/1/2, in UTF-16 chars.</summary>
+    public const int MaxTitleChars = 4096;
+
     public void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload)
     {
         if (TryHandleShellIntegration(code, payload)) return;
-        if (code == 0 || code == 2)
+        if (code == 4)
         {
-            if (_windowTitle is null || !payload.SequenceEqual(_windowTitle.AsSpan()))
-                _windowTitle = payload.ToString();
-            TitleChanged?.Invoke(_windowTitle);
-            RequestRender();
-        }
-        else if (code == 4)
-        {
-            HandleOscPalette(payload);
+            HandleOscPalette(4, payload);
         }
         else if (code == 104)
         {
-            HandleOscPaletteReset(payload);
+            HandleOscPaletteReset(104, payload);
         }
         else if (code == 8)
         {
-            int semiIdx = payload.IndexOf(';');
-            _currentAttributes.HyperlinkId = semiIdx >= 0
-                ? _buffer.GetOrCreateHyperlinkId(payload[(semiIdx + 1)..])
-                : (ushort)0;
+            HandleOsc8(payload);
         }
         else if (code == 52)
         {
-            var payloadStr = payload.ToString();
-            int semiIdx = payloadStr.IndexOf(';');
-            if (semiIdx >= 0)
-            {
-                var base64Part = payloadStr.Substring(semiIdx + 1);
-                if (base64Part != "?")
-                {
-                    try
-                    {
-                        var decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64Part));
-                        ClipboardWriteRequested?.Invoke(decoded);
-                    }
-                    catch { }
-                }
-            }
+            HandleOsc52(payload);
         }
-        else if (code == 10 || code == 11 || code == 12)
+        else if (code == 22)
+        {
+            HandleOsc22(payload);
+        }
+        else if (code is 10 or 11 or 12)
         {
             HandleOscDynamicColor(code, payload);
         }
@@ -298,30 +318,69 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         {
             // Cursor color is accepted but not rendered.
         }
+        else if (code == 5)
+        {
+            HandleOscPalette(5, payload);
+        }
+        else if (code == 105)
+        {
+            HandleOscPaletteReset(105, payload);
+        }
+        else if (code is 6 or 106)
+        {
+            HandleOscSpecialMode(payload);
+        }
     }
 
 
     public void OnSaveCursor()
     {
         _buffer.SaveCursor();
-        _savedAttributes = _currentAttributes;
-        _hasSavedAttributes = true;
+        SaveAttributesForActiveScreen();
     }
 
     public void OnRestoreCursor()
     {
         _buffer.RestoreCursor();
-        if (_hasSavedAttributes)
-        {
-            _currentAttributes = _savedAttributes;
-            _hasSavedAttributes = false;
-        }
+        RestoreAttributesForActiveScreen();
         RequestRender();
     }
+
+    private void SaveAttributesForActiveScreen()
+    {
+        if (_buffer.IsAlternateScreenActive)
+            _savedAlternateAttributes = _currentAttributes;
+        else
+            _savedMainAttributes = _currentAttributes;
+    }
+
+    private void RestoreAttributesForActiveScreen() =>
+        _currentAttributes = _buffer.IsAlternateScreenActive ? _savedAlternateAttributes : _savedMainAttributes;
+
+    public void OnSetAnsiMode(int mode, bool enabled)
+    {
+        if (mode == 2)
+            KeyboardActionModeLocked = enabled;
+        else if (mode == 4)
+            _buffer.InsertMode = enabled;
+        else if (mode == 12)
+            LocalEchoEnabled = !enabled;
+        else if (mode == 20)
+            _buffer.NewLineMode = enabled;
+    }
+
+    public void OnSetMoreFix(bool enabled) => MoreFixEnabled = enabled;
 
     public void OnSetAutoWrap(bool enabled)
     {
         _buffer.SetAutoWrap(enabled);
+    }
+
+    public void OnScreenAlignmentTest()
+    {
+        _currentAttributes = CellAttributes.Default;
+        _buffer.ScreenAlignmentTest(in _currentAttributes);
+        RequestRender();
     }
 
     public void OnSetTabStop()
@@ -351,32 +410,6 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         _buffer.SetBracketedPasteMode(enabled);
     }
 
-    public void OnDeviceStatusReport(int code)
-    {
-        switch (code)
-        {
-            case 6:
-                // Cursor Position Report (CPR) requested via DSR variant:
-                SendTwoNumberReply("\x1b[".AsSpan(), _buffer.CursorRow + 1, _buffer.CursorCol + 1, 'R');
-                break;
-            case 5:
-            case 0:
-                // Terminal status OK
-                ReplyRequested?.Invoke("\x1b[0n".AsSpan());
-                break;
-            default:
-                // Unknown/unsupported: return failure
-                ReplyRequested?.Invoke("\x1b[3n".AsSpan());
-                break;
-        }
-    }
-
-    public void OnCursorPositionReport()
-    {
-        // DEC private CPR response for CSI ? 6 n requests.
-        SendTwoNumberReply("\x1b[?".AsSpan(), _buffer.CursorRow + 1, _buffer.CursorCol + 1, 'R');
-    }
-
     public void OnInsertChars(int n)
     {
         _buffer.InsertChars(n);
@@ -386,6 +419,56 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     public void OnDeleteChars(int n)
     {
         _buffer.DeleteChars(n);
+        RequestRender();
+    }
+
+    public void OnInsertColumns(int n)
+    {
+        if (_conformanceLevel < 4) return;
+        _buffer.InsertColumns(n);
+        RequestRender();
+    }
+
+    public void OnDeleteColumns(int n)
+    {
+        if (_conformanceLevel < 4) return;
+        _buffer.DeleteColumns(n);
+        RequestRender();
+    }
+
+    public void OnBackIndex()
+    {
+        if (_conformanceLevel < 4) return;
+        _buffer.BackIndex();
+        RequestRender();
+    }
+
+    public void OnForwardIndex()
+    {
+        if (_conformanceLevel < 4) return;
+        _buffer.ForwardIndex();
+        RequestRender();
+    }
+
+    public void OnCopyRectangle(int top, int left, int bottom, int right, int sourcePage, int destinationTop, int destinationLeft, int destinationPage)
+    {
+        if (_conformanceLevel < 4) return;
+        // There is one addressable page: defaults and larger page selectors both resolve to it.
+        _buffer.CopyRectangle(top, left, bottom, right, destinationTop, destinationLeft);
+        RequestRender();
+    }
+
+    public void OnFillRectangle(uint rune, int top, int left, int bottom, int right)
+    {
+        if (_conformanceLevel < 4) return;
+        _buffer.FillRectangle(rune, top, left, bottom, right, in _currentAttributes);
+        RequestRender();
+    }
+
+    public void OnEraseRectangle(int top, int left, int bottom, int right, bool selective)
+    {
+        if (_conformanceLevel < 4) return;
+        _buffer.EraseRectangle(top, left, bottom, right, selective);
         RequestRender();
     }
 
@@ -432,6 +515,21 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         RequestRender();
     }
 
+    public void OnSelectiveEraseDisplay(int mode)
+    {
+        _buffer.EraseDisplaySelective(mode);
+        Trace?.Invoke($"DECSED({mode})", _buffer);
+        RequestRender();
+    }
+
+    public void OnSelectiveEraseLine(int mode)
+    {
+        _buffer.EraseLineSelective(mode);
+        Trace?.Invoke($"DECSEL({mode}) cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
+        RequestRender();
+    }
+    public void OnSetIsoProtection(bool active) => _buffer.SetIsoProtection(active);
+    public void OnSetDecProtection(int mode) => _buffer.SetDecProtection(mode);
     public void OnSetGraphicsRendition(ReadOnlySpan<char> parameters)
     {
         _currentAttributes = SgrParserArgb.Apply(parameters, _currentAttributes, Volatile.Read(ref _palette));
@@ -467,7 +565,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
 
     public void OnCursorBack(int n)
     {
-        _buffer.MoveCursorBy(0, -Math.Max(1, n));
+        _buffer.MoveCursorBack(Math.Max(1, n));
         Trace?.Invoke($"CUB({n}) cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
@@ -492,11 +590,47 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         RequestRender();
     }
 
+    public void OnIndex()
+    {
+        _buffer.Index();
+        Trace?.Invoke($"IND cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
+        RequestRender();
+    }
+
+    public void OnNextLine()
+    {
+        _buffer.NextLine();
+        Trace?.Invoke($"NEL cur=({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
+        RequestRender();
+    }
+
+    /// <summary>DECSET/DECRST 1049: alternate screen with cursor save/restore.</summary>
     public void OnSetAlternateScreen(bool enabled)
     {
+        if (SmoothScrollEnabled)
+            ResetSmoothScrollAnimation();
+        bool wasAlternate = _buffer.IsAlternateScreenActive;
+        if (enabled && !wasAlternate)
+            SaveAttributesForActiveScreen();
         _buffer.SetAlternateScreen(enabled);
+        if (!enabled && wasAlternate)
+            RestoreAttributesForActiveScreen();
+        AbortKittyGraphicsTransferIfScreenChanged(wasAlternate);
         SetKittyAlternateScreen(enabled);
         Trace?.Invoke($"AltScreen({enabled})", _buffer);
+        RequestRender();
+    }
+
+    /// <summary>47 retains alternate contents; 1047 clears them before returning. Neither saves the cursor.</summary>
+    public void OnSwitchAlternateScreen(int mode, bool enabled)
+    {
+        if (SmoothScrollEnabled)
+            ResetSmoothScrollAnimation();
+        bool wasAlternate = _buffer.IsAlternateScreenActive;
+        _buffer.SwitchAlternateScreen(mode, enabled);
+        AbortKittyGraphicsTransferIfScreenChanged(wasAlternate);
+        SetKittyAlternateScreen(enabled);
+        Trace?.Invoke($"AltScreen{mode}({enabled})", _buffer);
         RequestRender();
     }
 
@@ -504,6 +638,40 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     {
         _buffer.SetOriginMode(enabled);
         Trace?.Invoke($"DECOM({enabled})", _buffer);
+        RequestRender();
+    }
+
+    public void OnSetLeftRightMarginMode(bool enabled)
+    {
+        _buffer.SetLeftRightMarginMode(enabled && _conformanceLevel >= 4);
+        RequestRender();
+    }
+
+    public void OnSetConformanceLevel(int level, int controls)
+    {
+        if (level is < 61 or > 65 || controls is < 0 or > 2)
+            return;
+
+        OnSoftReset();
+        _conformanceLevel = level - 60;
+    }
+
+    public void OnSaveCursorOrSetMargins(int left, int right)
+    {
+        if (_buffer.LeftRightMarginMode)
+        {
+            _buffer.SetHorizontalMargins(left, right);
+            RequestRender();
+        }
+        else if (left == 0 && right == 0)
+        {
+            OnSaveCursor();
+        }
+    }
+
+    public void OnSetReverseWrapMode(int mode, bool enabled)
+    {
+        _buffer.SetReverseWrapMode(mode, enabled);
         RequestRender();
     }
 
@@ -529,33 +697,42 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
 
     public void OnCursorHorizontalAbsolute(int col)
     {
-        // CHA - CSI n G - move cursor to column n (1-based)
-        int targetCol = Math.Max(0, col - 1);
-        _buffer.MoveCursorBy(0, targetCol - _buffer.CursorCol);
+        _buffer.SetCursorColumn(Math.Max(0, col - 1));
         Trace?.Invoke($"CHA({col})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorVerticalAbsolute(int row)
     {
-        // VPA - CSI n d - move cursor to row n (1-based)
-        _buffer.MoveCursorTo(Math.Max(0, row - 1), _buffer.CursorCol);
+        _buffer.SetCursorRow(Math.Max(0, row - 1));
         Trace?.Invoke($"VPA({row})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
+        RequestRender();
+    }
+
+    public void OnHorizontalPositionRelative(int n)
+    {
+        _buffer.MoveCursorHorizontalRelative(Math.Max(1, n));
+        RequestRender();
+    }
+
+    public void OnVerticalPositionRelative(int n)
+    {
+        _buffer.MoveCursorVerticalRelative(Math.Max(1, n));
         RequestRender();
     }
 
     public void OnCursorNextLine(int n)
     {
-        // CNL - CSI n E - move cursor down n lines, to column 1
-        _buffer.MoveCursorBy(Math.Max(1, n), -_buffer.CursorCol);
+        _buffer.MoveCursorBy(Math.Max(1, n), 0);
+        _buffer.CarriageReturn();
         Trace?.Invoke($"CNL({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
     public void OnCursorPreviousLine(int n)
     {
-        // CPL - CSI n F - move cursor up n lines, to column 1
-        _buffer.MoveCursorBy(-Math.Max(1, n), -_buffer.CursorCol);
+        _buffer.MoveCursorBy(-Math.Max(1, n), 0);
+        _buffer.CarriageReturn();
         Trace?.Invoke($"CPL({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
@@ -578,43 +755,105 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
 
     public void OnFullReset()
     {
-        // RIS - ESC c - full terminal reset
+        // RIS - ESC c - full terminal reset: the DECSTR core plus everything below (title is kept, like xterm).
+        bool restore80Columns = ColumnModeChangesAllowed && _buffer.Columns == 132;
+        OnSetSmoothScroll(false);
         _buffer.FullReset();
-        _currentAttributes = CellAttributes.Default;
-        _savedAttributes = CellAttributes.Default;
-        _hasSavedAttributes = false;
-        _windowTitle = null;
-        CursorShape = 0;
-        KeypadApplicationMode = false;
-        ApplicationCursorKeysEnabled = false;
-        ModifyOtherKeysLevel = 0;
+        ResetKittyGraphics();
+        _savedMainAttributes = CellAttributes.Default;
+        _savedAlternateAttributes = CellAttributes.Default;
+        MoreFixEnabled = false;
+        ResetTerminalModesCore();
+        LocalEchoEnabled = false;
+        OnSetNationalReplacementMode(false);
+        _attributeChangeExtent = 0;
+        ResetColumnModes(resetPermission: true);
+        if (restore80Columns)
+            RequestWindowResize(0, 80);
+        _conformanceLevel = 5;
+        _lastPrintedChar = '\0';
+        CurrentMouseMode = MouseMode.None;
+        CurrentMouseEncoding = MouseEncoding.Default;
+        AlternateScrollMode = true;
+        _focusReportingEnabled = false;
+        OnSetSynchronizedUpdate(false);
+        OnSetReverseVideo(false);
         ResetPaletteForRis();
+        RequestedPointerShape = PointerShape.Default;
         ResetKittyKeyboardState();
+        ResetBackarrowKeyMode();
+        ResetVisibilityReports();
+        ResetTitleModes();
         RequestRender();
     }
 
+    /// <summary>
+    /// REP (<c>CSI Ps b</c>): repeats the previous printed character <paramref name="n"/> times. The count is
+    /// bounded to what the retained window (visible rows + scrollback) can observe, so a hostile
+    /// <c>CSI 2147483647 b</c> costs O(window) instead of O(n). For printable ASCII the result is identical to an
+    /// unbounded repeat; for other characters (possibly wide or zero-width, so the periodicity argument in the
+    /// body does not hold) the count is capped at one window and the final cursor column can differ from an
+    /// unbounded repeat when <paramref name="n"/> exceeds it.
+    /// </summary>
     public void OnRepeatCharacter(int n)
     {
         // REP - CSI n b - repeat previous character n times
         if (_lastPrintedChar == '\0' || n <= 0) return;
-        Span<char> chars = stackalloc char[Math.Min(n, 256)];
-        chars.Fill(_lastPrintedChar);
-        int remaining = n;
-        while (remaining > 0)
+
+        int columns = Math.Max(1, _buffer.Columns);
+        long window = ((long)_buffer.Rows + Math.Max(0, _buffer.MaxScrollback) + 1) * columns;
+        int limit = (int)(Math.Min(window, int.MaxValue - columns) / columns * columns);
+
+        if (_lastPrintedChar >= 0x20 && _lastPrintedChar <= 0x7E)
         {
-            int batch = Math.Min(remaining, 256);
-            _buffer.WriteText(chars.Slice(0, batch), _currentAttributes);
-            remaining -= batch;
+            int wrapWidth = columns;
+            int firstLineExtra = 0;
+            if (_buffer.LeftRightMarginMode && _buffer.AutoWrap)
+            {
+                int left = _buffer.WriteLeftMargin;
+                int steadyRight = _buffer.GetWriteRightMargin(left);
+                int firstRight = _buffer.GetWriteRightMargin(_buffer.CursorCol);
+                wrapWidth = steadyRight - left + 1;
+                firstLineExtra = Math.Max(0, firstRight - _buffer.CursorCol + 1 - wrapWidth);
+            }
+            long asciiWindow = ((long)_buffer.Rows + Math.Max(0, _buffer.MaxScrollback) + 1) * wrapWidth + firstLineExtra;
+            long roundedWindow = (asciiWindow + wrapWidth - 1) / wrapWidth * wrapWidth;
+            int asciiLimit = (int)Math.Min(roundedWindow, int.MaxValue / (long)wrapWidth * wrapWidth);
+            // The reduction drops whole effective rows only after the complete retained window is saturated.
+            if (n > asciiLimit)
+                n = asciiLimit + (n % wrapWidth);
+
+            Span<byte> bytes = stackalloc byte[256];
+            bytes.Fill((byte)_lastPrintedChar);
+            int remaining = n;
+            while (remaining > 0)
+            {
+                int batch = Math.Min(remaining, bytes.Length);
+                _buffer.WriteAscii(bytes.Slice(0, batch), _currentAttributes);
+                remaining -= batch;
+            }
+        }
+        else
+        {
+            if (n > limit) n = limit;
+
+            Span<char> chars = stackalloc char[256];
+            chars.Fill(_lastPrintedChar);
+            int remaining = n;
+            while (remaining > 0)
+            {
+                int batch = Math.Min(remaining, chars.Length);
+                _buffer.WriteText(chars.Slice(0, batch), _currentAttributes);
+                remaining -= batch;
+            }
         }
         RequestRender();
     }
 
-    public void OnTab()
+    public void OnTab(int n)
     {
-        // HT - horizontal tab
-        int nextStop = _buffer.GetNextTabStopFrom(_buffer.CursorCol);
-        _buffer.MoveCursorBy(0, nextStop - _buffer.CursorCol);
-        Trace?.Invoke($"HT→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
+        _buffer.TabForward(n, MoreFixEnabled);
+        Trace?.Invoke($"HT({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
 
@@ -622,28 +861,28 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
     {
         // CBT - CSI n Z - cursor backward tabulation
         int col = _buffer.CursorCol;
-        for (int i = 0; i < Math.Max(1, n); i++)
+        for (int i = 0; i < Math.Max(1, n) && col > 0; i++)
         {
             col = _buffer.GetPrevTabStopFrom(col);
         }
-        _buffer.MoveCursorBy(0, col - _buffer.CursorCol);
+        _buffer.MoveCursorToScreenColumn(col);
         Trace?.Invoke($"CBT({n})→({_buffer.CursorRow},{_buffer.CursorCol})", _buffer);
         RequestRender();
     }
     public void OnSetCursorShape(int shape)
     {
         CursorShape = shape;
-        var (cursorShape, blinking) = shape switch
+        switch (shape)
         {
-            0 or 1 => (TerminalCursorShape.Block, true),
-            2 => (TerminalCursorShape.Block, false),
-            3 => (TerminalCursorShape.Underline, true),
-            4 => (TerminalCursorShape.Underline, false),
-            5 => (TerminalCursorShape.Beam, true),
-            6 => (TerminalCursorShape.Beam, false),
-            _ => (TerminalCursorShape.Block, true),
-        };
-        _buffer.SetCursorStyle(cursorShape, blinking);
+            case 1: _buffer.SetCursorStyle(TerminalCursorShape.Block, blinking: true); break;
+            case 2: _buffer.SetCursorStyle(TerminalCursorShape.Block, blinking: false); break;
+            case 3: _buffer.SetCursorStyle(TerminalCursorShape.Underline, blinking: true); break;
+            case 4: _buffer.SetCursorStyle(TerminalCursorShape.Underline, blinking: false); break;
+            case 5: _buffer.SetCursorStyle(TerminalCursorShape.Beam, blinking: true); break;
+            case 6: _buffer.SetCursorStyle(TerminalCursorShape.Beam, blinking: false); break;
+            // 0 and unknown values restore the user's configured default (cursor.shape / cursor.blink).
+            default: _buffer.ResetCursorStyle(); break;
+        }
         RequestRender();
     }
 
@@ -673,12 +912,26 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         }
     }
 
+    /// <summary>XTVERSION (<c>CSI &gt; q</c> / <c>CSI &gt; 0 q</c>): replies <c>DCS &gt; | Dotty &lt;version&gt; ST</c>.</summary>
+    public void OnRequestTerminalVersion() => ReplyRequested?.Invoke(_xtVersionReply.AsSpan());
+
     public void OnMouseEvent(int button, int col, int row, bool isPress)
     {
     }
 
+    /// <summary>
+    /// Mouse-related private modes. Tracking modes 9/1000/1002/1003 share one slot, as do the coordinate encodings
+    /// 1005/1006/1015/1016 (the last one set wins; resetting the active one restores the default, like xterm);
+    /// 1007 is the independent alternate-scroll flag.
+    /// </summary>
     public void OnSetMouseMode(int mode, bool enabled)
     {
+        if (mode == 1007)
+        {
+            AlternateScrollMode = enabled;
+            return;
+        }
+
         if (mode == 9 || mode == 1000 || mode == 1002 || mode == 1003)
         {
             if (enabled)
@@ -690,7 +943,7 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
                 CurrentMouseMode = MouseMode.None;
             }
         }
-        else if (mode == 1005 || mode == 1006 || mode == 1015)
+        else if (mode == 1005 || mode == 1006 || mode == 1015 || mode == 1016)
         {
             if (enabled)
             {
@@ -763,6 +1016,24 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
 
     public bool FocusReportingEnabled => _focusReportingEnabled;
 
+    private volatile bool _reverseVideo;
+
+    /// <summary>
+    /// DECSCNM (<c>CSI ? 5 h/l</c>): when set, the renderer swaps this terminal's effective default foreground and
+    /// background (after OSC 10/11 overrides). Cells with explicit colours keep them. Kept by DECSTR, cleared by RIS.
+    /// Written on the parser thread, read by the render thread.
+    /// </summary>
+    public bool ReverseVideo => _reverseVideo;
+
+    public void OnSetReverseVideo(bool enabled)
+    {
+        if (_reverseVideo == enabled)
+            return;
+        _reverseVideo = enabled;
+        // The default colours change exactly as for an OSC 10/11 set: repaint every row and wake the host.
+        NotifyPaletteChanged();
+    }
+
 
     public void FlushRender()
     {
@@ -784,5 +1055,11 @@ public partial class TerminalAdapter : ITerminalHandler, IDisposable
         RequestRender();
         FlushRender();
     }
-    public void Dispose() => _buffer.Dispose();
+    public void Dispose()
+    {
+        OnSetSmoothScroll(false);
+        DisposePrinterOutput();
+        DisposeKittyGraphics();
+        _buffer.Dispose();
+    }
 }

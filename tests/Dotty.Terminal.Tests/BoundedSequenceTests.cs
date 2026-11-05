@@ -32,13 +32,27 @@ public sealed class BoundedSequenceTests
         var handler = new RecordingHandler();
         parser.Handler = handler;
 
-        var oversizedPayload = new string('x', 65_537);
+        var oversizedPayload = new string('x', 1_048_577);
         var input = $"\u001b]8;;{oversizedPayload}\u0007\u001b]8;;ok\u0007tail";
         parser.Feed(Encoding.UTF8.GetBytes(input));
 
         Assert.Single(handler.OscCalls);
         Assert.Equal((8, ";ok"), handler.OscCalls[0]);
         Assert.Contains("tail", handler.PrintCalls);
+    }
+
+    [Fact]
+    public void Osc52Payload100Kb_IsDeliveredWhole()
+    {
+        var parser = new BasicAnsiParser();
+        var handler = new RecordingHandler();
+        parser.Handler = handler;
+
+        var payload = new string('A', 100_000);
+        parser.Feed(Encoding.ASCII.GetBytes($"\u001b]52;c;{payload}\u0007"));
+
+        Assert.Single(handler.OscCalls);
+        Assert.Equal((52, "c;" + payload), handler.OscCalls[0]);
     }
 
     [Fact]
@@ -153,7 +167,7 @@ public sealed class BoundedSequenceTests
         Assert.Contains("text", handler.PrintCalls);
     }
 
-    private sealed class RecordingHandler : ITerminalHandler
+    internal sealed class RecordingHandler : ITerminalHandler
     {
         public List<string> PrintCalls { get; } = new();
         public List<string> GraphicsCalls { get; } = new();
@@ -162,10 +176,56 @@ public sealed class BoundedSequenceTests
         public List<int> CursorDownCalls { get; } = new();
         public List<(int code, string payload)> OscCalls { get; } = new();
         public List<(int mode, bool enabled)> PrivateModeCalls { get; } = new();
+        public List<string> ControlCalls { get; } = new();
+        public List<int> DeviceStatusReportCodes { get; } = new();
+        public List<int> PrivateDeviceStatusReportCodes { get; } = new();
+        public List<(int operation, int arg1, int arg2)> WindowOperationCalls { get; } = new();
+        public List<bool> KeypadApplicationModeCalls { get; } = new();
+        public List<bool> BackarrowKeyModeCalls { get; } = new();
+        public List<bool> VisibilityReportCalls { get; } = new();
+        public List<(int mode, bool isPrivate)> RequestModeCalls { get; } = new();
+        public List<(int id, int page, int top, int left, int bottom, int right)> ChecksumCalls { get; } = new();
+        public int CursorPositionReportCalls { get; private set; }
+        // Kitty graphics capture.  KittyEvents holds "B:<control>", "P:<slice>" and "E:True|False"
+        // (bytes mapped 1:1 to chars).  With KittyCountOnly set nothing is stored, so
+        // allocation tests only measure the parser.
+        public bool KittyEnabled { get; set; }
+        public bool KittyCountOnly { get; set; }
+        public List<string> KittyEvents { get; } = new();
+        public int KittyBeginCount { get; private set; }
+        public int KittyEndCount { get; private set; }
+        public long KittyPayloadBytes { get; private set; }
+        bool ITerminalHandler.KittyGraphicsEnabled => KittyEnabled;
+        void ITerminalHandler.OnKittyGraphicsBegin(ReadOnlySpan<byte> control)
+        {
+            KittyBeginCount++;
+            if (!KittyCountOnly) KittyEvents.Add("B:" + Encoding.Latin1.GetString(control));
+        }
+        void ITerminalHandler.OnKittyGraphicsPayload(ReadOnlySpan<byte> base64)
+        {
+            KittyPayloadBytes += base64.Length;
+            if (!KittyCountOnly) KittyEvents.Add("P:" + Encoding.Latin1.GetString(base64));
+        }
+        void ITerminalHandler.OnKittyGraphicsEnd(bool completed)
+        {
+            KittyEndCount++;
+            if (!KittyCountOnly) KittyEvents.Add("E:" + completed);
+        }
+        public int SoftResetCalls { get; private set; }
 
         object? ITerminalHandler.Buffer => null;
+        bool ITerminalHandler.NationalReplacementEnabled => false;
+        void ITerminalHandler.OnSetNationalReplacementMode(bool enabled) { }
+        void ITerminalHandler.OnSetFontShiftMode(bool enabled) { }
+        void ITerminalHandler.OnSetSmoothScroll(bool enabled) { }
+        void ITerminalHandler.OnSetPrinterMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnPrintScreen() { }
+        void ITerminalHandler.OnSetScreenLines(int lines) { }
+        void ITerminalHandler.OnSetAttributeChangeExtent(int mode) { }
+        void ITerminalHandler.OnChangeRectangleAttributes(int top, int left, int bottom, int right, ReadOnlySpan<int> parameters, bool reverse) { }
+        void ITerminalHandler.OnRequestStatusString(ReadOnlySpan<byte> request) { }
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
-        event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
         event Action? ITerminalHandler.PaletteChanged { add { } remove { } }
 
@@ -174,9 +234,27 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }
         void ITerminalHandler.OnPrint(ReadOnlySpan<char> text) => PrintCalls.Add(text.ToString());
         void ITerminalHandler.OnEraseDisplay(int mode) { }
+        void ITerminalHandler.OnSelectiveEraseDisplay(int mode) { }
+        void ITerminalHandler.OnSelectiveEraseLine(int mode) { }
         void ITerminalHandler.OnClearScrollback() { }
+        void ITerminalHandler.OnSetConformanceLevel(int level, int controls) { }
+        void ITerminalHandler.OnSavePrivateMode(int mode) { }
+        void ITerminalHandler.OnRestorePrivateMode(int mode) { }
+        void ITerminalHandler.OnSetTitle(int code, ReadOnlySpan<byte> payload) => OscCalls.Add((code, Encoding.UTF8.GetString(payload)));
+        void ITerminalHandler.OnSetTitleModes(ReadOnlySpan<int> modes, bool enabled) { }
+        void ITerminalHandler.OnInsertColumns(int n) { }
+        void ITerminalHandler.OnDeleteColumns(int n) { }
+        void ITerminalHandler.OnBackIndex() { }
+        void ITerminalHandler.OnForwardIndex() { }
+        void ITerminalHandler.OnCopyRectangle(int top, int left, int bottom, int right, int sourcePage, int destinationTop, int destinationLeft, int destinationPage) { }
+        void ITerminalHandler.OnFillRectangle(uint rune, int top, int left, int bottom, int right) { }
+        void ITerminalHandler.OnEraseRectangle(int top, int left, int bottom, int right, bool selective) { }
+        void ITerminalHandler.OnSetAnsiMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnSetColumnMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnSetMoreFix(bool enabled) { }
+        void ITerminalHandler.OnSwitchAlternateScreen(int mode, bool enabled) { }
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> parameters) => GraphicsCalls.Add(parameters.ToString());
-        void ITerminalHandler.OnBell() { }
+        void ITerminalHandler.OnBell() => ControlCalls.Add("BEL");
 
         void ITerminalHandler.OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload) => OscCalls.Add((code, payload.ToString()));
 
@@ -184,10 +262,12 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnCursorUp(int n) => CursorUpCalls.Add(n);
         void ITerminalHandler.OnCursorDown(int n) => CursorDownCalls.Add(n);
         void ITerminalHandler.OnCursorForward(int n) { }
-        void ITerminalHandler.OnCursorBack(int n) { }
+        void ITerminalHandler.OnCursorBack(int n) => ControlCalls.Add("BS");
         void ITerminalHandler.OnEraseLine(int mode) { }
-        void ITerminalHandler.OnCarriageReturn() { }
-        void ITerminalHandler.OnLineFeed() { }
+        void ITerminalHandler.OnSetIsoProtection(bool active) { }
+        void ITerminalHandler.OnSetDecProtection(int mode) { }
+        void ITerminalHandler.OnCarriageReturn() => ControlCalls.Add("CR");
+        void ITerminalHandler.OnLineFeed() => ControlCalls.Add("LF");
         void ITerminalHandler.OnSetScrollRegion(int top1Based, int bottom1Based) { }
         void ITerminalHandler.OnSetOriginMode(bool enabled) => PrivateModeCalls.Add((6, enabled));
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) => PrivateModeCalls.Add((1049, enabled));
@@ -203,21 +283,27 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnSetTabStop() { }
         void ITerminalHandler.OnClearTabStop() { }
         void ITerminalHandler.OnClearAllTabStops() { }
-        void ITerminalHandler.OnReverseIndex() { }
+        void ITerminalHandler.OnReverseIndex() => ControlCalls.Add("RI");
         void ITerminalHandler.OnSetBracketedPasteMode(bool enabled) => PrivateModeCalls.Add((2004, enabled));
-        void ITerminalHandler.OnDeviceStatusReport(int code) { }
-        void ITerminalHandler.OnCursorPositionReport() { }
+        void ITerminalHandler.OnDeviceStatusReport(int code) => DeviceStatusReportCodes.Add(code);
+        void ITerminalHandler.OnCursorPositionReport() => CursorPositionReportCalls++;
         void ITerminalHandler.OnCursorHorizontalAbsolute(int col) { }
         void ITerminalHandler.OnCursorVerticalAbsolute(int row) { }
         void ITerminalHandler.OnCursorNextLine(int n) { }
         void ITerminalHandler.OnCursorPreviousLine(int n) { }
+        void ITerminalHandler.OnHorizontalPositionRelative(int n) { }
+        void ITerminalHandler.OnVerticalPositionRelative(int n) { }
+        void ITerminalHandler.OnSetLeftRightMarginMode(bool enabled) { }
+        void ITerminalHandler.OnSaveCursorOrSetMargins(int left, int right) { }
+        void ITerminalHandler.OnSetReverseWrapMode(int mode, bool enabled) { }
         void ITerminalHandler.OnScrollUp(int n) { }
         void ITerminalHandler.OnScrollDown(int n) { }
         void ITerminalHandler.OnFullReset() { }
+        void ITerminalHandler.OnScreenAlignmentTest() { }
         void ITerminalHandler.OnRepeatCharacter(int n) { }
-        void ITerminalHandler.OnTab() { }
+        void ITerminalHandler.OnTab(int n) => ControlCalls.Add("HT");
         void ITerminalHandler.OnBackTab(int n) { }
-        void ITerminalHandler.OnSetKeypadApplicationMode(bool enabled) { }
+        void ITerminalHandler.OnSetKeypadApplicationMode(bool enabled) => KeypadApplicationModeCalls.Add(enabled);
         void ITerminalHandler.OnSetCursorShape(int shape) { }
         void ITerminalHandler.OnSetApplicationCursorKeys(bool enabled) { }
         void ITerminalHandler.OnSendDeviceAttributes(int daType) { }
@@ -227,6 +313,12 @@ public sealed class BoundedSequenceTests
         void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) { }
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) => PrivateModeCalls.Add((1004, enabled));
-        void ITerminalHandler.OnWindowReport(int command) { }
+        void ITerminalHandler.OnWindowOperation(int operation, int arg1, int arg2) => WindowOperationCalls.Add((operation, arg1, arg2));
+        void ITerminalHandler.OnSoftReset() => SoftResetCalls++;
+        void ITerminalHandler.OnPrivateDeviceStatusReport(int code, int identifier) => PrivateDeviceStatusReportCodes.Add(code);
+        void ITerminalHandler.OnSetBackarrowKeyMode(bool sendsBackspace) => BackarrowKeyModeCalls.Add(sendsBackspace);
+        void ITerminalHandler.OnSetVisibilityReports(bool enabled) => VisibilityReportCalls.Add(enabled);
+        void ITerminalHandler.OnRequestMode(int mode, bool isPrivate) => RequestModeCalls.Add((mode, isPrivate));
+        void ITerminalHandler.OnRequestChecksum(int id, int page, int top, int left, int bottom, int right) => ChecksumCalls.Add((id, page, top, left, bottom, right));
     }
 }

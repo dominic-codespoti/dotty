@@ -143,13 +143,38 @@ public sealed class LuaHookManager
         return false;
     }
 
-    public bool TryOpenUrl(string url)
+    /// <summary>
+    /// Runs the <c>open_url</c> hooks with the canonical URL and its <paramref name="source"/>
+    /// (<c>"explicit"</c> for OSC 8, <c>"detected"</c> for scanned text). Returns true when a
+    /// hook returned <c>true</c> (handled). One-argument callbacks ignore the second argument.
+    /// </summary>
+    public bool TryOpenUrl(string url, string source)
     {
-        return Owner != null
-            && TryInvokeFirst("open_url", LuaValue.From(url), out LuaValue value)
-            && value.TryGetBoolean(out bool handled)
-            && handled;
+        if (Owner == null)
+        {
+            return false;
+        }
+
+        LuaCallbackReference[] callbacks = Get("open_url");
+        LuaValue urlArg = LuaValue.From(url);
+        LuaValue sourceArg = LuaValue.From(source);
+        for (int i = 0; i < callbacks.Length; i++)
+        {
+            if (callbacks[i].Invoke(urlArg, sourceArg, out LuaValue value)
+                && !value.IsNil)
+            {
+                return value.TryGetBoolean(out bool handled) && handled;
+            }
+        }
+
+        return false;
     }
+
+    /// <summary>
+    /// True when an <c>update_status</c> hook is registered. Only such a hook can change the status text with time
+    /// alone, so the host polls <see cref="TryFormatStatus"/> only while this is true.
+    /// </summary>
+    public bool HasStatusFormatter => Owner != null && HasHandlers("update_status");
 
     public bool TryFormatStatus(ReusableTextBuffer destination)
     {
@@ -171,15 +196,27 @@ public sealed class LuaHookManager
         return false;
     }
 
-    public bool AllowClipboardWrite(LeafPane pane, TerminalTab tab, string text)
+    public bool AllowClipboardWrite(LeafPane pane, TerminalTab tab, string text) =>
+        AllowClipboardAccess("clipboard_write", pane, tab, text);
+
+    /// <summary>
+    /// Runs the <c>clipboard_read</c> hooks for an OSC 52 read request. <paramref name="selection"/> is
+    /// <c>"clipboard"</c> or <c>"primary"</c> (primary is served on X11 only). Same veto semantics as
+    /// <see cref="AllowClipboardWrite"/>: the first non-nil result decides (<c>false</c> denies), a nil result
+    /// defers to the next hook, and a callback invocation error denies. No handler allows.
+    /// </summary>
+    public bool AllowClipboardRead(LeafPane pane, TerminalTab tab, string selection) =>
+        AllowClipboardAccess("clipboard_read", pane, tab, selection);
+
+    private bool AllowClipboardAccess(string hook, LeafPane pane, TerminalTab tab, string argument)
     {
         if (Owner == null)
             return true;
 
-        LuaCallbackReference[] callbacks = Get("clipboard_write");
+        LuaCallbackReference[] callbacks = Get(hook);
         for (int i = 0; i < callbacks.Length; i++)
         {
-            if (!callbacks[i].Invoke(LuaValue.FromPane(pane, tab), LuaValue.From(text), out LuaValue value))
+            if (!callbacks[i].Invoke(LuaValue.FromPane(pane, tab), LuaValue.From(argument), out LuaValue value))
                 return false;
             if (value.IsNil)
                 continue;

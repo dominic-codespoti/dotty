@@ -13,7 +13,13 @@ public static class PtyFactory
     /// </summary>
     /// <returns>A platform-specific IPty implementation.</returns>
     /// <exception cref="PlatformNotSupportedException">Thrown when the current platform is not supported.</exception>
-    public static IPty Create()
+    public static IPty Create() => Create(windowsGraphicsPassthrough: false);
+
+    /// <summary>
+    /// Creates a PTY, optionally requesting ConPTY passthrough mode on Windows (ignored elsewhere).
+    /// </summary>
+    /// <param name="windowsGraphicsPassthrough">Experimental; see <c>WindowsPty</c>.</param>
+    public static IPty Create(bool windowsGraphicsPassthrough)
     {
         if (!PtyPlatform.IsSupportedArchitecture)
         {
@@ -25,7 +31,7 @@ public static class PtyFactory
 #if WINDOWS
             if (PtyPlatform.IsConPtySupported)
             {
-                return new Windows.WindowsPty();
+                return new Windows.WindowsPty(windowsGraphicsPassthrough);
             }
             throw new PlatformNotSupportedException(
                 "Windows ConPTY requires Windows 10 version 1809 (build 17763) or later. " +
@@ -138,7 +144,8 @@ public static class PtyFactory
 
         if (PtyPlatform.IsUnix)
         {
-            string? helper = Unix.UnixPty.FindHelperExecutableForCurrentProcess();
+            Unix.PtyHelperResolution resolution = Unix.PtyHelperLocator.ResolveForCurrentProcess();
+            string? helper = resolution.Path;
             if (helper == null)
             {
                 return new PtyCapabilities(
@@ -147,7 +154,7 @@ public static class PtyFactory
                     PtyBackend.UnixHelper,
                     PlatformSupported: true,
                     NativeDependencyAvailable: false,
-                    "The packaged pty-helper executable was not found.");
+                    $"The packaged pty-helper executable was not found. {resolution.Describe()}");
             }
 
             bool executable = Unix.UnixPty.IsExecutable(helper);

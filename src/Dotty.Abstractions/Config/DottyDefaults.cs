@@ -10,8 +10,16 @@ namespace Dotty.Abstractions.Config;
 public static class DottyDefaults
 {
     // Font Settings
-    public const string FontFamily = "JetBrainsMono Nerd Font Mono, JetBrainsMono NF, JetBrainsMono Nerd Font, JetBrains Mono, SpaceMono Nerd Font Mono, SpaceMono Nerd Font, Cascadia Code, Consolas, Liberation Mono, Noto Sans Mono, monospace, Material Symbols Sharp, Material Symbols Rounded, Noto Sans Symbols";
-    public const double FontSize = 15.0;
+    // Default font.family per OS (decision F3): an ordered list that is also the fallback order. No Nerd
+    // Font is assumed: box drawing, blocks and Powerline come from built-in sprites.
+    public const string FontFamilyLinux = "monospace, DejaVu Sans Mono, Noto Sans Mono, Liberation Mono, Noto Color Emoji";
+    public const string FontFamilyMacOS = "Menlo, SF Mono, Monaco, Apple Color Emoji, Apple Symbols";
+    public const string FontFamilyWindows = "Cascadia Mono, Consolas, Segoe UI Emoji, Segoe UI Symbol";
+    public static readonly string FontFamily =
+        OperatingSystem.IsMacOS() ? FontFamilyMacOS : OperatingSystem.IsWindows() ? FontFamilyWindows : FontFamilyLinux;
+    public const string FontWeight = "regular";
+    /// <summary>Default <c>font.size</c> in points: 11.25 pt = 15 px at content scale 1.</summary>
+    public const double FontSize = 11.25;
     public const double ContentPaddingLeft = 0.0;
     public const double ContentPaddingTop = 0.0;
     public const double ContentPaddingRight = 0.0;
@@ -19,7 +27,16 @@ public static class DottyDefaults
 
     // Terminal Settings
     public const int ScrollbackLines = 5000;
-    public const int InactiveTabDestroyDelayMs = 5000;
+    public const long ScrollbackLimitBytes = 64L * 1024 * 1024;
+
+    // Kitty graphics protocol (enabled stays false until the renderer lands)
+    public const bool KittyGraphicsEnabled = false;
+    public const long KittyImageStorageLimitBytes = 320L * 1024 * 1024;
+    public const long KittyMaxPayloadBytes = 65L * 1024 * 1024;
+    public const int KittyMaxImageDimension = 10000;
+    public const int KittyMaxPlacementsPerScreen = 8192;
+    /// <summary>Experimental: request ConPTY passthrough mode (Windows) so graphics APC reaches the terminal.</summary>
+    public const bool GraphicsWindowsPassthrough = false;
 
     // UI Colors (ARGB format)
     public const uint SelectionColor = 0xA03385DB;
@@ -53,9 +70,6 @@ public static class DottyDefaults
     // Transparency Settings
     public const TransparencyLevel Transparency = TransparencyLevel.None;
     public const byte WindowOpacity = 100;
-
-    // Shell Integration
-    public const bool EnableShellIntegration = true;
 
     // Theme Settings
     public static readonly IColorScheme DefaultColorScheme = BuiltInThemes.DarkPlus;

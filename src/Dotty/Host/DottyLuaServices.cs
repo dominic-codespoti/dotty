@@ -11,7 +11,7 @@ internal sealed class DottyLuaServices : ILuaHostServices
     private readonly Action<Action> _post;
     private readonly Func<string?, string?, TerminalTab> _createTab;
     private readonly Func<TerminalTab, LeafPane, SplitDirection, string?, string?, LeafPane> _splitPane;
-    private readonly Func<TerminalAction, bool> _executeAction;
+    private readonly Func<BoundAction, bool> _executeAction;
     private readonly Action _applyConfig;
     private readonly Action _invalidate;
 
@@ -19,7 +19,7 @@ internal sealed class DottyLuaServices : ILuaHostServices
         Action<Action> post,
         Func<string?, string?, TerminalTab> createTab,
         Func<TerminalTab, LeafPane, SplitDirection, string?, string?, LeafPane> splitPane,
-        Func<TerminalAction, bool> executeAction,
+        Func<BoundAction, bool> executeAction,
         Action applyConfig,
         Action invalidate)
     {
@@ -44,7 +44,7 @@ internal sealed class DottyLuaServices : ILuaHostServices
         string? shell) =>
         _splitPane(tab, target, direction, workingDirectory, shell);
 
-    public bool TryExecuteAction(TerminalAction action) => _executeAction(action);
+    public bool TryExecuteAction(BoundAction action) => _executeAction(action);
 
     public void ApplyConfig() => _applyConfig();
 

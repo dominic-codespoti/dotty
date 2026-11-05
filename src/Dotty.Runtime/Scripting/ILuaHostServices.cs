@@ -21,7 +21,7 @@ public interface ILuaHostServices
     LeafPane SplitPane(TerminalTab tab, LeafPane target, SplitDirection direction, string? workingDirectory, string? shell);
 
     /// <summary>Runs a named action against the active tab. Returns false when not applicable.</summary>
-    bool TryExecuteAction(TerminalAction action);
+    bool TryExecuteAction(BoundAction action);
 
     /// <summary>Re-applies the current configuration after a runtime (non-evaluation) Lua mutation.</summary>
     void ApplyConfig();

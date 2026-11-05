@@ -1,0 +1,15 @@
+{
+  "linux-x64": {
+    "glibc": "2.31"
+  },
+  "osx-arm64": {
+    "macos": "15.0"
+  },
+  "osx-x64": {
+    "macos": "15.0"
+  },
+  "win-x64": {
+    "windows": "10.0.17763",
+    "windowsSource": "ConPTY (CreatePseudoConsole) requires Windows 10 version 1809, build 17763"
+  }
+}

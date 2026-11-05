@@ -18,19 +18,22 @@ Dotty is a modern terminal emulator composed of:
 
 ### Key Features
 
-- Hardware-accelerated OpenGL rendering with SkiaSharp font shaping
+- Hardware-accelerated OpenGL rendering with SkiaSharp glyph rasterization, HarfBuzz grapheme shaping, and configurable programming ligatures (`font.ligatures`: `never`, `cursor`, or `always`)
 - Multiple tabs, split panes, per-tab search, and configurable keyboard shortcuts
 - Custom JSON themes and Lua startup configuration, tab titles, and status text
 - Native PTY support on Linux, macOS, and Windows
 - Efficient cell-preserving buffer and scrollback reflow
-- Ligature support via HarfBuzz font shaping
-- Undercurl, dotted, and dashed underline rendering
-- Rounded rectangle clip regions for modern terminal aesthetics
+- Rounded tab-bar, scrollbar, and context-menu chrome
 - Runtime JSON configuration hot-reload with platform-specific paths
 - [Kitty keyboard negotiation](docs/KeyboardProtocol.md), native press/repeat/release, and committed Unicode scalars
 - [Direct command launches](docs/CommandLine.md) with literal arguments, working directories, and child exit status
-- Explicit OSC 52 clipboard-write authorization (denied by default)
-- Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy
+- `dotty +explain-config [OPTION]` documents every configuration option from the command line without opening a window
+- OSC 52 clipboard policy: writes denied by default, reads (`osc52Read`) `deny` by default with an `ask` prompt option
+- Confirmation prompts for risky pastes and risky or blocked links (OSC 8 and detected URLs), with a hard scheme blocklist and `hyperlinks` policy
+- Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy, optionally injected automatically (`shellIntegration: "detect"`)
+- Mouse options (`mouse.copyOnSelect`, `mouse.middleClickAction`) with the X11 PRIMARY selection on X11 and an in-process fallback elsewhere, and opt-in VT switches (`vt.windowResizeAllowed`, `vt.checksumReportEnabled`); see [configuration](docs/Configuration.md#mouse)
+- [Kitty graphics protocol](docs/KittyGraphics.md): inline images, Unicode placeholders, and animation support, **off by default** (`graphics.kittyProtocol`). Basic image display, scrolling, deletion, placeholders, and animation are implemented; runtime verification and platform/protocol coverage remain limited as described in the [feature notes](docs/KittyGraphics.md#runtime-verification).
+- [esctest2 conformance run](docs/Conformance.md) on Linux CI, reporting all outcomes; its regression gate remains unarmed until a reviewed baseline is captured.
 - [Performance regression snapshots](docs/Performance.md) and [native desktop verification lanes](docs/NativeDesktopAndIme.md)
 
 ## Install
@@ -43,12 +46,14 @@ Versioned self-contained archives are published on
 [GitHub Releases](https://github.com/dominic-codespoti/dotty/releases) only when a
 release is explicitly requested. See the [release policy](docs/Releasing.md) for
 versioning and publication. Release signing and a graphical installer are not
-currently provided.
+currently provided. Every archive contains `License.md`, the third-party
+notices (`THIRD-PARTY-NOTICES.md`) and `licenses/GLFW-LICENSE.md`.
 
 Linux x64:
 
 ```bash
 tar -xzf dotty-<version>-linux-x64.tar.gz
+cd dotty-<version>-linux-x64
 ./dotty
 ```
 
@@ -56,6 +61,7 @@ macOS x64:
 
 ```bash
 tar -xzf dotty-<version>-osx-x64.tar.gz
+cd dotty-<version>-osx-x64
 ./dotty
 ```
 
@@ -63,13 +69,17 @@ macOS arm64:
 
 ```bash
 tar -xzf dotty-<version>-osx-arm64.tar.gz
+cd dotty-<version>-osx-arm64
 ./dotty
 ```
 
 Windows x64: extract `dotty-<version>-win-x64.zip` and run `dotty.exe`,
 keeping it beside the DLLs included in the archive. The archives are
 self-contained; no .NET installation is needed. Windows requires build 17763+
-(or Windows 11) and an OpenGL 3.3 driver.
+(or Windows 11) and an OpenGL 3.3 driver. The minimum glibc (Linux) and macOS
+versions of each release are measured from its binaries and listed in its
+release notes and `baselines.json`; the builds target glibc 2.31 and macOS 15.0
+(see [Platform Support](docs/PlatformSupport.md#requirements)).
 
 ## Quick Start
 
@@ -109,11 +119,9 @@ git clone --branch main https://github.com/dominic-codespoti/dotty.git
 cd dotty
 ```
 
-On Linux or macOS, build the POSIX helper first:
-
-```bash
-make -C src/Dotty.NativePty
-```
+On Linux or macOS the build also builds the POSIX `pty-helper`
+(`src/Dotty.NativePty/bin/pty-helper`) when a C compiler is available; run
+`make -C src/Dotty.NativePty` by hand if it warns that the helper was not built.
 
 On Windows, no separate native helper build is required; ConPTY is provided by
 the OS. All platforms then build the solution:
@@ -164,10 +172,18 @@ dotnet publish src/Dotty/Dotty.csproj -c Release -r linux-x64 --self-contained t
 For macOS, replace `linux-x64` with `osx-x64` (Intel) or `osx-arm64` (Apple
 Silicon) in both paths. Build and publish on the target OS and architecture.
 
-Clipboard writes requested by terminal applications through OSC 52 require
-`"clipboard": { "allowOsc52Write": true }` in `config.json`. This permission
-does not disable user-initiated copy/paste, and Lua hooks may veto but cannot
-override a global denial. See the [clipboard policy](docs/Configuration.md#clipboard).
+Clipboard access requested by terminal applications is denied by default.
+Writes through OSC 52 require `"clipboard": { "allowOsc52Write": true }`; reads
+require `"clipboard": { "osc52Read": "ask" }` (prompt each time) or `"allow"`
+(silent: any program that can print to the terminal can then read your
+clipboard, so prefer `ask`). These settings do not affect user-initiated
+copy/paste, and Lua hooks may veto but cannot override a global denial. Pastes
+that contain line breaks (outside bracketed paste), control characters, or a
+paste-end marker ask for confirmation (`clipboard.confirmPaste`), and
+Ctrl+click on a risky link asks first (`hyperlinks.confirm`). See the
+[clipboard policy](docs/Configuration.md#clipboard) and
+[hyperlink policy](docs/Configuration.md#hyperlinks). The prompts and native
+link opening are verified manually, not in CI.
 
 ### Test
 
@@ -175,7 +191,12 @@ The repository uses Microsoft.Testing.Platform. Run the solution tests with the 
 
 ```bash
 dotnet test --solution Dotty.slnx -c Release
+# or build + every suite + packaging checks with one summary (Linux/macOS):
+scripts/dev/check.sh
 ```
+
+Testing on a laptop with a display, including the manual checklist for HiDPI, fonts, IME and graphics: see
+[Testing Dotty on a laptop](docs/LaptopTesting.md).
 
 See the [testing guide](docs/Testing.md) for scope and procedures, and [Contributing](Contributing.md#tests) for setup and a note about diagnosing zero-test results. Test and benchmark results depend on workload and machine; see [Performance](docs/Performance.md) for recorded evidence and its limits.
 
@@ -185,25 +206,28 @@ Dotty loads JSON configuration at startup and watches the file for atomic
 updates. The active path is:
 
 - Linux: `$XDG_CONFIG_HOME/dotty/config.json`, or `~/.config/dotty/config.json`
-- macOS: `~/Library/Application Support/Dotty/config.json`
+- macOS: `~/.config/dotty/config.json` when that directory exists, otherwise
+  `~/Library/Application Support/Dotty/config.json`
 - Windows: `%APPDATA%/Dotty/config.json`
 
-Set `DOTTY_CONFIG_HOME` to override the platform directory. The file is
-created with defaults on first run.
+Set `DOTTY_CONFIG_HOME` to override the platform directory. Dotty does not
+write the file itself, so every option you leave out follows the current
+default; `dotty +init-config` writes a commented starter file,
+`dotty +validate-config` checks it, and `dotty +diagnose` prints the paths in
+use.
 
 ```json
 {
   "font": {
     "family": "JetBrains Mono, Cascadia Code, monospace",
-    "size": 14,
+    "size": 15,
     "lineHeight": 1.25
   },
   "window": {
-    "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 },
-    "opacity": 1
+    "padding": { "left": 14, "top": 8, "right": 14, "bottom": 8 }
   },
   "theme": "DarkPlus",
-  "cursor": { "shape": "Block", "blink": true, "blinkIntervalMs": 500 },
+  "cursor": { "blink": true, "blinkIntervalMs": 500 },
   "keybindings": {
     "ctrl+shift+t": "NewTab",
     "ctrl+shift+w": "ClosePane"
@@ -245,6 +269,7 @@ Start with the [documentation index](docs/index.md) for the current catalog. Com
 - [Platform support and setup](docs/PlatformSupport.md)
 - [Configuration Guide](docs/Configuration.md)
 - [Command-line usage](docs/CommandLine.md)
+- [Kitty graphics protocol](docs/KittyGraphics.md)
 - [Architecture Overview](docs/Architecture.md)
 - [Testing](docs/Testing.md) and [performance evidence](docs/Performance.md)
 - [Native desktop and IME verification](docs/NativeDesktopAndIme.md)

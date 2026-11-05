@@ -13,6 +13,7 @@ using Dotty.Rendering.Gpu;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Hyperlinks;
+using Dotty.Runtime.Hosting;
 using Dotty.Runtime.Clipboard;
 using Dotty.Runtime.Input;
 using Dotty.Runtime.Panes;
@@ -32,17 +33,27 @@ using SkiaSharp;
 using InputKey = Silk.NET.Input.Key;
 namespace Dotty.Silk;
 
-internal static class DottyWindowHost
+internal static partial class DottyWindowHost
 {
     private static IWindow _window = null!;
     private static GL _gl = null!;
     private static GlyphAtlas _atlas = null!;
     private static SKTypeface _typeface = null!;
-    private static float _cellWidth, _cellHeight, _scale = 1f;
+    private static readonly FontChainResolutionCache _fontChains = new(static options => new FontFallbackChain(options, SkiaFontCatalog.Shared));
+    private static FontFallbackChain _fontChain = null!;
+    // Cell size in whole device pixels (layout, renderer, VT reports) and its logical view
+    // (device / ContentScale, used only where config lengths are logical, e.g. tab-bar rows).
+    private static int _cellWidthPx = 1, _cellHeightPx = 1;
+    // Full cell metrics (baseline, decoration strokes) behind _cellWidthPx/_cellHeightPx.
+    private static CellMetrics _cellMetrics;
+    private static float _cellWidth = 1f, _cellHeight = 1f;
+    private static DisplayMetrics _display = DisplayMetrics.Identity;
+    private static DisplayPlatform _displayPlatform;
+    private static int _contentScaleChangePending;
     private const float MinRuntimeFontSize = 6f;
     private const float MaxRuntimeFontSize = 72f;
     private static double? _runtimeFontSize;
-    private static double _configuredFontSize = 14d;
+    private static double _configuredFontSize = DottyDefaults.FontSize;
     private static WindowState _previousNonFullscreenState = WindowState.Normal;
     private static int _cols = 80, _rows = 24;
     private static SilkTerminalRenderer _renderer = null!;
@@ -57,6 +68,9 @@ internal static class DottyWindowHost
     private static IInputContext _input = null!;
     private static IKeyboard? _keyboard;
     private static ITerminalClipboard? _clipboard;
+    private static ClipboardPasteRouter? _pasteRouter;
+    private static IPrimarySelection? _primary;
+    private static ClipboardPasteRouter? _primaryPasteRouter;
     private static IMouse? _mouse;
     private static TerminalKeyboardController _keyboardController = null!;
     private static TerminalKeyboardDispatcher _keyboardDispatcher = null!;
@@ -73,7 +87,10 @@ internal static class DottyWindowHost
     private static readonly Queue<string> _pendingTitles = new(8);
     private static readonly object _pendingTitlesLock = new();
     private static int _pendingTitleCount;
-    private readonly record struct ClipboardWrite(TerminalSession Session, string Text);
+    private readonly record struct ClipboardWrite(TerminalSession Session, Dotty.Abstractions.Clipboard.ClipboardSelection Selection, string Text, int Bytes);
+    private const int MaxOsc52WriteBytes = 786_432;
+    private const int MaxPendingClipboardBytes = 4 * 1024 * 1024;
+    private static int _pendingClipboardBytes;
     private static readonly Queue<ClipboardWrite> _pendingClipboards = new(8);
     private static int _pendingClipboardCount;
     private static readonly object _pendingClipboardsLock = new();
@@ -90,7 +107,7 @@ internal static class DottyWindowHost
     private static DesktopControlServer? _controlServer;
     private static readonly Dictionary<TerminalSession, Action> _renderSubscriptions = new();
     private static readonly Dictionary<TerminalSession, Action> _renderCallbackCache = new();
-    private static readonly Dictionary<TerminalSession, Action<string>> _clipboardSubscriptions = new();
+    private static readonly Dictionary<TerminalSession, Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>> _clipboardSubscriptions = new();
     private static readonly Dictionary<TerminalSession, Action> _paletteSubscriptions = new();
     private static readonly Dictionary<TerminalTab, (Action TopologyChanged, Action<LeafPane, LeafPane> ActivePaneChanged)> _paneSubscriptions = new();
     private sealed class TabTitleCache
@@ -153,6 +170,9 @@ internal static class DottyWindowHost
     // identify whether a reported freeze is a long producer hold (nvim-side
     // slowness) or withheld presents after the hold released (renderer-side).
     private static bool _syncHeld;
+    // Next animated-image frame deadline of the last composed frame, in TimeProvider.System timestamp ticks (the
+    // clock IKittyGraphicsHost.NowTicks reads); 0 = no animated image is visible.
+    private static long _nextImageDeadlineTicks;
     private static long _syncHoldStartTimestampMs;
     private static long _syncHoldMaxDurationMs;
     private static long _syncHoldCount;
@@ -164,7 +184,6 @@ internal static class DottyWindowHost
     private static byte[] _windowTitleUtf8 = new byte[128];
     private static global::Silk.NET.GLFW.Glfw? _glfwApi;
     private static string _windowBackend = "unknown";
-    private static TerminalKeyModifiers _nativeModifiers;
     private static nint _glfwSetWindowTitleProc;
     private static bool _glfwTitleProcResolved;
     private const int LuaStatusRefreshIntervalMs = 1000;
@@ -189,12 +208,17 @@ internal static class DottyWindowHost
     private static DottyLaunchOptions _launchOptions = new();
     private static TerminalSession? _initialCommandSession;
     private static int _exitCode;
+    private static bool _windowRevealed;
+    private static long _revealDeadlineMs = long.MaxValue;
+    private const long RevealFallbackMs = 500;
 
     public static int Run(DottyLaunchOptions launchOptions)
     {
         _launchOptions = launchOptions;
         _initialCommandSession = null;
         _exitCode = 0;
+        _windowRevealed = false;
+        _revealDeadlineMs = long.MaxValue;
         _closed = false;
         Volatile.Write(ref _themeApplyPending, 0);
         _lastWindowFocus = null;
@@ -214,9 +238,11 @@ internal static class DottyWindowHost
         InputWindowExtensions.ShouldLoadFirstPartyPlatforms(false);
         global::Silk.NET.Input.Glfw.GlfwInput.RegisterPlatform();
 
-        var options = WindowOptions.Default with
+        var options = WithStartOptions(WindowOptions.Default) with
         {
-            Title = "Dotty (Silk)",
+            // Shown by RevealWindowWhenReady once the first frame is presented, so the user
+            // never sees an unpainted or wrongly sized window.
+            IsVisible = false,
             VSync = false,
             ShouldSwapAutomatically = false,
             API = new global::Silk.NET.Windowing.GraphicsAPI(
@@ -240,9 +266,13 @@ internal static class DottyWindowHost
         _window.Render += OnRender;
         _window.FramebufferResize += OnFramebufferResize;
         _window.FocusChanged += OnWindowFocusChanged;
+        _window.FileDrop += OnFilesDropped;
         _window.Closing += OnClosing;
         _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
+        GlfwErrorLog.Install(_glfwApi);
         HostWake.Initialize(static () => _glfwApi!.PostEmptyEvent(), Environment.CurrentManagedThreadId);
+        RequestRobustContext();
+        RequestDesktopIdentityHints();
         try
         {
             _window.Initialize();
@@ -293,6 +323,35 @@ internal static class DottyWindowHost
             _window.Size = size;
     }
 
+    // The window is created hidden. Called after every frame iteration: shows the window once
+    // the first frame has been presented, or RevealFallbackMs after load if no frame could be
+    // presented yet (a synchronized-update hold, an empty framebuffer), so it never stays hidden.
+    // Costs one bool test per frame once shown.
+    private static void RevealWindowWhenReady()
+    {
+        if (!_windowRevealed &&
+            (_lastPresentTimestampMs != 0 || GetClockMilliseconds() >= _revealDeadlineMs))
+        {
+            RevealWindow();
+        }
+    }
+
+    // One-shot show. The render-failure path calls it directly so a failing first frame never
+    // leaves the window hidden. Invalidates a frame first because Wayland drops swaps on a hidden
+    // surface (vendor/glfw/source/src/egl_context.c, swapBuffersEGL), so the first visible content
+    // needs a present after the show; showing can re-enter the frame action through the GLFW
+    // refresh callback, which then already sees the pending frame.
+    private static void RevealWindow()
+    {
+        if (_windowRevealed || _closed)
+            return;
+
+        _windowRevealed = true;
+        WindowPresentationGate.Invalidate(WindowFrameReason.Initial);
+        _window.IsVisible = true;
+        ApplyStartWindowState();
+    }
+
     private static void PublishCustomFrameHitTestGeometry(
         int framebufferWidth,
         float barHeight,
@@ -303,7 +362,7 @@ internal static class DottyWindowHost
         _customFrameHitTestStatusWidth = statusWidth;
         _customFrameHitTestCaptionButtonsWidth = _customFrameActive
             ? Math.Min(framebufferWidth,
-                TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _display.ContentScale)
             : 0f;
         _customFrameHitTestTabCount = _tabManager?.Count ?? 0;
         _customFrameHitTestActiveIndex = _tabManager?.ActiveIndex ?? -1;
@@ -348,6 +407,7 @@ internal static class DottyWindowHost
         {
             _exitCode = 1;
             Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));
+            LogGraphicsInfoOnInitFailure();
             _window.Close();
         }
     }
@@ -363,6 +423,7 @@ internal static class DottyWindowHost
         _tabManager.TabAdded += OnTabAdded;
         _tabManager.TabClosed += OnTabClosed;
         _tabManager.TabTitleChanged += OnTabTitleChanged;
+        AttachBellNotifications(_tabManager);
         var luaServices = new DottyLuaServices(
             action => { _lifecycle.TryEnqueue(action); },
             CreateLuaTab,
@@ -380,29 +441,36 @@ internal static class DottyWindowHost
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
 
         _gl = _window.CreateOpenGL();
-        string openGlVersion = _gl.GetStringS(StringName.Version);
-        if (!GraphicsCapabilities.IsOpenGlVersionSupported(openGlVersion))
-            throw new PlatformNotSupportedException(GraphicsCapabilities.DescribeUnsupportedVersion(openGlVersion));
+        CaptureGraphicsInfo(_gl);
+        if (!GraphicsCapabilities.IsOpenGlVersionSupported(_glVersion))
+            throw new PlatformNotSupportedException(GraphicsCapabilities.DescribeUnsupportedVersion(_glVersion));
+        ConfigureGlDebug(_gl);
+        ConfigureFramePacing();
+        ConfigureRenderRecovery();
 
+        _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
+        NativeGlfwMetadata.Initialize(_glfwApi);
+        _displayPlatform = NativeGlfwMetadata.TryGetPlatform(out int platform) ? (DisplayPlatform)platform : DisplayPlatform.Unknown;
+        ApplyLoadedWindowOptions();
         ResolveFontAndMetrics();
-        _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
+        InstallContentScaleCallback();
+        _atlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain, rasterPolicy: CurrentRasterPolicy());
         GlyphAtlasService.AcquireAtlas(_atlas);
         _renderer = new SilkTerminalRenderer(_gl, _atlas);
-        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx());
+        _sceneComposer = new TerminalSceneComposer(_atlas, _typeface, _cellFontSizePx()) { CellMetrics = _cellMetrics };
+        ApplyLiveWindowOptions(UserConfigService.Current);
 
         _mouseHost = new MouseHost();
         _keyboardDispatcher = new TerminalKeyboardDispatcher(_mouseHost);
-        _glfwApi ??= global::Silk.NET.GLFW.Glfw.GetApi();
-        NativeGlfwMetadata.Initialize(_glfwApi);
-        _windowBackend = NativeGlfwMetadata.TryGetPlatform(out int platform) ? platform switch
+        _windowBackend = _displayPlatform switch
         {
-            0x00060001 => "windows",
-            0x00060002 => "macos",
-            0x00060003 => "wayland",
-            0x00060004 => "x11",
-            0x00060005 => "null",
+            DisplayPlatform.Win32 => "windows",
+            DisplayPlatform.Cocoa => "macos",
+            DisplayPlatform.Wayland => "wayland",
+            DisplayPlatform.X11 => "x11",
+            DisplayPlatform.Null => "null",
             _ => "unknown"
-        } : "unknown";
+        };
         _keyboardController = new TerminalKeyboardController(
             keyEventReceived: _keyboardDispatcher.HandleKeyEvent,
             textReceived: _keyboardDispatcher.HandleCommittedText,
@@ -411,11 +479,22 @@ internal static class DottyWindowHost
                 scancode >= 0 && NativeGlfwMetadata.TryGetPrimaryCodePoint((int)key, scancode, out uint scalar) ? (int)scalar : 0);
         _mouseController = new TerminalMouseController(_mouseHost);
 
+        _primary = new NativeSelection(_glfwApi!);
         _input = _window.CreateInput();
         if (_input.Keyboards.Count > 0)
         {
             _keyboard = _input.Keyboards[0];
             _clipboard = new KeyboardClipboard(_keyboard);
+            _pasteRouter = new ClipboardPasteRouter(
+                _clipboard,
+                static () => UserConfigService.Current.Clipboard,
+                static prompt => _mouseHost.ShowPrompt(prompt),
+                static pane => IsPaneAlive(pane));
+            _primaryPasteRouter = new ClipboardPasteRouter(
+                new PrimarySelectionClipboard(_primary),
+                static () => UserConfigService.Current.Clipboard,
+                static prompt => _mouseHost.ShowPrompt(prompt),
+                static pane => IsPaneAlive(pane));
         }
         InstallNativeKeyboardCallbacks();
         _nativeTextInput = new NativeTextInputBridge(_glfwApi!, _window.Native?.Glfw ?? 0, OnNativePreeditChanged);
@@ -437,16 +516,19 @@ internal static class DottyWindowHost
             shell: _launchOptions.Shell,
             command: _launchOptions.Command,
             shellIsExecutable: _launchOptions.Shell != null);
-        SilkConfig.ApplyThemeToAdapter(initialTab.Session.Adapter, _activeTheme);
+        SilkConfig.ApplyConfigToAdapter(initialTab.Session.Adapter, _activeTheme);
         if (_launchOptions.Command != null)
             _initialCommandSession = initialTab.Session;
-        _keybindings.RegisterDefaults();
-        _keybindings.ApplyCustomBindings(UserConfigService.Current.Keybindings);
+        ApplyKeybindings(UserConfigService.Current);
         if (_customFrameActive)
             InstallCustomFrame();
-        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
-        float topOffset = barRows * _cellHeight * _scale;
-        SetWindowClientSize(new Vector2D<int>((int)(_cols * _cellWidth), (int)(_rows * _cellHeight + topOffset / _scale)));
+        var (clientWidth, clientHeight) = ClientSizeFor(_cols, _rows);
+        SetWindowClientSize(new Vector2D<int>(clientWidth, clientHeight));
+        _revealDeadlineMs = GetClockMilliseconds() + RevealFallbackMs;
+        VtHostBridge.Attach(_window, _tabManager,
+            static () => new VtHostLayout(_cellWidthPx, _cellHeightPx, CurrentBarRows(), CurrentDevicePadding(), _display.WindowUnitsToDevice, _cols, _rows),
+            static (width, height) => SetWindowClientSize(new Vector2D<int>(width, height)));
+        LogGraphicsInfoIfRequested();
         StartControlServer();
         StartSystemThemeRefresher();
         _luaHost.NotifyGuiStartup();
@@ -583,6 +665,7 @@ internal static class DottyWindowHost
     {
         RefreshClipboardSubscriptions();
         RefreshVisibleSessionSubscriptions();
+        VtHostBridge.OnSessionsChanged();
     }
 
     private static void RefreshClipboardSubscriptions()
@@ -604,9 +687,26 @@ internal static class DottyWindowHost
             if (_clipboardSubscriptions.ContainsKey(session))
                 continue;
 
-            Action<string> callback = CreateClipboardHandler(session);
+            // Split panes are created outside the six ApplyConfigToAdapter sites; give them the OSC 8 ingest switch,
+            // the vt switches and the Kitty graphics settings on first sight.
+            HyperlinkIngestConfig.Apply(session.Adapter, UserConfigService.Current.Hyperlinks);
+            session.Adapter.ConfigurePrinterOutput(UserConfigService.Current.Printing.OutputFile);
+            VtAdapterConfig.Apply(session.Adapter, UserConfigService.Current.Vt);
+            SilkConfig.ApplyGraphicsToAdapter(session.Adapter);
+
+            Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> callback = CreateClipboardHandler(session);
             session.ClipboardWriteRequested += callback;
             _clipboardSubscriptions.Add(session, callback);
+        }
+
+        foreach (var session in _sessionScratch)
+        {
+            if (_clipboardReadSubscriptions.ContainsKey(session))
+                continue;
+
+            Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest> readCallback = CreateClipboardReadHandler(session);
+            session.ClipboardReadRequested += readCallback;
+            _clipboardReadSubscriptions.Add(session, readCallback);
         }
 
         _staleSessionScratch.Clear();
@@ -619,23 +719,96 @@ internal static class DottyWindowHost
         {
             var session = _staleSessionScratch[i];
             session.ClipboardWriteRequested -= _clipboardSubscriptions[session];
+            session.Adapter.DisposePrinterOutput();
             _clipboardSubscriptions.Remove(session);
             _renderCallbackCache.Remove(session);
         }
+
+        _staleSessionScratch.Clear();
+        foreach (var pair in _clipboardReadSubscriptions)
+        {
+            if (!_sessionScratch.Contains(pair.Key))
+                _staleSessionScratch.Add(pair.Key);
+        }
+        for (int i = 0; i < _staleSessionScratch.Count; i++)
+        {
+            var session = _staleSessionScratch[i];
+            session.Adapter.DisposePrinterOutput();
+            session.ClipboardReadRequested -= _clipboardReadSubscriptions[session];
+            _clipboardReadSubscriptions.Remove(session);
+            _clipboardReads.RemoveSession(session);
+        }
     }
 
-    private static Action<string> CreateClipboardHandler(TerminalSession session) =>
-        text => EnqueueClipboardWrite(session, text);
+    private static Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest> CreateClipboardHandler(TerminalSession session) =>
+        request => EnqueueClipboardWrite(session, request);
 
-    private static void EnqueueClipboardWrite(TerminalSession session, string text)
+    private static Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest> CreateClipboardReadHandler(TerminalSession session) =>
+        request => _clipboardReads.OnRequested(session, request);
+
+    private static void EnqueueClipboardWrite(TerminalSession session, Dotty.Abstractions.Clipboard.ClipboardWriteRequest request)
     {
-        if (!UserConfigService.Current.Clipboard.AllowOsc52Write || text.Length > 65536)
+        var selection = request.Selection &
+            (Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard |
+             Dotty.Abstractions.Clipboard.ClipboardSelection.Primary |
+             Dotty.Abstractions.Clipboard.ClipboardSelection.CutBuffer0);
+        if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Select) != 0)
+        {
+            var configured = MouseOptions.ParseCopyOnSelect(UserConfigService.Current.Mouse.CopyOnSelect);
+            if (configured is CopyOnSelectMode.Clipboard or CopyOnSelectMode.Both)
+                selection |= Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+            if (configured is CopyOnSelectMode.Primary or CopyOnSelectMode.Both ||
+                configured == CopyOnSelectMode.None && _primary is { IsSystemSelection: true })
+                selection |= _primary is { IsSystemSelection: true }
+                    ? Dotty.Abstractions.Clipboard.ClipboardSelection.Primary
+                    : Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+            if (selection == Dotty.Abstractions.Clipboard.ClipboardSelection.None)
+                selection |= Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+        }
+        if ((selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary) != 0 &&
+            _primary is not { IsSystemSelection: true })
+            selection &= ~Dotty.Abstractions.Clipboard.ClipboardSelection.Primary;
+        if ((selection & (Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard |
+                          Dotty.Abstractions.Clipboard.ClipboardSelection.Primary |
+                          Dotty.Abstractions.Clipboard.ClipboardSelection.CutBuffer0)) ==
+            Dotty.Abstractions.Clipboard.ClipboardSelection.None)
+            return;
+        if (!UserConfigService.Current.Clipboard.AllowOsc52Write)
+            return;
+        string text = request.Text;
+        if (text.Length > MaxOsc52WriteBytes)
+            return;
+        int bytes = System.Text.Encoding.UTF8.GetByteCount(text);
+        if (bytes > MaxOsc52WriteBytes)
             return;
         lock (_pendingClipboardsLock)
         {
-            if (_closed || _pendingClipboards.Count >= 32)
+            if (_closed)
                 return;
-            _pendingClipboards.Enqueue(new ClipboardWrite(session, text));
+            // Coalesce: latest write of a session replaces its pending one.
+            if (_pendingClipboards.Count > 0)
+            {
+                bool replaced = false;
+                int n = _pendingClipboards.Count;
+                for (int i = 0; i < n; i++)
+                {
+                    var item = _pendingClipboards.Dequeue();
+                    if (!replaced && ReferenceEquals(item.Session, session))
+                    {
+                        _pendingClipboardBytes -= item.Bytes;
+                        replaced = true;
+                        continue;
+                    }
+                    _pendingClipboards.Enqueue(item);
+                }
+            }
+            if (_pendingClipboards.Count >= 32 || _pendingClipboardBytes + bytes > MaxPendingClipboardBytes)
+            {
+                Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
+                return;
+            }
+            _pendingClipboards.Enqueue(new ClipboardWrite(session, selection, text, bytes));
+            _pendingClipboardBytes += bytes;
             Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
         }
         HostWake.Request();
@@ -728,12 +901,8 @@ internal static class DottyWindowHost
 
     private static void OnSessionPaletteChanged() =>
         WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
-    private static float _cellFontSizePx()
-    {
-        float size = EffectiveFontSize();
-        float scale = float.IsFinite(_scale) ? Math.Clamp(_scale, 0.1f, 16f) : 1f;
-        return size * scale;
-    }
+    // font.size and zoom are points; the atlas and chrome text want device pixels.
+    private static float _cellFontSizePx() => CellMetricsCalculator.PointsToPixels(EffectiveFontSize(), _display.ContentScale);
 
     private static float EffectiveFontSize()
     {
@@ -741,7 +910,7 @@ internal static class DottyWindowHost
             ? _configuredFontSize
             : UserConfigService.Current.Font.Size;
         double size = _runtimeFontSize ?? configured;
-        return float.IsFinite((float)size) ? Math.Clamp((float)size, 1f, 512f) : 14f;
+        return float.IsFinite((float)size) ? Math.Clamp((float)size, 1f, 512f) : (float)DottyDefaults.FontSize;
     }
 
     private static void OnConfigChanged(DottyUserConfig config)
@@ -891,6 +1060,10 @@ internal static class DottyWindowHost
 
     private static void UpdateWindowTitle(string fallbackTitle)
     {
+        // After a driver reset the title carries the "rendering stopped" notice instead.
+        if (RenderingStopped)
+            return;
+
         int tabCount = _tabManager?.Count ?? 1;
         int activeIndex = _tabManager?.ActiveIndex ?? -1;
         var activeTab = _tabManager?.ActiveTab;
@@ -991,6 +1164,15 @@ internal static class DottyWindowHost
         pane = null!;
         return false;
     }
+    // Rejected chords and actions are logged, never dropped silently (+validate-config lists them too).
+    private static void ApplyKeybindings(DottyUserConfig config)
+    {
+        _keybindings.RegisterDefaults();
+        _keybindings.ApplyCustomBindings(config.Keybindings);
+        foreach (var diagnostic in _keybindings.Diagnostics)
+            Console.Error.WriteLine("dotty: " + diagnostic);
+    }
+
     private static void ApplyConfigOnly(DottyUserConfig config)
     {
         if (_closed) return;
@@ -998,8 +1180,7 @@ internal static class DottyWindowHost
         SetCustomFrameMode(config.Window.Decorations);
         _showTabBar = config.TabBar.Show;
         WindowPresentationGate.Invalidate(WindowFrameReason.ThemeConfig);
-        _keybindings.RegisterDefaults();
-        _keybindings.ApplyCustomBindings(config.Keybindings);
+        ApplyKeybindings(config);
         ResolveFontAndMetrics();
         RefreshFontResources();
         var size = _window.FramebufferSize;
@@ -1008,9 +1189,13 @@ internal static class DottyWindowHost
         _activeTheme = SilkConfig.LoadActiveTheme();
         foreach (var tab in _tabManager.Tabs)
             foreach (var pane in tab.PaneTree.Leaves)
-                SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter, _activeTheme);
+            {
+                pane.Session.Adapter.ConfigurePrinterOutput(config.Printing.OutputFile);
+                SilkConfig.ApplyConfigToAdapter(pane.Session.Adapter, _activeTheme);
+            }
         (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme(theme: _activeTheme);
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
+        ApplyLiveWindowOptions(config);
     }
     private static void StartSystemThemeRefresher()
     {
@@ -1023,7 +1208,8 @@ internal static class DottyWindowHost
             {
                 while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
                 {
-                    if (_closed || !UserConfigService.Current.ThemeAuto) continue;
+                    // Polling spawns a helper process; skip it while the window is iconified (nothing is drawn).
+                    if (_closed || !UserConfigService.Current.ThemeAuto || Volatile.Read(ref _windowIconified)) continue;
                     if (!SilkConfig.RefreshSystemTheme()) continue;
                     if (Interlocked.CompareExchange(ref _themeApplyPending, 1, 0) != 0) continue;
                     if (!_lifecycle.TryEnqueue(() =>
@@ -1043,39 +1229,126 @@ internal static class DottyWindowHost
     {
         var activeSession = _tabManager.ActiveTab?.Session;
         var tab = _tabManager.CreateTab(cols: _cols, rows: _rows,
-            workingDirectory: workingDirectory ?? activeSession?.CurrentWorkingDirectory,
+            workingDirectory: workingDirectory ?? activeSession?.InheritableWorkingDirectory,
             shell: shell ?? activeSession?.LaunchShell ?? _launchOptions.Shell,
             shellIsExecutable: shell is null && (activeSession?.LaunchShellIsExecutable ?? (_launchOptions.Shell is not null)));
-        SilkConfig.ApplyThemeToAdapter(tab.Session.Adapter);
+        SilkConfig.ApplyConfigToAdapter(tab.Session.Adapter);
         return tab;
     }
 
     private static LeafPane SplitLuaPane(TerminalTab tab, LeafPane target, SplitDirection direction, string? workingDirectory, string? shell)
     {
-        var pane = tab.PaneTree.Split(target, direction, workingDirectory ?? target.Session.CurrentWorkingDirectory, shell);
-        SilkConfig.ApplyThemeToAdapter(pane.Session.Adapter);
+        var pane = tab.PaneTree.Split(target, direction, workingDirectory ?? target.Session.InheritableWorkingDirectory, shell);
+        SilkConfig.ApplyConfigToAdapter(pane.Session.Adapter);
         return pane;
     }
 
 
+    // Config, zoom and load path. The fallback chain (and with it the primary typeface) is rebuilt only when the
+    // font model (font.family/boldFamily/italicFamily/boldItalicFamily/weight/features) changes, so the typeface
+    // object identity (which keys the glyph atlas and the composer row cache) is stable.
     private static void ResolveFontAndMetrics()
     {
         var config = UserConfigService.Current;
-        _configuredFontSize = double.IsFinite(config.Font.Size) ? config.Font.Size : 14d;
-        float rawScale = _window.FramebufferSize.X / (float)MathF.Max(1, _window.Size.X);
-        _scale = float.IsFinite(rawScale) ? Math.Clamp(rawScale, 0.1f, 16f) : 1f;
-        _typeface = FontMetricsService.ResolveTypeface(config.Font.Family);
-        (_cellWidth, _cellHeight) = FontMetricsService.MeasureCell(
-            _typeface,
-            EffectiveFontSize(),
-            config.Font.LineHeight,
-            _scale);
+        _configuredFontSize = double.IsFinite(config.Font.Size) ? config.Font.Size : DottyDefaults.FontSize;
+        var font = config.Font;
+        var fontErrors = new List<string>();
+        var fontOptions = FontOptions.Create(font.Family, font.BoldFamily, font.ItalicFamily, font.BoldItalicFamily,
+            font.Weight, font.Features, fontErrors);
+        var chain = _fontChains.Resolve(fontOptions);
+        if (!ReferenceEquals(chain, _fontChain))
+        {
+            foreach (string error in fontErrors)
+                Console.Error.WriteLine("dotty: " + error);
+            _fontChain = chain;
+        }
+        _typeface = chain.PrimaryTypeface;
+        UpdateScaleAndCellMetrics();
+    }
+
+    // Resize and content-scale path: re-reads the display metrics. MeasureCell is cached by value,
+    // so an unchanged scale costs a dictionary hit and no Skia work.
+    private static void UpdateScaleAndCellMetrics()
+    {
+        nint window = _window.Native?.Glfw ?? 0;
+        NativeGlfwMetadata.TryGetWindowContentScale(window, out float contentScaleX, out float contentScaleY);
+        var windowSize = _window.Size;
+        var framebufferSize = _window.FramebufferSize;
+        _display = DisplayScale.Compute(
+            _displayPlatform,
+            windowSize.X, windowSize.Y,
+            framebufferSize.X, framebufferSize.Y,
+            contentScaleX, contentScaleY,
+            _display);
+        var font = UserConfigService.Current.Font;
+        _cellMetrics = FontMetricsService.MeasureCell(_typeface, new CellMetricsOptions(
+            _cellFontSizePx(),
+            font.LineHeight,
+            _display.ContentScale,
+            CellAdjustment.Parse(font.AdjustCellWidth),
+            CellAdjustment.Parse(font.AdjustCellHeight),
+            CurrentRasterPolicy()));
+        _cellWidthPx = _cellMetrics.CellWidth;
+        _cellHeightPx = _cellMetrics.CellHeight;
+        if (_sceneComposer != null)
+            _sceneComposer.CellMetrics = _cellMetrics;
+        _cellWidth = _cellWidthPx / _display.ContentScale;
+        _cellHeight = _cellHeightPx / _display.ContentScale;
+    }
+
+    /// <summary><c>font.hinting</c>/<c>font.antialias</c>: one policy for cell metrics and the glyph atlas.</summary>
+    private static RasterPolicy CurrentRasterPolicy()
+    {
+        var font = UserConfigService.Current.Font;
+        return RasterPolicy.FromConfig(font.Hinting, font.Antialias);
+    }
+
+    private static int CurrentBarRows() =>
+        IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+
+    private static DevicePadding CurrentDevicePadding()
+    {
+        var padding = UserConfigService.Current.Window.Padding;
+        return DevicePadding.FromLogical(padding.Left, padding.Top, padding.Right, padding.Bottom, _display.ContentScale);
+    }
+
+    /// <summary>Window client size (window units) that holds the given grid at the current metrics.</summary>
+    private static (int Width, int Height) ClientSizeFor(int columns, int rows) =>
+        GridFit.ClientSize(columns, rows, _cellWidthPx, _cellHeightPx, CurrentBarRows(), CurrentDevicePadding(), _display.WindowUnitsToDevice);
+
+    private static unsafe void InstallContentScaleCallback() =>
+        NativeGlfwMetadata.TrySetWindowContentScaleCallback(_window.Native?.Glfw ?? 0, &OnNativeContentScaleChanged);
+
+    // GLFW event thread: a monitor move or display-scale change, possibly without a framebuffer
+    // resize (macOS, Wayland). Coalesce and rebuild metrics and atlas on the UI thread.
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void OnNativeContentScaleChanged(nint window, float x, float y)
+    {
+        if (Interlocked.Exchange(ref _contentScaleChangePending, 1) != 0)
+            return;
+        if (!_lifecycle.TryEnqueue(ApplyContentScaleChange))
+            Volatile.Write(ref _contentScaleChangePending, 0);
+    }
+
+    private static void ApplyContentScaleChange()
+    {
+        Volatile.Write(ref _contentScaleChangePending, 0);
+        if (_closed)
+            return;
+        WindowPresentationGate.Invalidate(WindowFrameReason.Resize);
+        var previous = _display;
+        UpdateScaleAndCellMetrics();
+        if (DisplayScale.ContentScaleChanged(previous, _display))
+            RefreshFontResources();
+        var size = _window.FramebufferSize;
+        if (size.X > 0 && size.Y > 0)
+            ApplyFramebufferLayout(size);
     }
 
     private static void RefreshFontResources()
     {
         WindowPresentationGate.Invalidate(WindowFrameReason.Atlas);
-        var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx());
+        var newAtlas = GlyphAtlasService.GetOrCreateAtlas(_typeface, _cellFontSizePx(), fallbackChain: _fontChain, rasterPolicy: CurrentRasterPolicy());
         ApplyConfiguredSymbolMap(newAtlas);
         if (!ReferenceEquals(newAtlas, _atlas))
         {
@@ -1108,7 +1381,7 @@ internal static class DottyWindowHost
             return;
         }
         var map = SymbolMap.Parse(entries);
-        var target = atlas.FallbackChain ?? FontFallbackChain.CreateDefault(_typeface);
+        var target = atlas.FallbackChain ?? _fontChain;
         target.SymbolMap = map.Count > 0 ? map : null;
         atlas.FallbackChain = target;
     }
@@ -1121,9 +1394,9 @@ internal static class DottyWindowHost
         WindowPresentationGate.Invalidate(WindowFrameReason.Resize);
         if (size.X <= 0 || size.Y <= 0) return;
 
-        float previousScale = _scale;
-        ResolveFontAndMetrics();
-        if (MathF.Abs(previousScale - _scale) > 0.01f)
+        var previous = _display;
+        UpdateScaleAndCellMetrics();
+        if (DisplayScale.ContentScaleChanged(previous, _display))
             RefreshFontResources();
 
         ApplyFramebufferLayout(size);
@@ -1132,17 +1405,9 @@ internal static class DottyWindowHost
     private static void ApplyFramebufferLayout(Vector2D<int> size)
     {
         _gl.Viewport(size);
-        var config = UserConfigService.Current;
-        var pad = config.Window.Padding;
-        float padX = (float)(pad.Left + pad.Right) * _scale;
-        float padY = (float)(pad.Top + pad.Bottom) * _scale;
-
-        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
-        float topOffset = barRows * _cellHeight * _scale;
-
-        _cols = Math.Max(1, (int)((size.X - padX) / (_cellWidth * _scale)));
-        _rows = Math.Max(1, (int)((size.Y - topOffset - padY) / (_cellHeight * _scale)));
-        _tabManager?.ResizeAll(_cols, _rows);
+        (_cols, _rows) = GridFit.Compute(size.X, size.Y, _cellWidthPx, _cellHeightPx, CurrentBarRows(), CurrentDevicePadding());
+        // Physical text-area pixels: the same integer cell size the layout and the VT metrics use.
+        _tabManager?.ResizeAll(_cols, _rows, _cols * _cellWidthPx, _rows * _cellHeightPx);
     }
     private static void StartControlServer()
     {
@@ -1172,6 +1437,8 @@ internal static class DottyWindowHost
     {
         while (_pendingControlCommands.TryDequeue(out var request))
         {
+            if (TryDeferControlCommand(request.Command, request.Completion))
+                continue;
             string response;
             try
             {
@@ -1187,8 +1454,8 @@ internal static class DottyWindowHost
 
     private static string ExecuteControlCommand(string command)
     {
-        if (string.Equals(command, "WAIT_FOR_IDLE", StringComparison.OrdinalIgnoreCase))
-            return "IDLE";
+        if (string.Equals(command, "GL", StringComparison.OrdinalIgnoreCase))
+            return BuildGraphicsInfoJson();
         if (string.Equals(command, "DUMP", StringComparison.OrdinalIgnoreCase))
             return BuildControlDump();
         if (string.Equals(command, "GET_STATE", StringComparison.OrdinalIgnoreCase))
@@ -1202,11 +1469,23 @@ internal static class DottyWindowHost
         }
         if (string.Equals(command, "MEMORY", StringComparison.OrdinalIgnoreCase))
         {
-            // Ownership capacities are not resident-memory or live-object measurements.
-            var buffers = BufferMemoryMetrics.GetSnapshot();
-            long heapEstimate = GC.GetTotalMemory(forceFullCollection: false);
+            // Ownership capacities and counters are not resident-memory or live-object measurements; the image
+            // texture figure is an estimate of uploaded texture bytes, not driver RSS.
             var lastGc = GC.GetGCMemoryInfo();
-            return $"{{\"managedHeapEstimateBytes\":{heapEstimate},\"lastGcHeapSizeBytes\":{lastGc.HeapSizeBytes},\"lastGcCommittedBytes\":{lastGc.TotalCommittedBytes},\"lastGcIndex\":{lastGc.Index},\"terminalArenaCapacityBytes\":{buffers.LiveArenaCapacityBytes},\"ownedSnapshotArrayCapacityBytes\":{buffers.OwnedSnapshotArrayCapacityBytes},\"arenaCapacityAllocatedBytes\":{buffers.ArenaCapacityAllocatedBytes},\"snapshotCapacityAllocatedBytes\":{buffers.SnapshotCapacityAllocatedBytes},\"atlasBitmapBytes\":{GlyphAtlasService.TotalBytes},\"atlasCount\":{GlyphAtlasService.AtlasCount},\"r8TexturePayloadBytesEstimate\":{_renderer?.R8TexturePayloadBytes ?? 0},\"rgba8TexturePayloadBytesEstimate\":{_renderer?.Rgba8TexturePayloadBytes ?? 0},\"intrinsicColorProbeScratchBytes\":{SilkTerminalRenderer.IntrinsicColorProbeScratchBytes}}}";
+            return MemoryReport.ToJson(new MemoryReportInputs(
+                ManagedHeapEstimateBytes: GC.GetTotalMemory(forceFullCollection: false),
+                LastGcHeapSizeBytes: lastGc.HeapSizeBytes,
+                LastGcCommittedBytes: lastGc.TotalCommittedBytes,
+                LastGcIndex: lastGc.Index,
+                Buffers: BufferMemoryMetrics.GetSnapshot(),
+                ArenaBackend: BufferMemoryMetrics.ArenaBackend,
+                AtlasBitmapBytes: GlyphAtlasService.TotalBytes,
+                AtlasCount: GlyphAtlasService.AtlasCount,
+                R8TexturePayloadBytesEstimate: _renderer?.R8TexturePayloadBytes ?? 0,
+                Rgba8TexturePayloadBytesEstimate: _renderer?.Rgba8TexturePayloadBytes ?? 0,
+                IntrinsicColorProbeScratchBytes: SilkTerminalRenderer.IntrinsicColorProbeScratchBytes,
+                Graphics: Dotty.Terminal.Graphics.GraphicsMemoryMetrics.GetSnapshot(),
+                ImageTextureBytesEstimate: _renderer?.EstimatedImageTextureBytes ?? 0));
         }
         if (string.Equals(command, "IME", StringComparison.OrdinalIgnoreCase))
         {
@@ -1226,7 +1505,12 @@ internal static class DottyWindowHost
                 ? generation.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : "null";
             bool syncActive = session?.Adapter.SynchronizedUpdateActive ?? false;
-            return $"{{\"windowBackend\":{QuoteJson(_windowBackend)},\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount}}}";
+            var json = new StringBuilder(1024);
+            json.Append($"{{\"windowBackend\":{QuoteJson(_windowBackend)},\"tabs\":{tabCount},\"activeTab\":{activeIndex},\"skippedLeafFrames\":{skipped},\"syncHeld\":{(_syncHeld ? "true" : "false")},\"syncHoldCount\":{_syncHoldCount},\"syncHoldMaxMs\":{_syncHoldMaxDurationMs},\"syncHoldOver250Ms\":{_syncHoldOver250MsCount},\"syncActive\":{(syncActive ? "true" : "false")},\"ptyBytesRead\":{bytesRead},\"ptyBytesParsed\":{bytesParsed},\"pendingOutputChunks\":{pendingChunks},\"modelGeneration\":{modelGeneration},\"presentedGeneration\":{_presentedActiveGeneration},\"presentCount\":{_presentCount},\"frameTimings\":");
+            AppendFrameTimingsJson(json);
+            AppendFramePacingJson(json);
+            AppendRenderRecoveryJson(json);
+            return json.Append('}').ToString();
         }
         if (string.Equals(command, "SHUTDOWN", StringComparison.OrdinalIgnoreCase))
         {
@@ -1256,8 +1540,7 @@ internal static class DottyWindowHost
 
     private static string ExecuteControlAction(string name)
     {
-        if (!Enum.TryParse<TerminalAction>(name, ignoreCase: true, out var action) ||
-            !Enum.IsDefined(action) || action == TerminalAction.None)
+        if (!ActionRegistry.TryParse(name, out var action, out _) || action.Action == TerminalAction.None)
             return "ERROR unknown action";
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay | WindowFrameReason.TabOrPane);
         return _keyboardDispatcher.Actions.TryExecute(action) ? "OK" : "ERROR action unavailable";
@@ -1303,13 +1586,8 @@ internal static class DottyWindowHost
             return "ERROR dimensions must be positive integers";
         }
 
-        var config = UserConfigService.Current;
-        var padding = config.Window.Padding;
-        int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(config.TabBar.Height, _cellHeight) : 0;
-        var target = new Vector2D<int>(
-            Math.Max(1, (int)MathF.Ceiling(columns * _cellWidth + (float)(padding.Left + padding.Right))),
-            Math.Max(1, (int)MathF.Ceiling((rows + barRows) * _cellHeight + (float)(padding.Top + padding.Bottom))));
-        SetWindowClientSize(target);
+        var (width, height) = ClientSizeFor(columns, rows);
+        SetWindowClientSize(new Vector2D<int>(width, height));
         return "OK";
     }
 
@@ -1376,6 +1654,9 @@ internal static class DottyWindowHost
 
     private static void DrainWindowEvents()
     {
+        // Key events and the characters they produce arrive in the same GLFW event batch; key events still
+        // waiting for a character after the batch are encoded from the key now.
+        _keyboardDispatcher?.FlushDeferredKeys();
         DrainControlCommands();
         _lifecycle.Drain();
 
@@ -1418,8 +1699,17 @@ internal static class DottyWindowHost
             if (!_luaHost.Hooks.AllowClipboardWrite(ownerPane, ownerTab, request.Text))
                 continue;
 
-            _clipboard?.SetText(request.Text);
+            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard) != 0)
+                _clipboard?.SetText(request.Text);
+            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary) != 0 &&
+                _primary is { IsSystemSelection: true } primary)
+                primary.Set(request.Text);
+            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.CutBuffer0) != 0 &&
+                _primary is { SupportsCutBuffer0: true } cutBuffer)
+                cutBuffer.SetCutBuffer0(request.Text);
         }
+
+        _clipboardReads.Drain();
     }
 
     private static bool TryDequeuePendingTitle(out string title)
@@ -1509,6 +1799,7 @@ internal static class DottyWindowHost
             }
 
             request = _pendingClipboards.Dequeue();
+            _pendingClipboardBytes -= request.Bytes;
             Volatile.Write(ref _pendingClipboardCount, _pendingClipboards.Count);
             return true;
         }
@@ -1521,14 +1812,14 @@ internal static class DottyWindowHost
         try
         {
             OnRenderCore(delta);
+            RevealWindowWhenReady();
         }
         catch (Exception exception)
         {
+            RevealWindow();
+            // Never close the window or end the shells on a render failure: retry, rebuild, then ask.
             if (!_closed)
-            {
-                Console.Error.WriteLine(GraphicsCapabilities.DescribeInitializationFailure(exception));
-                _window.Close();
-            }
+                HandleRenderFailure(exception);
         }
     }
 
@@ -1549,8 +1840,27 @@ internal static class DottyWindowHost
         }
     }
 
+    /// <summary>
+    /// Whether the shared blink timer runs: the last composed frame drew a blinking cursor or SGR 5/6 text (see
+    /// <see cref="TerminalSceneComposer.BlinkActive"/>) and the window is not known to be unfocused. While it is idle
+    /// the blink phase stays on, so an unfocused window shows a steady cursor and steady text.
+    /// </summary>
     private static bool CursorBlinks(bool hasActiveTab) =>
-        hasActiveTab && _lastWindowFocus != false && UserConfigService.Current.Cursor.Blink;
+        hasActiveTab && _lastWindowFocus != false && (_sceneComposer?.BlinkActive ?? false);
+
+    /// <summary>
+    /// The shared blink phase (<see cref="_cursorBlinkVisible"/>). <see cref="_lastCursorBlinkTimestampMs"/> is the
+    /// start of the current on or off segment; input and focus changes restart an on segment.
+    /// <see cref="BlinkPolicy.Steady"/> while the timer is idle.
+    /// </summary>
+    private static BlinkPolicy CurrentBlinkPolicy(bool hasActiveTab)
+    {
+        if (!CursorBlinks(hasActiveTab))
+            return BlinkPolicy.Steady;
+        int interval = Math.Max(100, UserConfigService.Current.Cursor.BlinkIntervalMs);
+        long onSegmentStart = _cursorBlinkVisible ? _lastCursorBlinkTimestampMs : _lastCursorBlinkTimestampMs - interval;
+        return new BlinkPolicy(onSegmentStart, interval);
+    }
 
     /// <summary>
     /// Blocks until input, a cross-thread wake, or the nearest deadline. Replaces a
@@ -1561,7 +1871,8 @@ internal static class DottyWindowHost
         bool includeBlink,
         bool retryShortly = false,
         long coalesceRemainingMs = 0,
-        long syncHoldRemainingMs = 0)
+        long syncHoldRemainingMs = 0,
+        bool includeImageAnimation = false)
     {
         if (_frameDepth > 1 || (!retryShortly && HostWake.IsPending))
             return;
@@ -1570,14 +1881,17 @@ internal static class DottyWindowHost
         int timeoutMs = IdleWait.Compute(new IdleWaitInputs(
             NowMs: now,
             RetryShortly: retryShortly,
-            CursorBlinkActive: includeBlink && CursorBlinks(_tabManager?.ActiveTab != null),
-            LastCursorBlinkMs: _lastCursorBlinkTimestampMs,
-            CursorBlinkIntervalMs: Math.Max(100, UserConfigService.Current.Cursor.BlinkIntervalMs),
-            LastLuaStatusRefreshMs: _lastLuaStatusRefreshTimestampMs,
-            LuaStatusRefreshIntervalMs: LuaStatusRefreshIntervalMs,
+            NextBlinkToggleMs: NextBlinkToggleMs(includeBlink, now),
+            NextLuaStatusRefreshMs: NextLuaStatusRefreshMs(),
             CoalesceRemainingMs: coalesceRemainingMs,
             SyncHoldRemainingMs: syncHoldRemainingMs,
-            SelectionAutoscrollActive: _mouseController?.SelectionAutoscrollActive == true));
+            SelectionAutoscrollActive: _mouseController?.SelectionAutoscrollActive == true,
+            ImageAnimationRemainingMs: includeImageAnimation
+                ? IdleWait.ImageAnimationRemainingMs(
+                    _nextImageDeadlineTicks, TimeProvider.System.GetTimestamp(), TimeProvider.System.TimestampFrequency)
+                : 0,
+            ControlWaitRemainingMs: IdleWaiterRemainingMs(now),
+            BellFlashRemainingMs: BellFlashRemainingMs(now)));
         if (timeoutMs > 0)
             _glfwApi!.WaitEventsTimeout(timeoutMs / 1000.0);
     }
@@ -1589,18 +1903,37 @@ internal static class DottyWindowHost
         DrainWindowEvents();
         if (_closed)
             return;
+        VtHostBridge.Tick(GetClockMilliseconds());
         if (_mouseController?.TickSelectionAutoscroll() == true)
             WindowPresentationGate.Invalidate(WindowFrameReason.Selection);
         var tabManager = _tabManager;
         var activeTab = tabManager.ActiveTab;
         long now = GetClockMilliseconds();
-        if (now - _lastLuaStatusRefreshTimestampMs >= LuaStatusRefreshIntervalMs)
+        ExpireIdleWaiters(now);
+        if (now >= NextLuaStatusRefreshMs())
             RefreshLuaStatus();
+        // Before the sync-hold and minimized-window early returns: a bell must still request attention then.
+        TickBell(now);
+        // A driver reset lost the context for good: input, shells and control commands keep being served above, but
+        // nothing can be drawn until Dotty restarts.
+        if (RenderingStopped)
+        {
+            FailScreenshotRequests("rendering stopped after a GPU reset");
+            WaitWithoutRendering();
+            return;
+        }
+        int framebufferWidth = _window.FramebufferSize.X;
+        int framebufferHeight = _window.FramebufferSize.Y;
+        FrameGate gate = FramePlanner.Gate(
+            synchronizedUpdateHeld: !WindowPresentationGate.ShouldPresent(activeTab?.Session.Adapter),
+            framebufferWidth,
+            framebufferHeight,
+            iconified: Volatile.Read(ref _windowIconified));
         // While a synchronized update (CSI 2026, used by nvim for every
         // redraw) is held, presents are withheld by design. Sleep instead of
         // spinning: the gate below used to burn 100% of a core here, starving
         // the PTY consumer and the producer itself and stretching the hold.
-        if (!WindowPresentationGate.ShouldPresent(activeTab?.Session.Adapter))
+        if (gate == FrameGate.SyncHold)
         {
             if (!_syncHeld)
             {
@@ -1623,14 +1956,22 @@ internal static class DottyWindowHost
                 _syncHoldOver250MsCount++;
         }
 
-        int framebufferWidth = _window.FramebufferSize.X;
-        int framebufferHeight = _window.FramebufferSize.Y;
-        if (framebufferWidth <= 0 || framebufferHeight <= 0)
+        // Iconified or zero-sized: nothing to draw into. Pending reasons stay queued for the restore frame.
+        if (gate == FrameGate.NoSurface)
         {
             WaitForWork(includeBlink: false);
             return;
         }
+        // An animated image's next frame is due. Checked after the synchronized-update gate (a held present would
+        // otherwise spin on the wake this invalidation posts) and in the same clock as IKittyGraphicsHost.NowTicks.
+        // The deadline is re-read from every composed frame, so a stale one costs at most one extra frame.
+        if (_nextImageDeadlineTicks != 0 && TimeProvider.System.GetTimestamp() >= _nextImageDeadlineTicks)
+            WindowPresentationGate.Invalidate(WindowFrameReason.ImageAnimation);
         UpdateCursorBlink(now, activeTab != null);
+        // Without an update_status hook the status text (shell command state) only changes with PTY output or
+        // other invalidations, so it is refreshed with them instead of polled.
+        if (!LuaStatusPollActive() && WindowPresentationGate.PendingReasons != WindowFrameReason.None)
+            RefreshLuaStatus();
 
         WindowFrameReason pendingReasons = WindowPresentationGate.PendingReasons;
         if ((pendingReasons & WindowFrameReason.TabOrPane) != 0)
@@ -1667,54 +2008,46 @@ internal static class DottyWindowHost
         {
             Array.Clear(_frameGenerationValid, 0, _visibleLeafCount);
         }
-        bool dirty = pendingReasons != WindowFrameReason.None ||
-            generationDirty ||
+        bool stateDirty = generationDirty ||
             framebufferWidth != _committedFramebufferWidth ||
             framebufferHeight != _committedFramebufferHeight ||
             _atlas.ContentVersion != _committedAtlasVersion;
-        if (!dirty)
+        RefreshMonitorRefreshRateIfStale();
+        FramePlan plan = FramePlanner.Decide(new FramePlanInputs(
+            NowMs: now,
+            PendingReasons: pendingReasons,
+            StateDirty: stateDirty,
+            LastPresentMs: _lastPresentTimestampMs,
+            LastInteractionMs: _lastInteractionTimestampMs,
+            ContentFrameIntervalMs: ContentFrameIntervalMs(AnyVisibleLeafBacklogged())));
+        if (plan.Action == FrameAction.Idle)
         {
             // No SwapBuffers here: swapping without a fresh render presents the
             // stale back buffer (one full frame behind, or uninitialized garbage
             // at startup) — a periodic fullscreen flash to old content every
             // time the keepalive would have fired. Holding the front buffer is
             // always correct when nothing changed.
-            WaitForWork(includeBlink: true);
+            CompleteIdleWaitersIfIdle(framebufferWidth, framebufferHeight);
+            WaitForWork(includeBlink: true, includeImageAnimation: true);
             return;
         }
         // Preserve bulk-output coalescing, but let content catch up immediately
         // for a short window after interactive input.
-        bool contentOnly = (pendingReasons & ~WindowFrameReason.Content) == WindowFrameReason.None;
-        if (contentOnly &&
-            _lastPresentTimestampMs != 0 &&
-            now - _lastPresentTimestampMs < WindowPresentationGate.BackloggedFrameIntervalMs)
+        if (plan.Action == FrameAction.Hold)
         {
-            bool anyBacklogged = false;
-            for (int i = 0; i < _visibleLeafCount; i++)
-            {
-                if (visibleLeaves[i].Session.OutputBacklogged)
-                {
-                    anyBacklogged = true;
-                    break;
-                }
-            }
-
-            long holdMs = WindowPresentationGate.CoalesceRemainingMs(
-                now,
-                _lastPresentTimestampMs,
-                _lastInteractionTimestampMs,
-                anyBacklogged);
-            if (holdMs > 0)
-            {
-                WaitForWork(includeBlink: true, coalesceRemainingMs: holdMs);
-                return;
-            }
+            WaitForWork(includeBlink: true, coalesceRemainingMs: plan.HoldMs, includeImageAnimation: true);
+            return;
         }
+        // The driver reset the GPU: the context is lost and rendering stops (see StopRenderingAfterContextLoss).
+        if (HandleContextResetIfReported())
+            return;
         WindowFrameReason consumedReasons = WindowPresentationGate.Consume();
         try
         {
             if (activeTab == null)
             {
+                _nextImageDeadlineTicks = 0;
+                long emptyRenderStart = FrameTimestamp();
                 _renderer.Render(
                     ReadOnlySpan<CellInstance>.Empty,
                     ReadOnlySpan<ChromeQuadInstance>.Empty,
@@ -1722,36 +2055,39 @@ internal static class DottyWindowHost
                     _atlas.Height,
                     framebufferWidth,
                     framebufferHeight,
-                    _cellWidth * _scale,
-                    _cellHeight * _scale,
-                    0.85f,
-                    0.7f,
-                    0.04f,
+                    _cellWidthPx,
+                    _cellHeightPx,
                     _themeBackground,
                     false);
-                _window.SwapBuffers();
+                _frameTimings.RecordRender(emptyRenderStart, FrameTimestamp());
+                CheckGlErrorsIfDebugging("render");
+                CaptureScreenshotsBeforeSwap(framebufferWidth, framebufferHeight);
+                SwapBuffersTimed();
                 _lastPresentTimestampMs = GetClockMilliseconds();
                 CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
+                OnFramePresented();
                 return;
             }
 
             var theme = _activeTheme;
             var padding = UserConfigService.Current.Window.Padding;
-            float padLeft = (float)padding.Left * _scale;
-            float padTop = (float)padding.Top * _scale;
-            int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+            var devicePadding = CurrentDevicePadding();
+            float padLeft = devicePadding.Left;
+            float padTop = devicePadding.Top;
+            int barRows = CurrentBarRows();
             float statusWidth = TabBarQuadBuilder.MeasureStatusWidth(
                 GetLuaStatusText(),
-                _cellWidth * _scale,
+                _cellWidthPx,
                 _typeface,
                 _cellFontSizePx(),
                 _atlas,
                 _luaStatusWarning);
             PublishCustomFrameHitTestGeometry(
                 framebufferWidth,
-                barRows * _cellHeight * _scale,
+                barRows * _cellHeightPx,
                 statusWidth);
 
+            long composeStart = FrameTimestamp();
             var frame = _sceneComposer.Compose(
                 activeTab,
                 tabManager,
@@ -1760,9 +2096,9 @@ internal static class DottyWindowHost
                 _themeSelectionColor,
                 framebufferWidth,
                 framebufferHeight,
-                _cellWidth,
-                _cellHeight,
-                _scale,
+                _cellWidthPx,
+                _cellHeightPx,
+                _display.ContentScale,
                 _rows,
                 _cols,
                 padding,
@@ -1776,7 +2112,8 @@ internal static class DottyWindowHost
                     _keyboardDispatcher?.ActiveMatchIndex ?? -1,
                     _keyboardDispatcher?.SearchMatches?.Count ?? 0,
                     _keyboardDispatcher?.SearchMatches,
-                    _keyboardDispatcher?.SearchQueryCursor ?? -1),
+                    _keyboardDispatcher is { SearchActive: true } dispatcher ? dispatcher.SearchQueryCursorColumn : -1,
+                    _keyboardDispatcher?.SearchOverlayFlags ?? Dotty.Runtime.Search.SearchOverlayFlags.None),
                 _activeContextMenu,
                 _mouseController?.HoveredTabIndex ?? -1,
                 _mouseController?.HoveredTabHitType ?? TabBarHitType.None,
@@ -1784,11 +2121,14 @@ internal static class DottyWindowHost
                 GetLuaStatusText(),
                 _luaStatusWarning,
                 captionButtonsWidth: _customFrameActive
-                    ? Math.Min(framebufferWidth, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                    ? Math.Min(framebufferWidth, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _display.ContentScale)
                     : 0f,
                 isMaximized: _window.WindowState == WindowState.Maximized,
-                preeditState: _nativeTextInput?.Preedit);
+                preeditState: _nativeTextInput?.Preedit,
+                windowFocused: _lastWindowFocus != false);
 
+            _nextImageDeadlineTicks = frame.NextImageDeadlineTicks;
+            _frameTimings.RecordCompose(composeStart, FrameTimestamp());
             if (frame.IsIncomplete)
             {
                 // A leaf lost the buffer-lock race mid-burst; its quads are missing.
@@ -1797,19 +2137,26 @@ internal static class DottyWindowHost
                 // consumed reasons so the retry still has work to do. Yield: the
                 // lock is held by the PTY consumer, so an immediate retry just
                 // burns a core re-composing a frame that will likely lose again.
+                frame.ReleaseImageLeases();
                 WindowPresentationGate.Requeue(consumedReasons);
                 WaitForWork(includeBlink: false, retryShortly: true);
                 return;
             }
             if (frame.ImeCaretBoundsValid && _nativeTextInput != null)
             {
+                // The composer reports device pixels; the IME wants window coordinates.
                 var caret = frame.ImeCaretBounds;
-                int left = (int)MathF.Floor(caret.Left / _scale);
-                int top = (int)MathF.Floor(caret.Top / _scale);
+                float toWindow = _display.WindowUnitsToDevice;
+                int left = (int)MathF.Floor(caret.Left / toWindow);
+                int top = (int)MathF.Floor(caret.Top / toWindow);
                 _nativeTextInput.SetCursorRectangle(left, top,
-                    Math.Max(1, (int)MathF.Ceiling(caret.Right / _scale) - left),
-                    Math.Max(1, (int)MathF.Ceiling(caret.Bottom / _scale) - top));
+                    Math.Max(1, (int)MathF.Ceiling(caret.Right / toWindow) - left),
+                    Math.Max(1, (int)MathF.Ceiling(caret.Bottom / toWindow) - top));
             }
+            var textConfig = UserConfigService.Current.Text;
+            _renderer.TextBlend = CoverageCorrection.ParseMode(textConfig.Blending);
+            _renderer.TextContrast = CoverageCorrection.NormalizeContrast(textConfig.Contrast);
+            long renderStart = FrameTimestamp();
             _renderer.Render(
                 frame.AsSpan(),
                 frame.AsChromeSpan(),
@@ -1817,11 +2164,8 @@ internal static class DottyWindowHost
                 _atlas.Height,
                 framebufferWidth,
                 framebufferHeight,
-                _cellWidth * _scale,
-                _cellHeight * _scale,
-                0.85f,
-                0.7f,
-                0.04f,
+                _cellWidthPx,
+                _cellHeightPx,
                 _themeBackground,
                 true,
                 padLeft,
@@ -1829,11 +2173,22 @@ internal static class DottyWindowHost
                 barRows,
                 frame.ScrollbarChromeStart,
                 frame.MenuInstanceStart,
-                frame.MenuChromeStart);
-            _window.SwapBuffers();
+                frame.MenuChromeStart,
+                frame.ImageDraws,
+                transforms: frame.AsTransformSpan(),
+                underlayChromeCount: frame.UnderlayChromeCount);
+            _frameTimings.RecordRender(renderStart, FrameTimestamp());
+            CheckGlErrorsIfDebugging("render");
+            frame.ReleaseImageLeases();
+            if (_renderer.ImageUploadsDeferred)
+                WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload);
+            DrawBellFlash(framebufferWidth, framebufferHeight);
+            CaptureScreenshotsBeforeSwap(framebufferWidth, framebufferHeight);
+            SwapBuffersTimed();
             _lastPresentTimestampMs = GetClockMilliseconds();
             _presentCount++;
             CommitFrameStamps(visibleLeaves, framebufferWidth, framebufferHeight);
+            OnFramePresented();
         }
         catch
         {
@@ -1847,22 +2202,27 @@ internal static class DottyWindowHost
         if (!hasActiveTab)
             return;
 
-        var cursorConfig = UserConfigService.Current.Cursor;
-        if (CursorBlinks(hasActiveTab))
+        BlinkPolicy blink = CurrentBlinkPolicy(hasActiveTab);
+        if (blink.IsBlinking)
         {
-            int blinkInterval = Math.Max(100, cursorConfig.BlinkIntervalMs);
-            if (now - _lastCursorBlinkTimestampMs >= blinkInterval)
+            bool on = blink.IsOn(now);
+            // Always advance to the segment containing now, so the idle wait's next deadline is never in the past.
+            _lastCursorBlinkTimestampMs = blink.NextToggleMs(now) - blink.IntervalMs;
+            if (on != _cursorBlinkVisible)
             {
-                _cursorBlinkVisible = !_cursorBlinkVisible;
-                _lastCursorBlinkTimestampMs = now;
+                _cursorBlinkVisible = on;
                 WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
             }
         }
-        else if (!_cursorBlinkVisible)
+        else
         {
-            _cursorBlinkVisible = true;
+            // An idle timer restarts with a full on segment when blinking resumes.
             _lastCursorBlinkTimestampMs = now;
-            WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
+            if (!_cursorBlinkVisible)
+            {
+                _cursorBlinkVisible = true;
+                WindowPresentationGate.Invalidate(WindowFrameReason.CursorBlink);
+            }
         }
     }
 
@@ -1922,11 +2282,13 @@ internal static class DottyWindowHost
         var context = _glfwApi!.Context;
         var setInputMode = (delegate* unmanaged[Cdecl]<nint, int, int, void>)context.GetProcAddress("glfwSetInputMode");
         var setKeyCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetKeyCallback");
-        var setCharCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetCharCallback");
+        // The char-mods callback also receives the characters of Alt chords (X11/Wayland Mod1, Windows WM_SYSCHAR),
+        // which the plain char callback drops; Meta chords use them to keep Shift (Alt+Shift+, = ESC <).
+        var setCharModsCallback = (delegate* unmanaged[Cdecl]<nint, nint, nint>)context.GetProcAddress("glfwSetCharModsCallback");
         // GLFW_LOCK_KEY_MODS includes the real Caps Lock/Num Lock state in each key event.
         setInputMode(handle, 0x00033004, 1);
         setKeyCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, int, int, int, int, void>)&OnNativeKeyboardKey);
-        setCharCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, uint, void>)&OnNativeKeyboardScalar);
+        setCharModsCallback(handle, (nint)(delegate* unmanaged[Cdecl]<nint, uint, int, void>)&OnNativeKeyboardScalar);
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -1935,8 +2297,11 @@ internal static class DottyWindowHost
         if (_closed)
             return;
 
-        // GLFW reports the effective state even when modifiers arrive without physical key events.
-        _nativeModifiers = (TerminalKeyModifiers)((modifiers & 0x39) | ((modifiers & 2) << 1) | ((modifiers & 4) >> 1));
+        // keyboard.leftAlt/rightAlt are read live; GLFW reports the effective modifier state even when modifiers
+        // arrive without physical key events.
+        var keyboardConfig = UserConfigService.Current.Keyboard;
+        _keyboardController.Modifiers.Policy = KeyboardPolicy.ForCurrentPlatform(keyboardConfig.LeftAlt, keyboardConfig.RightAlt);
+        _keyboardController.Modifiers.SetNativeGlfwModifiers(modifiers);
         if (action == 0)
         {
             WindowPresentationGate.Invalidate(WindowFrameReason.Input);
@@ -1954,12 +2319,13 @@ internal static class DottyWindowHost
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void OnNativeKeyboardScalar(nint window, uint codepoint)
+    private static void OnNativeKeyboardScalar(nint window, uint codepoint, int modifiers)
     {
         if (_closed)
             return;
 
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.Overlay);
+        _keyboardController.Modifiers.SetNativeGlfwModifiers(modifiers);
         _keyboardController.HandleUnicodeScalar(codepoint);
     }
 
@@ -1977,6 +2343,7 @@ internal static class DottyWindowHost
     private static void OnKeyboardActivity()
     {
         RecordInteraction();
+        HidePointerWhileTyping();
         _cursorBlinkVisible = true;
         _lastCursorBlinkTimestampMs = GetClockMilliseconds();
         WindowPresentationGate.Invalidate(WindowFrameReason.Input | WindowFrameReason.CursorBlink);
@@ -1994,7 +2361,6 @@ internal static class DottyWindowHost
         RefreshLuaStatus();
         if (!focused)
         {
-            _nativeModifiers = TerminalKeyModifiers.None;
             _keyboardController?.ResetState();
             _mouseController?.ResetState();
         }
@@ -2022,8 +2388,11 @@ internal static class DottyWindowHost
 
     private static long GetClockMilliseconds() =>
         System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency;
-    private static void RecordInteraction() =>
+    private static void RecordInteraction()
+    {
         _lastInteractionTimestampMs = GetClockMilliseconds();
+        _frameTimings.MarkInput(FrameTimestamp());
+    }
 
     private static void OnMouseDown(IMouse mouse, MouseButton button)
     {
@@ -2069,12 +2438,29 @@ internal static class DottyWindowHost
         var activePane = _tabManager?.ActiveTab?.ActivePane;
         if (activePane == null || !activePane.Selection.HasSelection) return;
 
-        var text = activePane.Selection.GetSelectedText(activePane.Session.Adapter.Buffer);
+        var text = activePane.Selection.GetSelectedText();
         if (!string.IsNullOrEmpty(text) && _keyboard != null)
         {
             _clipboard?.SetText(text);
         }
-        activePane.Selection.ClearSelection();
+        if (UserConfigService.Current.Selection.ClearOnCopy)
+            activePane.Selection.ClearSelection();
+    }
+
+    private static void CopyFinishedSelection(LeafPane pane)
+    {
+        var mode = MouseOptions.ParseCopyOnSelect(UserConfigService.Current.Mouse.CopyOnSelect);
+        if (mode == CopyOnSelectMode.None || !pane.Selection.HasSelection)
+            return;
+
+        CopyOnSelect.Apply(mode, pane.Selection.GetSelectedText(), _primary, _clipboard);
+    }
+
+    private static void PastePrimaryToPane(LeafPane targetPane)
+    {
+        if (_keyboard == null) return;
+
+        _primaryPasteRouter?.Paste(targetPane);
     }
 
     private static void PasteClipboardToSession()
@@ -2088,12 +2474,23 @@ internal static class DottyWindowHost
     {
         if (_keyboard == null) return;
 
-        var text = _clipboard?.GetText();
-        if (!string.IsNullOrEmpty(text))
+        _pasteRouter?.Paste(targetPane);
+    }
+
+    private static bool IsPaneAlive(LeafPane pane)
+    {
+        if (_closed || _tabManager == null)
+            return false;
+        foreach (var tab in _tabManager.Tabs)
         {
-            var bytes = ClipboardPasteRouter.Encode(text, targetPane.Session.Adapter);
-            targetPane.Session.WriteInput(bytes);
+            foreach (var leaf in tab.PaneTree.Leaves)
+            {
+                if (ReferenceEquals(leaf, pane))
+                    return true;
+            }
         }
+
+        return false;
     }
 
     private static void OnClosing()
@@ -2117,7 +2514,10 @@ internal static class DottyWindowHost
         _controlServer = null;
         while (_pendingControlCommands.TryDequeue(out var request))
             request.Completion.TrySetResult("ERROR host is closed");
+        FailParkedControlRequests();
+        UnsubscribeFramePacing();
         _window.FocusChanged -= OnWindowFocusChanged;
+        VtHostBridge.Detach();
         UserConfigService.ConfigChanged -= OnConfigChanged;
         if (_tabManager != null)
         {
@@ -2126,13 +2526,21 @@ internal static class DottyWindowHost
             _tabManager.TabAdded -= OnTabAdded;
             _tabManager.TabClosed -= OnTabClosed;
             _tabManager.TabTitleChanged -= OnTabTitleChanged;
+            DetachBellNotifications(_tabManager);
             var tabs = _tabManager.Tabs;
             for (int i = 0; i < tabs.Count; i++)
                 UnsubscribePaneTree(tabs[i]);
         }
         foreach (var pair in _clipboardSubscriptions)
+        {
             pair.Key.ClipboardWriteRequested -= pair.Value;
+            pair.Key.Adapter.DisposePrinterOutput();
+        }
         _clipboardSubscriptions.Clear();
+        foreach (var pair in _clipboardReadSubscriptions)
+            pair.Key.ClipboardReadRequested -= pair.Value;
+        _clipboardReadSubscriptions.Clear();
+        _clipboardReads.Clear();
         foreach (var pair in _renderSubscriptions)
             pair.Key.RenderScheduled -= pair.Value;
         _renderSubscriptions.Clear();
@@ -2154,6 +2562,7 @@ internal static class DottyWindowHost
         lock (_pendingClipboardsLock)
         {
             _pendingClipboards.Clear();
+            _pendingClipboardBytes = 0;
             Volatile.Write(ref _pendingClipboardCount, 0);
         }
         lock (_pendingTabTitleChangesLock)
@@ -2175,6 +2584,9 @@ internal static class DottyWindowHost
         _tabManager?.Dispose();
         _input?.Dispose();
         _clipboard = null;
+        _pasteRouter = null;
+        _sceneComposer?.Dispose();
+        DisposeBellOverlay();
         _renderer?.Dispose();
         if (_atlas != null)
         {
@@ -2182,6 +2594,72 @@ internal static class DottyWindowHost
             _atlas = null!;
         }
     }
+
+    private static readonly Dictionary<TerminalSession, Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest>> _clipboardReadSubscriptions = new();
+    private static readonly ClipboardReadService _clipboardReads = new(
+        new ClipboardReadEnvironment(),
+        static () => UserConfigService.Current.Clipboard,
+        GetClockMilliseconds);
+
+    /// <summary>Connects <see cref="ClipboardReadService"/> to the window state owned by this host.</summary>
+    private sealed class ClipboardReadEnvironment : IClipboardReadEnvironment
+    {
+        public bool IsAvailable => !_closed && _keyboard is not null;
+        public bool IsWindowFocused => _lastWindowFocus != false;
+        public bool IsMenuVisible => _activeContextMenu?.IsVisible == true;
+
+        public bool TryResolveOwner(TerminalSession session, out TerminalTab tab, out LeafPane pane) =>
+            TryFindOwningPane(session, out tab, out pane);
+
+        public bool IsActiveTab(TerminalTab tab) => ReferenceEquals(tab, _tabManager?.ActiveTab);
+
+        public bool AllowRead(LeafPane pane, TerminalTab tab, Dotty.Abstractions.Clipboard.ClipboardSelection selection) =>
+            _luaHost.Hooks.AllowClipboardRead(
+                pane,
+                tab,
+                selection == Dotty.Abstractions.Clipboard.ClipboardSelection.Primary ? "primary" : "clipboard");
+
+        public bool SupportsPrimarySelection => _primary is { IsSystemSelection: true };
+        public Dotty.Abstractions.Clipboard.ClipboardSelection ConfiguredSelection
+        {
+            get
+            {
+                CopyOnSelectMode mode = MouseOptions.ParseCopyOnSelect(UserConfigService.Current.Mouse.CopyOnSelect);
+                var selection = Dotty.Abstractions.Clipboard.ClipboardSelection.None;
+                if (mode is CopyOnSelectMode.Clipboard or CopyOnSelectMode.Both)
+                    selection |= Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+                if (mode is CopyOnSelectMode.Primary or CopyOnSelectMode.Both ||
+                    mode == CopyOnSelectMode.None && _primary is { IsSystemSelection: true })
+                    selection |= _primary is { IsSystemSelection: true }
+                        ? Dotty.Abstractions.Clipboard.ClipboardSelection.Primary
+                        : Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+                if (selection == Dotty.Abstractions.Clipboard.ClipboardSelection.None)
+                    selection = Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+                return selection;
+            }
+        }
+
+        public string? ReadPrimary() => _primary is { IsSystemSelection: true } primary ? primary.Get() : null;
+        public bool SupportsCutBuffer0 => _primary is { SupportsCutBuffer0: true };
+
+        public string? ReadCutBuffer0() =>
+            _primary is { SupportsCutBuffer0: true } primary ? primary.GetCutBuffer0() : null;
+
+        public string? ReadClipboard() => _clipboard?.GetText();
+
+        public void WriteReply(TerminalSession session, byte[] reply) => session.WriteInput(reply);
+
+        public void ShowPrompt(ContextMenuModel prompt)
+        {
+            var size = _window.FramebufferSize;
+            ClipboardReadPromptBuilder.Center(prompt, size.X, size.Y, _cellWidthPx, _cellHeightPx);
+            _mouseHost.ActiveContextMenu = prompt;
+            WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
+        }
+
+        public void Wake() => HostWake.Request();
+    }
+
     private sealed class KeyboardClipboard : ITerminalClipboard
     {
         private readonly IKeyboard _keyboard;
@@ -2208,9 +2686,13 @@ internal static class DottyWindowHost
             {
                 if (ReferenceEquals(_activeContextMenu, value))
                     return;
+                var previousMenu = _activeContextMenu;
                 _nativeTextInput?.Cancel();
                 _activeContextMenu = value;
                 _nativeTextInput?.SetFocus((_lastWindowFocus ?? _initialWindowInputFocus) && value?.IsVisible != true);
+                // Close last: a Dismissed callback may install another menu (e.g. a follow-up prompt) and must not be overwritten.
+                if (previousMenu is { IsVisible: true })
+                    previousMenu.Close();
             }
         }
 
@@ -2219,25 +2701,26 @@ internal static class DottyWindowHost
             get
             {
                 var size = _window.FramebufferSize;
-                var padding = UserConfigService.Current.Window.Padding;
-                int barRows = IsTabBarVisible ? TabBarLayout.ComputeBarRows(UserConfigService.Current.TabBar.Height, _cellHeight) : 0;
+                var padding = CurrentDevicePadding();
+                int barRows = CurrentBarRows();
                 float captionButtonsWidth = _customFrameActive
-                    ? Math.Min(size.X, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _scale)
+                    ? Math.Min(size.X, TabBarLayout.CaptionButtonWidth * TabBarLayout.CaptionButtonCount * _display.ContentScale)
                     : 0f;
                 float statusWidth = TabBarQuadBuilder.MeasureStatusWidth(
                     GetLuaStatusText(),
-                    _cellWidth * _scale,
+                    _cellWidthPx,
                     _typeface,
                     _cellFontSizePx(),
                     _atlas,
                     _luaStatusWarning);
                 return new TerminalMouseGeometry(
-                    Scale: _scale,
-                    CellWidth: _cellWidth,
-                    CellHeight: _cellHeight,
-                    PaddingLeft: (float)padding.Left * _scale,
-                    PaddingTop: (float)padding.Top * _scale,
-                    TopOffset: barRows * _cellHeight * _scale,
+                    ContentScale: _display.ContentScale,
+                    WindowUnitsToDevice: _display.WindowUnitsToDevice,
+                    CellWidth: _cellWidthPx,
+                    CellHeight: _cellHeightPx,
+                    PaddingLeft: padding.Left,
+                    PaddingTop: padding.Top,
+                    TopOffset: barRows * _cellHeightPx,
                     FramebufferWidth: size.X,
                     FramebufferHeight: size.Y,
                     Columns: _cols,
@@ -2247,16 +2730,22 @@ internal static class DottyWindowHost
                     CaptionButtonsWidth: captionButtonsWidth);
             }
         }
-        public bool Ctrl => (_keyboardController?.Ctrl ?? false) || (_nativeModifiers & TerminalKeyModifiers.Control) != 0;
-        public bool Shift => (_keyboardController?.Shift ?? false) || (_nativeModifiers & TerminalKeyModifiers.Shift) != 0;
-        public bool Alt => (_keyboardController?.Alt ?? false) || (_nativeModifiers & TerminalKeyModifiers.Alt) != 0;
-        public bool AltGr => _keyboardController?.AltGr ?? false;
-        public bool Super => (_keyboardController?.Super ?? false) || (_nativeModifiers & TerminalKeyModifiers.Meta) != 0;
-        public TerminalKeyModifiers LockModifiers => _nativeModifiers & (TerminalKeyModifiers.CapsLock | TerminalKeyModifiers.NumLock);
+        public bool Ctrl => _keyboardController?.Modifiers.Ctrl ?? false;
+        public bool Shift => _keyboardController?.Modifiers.Shift ?? false;
+        public bool Alt => _keyboardController?.Modifiers.Alt ?? false;
+        public bool AltGr => _keyboardController?.Modifiers.AltGr ?? false;
+        public bool Super => _keyboardController?.Modifiers.Super ?? false;
+        public TerminalKeyModifiers LockModifiers => _keyboardController?.Modifiers.LockModifiers ?? TerminalKeyModifiers.None;
+        public bool MetaUsesCommittedText => _keyboardController?.Modifiers.MetaUsesCommittedText ?? false;
+        public bool KeypadNavigation => _keyboardController?.Modifiers.KeypadNavigation ?? false;
 
         public void CopySelection() => CopySelectionToClipboard();
         public void PasteClipboard() => PasteClipboardToSession();
         public void PasteClipboard(LeafPane targetPane) => PasteClipboardToPane(targetPane);
+        public MiddleClickAction MiddleClick => MouseOptions.ParseMiddleClick(UserConfigService.Current.Mouse.MiddleClickAction);
+        public MouseInputSettings MouseInput => MouseOptions.ResolveInput(UserConfigService.Current.Mouse);
+        public void PastePrimary(LeafPane targetPane) => PastePrimaryToPane(targetPane);
+        public void OnLocalSelectionFinished(LeafPane pane) => CopyFinishedSelection(pane);
         public bool TryExecuteAction(TerminalAction action) =>
             _keyboardDispatcher?.Actions.TryExecute(action) ?? false;
 
@@ -2297,15 +2786,39 @@ internal static class DottyWindowHost
             WindowPresentationGate.Invalidate(WindowFrameReason.Resize | WindowFrameReason.Input);
         }
 
+        public void ReloadConfig() => UserConfigService.RequestReload();
+
+        public string? ReadClipboardText() => _clipboard?.GetText();
+
+        public string? GetShortcutLabel(TerminalAction action) => _keybindings.GetShortcutLabel(action);
+
+        public SearchUserConfig SearchDefaults => UserConfigService.Current.Search;
+
+        public bool TryClickSearchOverlay(float deviceX, float deviceY)
+        {
+            var geometry = Geometry;
+            return _keyboardDispatcher?.ClickSearchOverlay(deviceX, deviceY, geometry.FramebufferWidth, geometry.FramebufferHeight,
+                geometry.CellWidth) ?? false; // TerminalMouseGeometry cell sizes are device pixels (W4-C1)
+        }
+
+        public void ToggleTabBar()
+        {
+            _showTabBar = !_showTabBar;
+            var size = _window.FramebufferSize;
+            if (size.X > 0 && size.Y > 0)
+                ApplyFramebufferLayout(size);
+            WindowPresentationGate.Invalidate(WindowFrameReason.Resize | WindowFrameReason.Input);
+        }
+
         public void DuplicateTab(TerminalTab activeTab)
         {
             var newTab = _tabManager.CreateTab(
                 cols: _cols,
                 rows: _rows,
-                workingDirectory: activeTab.Session.CurrentWorkingDirectory ?? activeTab.WorkingDirectory,
+                workingDirectory: activeTab.Session.InheritableWorkingDirectory,
                 shell: activeTab.Session.LaunchShell,
                 shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
-            SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
+            SilkConfig.ApplyConfigToAdapter(newTab.Session.Adapter);
         }
 
         public void CloseOtherTabs(TerminalTab activeTab)
@@ -2326,10 +2839,10 @@ internal static class DottyWindowHost
             var newTab = _tabManager.CreateTab(
                 cols: _cols,
                 rows: _rows,
-                workingDirectory: activeTab.Session.CurrentWorkingDirectory ?? activeTab.WorkingDirectory,
+                workingDirectory: activeTab.Session.InheritableWorkingDirectory,
                 shell: activeTab.Session.LaunchShell,
                 shellIsExecutable: activeTab.Session.LaunchShellIsExecutable);
-            SilkConfig.ApplyThemeToAdapter(newTab.Session.Adapter);
+            SilkConfig.ApplyConfigToAdapter(newTab.Session.Adapter);
         }
 
         public void ClearTerminal(TerminalTab activeTab)
@@ -2340,22 +2853,81 @@ internal static class DottyWindowHost
         }
 
         public void WriteInput(TerminalTab activeTab, ReadOnlySpan<byte> bytes) =>
-            activeTab.Session.WriteInput(bytes);
+            activeTab.Session.WriteUserInput(bytes);
 
-        public void OpenHyperlink(string url)
+        private HyperlinkActivator? _hyperlinks;
+
+        private HyperlinkActivator Hyperlinks => _hyperlinks ??= new HyperlinkActivator(
+            () => HyperlinkOptions.From(UserConfigService.Current.Hyperlinks),
+            (url, source) => _luaHost.Hooks.TryOpenUrl(
+                url, source == HyperlinkSource.Explicit ? "explicit" : "detected"),
+            new SystemHyperlinkOpener());
+
+        public HyperlinkScanOptions HyperlinkScan => new(UserConfigService.Current.Hyperlinks.Osc8);
+
+        public void OpenHyperlink(string url, HyperlinkSource source, string? displayText)
         {
-            if (!_luaHost.Hooks.TryOpenUrl(url))
+            HyperlinkActivation activation = Hyperlinks.Activate(url, source, displayText);
+            switch (activation.Kind)
             {
-                _ = new DefaultHyperlinkHandler().OpenUrlAsync(url);
+                case HyperlinkActivationKind.Open:
+                    OpenApprovedHyperlink(activation.Target!);
+                    break;
+                case HyperlinkActivationKind.NeedsConfirmation:
+                    ConfirmHyperlink(activation, displayText);
+                    break;
+                case HyperlinkActivationKind.Blocked:
+                    DebugLog.Log($"[hyperlink] blocked: {activation.Message}");
+                    ShowPrompt(HyperlinkPromptBuilder.BuildNotice("Link blocked", activation.Message ?? "The link is not allowed."));
+                    break;
             }
+        }
+
+        /// <summary>
+        /// Asks the user to confirm a risky link. The prompt holds the already-evaluated canonical target, so
+        /// what the user confirmed is exactly what opens. Cancel is focused; Escape and click-outside cancel.
+        /// </summary>
+        private void ConfirmHyperlink(HyperlinkActivation activation, string? displayText)
+        {
+            HyperlinkTarget target = activation.Target!;
+            ShowPrompt(HyperlinkPromptBuilder.BuildConfirm(
+                target,
+                activation.Risks,
+                displayText,
+                open: () => OpenApprovedHyperlink(target),
+                copyAddress: () => _clipboard?.SetText(target.Canonical)));
+        }
+
+        private void OpenApprovedHyperlink(HyperlinkTarget target) => _ = OpenApprovedHyperlinkAsync(target);
+
+        private async Task OpenApprovedHyperlinkAsync(HyperlinkTarget target)
+        {
+            HyperlinkOpenResult result = await Hyperlinks.OpenApprovedAsync(target).ConfigureAwait(false);
+            if (result.Success)
+                return;
+
+            DebugLog.Log($"[hyperlink] open failed: {result.Error}");
+            string message = result.Error ?? "The link could not be opened.";
+            // The opener finishes on a thread-pool thread; menus belong to the UI thread.
+            _lifecycle.TryEnqueue(() => ShowPrompt(HyperlinkPromptBuilder.BuildNotice("Could not open link", message)));
+        }
+
+        /// <summary>Shows a host prompt at the pointer (the layout clamps it into the viewport).</summary>
+        internal void ShowPrompt(ContextMenuModel prompt)
+        {
+            if (_closed)
+                return;
+
+            var pointer = _mouse?.Position ?? default;
+            prompt.X = _display.WindowToDevice(pointer.X);
+            prompt.Y = _display.WindowToDevice(pointer.Y);
+            ActiveContextMenu = prompt;
+            WindowPresentationGate.Invalidate(WindowFrameReason.Overlay);
         }
 
         public void SetPointerCursor(StandardCursor cursor)
         {
-            if (_mouse != null)
-            {
-                _mouse.Cursor.StandardCursor = cursor;
-            }
+            SetHostPointer(cursor);
         }
     }
 }

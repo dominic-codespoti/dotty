@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 using Dotty.Terminal.Adapter.Buffer;
+using Dotty.Terminal.Graphics;
 
 namespace Dotty.Terminal.Adapter;
 
@@ -16,8 +17,15 @@ internal sealed class BufferTextWriter
     private readonly BufferEraser _eraser;
     private readonly TerminalBuffer _ctx;
     private readonly StyleSet _styleSet;
+    private const int MaxGraphemeCacheEntries = 4096;
+    // A cell's cluster (at most MaxCellChars) plus at least as many chars of the next write: enough to see every
+    // continuation that still fits under the per-cell scalar cap.
+    private const int JoinWindowChars = GraphemeHelper.MaxCellChars * 2;
     private static readonly ConcurrentDictionary<string, string> _graphemeCache = new();
     private int _lastDirtyRow = -1;
+    // The last print wrote a non-ASCII cluster, which a following ASCII character may still continue (a Prepend
+    // character such as U+0600 joins the next base). ASCII after ASCII never joins, so the ASCII paths test this only.
+    private bool _clusterPending;
 
     public BufferTextWriter(TerminalBuffer ctx, CursorController cursor, BufferEraser eraser, StyleSet styleSet)
     {
@@ -35,6 +43,23 @@ internal sealed class BufferTextWriter
         ushort hyperlinkId = attributes.HyperlinkId;
         int length = text.Length;
         int i = 0;
+        // Clustering is always on (DECRQM 2027 reports "permanently set") and spans writes: a cluster that starts in
+        // an earlier write (or before an ASCII run of this one) is re-joined with the cell it was written to
+        // (TryJoinPrevious). A cluster segmented from this same text is already maximal, so the cluster after it is
+        // not tested again.
+        bool tryJoin = true;
+        bool lastWasCluster = false;
+        if (_clusterPending)
+        {
+            _clusterPending = false;
+            char first = text[0];
+            if (first >= 32 && first < 127 && TryJoinPrevious(text, out int joined))
+            {
+                i = joined;
+                tryJoin = false;
+                lastWasCluster = true;
+            }
+        }
 
         while (i < length)
         {
@@ -50,6 +75,8 @@ internal sealed class BufferTextWriter
             {
                 var run = text.Slice(runStart, i - runStart);
                 WriteAsciiRunBulk(run, styleId, hyperlinkId);
+                tryJoin = true;
+                lastWasCluster = false;
                 if (i >= length) break;
             }
 
@@ -60,6 +87,8 @@ internal sealed class BufferTextWriter
             {
                 _ctx.CarriageReturn();
                 _ctx.LineFeed();
+                tryJoin = true;
+                lastWasCluster = false;
                 i += 2;
                 continue;
             }
@@ -70,21 +99,30 @@ internal sealed class BufferTextWriter
                 {
                     _eraser.ErasePreviousGlyph(_ctx.ActiveBuffer, _cursor, _ctx.Rows, _ctx.Columns);
                     RequestMarkRowDirty(_cursor.Row);
+                    tryJoin = true;
+                    lastWasCluster = false;
                     i++;
+                    continue;
+                }
+
+                if (tryJoin && TryJoinPrevious(text.Slice(i), out int joined))
+                {
+                    i += joined;
+                    tryJoin = false;
+                    lastWasCluster = true;
                     continue;
                 }
 
                 int len = StringInfo.GetNextTextElementLength(text.Slice(i));
                 if (len > 0)
                 {
-                    var slice = text.Slice(i, len);
-                    var lookup = _graphemeCache.GetAlternateLookup<ReadOnlySpan<char>>();
-                    if (!lookup.TryGetValue(slice, out string? element))
-                    {
-                        element = slice.ToString();
-                        lookup.TryAdd(slice, element);
-                    }
-                    WriteGrapheme(element, styleId, hyperlinkId);
+                    // Cap the cluster at base + 64 combining code points; the rest is consumed but dropped.
+                    int keep = len <= GraphemeHelper.MaxScalarsPerCell
+                        ? len
+                        : GraphemeHelper.TruncateToScalars(text.Slice(i, len), GraphemeHelper.MaxScalarsPerCell);
+                    WriteGrapheme(GetCachedString(text.Slice(i, keep)), styleId, hyperlinkId);
+                    tryJoin = false;
+                    lastWasCluster = true;
                     i += len;
                     continue;
                 }
@@ -102,28 +140,61 @@ internal sealed class BufferTextWriter
                     RequestMarkRowDirty(_cursor.Row);
                     break;
             }
+            tryJoin = true;
+            lastWasCluster = false;
             i++;
         }
+
+        _clusterPending = lastWasCluster;
+    }
+
+    /// <summary>
+    /// Returns the interned string for a cluster. The cache is process-wide and keyed by arbitrary program output,
+    /// so it is bounded.
+    /// </summary>
+    private static string GetCachedString(ReadOnlySpan<char> cluster)
+    {
+        var lookup = _graphemeCache.GetAlternateLookup<ReadOnlySpan<char>>();
+        if (!lookup.TryGetValue(cluster, out string? element))
+        {
+            if (_graphemeCache.Count > MaxGraphemeCacheEntries) _graphemeCache.Clear();
+            element = cluster.ToString();
+            lookup.TryAdd(cluster, element);
+        }
+        return element;
     }
 
     /// <summary>
     /// Writes a pure-ASCII byte span directly to the buffer, skipping all
     /// control-character / non-ASCII / grapheme dispatch that WriteText performs.
-    /// The parser already validated every byte is in [0x20, 0x7E].
+    /// The parser already validated every byte is in [0x20, 0x7E]. Only the
+    /// first byte can continue a cluster left open by the previous write (after
+    /// a Prepend character): ASCII never extends an ASCII base.
     /// </summary>
     internal void WriteAscii(ReadOnlySpan<byte> text, in CellAttributes attributes)
     {
         if (text.IsEmpty) return;
+
+        if (_clusterPending)
+        {
+            _clusterPending = false;
+            char first = (char)text[0];
+            if (TryJoinPrevious(new ReadOnlySpan<char>(in first), out _))
+            {
+                text = text.Slice(1);
+                if (text.IsEmpty) return;
+            }
+        }
 
         ushort styleId = _styleSet.GetOrCreateId(in attributes);
         ushort hyperlinkId = attributes.HyperlinkId;
         WriteAsciiRunBulk(text, styleId, hyperlinkId);
     }
 
-    private static void ApplyCellTemplate(ref CellHot cell, ushort styleId)
+    private void ApplyCellTemplate(ref CellHot cell, ushort styleId)
     {
         cell.StyleId = styleId;
-        cell.PackedFlags = 0;
+        cell.PackedFlags = _ctx.IsProtectionActive ? (byte)0x10 : (byte)0;
     }
 
     private unsafe void WriteAsciiRunBulk(ReadOnlySpan<char> run, ushort styleId, ushort hyperlinkId)
@@ -142,20 +213,20 @@ internal sealed class BufferTextWriter
 
             if (_ctx._autoWrap && _cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
                 row = _cursor.Row;
-                col = 0;
+                col = _cursor.Col;
             }
 
             if (col < 0 || col >= cols) return;
 
-            int spaceOnRow = cols - col;
+            int rightCol = _ctx.GetWriteRightMargin(col);
+            int spaceOnRow = rightCol - col + 1;
             int chunkLen = Math.Min(remaining, spaceOnRow);
 
             var buf = _ctx.ActiveBuffer;
+            if (_ctx.InsertMode)
+                buf.InsertColumns(row, col, rightCol, chunkLen);
             int rowMapIdx = buf.GetPhysicalRow(row);
             int baseIdx = rowMapIdx * cols + col;
             int endCol = col + chunkLen - 1;
@@ -172,7 +243,7 @@ internal sealed class BufferTextWriter
             }
 
             int i = 0;
-            uint styleUint = styleId; // StyleId in low 16 bits, PackedFlags=0 in byte 2, _pad=0 in byte 3
+            uint styleUint = (uint)(styleId | (_ctx.IsProtectionActive ? 0x100000 : 0)); // PackedFlags occupies byte 2.
 
             // AVX2: process 4 cells per vector store (32 bytes = 4 × 8-byte CellHot)
             if (Avx2.IsSupported)
@@ -218,7 +289,7 @@ internal sealed class BufferTextWriter
                 for (int j = 0; j < chunkLen; j++)
                 {
                     ref var cold = ref Unsafe.Add(ref coldData, baseIdx + j);
-                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
                         cold.Reset();
                 }
             }
@@ -227,7 +298,8 @@ internal sealed class BufferTextWriter
             // this ASCII overwrite, clear its trailing continuation cells so stale
             // fragments do not survive at the right edge of the rewritten run.
             int trailingCol = endCol + 1;
-            while (trailingCol < cols)
+            int trailingLimit = _ctx.InsertMode ? rightCol + 1 : cols;
+            while (trailingCol < trailingLimit)
             {
                 ref var trailing = ref buf.GetCellRef(row, trailingCol);
                 if (!trailing.IsContinuation)
@@ -263,21 +335,18 @@ internal sealed class BufferTextWriter
 
             if (remaining > 0)
             {
-                _cursor.Set(row, cols - 1, _ctx.Rows, cols);
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
+                _cursor.SetWrapPending(_ctx._autoWrap);
+            }
+            else if (_ctx._autoWrap && endCol >= rightCol)
+            {
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
             {
-                if (_ctx._autoWrap && endCol >= cols - 1)
-                {
-                    _cursor.Set(row, cols - 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(true);
-                }
-                else
-                {
-                    _cursor.Set(row, endCol + 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(false);
-                }
+                _cursor.Set(row, Math.Min(endCol + 1, rightCol), _ctx.Rows, cols);
+                _cursor.SetWrapPending(false);
             }
         }
     }
@@ -301,20 +370,20 @@ internal sealed class BufferTextWriter
 
             if (_ctx._autoWrap && _cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
                 row = _cursor.Row;
-                col = 0;
+                col = _cursor.Col;
             }
 
             if (col < 0 || col >= cols) return;
 
-            int spaceOnRow = cols - col;
+            int rightCol = _ctx.GetWriteRightMargin(col);
+            int spaceOnRow = rightCol - col + 1;
             int chunkLen = Math.Min(remaining, spaceOnRow);
 
             var buf = _ctx.ActiveBuffer;
+            if (_ctx.InsertMode)
+                buf.InsertColumns(row, col, rightCol, chunkLen);
             int rowMapIdx = buf.GetPhysicalRow(row);
             int baseIdx = rowMapIdx * cols + col;
             int endCol = col + chunkLen - 1;
@@ -331,7 +400,7 @@ internal sealed class BufferTextWriter
             }
 
             int i = 0;
-            uint styleUint = styleId;
+            uint styleUint = (uint)(styleId | (_ctx.IsProtectionActive ? 0x100000 : 0));
 
             // AVX2: process 4 cells per vector store
             if (Avx2.IsSupported)
@@ -377,14 +446,15 @@ internal sealed class BufferTextWriter
                 for (int j = 0; j < chunkLen; j++)
                 {
                     ref var cold = ref Unsafe.Add(ref coldData, baseIdx + j);
-                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                    if (cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
                         cold.Reset();
                 }
             }
 
             // Clear trailing continuation cells from previous content
             int trailingCol = endCol + 1;
-            while (trailingCol < cols)
+            int trailingLimit = _ctx.InsertMode ? rightCol + 1 : cols;
+            while (trailingCol < trailingLimit)
             {
                 ref var trailing = ref buf.GetCellRef(row, trailingCol);
                 if (!trailing.IsContinuation)
@@ -420,21 +490,18 @@ internal sealed class BufferTextWriter
 
             if (remaining > 0)
             {
-                _cursor.Set(row, cols - 1, _ctx.Rows, cols);
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
+                _cursor.SetWrapPending(_ctx._autoWrap);
+            }
+            else if (_ctx._autoWrap && endCol >= rightCol)
+            {
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
             {
-                if (_ctx._autoWrap && endCol >= cols - 1)
-                {
-                    _cursor.Set(row, cols - 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(true);
-                }
-                else
-                {
-                    _cursor.Set(row, endCol + 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(false);
-                }
+                _cursor.Set(row, Math.Min(endCol + 1, rightCol), _ctx.Rows, cols);
+                _cursor.SetWrapPending(false);
             }
         }
     }
@@ -461,25 +528,24 @@ internal sealed class BufferTextWriter
         {
             if (_cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
             }
             _cursor.EnsureSpace(1, _ctx.Rows, _ctx.Columns);
             startCol = _cursor.Col;
         }
         else
         {
-            int cols = _ctx.Columns;
             startCol = _cursor.Col;
-            if (startCol > cols - 1) startCol = Math.Max(0, cols - 1);
-            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, cols);
+            int clampRight = _ctx.GetWriteRightMargin(startCol);
+            if (startCol > clampRight) startCol = clampRight;
+            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, _ctx.Columns);
         }
 
         var buf = _ctx.ActiveBuffer;
         int currentRow = _cursor.Row;
 
+        if (_ctx.InsertMode)
+            buf.InsertColumns(currentRow, startCol, _ctx.GetWriteRightMargin(startCol), 1);
         ref var cell = ref buf.GetCellRef(currentRow, startCol);
 
         if (cell.IsContinuation || cell.Width > 1)
@@ -488,7 +554,7 @@ internal sealed class BufferTextWriter
             cell = ref buf.GetCellRef(currentRow, startCol);
         }
 
-        bool hadCold = cell.HasHyperlink || cell.HasGrapheme;
+        bool hadCold = cell.HasHyperlink || cell.HasGrapheme || cell.Rune == PlaceholderTable.PlaceholderRune;
         ApplyCellTemplate(ref cell, styleId);
         cell.Rune = ch;
 
@@ -507,12 +573,13 @@ internal sealed class BufferTextWriter
         if (consumedWrap)
             buf.SetRowContinuation(currentRow, true);
 
+        int cols = _ctx.Columns;
+        int rightCol = _ctx.GetWriteRightMargin(startCol);
         if (autoWrap)
         {
-            int cols = _ctx.Columns;
-            if (startCol >= cols - 1)
+            if (startCol >= rightCol)
             {
-                _cursor.Set(currentRow, Math.Min(cols - 1, startCol), _ctx.Rows, cols);
+                _cursor.Set(currentRow, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
@@ -523,8 +590,7 @@ internal sealed class BufferTextWriter
         }
         else
         {
-            int cols = _ctx.Columns;
-            _cursor.Set(currentRow, Math.Min(startCol + 1, cols - 1), _ctx.Rows, cols);
+            _cursor.Set(currentRow, Math.Min(startCol + 1, rightCol), _ctx.Rows, cols);
             _cursor.SetWrapPending(false);
         }
         RequestMarkRowDirty(currentRow);
@@ -533,13 +599,26 @@ internal sealed class BufferTextWriter
     private void WriteGrapheme(string grapheme, ushort styleId, ushort hyperlinkId)
     {
         if (string.IsNullOrEmpty(grapheme)) return;
-        int width = UnicodeWidth.GetWidth(grapheme);
+        // A Unicode-placeholder cluster (U+10EEEE + diacritics) is always one cell wide and never enters the grapheme store.
+        bool placeholder = PlaceholderTable.IsPlaceholderCluster(grapheme);
+        int width = placeholder ? 1 : UnicodeWidth.GetWidth(grapheme);
         if (width == 0)
         {
             if (AttachCombiningMark(grapheme)) return;
             width = 1;
         }
 
+        PlaceCluster(grapheme, placeholder, width, styleId, hyperlinkId, _ctx.IsProtectionActive);
+    }
+
+    /// <summary>
+    /// Writes one cluster of <paramref name="width"/> cells at the cursor (wrapping first when autowrap is on and
+    /// it does not fit) and advances the cursor past it.
+    /// </summary>
+    private void PlaceCluster(string grapheme, bool placeholder, int width, ushort styleId, ushort hyperlinkId, bool protectedGlyph, bool applyInsert = true)
+    {
+        int columns = _ctx.Columns;
+        if (width > columns) width = columns;
         bool autoWrap = _ctx._autoWrap;
         bool consumedWrap = false;
         int startCol;
@@ -547,25 +626,34 @@ internal sealed class BufferTextWriter
         {
             if (_cursor.WrapPending)
             {
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
-                _cursor.SetWrapPending(false);
-                consumedWrap = true;
+                consumedWrap = _ctx.WrapToNextLine();
             }
-            _cursor.EnsureSpace(width, _ctx.Rows, _ctx.Columns);
+            int wrapRight = _ctx.GetWriteRightMargin(_cursor.Col);
+            if (_cursor.Col + width - 1 > wrapRight)
+            {
+                // This advance skips a glyph that cannot fit; unlike consuming wrap-pending, it does not make
+                // the destination row a continuation of the preceding row.
+                _ctx.WrapToNextLine();
+            }
             startCol = _cursor.Col;
         }
         else
         {
-            int cols = _ctx.Columns;
             startCol = _cursor.Col;
-            if (startCol > cols - width) startCol = Math.Max(0, cols - width);
-            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, cols);
+            int clampRight = _ctx.GetWriteRightMargin(startCol);
+            if (startCol + width - 1 > clampRight)
+                startCol = Math.Max(0, clampRight - width + 1);
+            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, columns);
         }
 
         var buf = _ctx.ActiveBuffer;
         int currentRow = _cursor.Row;
-        buf.ClearCell(currentRow, startCol);
+        // Overwriting cells never changes whether this row soft-wraps from the previous one, but clearing does.
+        bool continuesPrevious = consumedWrap || buf.GetRowContinuesPrevious(currentRow);
+        if (_ctx.InsertMode && applyInsert)
+            buf.InsertColumns(currentRow, startCol, _ctx.GetWriteRightMargin(startCol), width);
+        // Clear every covered cell, so a wide glyph partly overwritten here is removed whole.
+        buf.ClearColumns(currentRow, startCol, startCol + width);
 
         uint rune;
         try { rune = (uint)char.ConvertToUtf32(grapheme, 0); }
@@ -576,15 +664,21 @@ internal sealed class BufferTextWriter
         cell.StyleId = styleId;
         cell.Width = (byte)Math.Clamp(width, 1, 2);
         cell.IsContinuation = false;
+        cell.IsProtected = protectedGlyph;
         cell.HasHyperlink = hyperlinkId != 0;
-        cell.HasGrapheme = grapheme.Length > 1;
+        cell.HasGrapheme = !placeholder && grapheme.Length > 1;
 
         if (hyperlinkId != 0)
         {
             buf.SetColdHyperlink(currentRow, startCol, hyperlinkId);
         }
 
-        if (grapheme.Length > 1)
+        if (placeholder)
+        {
+            short code = PlaceholderTable.Encode(grapheme.AsSpan(2));
+            if (code != -1) buf.SetColdGraphemeIndex(currentRow, startCol, code);
+        }
+        else if (grapheme.Length > 1)
         {
             buf.SetColdGraphemeIndex(currentRow, startCol, GraphemeHelper.StoreGrapheme(grapheme));
         }
@@ -594,7 +688,10 @@ internal sealed class BufferTextWriter
             ref var cont = ref buf.GetCellRef(_cursor.Row, startCol + i);
             cont.Reset();
             cont.IsContinuation = true;
+            cont.IsProtected = protectedGlyph;
             cont.StyleId = styleId;
+            // The cell may have held a placeholder code (or other cold data); a continuation never keeps it.
+            buf.GetColdCellRef(_cursor.Row, startCol + i).Reset();
             if (hyperlinkId != 0)
             {
                 cont.HasHyperlink = true;
@@ -604,16 +701,17 @@ internal sealed class BufferTextWriter
 
         buf.UpdateRowMaxCol(currentRow, startCol + width - 1);
         buf.MarkRowEnd(currentRow, startCol + width - 1);
-        if (consumedWrap)
+        if (continuesPrevious)
             buf.SetRowContinuation(currentRow, true);
 
+        int cols = _ctx.Columns;
+        int endCol = startCol + width - 1;
+        int rightCol = _ctx.GetWriteRightMargin(startCol);
         if (autoWrap)
         {
-            int cols = _ctx.Columns;
-            int endCol = startCol + width - 1;
-            if (endCol >= cols - 1)
+            if (endCol >= rightCol)
             {
-                _cursor.Set(_cursor.Row, Math.Min(cols - 1, endCol), _ctx.Rows, cols);
+                _cursor.Set(_cursor.Row, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
@@ -624,13 +722,92 @@ internal sealed class BufferTextWriter
         }
         else
         {
-            int cols = _ctx.Columns;
-            _cursor.Set(_cursor.Row, Math.Min(_cursor.Col + width, cols - 1), _ctx.Rows, cols);
+            _cursor.Set(_cursor.Row, Math.Min(endCol + 1, rightCol), _ctx.Rows, cols);
             _cursor.SetWrapPending(false);
         }
         RequestMarkRowDirty(currentRow);
     }
 
+    /// <summary>
+    /// Re-joins a grapheme cluster split across writes. The base is the cell before the cursor on the cursor row (the
+    /// cursor cell itself while a wrap is pending), as in Ghostty; it never reaches into the previous row. When that
+    /// cell's cluster followed by the start of <paramref name="text"/> segments (UAX #29, .NET
+    /// <see cref="StringInfo"/>) as one cluster, the continuation is appended (up to
+    /// <see cref="GraphemeHelper.MaxScalarsPerCell"/> scalars; the rest is consumed and dropped) and the cell is
+    /// re-measured: a late U+FE0F widens it in place, or, at the right edge with autowrap on, moves it to the next
+    /// line; a late U+FE0E narrows it. Returns false, consuming nothing, when <paramref name="text"/> starts a new
+    /// cluster.
+    /// </summary>
+    private bool TryJoinPrevious(ReadOnlySpan<char> text, out int consumed)
+    {
+        consumed = 0;
+        int columns = _ctx.Columns;
+        int row = _cursor.Row;
+        int col = Math.Min(_cursor.Col, columns - 1);
+        if (!_cursor.WrapPending)
+        {
+            if (col == 0) return false;
+            col--;
+        }
+
+        var buf = _ctx.ActiveBuffer;
+        while (col > 0 && buf.GetCellRef(row, col).IsContinuation) col--;
+        ref var cell = ref buf.GetCellRef(row, col);
+        // Unicode-placeholder diacritics are decoded by AttachCombiningMark, not appended as text.
+        if (cell.IsEmpty || cell.IsContinuation || cell.Rune == PlaceholderTable.PlaceholderRune) return false;
+
+        var cold = buf.GetColdCell(row, col);
+        string? previous = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
+        if (string.IsNullOrEmpty(previous) || previous.Length > GraphemeHelper.MaxCellChars) return false;
+
+        Span<char> window = stackalloc char[JoinWindowChars];
+        int take = Math.Min(text.Length, window.Length - previous.Length);
+        if (take < text.Length && char.IsHighSurrogate(text[take - 1])) take--;
+        previous.AsSpan().CopyTo(window);
+        text[..take].CopyTo(window[previous.Length..]);
+        int extension = StringInfo.GetNextTextElementLength(window[..(previous.Length + take)]) - previous.Length;
+        if (extension <= 0) return false;
+        consumed = extension;
+
+        int room = GraphemeHelper.MaxScalarsPerCell - GraphemeHelper.CountScalars(previous);
+        if (room <= 0) return true;
+        int keep = GraphemeHelper.TruncateToScalars(text[..extension], room);
+        ReadOnlySpan<char> joined = window[..(previous.Length + keep)];
+
+        int oldWidth = cell.Width;
+        int newWidth = Math.Clamp(UnicodeWidth.GetWidth(joined), 1, 2);
+        bool fits = newWidth <= columns && (_ctx._autoWrap || col + newWidth - 1 <= _ctx.GetWriteRightMargin(col));
+        if (newWidth != oldWidth && (newWidth < oldWidth || fits))
+        {
+            bool protectedGlyph = cell.IsProtected;
+            ushort styleId = cell.StyleId;
+            bool continuesPrevious = buf.GetRowContinuesPrevious(row);
+            if (newWidth > oldWidth && _ctx.InsertMode)
+                buf.InsertColumns(row, col + oldWidth, _ctx.GetWriteRightMargin(col), newWidth - oldWidth);
+            buf.ClearColumns(row, col, col + oldWidth);
+            if (continuesPrevious) buf.SetRowContinuation(row, true);
+            RequestMarkRowDirty(row);
+            _cursor.Set(row, col, _ctx.Rows, columns);
+            _cursor.SetWrapPending(false);
+            PlaceCluster(GetCachedString(joined), placeholder: false, newWidth, styleId, cold.HyperlinkId, protectedGlyph, applyInsert: false);
+            return true;
+        }
+
+        // Same width (or a widening that cannot fit): keep the cell and store the longer cluster. A full grapheme
+        // store (index <= 0) keeps the cell as it was.
+        short index = GraphemeHelper.StoreGrapheme(joined);
+        if (index > 0)
+        {
+            buf.SetColdGraphemeIndex(row, col, index);
+            RequestMarkRowDirty(row);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Appends a zero-width cluster that does not continue the previous cluster (a format character such as U+200B,
+    /// or a mark with no base on the cursor row) to the previous non-empty cell, or completes a Unicode placeholder.
+    /// </summary>
     private bool AttachCombiningMark(string mark)
     {
         var (row, col) = GetPreviousBaseCell();
@@ -638,23 +815,38 @@ internal sealed class BufferTextWriter
         var buf = _ctx.ActiveBuffer;
         ref var cell = ref buf.GetCellRef(row, col);
         var cold = buf.GetColdCell(row, col);
+        if (cell.Rune == PlaceholderTable.PlaceholderRune)
+        {
+            // Diacritics arriving after the placeholder (e.g. in a later OnPrint call) complete its row/column/msb;
+            // any other mark is consumed and dropped.
+            short current = cold.GraphemeIndex;
+            short updated = PlaceholderTable.Append(current, mark);
+            if (updated != current)
+            {
+                buf.SetColdGraphemeIndex(row, col, updated);
+                RequestMarkRowDirty(row);
+            }
+            return true;
+        }
+
         var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
         if (string.IsNullOrEmpty(grapheme)) return false;
 
-        var newGrapheme = grapheme + mark;
-        if (newGrapheme.Length > 1)
+        // A cell holds at most base + 64 combining code points; further marks are consumed and dropped.
+        int room = GraphemeHelper.MaxScalarsPerCell - GraphemeHelper.CountScalars(grapheme);
+        if (room <= 0) return true;
+
+        int markLength = GraphemeHelper.TruncateToScalars(mark, room);
+        Span<char> combined = stackalloc char[GraphemeHelper.MaxCellChars];
+        grapheme.AsSpan().CopyTo(combined);
+        mark.AsSpan(0, markLength).CopyTo(combined[grapheme.Length..]);
+        short index = GraphemeHelper.StoreGrapheme((ReadOnlySpan<char>)combined[..(grapheme.Length + markLength)]);
+        // A full grapheme store (index <= 0) keeps the cell as it was rather than losing its existing marks.
+        if (index > 0)
         {
-            try { cell.Rune = (uint)char.ConvertToUtf32(newGrapheme, 0); }
-            catch (ArgumentException) { cell.Rune = 0; }
-            buf.SetColdGraphemeIndex(row, col, GraphemeHelper.StoreGrapheme(newGrapheme));
+            buf.SetColdGraphemeIndex(row, col, index);
+            RequestMarkRowDirty(row);
         }
-        else
-        {
-            try { cell.Rune = (uint)char.ConvertToUtf32(newGrapheme, 0); }
-            catch (ArgumentException) { cell.Rune = 0; }
-            buf.SetColdGraphemeIndex(row, col, -1);
-        }
-        RequestMarkRowDirty(row);
         return true;
     }
 
@@ -682,9 +874,14 @@ internal sealed class BufferTextWriter
     {
         int row = _cursor.Row;
         int col = _cursor.Col;
-        if (row == 0 && col == 0) return (-1, -1);
-        if (col == 0) { row--; col = _ctx.Columns - 1; }
-        else col--;
+        // With a wrap pending the cursor still rests on the cell that was just written (it only moves on the next
+        // print), so that cell is the base; otherwise the base is the cell before the cursor.
+        if (!_cursor.WrapPending)
+        {
+            if (row == 0 && col == 0) return (-1, -1);
+            if (col == 0) { row--; col = _ctx.Columns - 1; }
+            else col--;
+        }
 
         var buf = _ctx.ActiveBuffer;
         while (row >= 0)

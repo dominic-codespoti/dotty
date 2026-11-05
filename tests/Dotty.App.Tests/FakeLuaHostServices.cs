@@ -68,9 +68,9 @@ internal sealed class FakeLuaHostServices : ILuaHostServices
     }
 
     /// <summary>Records the action and returns the configured result.</summary>
-    public bool TryExecuteAction(TerminalAction action)
+    public bool TryExecuteAction(BoundAction action)
     {
-        ExecutedActions.Add(action);
+        ExecutedActions.Add(action.Action);
         return ActionResult;
     }
 

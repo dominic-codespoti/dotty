@@ -10,6 +10,12 @@ internal static unsafe class NativeGlfwMetadata
     private static delegate* unmanaged[Cdecl]<int, int, byte*> _getKeyName;
     private static delegate* unmanaged[Cdecl]<int> _getPlatform;
     private static delegate* unmanaged[Cdecl]<nint, int, int> _getWindowAttrib;
+    private static delegate* unmanaged[Cdecl]<nint, int*, int*, void> _getWindowPos;
+    private static delegate* unmanaged[Cdecl]<nint> _getPrimaryMonitor;
+    private static delegate* unmanaged[Cdecl]<nint, int*> _getVideoMode;
+    private static delegate* unmanaged[Cdecl]<nint, float*, float*, void> _getWindowContentScale;
+    private static delegate* unmanaged[Cdecl]<nint, delegate* unmanaged[Cdecl]<nint, float, float, void>, nint> _setWindowContentScaleCallback;
+    private const int PlatformWayland = 0x00060003;
     private static bool _initialized;
 
     /// <summary>Resolve core GLFW exports from the already-loaded Silk GLFW instance.</summary>
@@ -26,10 +32,94 @@ internal static unsafe class NativeGlfwMetadata
         _getKeyName = (delegate* unmanaged[Cdecl]<int, int, byte*>)keyName;
         _getPlatform = (delegate* unmanaged[Cdecl]<int>)platform;
         _getWindowAttrib = (delegate* unmanaged[Cdecl]<nint, int, int>)glfw.Context.GetProcAddress("glfwGetWindowAttrib");
+        // Optional exports used only for CSI 13/15 t reports; absent ones leave the pointer null.
+        _getWindowPos = glfw.Context.TryGetProcAddress("glfwGetWindowPos", out nint windowPos)
+            ? (delegate* unmanaged[Cdecl]<nint, int*, int*, void>)windowPos : null;
+        _getPrimaryMonitor = glfw.Context.TryGetProcAddress("glfwGetPrimaryMonitor", out nint primaryMonitor)
+            ? (delegate* unmanaged[Cdecl]<nint>)primaryMonitor : null;
+        _getVideoMode = glfw.Context.TryGetProcAddress("glfwGetVideoMode", out nint videoMode)
+            ? (delegate* unmanaged[Cdecl]<nint, int*>)videoMode : null;
+        // GLFW 3.3+; absent exports make the content scale fall back to the framebuffer/window ratio.
+        _getWindowContentScale = glfw.Context.TryGetProcAddress("glfwGetWindowContentScale", out nint contentScale)
+            ? (delegate* unmanaged[Cdecl]<nint, float*, float*, void>)contentScale : null;
+        _setWindowContentScaleCallback = glfw.Context.TryGetProcAddress("glfwSetWindowContentScaleCallback", out nint contentScaleCallback)
+            ? (delegate* unmanaged[Cdecl]<nint, delegate* unmanaged[Cdecl]<nint, float, float, void>, nint>)contentScaleCallback : null;
         _initialized = true;
     }
 
     public static bool IsWindowFocused(nint window) => window != 0 && _getWindowAttrib != null && _getWindowAttrib(window, 0x00020001) != 0;
+
+    /// <summary>True while the window is minimized (GLFW_ICONIFIED). Always false where GLFW cannot observe it (Wayland).</summary>
+    public static bool IsWindowIconified(nint window) => window != 0 && _getWindowAttrib != null && _getWindowAttrib(window, 0x00020002) != 0;
+
+    /// <summary><c>glfwGetWindowContentScale</c>: the OS display scale for the window; false (and 0) when unavailable.</summary>
+    public static bool TryGetWindowContentScale(nint window, out float x, out float y)
+    {
+        x = 0f;
+        y = 0f;
+        if (window == 0 || _getWindowContentScale == null)
+            return false;
+
+        float sx = 0f, sy = 0f;
+        _getWindowContentScale(window, &sx, &sy);
+        x = sx;
+        y = sy;
+        return true;
+    }
+
+    /// <summary>
+    /// Installs <c>glfwSetWindowContentScaleCallback</c> (Silk.NET does not wrap it): GLFW calls
+    /// <paramref name="callback"/> on the event-polling thread when the window moves to a monitor with
+    /// a different scale or the user changes the display scale. False when the export is missing.
+    /// </summary>
+    public static bool TrySetWindowContentScaleCallback(nint window, delegate* unmanaged[Cdecl]<nint, float, float, void> callback)
+    {
+        if (window == 0 || _setWindowContentScaleCallback == null)
+            return false;
+        _setWindowContentScaleCallback(window, callback);
+        return true;
+    }
+
+    /// <summary>Window position in screen coordinates; false when GLFW does not export the query.</summary>
+    public static bool TryGetWindowPosition(nint window, out int x, out int y)
+    {
+        x = 0;
+        y = 0;
+        if (window == 0 || _getWindowPos == null)
+            return false;
+
+        // A Wayland client cannot know its position: GLFW raises GLFW_FEATURE_UNAVAILABLE on every call, so skip it.
+        if (TryGetPlatform(out int platform) && platform == PlatformWayland)
+            return false;
+
+        int px = 0, py = 0;
+        _getWindowPos(window, &px, &py);
+        x = px;
+        y = py;
+        return true;
+    }
+
+    /// <summary>Current video mode size of the primary monitor in pixels.</summary>
+    public static bool TryGetPrimaryMonitorSize(out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        if (_getPrimaryMonitor == null || _getVideoMode == null)
+            return false;
+
+        nint monitor = _getPrimaryMonitor();
+        if (monitor == 0)
+            return false;
+
+        // GLFWvidmode starts with { int width; int height; ... }.
+        int* mode = _getVideoMode(monitor);
+        if (mode == null)
+            return false;
+
+        width = mode[0];
+        height = mode[1];
+        return width > 0 && height > 0;
+    }
 
     /// <summary>Returns the first printable Unicode scalar for a key, falling back to GLFW's physical scancode mapping.</summary>
     public static bool TryGetPrimaryCodePoint(int key, int scancode, out uint codePoint)

@@ -62,17 +62,9 @@ public partial class TerminalAdapter
 
     private bool TrySetCurrentWorkingDirectory(ReadOnlySpan<char> payload)
     {
-        if (!Uri.TryCreate(payload.ToString(), UriKind.Absolute, out var uri)
-            || !uri.IsFile
-            || !IsLocalHost(uri.Host))
+        if (!Osc7WorkingDirectory.TryParse(payload, OperatingSystem.IsWindows(),
+                Osc7WorkingDirectory.DefaultLocalHostNames, out string path))
             return false;
-
-        string path;
-        try { path = Uri.UnescapeDataString(uri.AbsolutePath); }
-        catch (UriFormatException) { return false; }
-        if (OperatingSystem.IsWindows() && path.Length >= 3 && path[0] == '/' && char.IsAsciiLetter(path[1]) && path[2] == ':')
-            path = path[1..];
-        if (path.Length == 0) return false;
 
         string? previous = Volatile.Read(ref _currentWorkingDirectory);
         if (string.Equals(previous, path, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
@@ -81,11 +73,6 @@ public partial class TerminalAdapter
         CurrentWorkingDirectoryChanged?.Invoke(path);
         return true;
     }
-
-    private static bool IsLocalHost(string host) =>
-        string.IsNullOrEmpty(host)
-        || string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(host, Environment.MachineName, StringComparison.OrdinalIgnoreCase);
 
     private static int ParseExitCode(ReadOnlySpan<char> payload)
     {

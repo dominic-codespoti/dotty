@@ -12,8 +12,9 @@ namespace Dotty.Abstractions.Adapter
     public interface ITerminalHandler
     {
         object? Buffer { get; }
+        bool NationalReplacementEnabled { get; }
         event Action<string>? RenderRequested;
-        event Action<string>? ClipboardWriteRequested;
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
         event Action<string>? TitleChanged;
         event Action? PaletteChanged;
         void OnHyperlink(string uri);
@@ -22,7 +23,22 @@ namespace Dotty.Abstractions.Adapter
 
         void OnPrint(ReadOnlySpan<char> text);
         void OnEraseDisplay(int mode);
+        void OnSelectiveEraseDisplay(int mode);
         void OnClearScrollback();
+        void OnSetConformanceLevel(int level, int controls);
+        void OnSetAnsiMode(int mode, bool enabled);
+        void OnSetColumnMode(int mode, bool enabled);
+        void OnSetMoreFix(bool enabled);
+        void OnSetNationalReplacementMode(bool enabled);
+        void OnSetFontShiftMode(bool enabled);
+        void OnSetSmoothScroll(bool enabled);
+        void OnSetPrinterMode(int mode, bool enabled);
+        void OnPrintScreen();
+        void OnSetScreenLines(int lines);
+        void OnSavePrivateMode(int mode);
+        void OnRestorePrivateMode(int mode);
+        void OnSetTitle(int code, ReadOnlySpan<byte> payload);
+        void OnSetTitleModes(ReadOnlySpan<int> modes, bool enabled);
         void OnSetGraphicsRendition(ReadOnlySpan<char> parameters);
         void OnBell();
         void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload);
@@ -32,16 +48,32 @@ namespace Dotty.Abstractions.Adapter
         void OnCursorForward(int n);
         void OnCursorBack(int n);
         void OnEraseLine(int mode);
+        void OnSelectiveEraseLine(int mode);
+        void OnSetIsoProtection(bool active);
+        void OnSetDecProtection(int mode);
         void OnCarriageReturn();
         void OnLineFeed();
+        void OnIndex() { }                        // IND - ESC D: line feed without carriage return
+        void OnNextLine() { }                     // NEL - ESC E: index then carriage return
         void OnSetScrollRegion(int top1Based, int bottom1Based);
         void OnSetOriginMode(bool enabled);
-        void OnSetAlternateScreen(bool enabled);
+        void OnSetAlternateScreen(bool enabled); // DECSET/DECRST 1049: save/restore the cursor around the switch
+        // 47 retains alternate contents; 1047 clears them before returning to the main screen.
+        void OnSwitchAlternateScreen(int mode, bool enabled);
         void OnSetCursorVisibility(bool visible);
         void OnSaveCursor();
         void OnRestoreCursor();
         void OnInsertChars(int n);
         void OnDeleteChars(int n);
+        void OnInsertColumns(int n);
+        void OnDeleteColumns(int n);
+        void OnBackIndex();
+        void OnForwardIndex();
+        void OnCopyRectangle(int top, int left, int bottom, int right, int sourcePage, int destinationTop, int destinationLeft, int destinationPage);
+        void OnFillRectangle(uint rune, int top, int left, int bottom, int right);
+        void OnEraseRectangle(int top, int left, int bottom, int right, bool selective);
+        void OnSetAttributeChangeExtent(int mode);
+        void OnChangeRectangleAttributes(int top, int left, int bottom, int right, ReadOnlySpan<int> parameters, bool reverse);
         void OnEraseCharacters(int n);
         void OnInsertLines(int n);
         void OnDeleteLines(int n);
@@ -60,6 +92,12 @@ namespace Dotty.Abstractions.Adapter
         void OnCursorNextLine(int n);             // CNL - CSI n E
         void OnCursorPreviousLine(int n);         // CPL - CSI n F
 
+        void OnHorizontalPositionRelative(int n); // HPR - CSI n a
+        void OnVerticalPositionRelative(int n);   // VPR - CSI n e
+        void OnSetLeftRightMarginMode(bool enabled); // DECLRMM - DEC mode 69
+        void OnSaveCursorOrSetMargins(int left, int right); // CSI Pl;Pr s
+        void OnSetReverseWrapMode(int mode, bool enabled);
+        void OnScreenAlignmentTest(); // DECALN - ESC # 8
         // Explicit scroll commands
         void OnScrollUp(int n);   // SU - CSI n S
         void OnScrollDown(int n); // SD - CSI n T
@@ -71,7 +109,7 @@ namespace Dotty.Abstractions.Adapter
         void OnRepeatCharacter(int n); // REP - CSI n b
 
         // Horizontal tab
-        void OnTab();     // HT - move to next tab stop
+        void OnTab(int n);  // HT / CHT - horizontal tabulation
         void OnBackTab(int n); // CBT - CSI n Z - move back n tab stops
 
         // Cursor shape
@@ -80,11 +118,17 @@ namespace Dotty.Abstractions.Adapter
         void OnSetKeypadApplicationMode(bool enabled); // DECKPAM / DECKPNM - ESC = / ESC >
 
         // Device attributes
-        void OnSendDeviceAttributes(int daType); // DA - CSI c / CSI > c
-        // DA3 (CSI = c) is intentionally silent; no reply is sent.
+        void OnSendDeviceAttributes(int daType); // DA1: ESC Z / CSI c; DA2: CSI > c; DA3: CSI = c
+        // The parser invokes this only for syntactically valid DA requests; unsupported DA3 remains silent.
+
+        // XTVERSION (CSI > q / CSI > 0 q): report the terminal name and version.
+        void OnRequestTerminalVersion() { }
 
         // Mode status (DECRQM - CSI ? Ps $ p / CSI Ps $ p)
         void OnRequestMode(int mode, bool isPrivate) { } // Default no-op for external implementors.
+
+        // DECRQSS (DCS $ q Pt ST): report the actual current value of a supported setting.
+        void OnRequestStatusString(ReadOnlySpan<byte> request);
 
         // Capability query (XTGETTCAP - DCS + q hex ST)
         void OnQueryCapability(string requestHex) { }
@@ -92,6 +136,18 @@ namespace Dotty.Abstractions.Adapter
         // Span fast path for the same query; default bridges to the string
         // form for external implementors.
         void OnQueryCapability(ReadOnlySpan<char> requestHex) => OnQueryCapability(requestHex.ToString());
+
+        // Kitty graphics protocol (APC G ... ST).  The parser captures the APC
+        // only when KittyGraphicsEnabled is true; otherwise the string is
+        // discarded without any callback.  Begin receives the control data
+        // (bytes between "ESC _ G" and the first ';' or the terminator), Payload
+        // receives the base64 bytes in arbitrary slices (0..n calls), and End is
+        // called exactly once per Begin: true when terminated by ST/0x9C, false
+        // when cancelled or aborted.  Slices are only valid during the call.
+        bool KittyGraphicsEnabled => false;
+        void OnKittyGraphicsBegin(ReadOnlySpan<byte> control) { }
+        void OnKittyGraphicsPayload(ReadOnlySpan<byte> base64) { }
+        void OnKittyGraphicsEnd(bool completed) { }
 
         // XTerm modifyOtherKeys (CSI > 4 ; Pv m)
         void OnSetModifyOtherKeys(int level) { }
@@ -109,8 +165,26 @@ namespace Dotty.Abstractions.Adapter
         // Focus reporting (DEC 1004)
         void OnSetFocusReporting(bool enabled);
 
-        // Window manipulation / report (CSI Ps t)
-        void OnWindowReport(int command);
+        // DECSCNM reverse video (CSI ? 5 h/l): swaps the default foreground and background
+        void OnSetReverseVideo(bool enabled) { }
+
+        // Window manipulation / report (CSI Ps ; Ps ; Ps t). Omitted parameters are 0.
+        void OnWindowOperation(int operation, int arg1, int arg2) { }
+
+        // DECSTR soft terminal reset (CSI ! p)
+        void OnSoftReset() { }
+
+        // Private device status report; identifier is used by macro-checksum request 63.
+        void OnPrivateDeviceStatusReport(int code, int identifier);
+
+        // DECBKM (CSI ? 67 h/l): true = Backspace sends BS (0x08), false = DEL (0x7F)
+        void OnSetBackarrowKeyMode(bool sendsBackspace) { }
+
+        // Visibility reports (CSI ? 2033 h/l)
+        void OnSetVisibilityReports(bool enabled) { }
+
+        // DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y); omitted parameters are 0.
+        void OnRequestChecksum(int id, int page, int top, int left, int bottom, int right) { }
 
         // Render batching
         void FlushRender();

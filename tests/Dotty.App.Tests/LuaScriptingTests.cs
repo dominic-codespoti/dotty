@@ -74,6 +74,27 @@ public class LuaScriptingTests : IDisposable
         Assert.Equal("OneLight", _config.ThemeLight);
     }
 
+    /// <summary>Verifies Lua can configure hyperlink behavior through direct keys, groups and apply_table.</summary>
+    [Fact]
+    public void LuaConfig_SetsHyperlinkOptions()
+    {
+        Assert.True(_host.ExecuteString(@"
+            local d=require('dotty');
+            d.config.hyperlinks.osc8=false;
+            d.config.hyperlinks.confirm='always';
+            d.config.hyperlinks.allowed_schemes={'https'};
+            assert(d.config.hyperlinks.osc8==false and d.config.hyperlinks.confirm=='always');
+            assert(d.config.hyperlinks.allowed_schemes[1]=='https')"));
+        Assert.False(_config.Hyperlinks.Osc8);
+        Assert.Equal("always", _config.Hyperlinks.Confirm);
+        Assert.Equal(new[] { "https" }, _config.Hyperlinks.AllowedSchemes);
+
+        Assert.True(_host.ExecuteString(@"
+            require('dotty').config.apply_table({hyperlinks={osc8=true,confirm='never'}})"));
+        Assert.True(_config.Hyperlinks.Osc8);
+        Assert.Equal("never", _config.Hyperlinks.Confirm);
+    }
+
     /// <summary>Verifies Lua can create and select tabs.</summary>
     [Fact]
     public void LuaTabs_CreatesAndSelectsTabs()
@@ -166,13 +187,59 @@ public class LuaScriptingTests : IDisposable
         Assert.Contains(_services.Messages, message =>
             message.Level == LuaMessageLevel.Error && message.Message.Contains("clipboard hook failed", StringComparison.Ordinal));
     }
+
+    /// <summary>Verifies the clipboard_read hook has the same veto semantics as clipboard_write.</summary>
+    [Fact]
+    public void ClipboardReadHook_AllowsWhenAbsentAndDeniesFalseOrInvocationError()
+    {
+        using var tab = new TerminalTab();
+        Assert.True(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "clipboard"));
+
+        Assert.True(_host.ExecuteString("dotty.on('clipboard_read', function() return false end)"));
+        Assert.False(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "clipboard"));
+
+        _host.Hooks.Clear();
+        Assert.True(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "clipboard"));
+        Assert.True(_host.ExecuteString("dotty.on('clipboard_read', function() error('clipboard read hook failed') end)"));
+        Assert.False(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "clipboard"));
+        Assert.Contains(_services.Messages, message =>
+            message.Level == LuaMessageLevel.Error && message.Message.Contains("clipboard read hook failed", StringComparison.Ordinal));
+    }
+
+    /// <summary>Verifies a clipboard_read hook decides from its result and sees the pane and selection.</summary>
+    [Fact]
+    public void ClipboardReadHook_ReceivesPaneAndSelectionAndNilDefersToAllow()
+    {
+        using var tab = new TerminalTab();
+        Assert.True(_host.ExecuteString("dotty.on('clipboard_read', function(pane, selection) return selection == 'clipboard' and pane ~= nil end)"));
+        Assert.True(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "clipboard"));
+        Assert.False(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "primary"));
+
+        _host.Hooks.Clear();
+        Assert.True(_host.ExecuteString("dotty.on('clipboard_read', function() return nil end)"));
+        Assert.True(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "clipboard"));
+
+        // The read hook is independent of the write hook.
+        _host.Hooks.Clear();
+        Assert.True(_host.ExecuteString("dotty.on('clipboard_write', function() return false end)"));
+        Assert.True(_host.Hooks.AllowClipboardRead(tab.ActivePane, tab, "clipboard"));
+    }
     /// <summary>Verifies URL hooks handle only explicitly accepted URLs.</summary>
     [Fact]
     public void LuaHooks_HandlesOpenUrlOnlyWhenCallbackAcceptsIt()
     {
         Assert.True(_host.ExecuteString(@"dotty.on('open_url',function(url) return url=='dotty://handled' end)"));
-        Assert.True(_host.Hooks.TryOpenUrl("dotty://handled"));
-        Assert.False(_host.Hooks.TryOpenUrl("dotty://unhandled"));
+        Assert.True(_host.Hooks.TryOpenUrl("dotty://handled", "detected"));
+        Assert.False(_host.Hooks.TryOpenUrl("dotty://unhandled", "detected"));
+    }
+
+    /// <summary>Verifies the open_url hook receives the link source as its second argument.</summary>
+    [Fact]
+    public void LuaHooks_OpenUrlReceivesSourceArgument()
+    {
+        Assert.True(_host.ExecuteString(@"dotty.on('open_url',function(url, source) return source=='explicit' end)"));
+        Assert.True(_host.Hooks.TryOpenUrl("https://example.com/", "explicit"));
+        Assert.False(_host.Hooks.TryOpenUrl("https://example.com/", "detected"));
     }
 
     /// <summary>Verifies config.lua changes apply before evaluation returns.</summary>
@@ -271,6 +338,49 @@ public class LuaScriptingTests : IDisposable
         Assert.Equal(16, _config.Font.Size);
         InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => _host.ExecuteString("dotty.config.font.size='large'"));
         Assert.Contains("font.size", error.Message);
+    }
+
+    /// <summary>Verifies Lua can set the paste safety options and rejects wrong types with the config path.</summary>
+    [Fact]
+    public void LuaConfig_SetsPasteSafetyOptions()
+    {
+        Assert.True(_config.Clipboard.ConfirmPaste);
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.confirm_paste=false"));
+        Assert.False(_config.Clipboard.ConfirmPaste);
+        Assert.True(_host.ExecuteString("dotty.config.apply_table({clipboard={bracketed_paste_is_safe=false}})"));
+        Assert.False(_config.Clipboard.BracketedPasteIsSafe);
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => _host.ExecuteString("dotty.config.clipboard.confirm_paste='no'"));
+        Assert.Contains("clipboard.confirm_paste", error.Message);
+    }
+
+    /// <summary>Verifies Lua can set the OSC 52 read policy and limit, and rejects wrong types with the config path.</summary>
+    [Fact]
+    public void LuaConfig_SetsOsc52ReadOptions()
+    {
+        Assert.Equal("deny", _config.Clipboard.Osc52Read);
+        Assert.Equal(1_048_576, _config.Clipboard.Osc52ReadLimitBytes);
+
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.osc52_read='ask'; assert(dotty.config.clipboard.osc52_read=='ask')"));
+        Assert.Equal("ask", _config.Clipboard.Osc52Read);
+
+        Assert.True(_host.ExecuteString("dotty.config.apply_table({clipboard={osc52_read='allow', osc52_read_limit_bytes=2048}})"));
+        Assert.Equal("allow", _config.Clipboard.Osc52Read);
+        Assert.Equal(2048, _config.Clipboard.Osc52ReadLimitBytes);
+        Assert.True(_host.ExecuteString("assert(dotty.config.clipboard.osc52_read_limit_bytes==2048)"));
+
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes=0"));
+        Assert.Equal(1, _config.Clipboard.Osc52ReadLimitBytes);
+
+        // Values beyond int range saturate (and then clamp to the 8 MiB ceiling) instead of wrapping around to a tiny limit.
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes=1099511627776"));
+        Assert.Equal(ClipboardUserConfig.MaxOsc52ReadLimitBytes, _config.Clipboard.Osc52ReadLimitBytes);
+        Assert.True(_host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes=-1099511627776"));
+        Assert.Equal(1, _config.Clipboard.Osc52ReadLimitBytes);
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() => _host.ExecuteString("dotty.config.clipboard.osc52_read=true"));
+        Assert.Contains("clipboard.osc52_read", error.Message);
+        error = Assert.Throws<InvalidOperationException>(() => _host.ExecuteString("dotty.config.clipboard.osc52_read_limit_bytes='big'"));
+        Assert.Contains("clipboard.osc52_read_limit_bytes", error.Message);
     }
 
     /// <summary>Verifies runtime config writes coalesce application until posted work is drained.</summary>

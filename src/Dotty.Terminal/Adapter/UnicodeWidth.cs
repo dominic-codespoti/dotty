@@ -1,101 +1,91 @@
-using System.Globalization;
-using System.Text;
-
 namespace Dotty.Terminal.Adapter;
 
 /// <summary>
-/// Minimal Unicode width helper roughly following wcwidth semantics.
-/// Wide-range table adapted from Markus Kuhn's public-domain implementation.
+/// Terminal cell width of grapheme clusters, from tables generated out of the Unicode Character Database
+/// (<see cref="UnicodeWidthTables"/>, written by <c>tools/gen-width-tables.py</c>). Segmentation into clusters is
+/// .NET's <see cref="System.Globalization.StringInfo"/> (UAX #29); this class only measures a cluster.
 /// </summary>
+/// <remarks>
+/// <para>Scalar widths: 0 for General_Category Cc, Cf, Mn and Me (except U+00AD SOFT HYPHEN, which is 1) and for
+/// Hangul medial/final jamo U+1160..U+11FF, U+D7B0..U+D7FF; 2 for East_Asian_Width W or F (which covers every
+/// Emoji_Presentation character); 1 otherwise, including East Asian ambiguous width.</para>
+/// <para>A cluster takes the width of its first scalar that is not zero-width, so a Prepend format character such
+/// as U+0600 defers to the base after it and Hangul L+V+T takes the leading consonant's width. The scalar right after
+/// that base then adjusts it: a regional-indicator pair is 2 (a lone indicator is 1); U+FE0F widens exactly the
+/// emoji-variation bases to 2 and U+FE0E narrows exactly those bases to 1, leaving any other base unchanged. ZWJ,
+/// skin-tone modifiers and other extenders never widen a cluster. A cluster of zero-width scalars only is 0.</para>
+/// </remarks>
 public static class UnicodeWidth
 {
-    private static readonly (int Start, int End)[] WideIntervals =
-    {
-        (0x1100, 0x115F), (0x231A, 0x231B), (0x2329, 0x232A), (0x23E9, 0x23EC), (0x23F0, 0x23F0),
-        (0x23F3, 0x23F3), (0x25FD, 0x25FE), (0x2614, 0x2615), (0x2648, 0x2653), (0x267F, 0x267F),
-        (0x2693, 0x2693), (0x26A1, 0x26A1), (0x26AA, 0x26AB), (0x26BD, 0x26BE), (0x26C4, 0x26C5),
-        (0x26CE, 0x26CE), (0x26D4, 0x26D4), (0x26EA, 0x26EA), (0x26F2, 0x26F3), (0x26F5, 0x26F5),
-        (0x26FA, 0x26FA), (0x26FD, 0x26FD), (0x2705, 0x2705), (0x270A, 0x270B), (0x2728, 0x2728),
-        (0x274C, 0x274C), (0x274E, 0x274E), (0x2753, 0x2755), (0x2757, 0x2757), (0x2795, 0x2797),
-        (0x27B0, 0x27B0), (0x27BF, 0x27BF), (0x2B1B, 0x2B1C), (0x2B50, 0x2B50), (0x2B55, 0x2B55),
-        (0x2E80, 0x2FFB), (0x3000, 0x303E), (0x3040, 0xA4CF), (0xAC00, 0xD7A3), (0xF900, 0xFAFF),
-        (0xFE10, 0xFE19), (0xFE30, 0xFE6F), (0xFF01, 0xFF60), (0xFFE0, 0xFFE6), (0x1F004, 0x1F004),
-        (0x1F0CF, 0x1F0CF), (0x1F18E, 0x1F18E), (0x1F191, 0x1F19A), (0x1F200, 0x1F251),
-        (0x1F300, 0x1F64F), (0x1F680, 0x1F6FF), (0x1F900, 0x1F9FF), (0x1FA70, 0x1FCFF),
-        (0x20000, 0x2FFFD), (0x30000, 0x3FFFD)
-    };
+    private const uint VariationSelector15 = 0xFE0E;
+    private const uint VariationSelector16 = 0xFE0F;
+    private const uint RegionalIndicatorFirst = 0x1F1E6;
+    private const uint RegionalIndicatorLast = 0x1F1FF;
 
     public static int GetWidth(string grapheme) => GetWidth(grapheme.AsSpan());
 
     public static int GetWidth(ReadOnlySpan<char> grapheme)
     {
-        if (grapheme.IsEmpty)
+        var runes = grapheme.EnumerateRunes();
+        uint baseCodePoint = 0;
+        int width = 0;
+        while (runes.MoveNext())
         {
-            return 0;
+            baseCodePoint = (uint)runes.Current.Value;
+            width = GetScalarWidth(baseCodePoint);
+            if (width != 0) break;
         }
 
-        var runeEnumerator = grapheme.EnumerateRunes();
-        if (!runeEnumerator.MoveNext())
-        {
-            return 0;
-        }
+        if (width == 0 || !runes.MoveNext()) return width;
 
-        var first = runeEnumerator.Current;
-        var category = Rune.GetUnicodeCategory(first);
-        if (category == UnicodeCategory.NonSpacingMark ||
-            category == UnicodeCategory.SpacingCombiningMark ||
-            category == UnicodeCategory.EnclosingMark)
-        {
-            return 0;
-        }
-
-        if (category == UnicodeCategory.Control)
-        {
-            return 0;
-        }
-
-        if (ContainsEmojiIndicators(grapheme) || IsWide(first.Value))
-        {
-            return 2;
-        }
-
-        return 1;
+        uint next = (uint)runes.Current.Value;
+        if (IsRegionalIndicator(baseCodePoint)) return IsRegionalIndicator(next) ? 2 : width;
+        if (next == VariationSelector16) return IsEmojiVariationBase(baseCodePoint) ? 2 : width;
+        if (next == VariationSelector15) return IsEmojiVariationBase(baseCodePoint) ? 1 : width;
+        return width;
     }
 
-    private static bool ContainsEmojiIndicators(ReadOnlySpan<char> grapheme)
+    /// <summary>Width of one scalar value: 0, 1 or 2 (see the class remarks).</summary>
+    internal static int GetScalarWidth(uint codePoint)
     {
-        foreach (var rune in grapheme.EnumerateRunes())
-        {
-            var value = rune.Value;
-            if (value == 0x200D || value == 0xFE0F)
-            {
-                return true;
-            }
-
-            if (value >= 0x1F3FB && value <= 0x1F3FF)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        // Below U+0300 the only zero-width scalars are the C0/C1 controls (U+00AD is 1) and nothing is wide.
+        if (codePoint < 0x300) return codePoint < 0x20 || (codePoint >= 0x7F && codePoint < 0xA0) ? 0 : 1;
+        if (InRanges(UnicodeWidthTables.ZeroWidth, codePoint)) return 0;
+        return InRanges(UnicodeWidthTables.Wide, codePoint) ? 2 : 1;
     }
 
-    private static bool IsWide(int codepoint)
+    /// <summary>Whether <paramref name="codePoint"/> is the base of an emoji-style variation sequence (X U+FE0F).</summary>
+    internal static bool IsEmojiVariationBase(uint codePoint) =>
+        InRanges(UnicodeWidthTables.EmojiVariationBases, codePoint);
+
+    /// <summary>
+    /// Whether <paramref name="codePoint"/> defaults to emoji presentation (Emoji_Presentation), approximated from the
+    /// width tables as a two-cell scalar in the symbol and pictograph blocks U+2300..U+2BFF and U+1F000..U+1FAFF,
+    /// excluding the angle brackets U+2329/U+232A. A few squared CJK signs in U+1F200..U+1F2FF are wide without
+    /// being emoji; callers use this only to prefer an emoji face, so they still fall back by coverage.
+    /// </summary>
+    public static bool IsDefaultEmojiPresentation(int codePoint)
     {
-        // WideIntervals is sorted by Start; binary search for the interval
-        // that could contain the codepoint (~11 probes vs up to 56 linear).
-        int lo = 0, hi = WideIntervals.Length - 1;
+        uint cp = (uint)codePoint;
+        bool pictographBlock = (cp >= 0x2300 && cp <= 0x2BFF && cp != 0x2329 && cp != 0x232A) || (cp >= 0x1F000 && cp <= 0x1FAFF);
+        return pictographBlock && GetScalarWidth(cp) == 2;
+    }
+
+    private static bool IsRegionalIndicator(uint codePoint) =>
+        codePoint - RegionalIndicatorFirst <= RegionalIndicatorLast - RegionalIndicatorFirst;
+
+    /// <summary>Binary search over sorted, non-overlapping inclusive [start, end] pairs.</summary>
+    private static bool InRanges(ReadOnlySpan<uint> ranges, uint codePoint)
+    {
+        if (codePoint < ranges[0] || codePoint > ranges[^1]) return false;
+        int lo = 0;
+        int hi = (ranges.Length >> 1) - 1;
         while (lo <= hi)
         {
-            int mid = (lo + hi) >> 1;
-            var (start, end) = WideIntervals[mid];
-            if (codepoint < start)
-                hi = mid - 1;
-            else if (codepoint > end)
-                lo = mid + 1;
-            else
-                return true;
+            int mid = (lo + hi) >>> 1;
+            if (codePoint < ranges[mid << 1]) hi = mid - 1;
+            else if (codePoint > ranges[(mid << 1) + 1]) lo = mid + 1;
+            else return true;
         }
         return false;
     }

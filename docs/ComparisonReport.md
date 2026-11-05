@@ -30,9 +30,9 @@ Both Ghostty and Wezterm are written in low-level systems programming languages 
 *   **Wezterm:** Uses a native OpenGL/EGL hardware-accelerated rendering pipeline. It heavily supports complex text shaping (Harfbuzz), ligatures, and fallback fonts.
 
 **Where Dotty Differs/Misses:**
-*   **Complex Text Layout (CTL):** Dotty does not support OpenType features or programming ligatures; the renderer draws one grapheme per terminal cell. Arabic/Indic shaping and cross-cell ligatures are not available.
-*   **Underline Styles:** Dotty now supports undercurl (wavy), dotted, and dashed underline styles in addition to standard underline — matching the rendering capabilities of Wezterm and Ghostty for editor diagnostics.
-*   **Rounded Corners:** Dotty's OpenGL chrome shader computes rounded terminal-frame geometry directly; this is a modern terminal-window feature also present in Ghostty and kitty.
+*   **Complex Text Layout (CTL):** Dotty does not support OpenType features or programming ligatures; the renderer draws one grapheme per terminal cell. Arabic/Indic shaping, cross-cell ligatures, and bidirectional (RTL) text are not available.
+*   **Underline Styles:** Dotty parses SGR 4:2–4:5 (double, curly, dotted, dashed) and SGR 58 underline colour, but the renderer only knows "underlined or not": every style is drawn as the same single underline and the SGR 58 colour is not used. Curly/dotted/dashed rendering is planned (W4-C3).
+*   **Rounded Corners:** Dotty's chrome quads support rounded corners, used for the tab bar, scrollbar, and context menus. Window corners are the operating system's.
 *   **Direct GPU Control:** Dotty's current host submits directly to an OpenGL 3.3 context through Silk.NET. Ghostty and Wezterm interface even closer to their platform GPU APIs, allowing specialized shaders and tighter platform-specific latency control.
 
 ## 3. Platform & PTY Integration
@@ -54,7 +54,7 @@ contract; the helper must not depend on repository-relative paths.
 *   **Multiplexing (tmux-like behavior):** Wezterm has a built-in client/server architecture allowing users to detach and reattach to terminal sessions locally or over SSH. Dotty provides local terminal sessions, tabs, and panes but no client/server multiplexer.
 *   **Scriptability:** Dotty exposes Lua configuration, keybinding callbacks, tab/pane operations, timers, actions, and event/value hooks; Wezterm's Lua engine exposes a broader client/server and event-hook surface.
 *   **Split Panes and Native Tabs:** Dotty provides tabs and split panes in its runtime. Ghostty and Wezterm also provide built-in window management.
-*   **Image Protocol Support:** Wezterm supports the Kitty image protocol and iTerm2 image protocols to display inline graphics; Dotty does not currently document those protocols as supported.
+*   **Image Protocol Support:** Wezterm supports the Kitty image protocol and iTerm2 image protocols to display inline graphics. Dotty implements the Kitty graphics protocol (see [Kitty graphics](KittyGraphics.md)), **disabled by default** (`graphics.kittyProtocol`) until it has been run and smoke-tested on real displays; it was written without a compiler and nothing is verified at runtime. Dotty does not implement the iTerm2 image protocol or Sixel, and it does not interpret `DCS tmux ;` passthrough.
 
 ## 5. Strategic Recommendations for Dotty
 
@@ -63,6 +63,8 @@ If Dotty aims to compete or find a specific niche against these giants, it shoul
 
 | Date | Change |
 |------|--------|
+| 2026-10-30 | Corrected underline-style and rounded-corner rows (styles parsed but drawn as a single underline; rounding is chrome only); bidi listed as unsupported |
+| 2026-10-28 | Image protocol row: Kitty graphics protocol implemented, default off, unverified at runtime |
 | 2026-06-17 | Updated underline styles and rounded-corner comparison |
 | 2026-06-15 | Updated roadmap wording |
 

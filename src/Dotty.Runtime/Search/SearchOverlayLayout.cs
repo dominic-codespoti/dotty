@@ -2,13 +2,39 @@ using System;
 
 namespace Dotty.Runtime.Search;
 
+/// <summary>Matching modes shown by the overlay's toggles.</summary>
+[Flags]
+public enum SearchOverlayFlags
+{
+    None = 0,
+    Regex = 1,
+    CaseSensitive = 2,
+    WholeWord = 4,
+    /// <summary>Regex mode with a pattern that does not compile (searched literally); the regex toggle turns red.</summary>
+    InvalidRegex = 8,
+}
+
+/// <summary>The overlay part under a point.</summary>
+public enum SearchOverlayHit
+{
+    None,
+    Panel,
+    Input,
+    ToggleRegex,
+    ToggleCase,
+    ToggleWord,
+    Previous,
+    Next,
+    Close,
+}
+
 /// <summary>
 /// Layout descriptor for the floating search overlay dialog.
-/// Positioned at the top-right corner of the terminal view ($320\text{px} \times 36\text{px}$).
+/// Positioned at the top-right corner of the terminal view ($392\text{px} \times 36\text{px}$).
 /// </summary>
 public readonly record struct SearchOverlayLayout
 {
-    public const float DefaultWidth = 320f;
+    public const float DefaultWidth = 392f;
     public const float DefaultHeight = 36f;
     public const float DefaultMarginRight = 16f;
     private readonly record struct BadgeKey(
@@ -62,6 +88,18 @@ public readonly record struct SearchOverlayLayout
     /// <summary>Match counter badge bounding rect (X, Y, Width, Height).</summary>
     public OverlayRect MatchCountRect { get; init; }
 
+    /// <summary>Regex toggle (<c>.*</c>, Alt+R) bounding rect.</summary>
+    public OverlayRect RegexToggleRect { get; init; }
+
+    /// <summary>Case toggle (<c>Aa</c>, Alt+C) bounding rect.</summary>
+    public OverlayRect CaseToggleRect { get; init; }
+
+    /// <summary>Whole-word toggle (<c>W</c>, Alt+W) bounding rect.</summary>
+    public OverlayRect WordToggleRect { get; init; }
+
+    /// <summary>Toggle states drawn by the overlay.</summary>
+    public SearchOverlayFlags Flags { get; init; }
+
     /// <summary>Previous match button (▲) bounding rect.</summary>
     public OverlayRect PrevButtonRect { get; init; }
 
@@ -99,7 +137,8 @@ public readonly record struct SearchOverlayLayout
         float width = DefaultWidth,
         float height = DefaultHeight,
         float marginRight = DefaultMarginRight,
-        float marginTop = DefaultMarginTop)
+        float marginTop = DefaultMarginTop,
+        SearchOverlayFlags flags = SearchOverlayFlags.None)
     {
         float x = Math.Max(0f, viewportWidth - width - marginRight);
         float y = marginTop;
@@ -107,7 +146,7 @@ public readonly record struct SearchOverlayLayout
         string badge = GetBadgeText(query, activeMatchIndex, totalMatches);
 
         // Internal layout:
-        // [ Input text area (~160px) | Match Badge (~60px) | Prev ▲ (24px) | Next ▼ (24px) | Close × (28px) ]
+        // [ Input (~160px) | Badge (64px) | .* | Aa | W (24px each) | Prev ▲ (24px) | Next ▼ (24px) | Close × (28px) ]
         // Padding: 4px top/bottom/left/right
         float pad = 4f;
         float innerH = height - (pad * 2);
@@ -116,13 +155,20 @@ public readonly record struct SearchOverlayLayout
         float btnW = 24f;
         float closeW = 28f;
         float badgeW = 64f;
-        float inputW = Math.Max(60f, width - (pad * 2) - badgeW - (btnW * 2) - closeW - (pad * 4));
+        float inputW = Math.Max(60f, width - (pad * 2) - badgeW - (btnW * 5) - closeW - (pad * 7));
 
         var inputRect = new OverlayRect(curX, y + pad, inputW, innerH);
         curX += inputW + pad;
 
         var badgeRect = new OverlayRect(curX, y + pad, badgeW, innerH);
         curX += badgeW + pad;
+
+        var regexRect = new OverlayRect(curX, y + pad, btnW, innerH);
+        curX += btnW + pad;
+        var caseRect = new OverlayRect(curX, y + pad, btnW, innerH);
+        curX += btnW + pad;
+        var wordRect = new OverlayRect(curX, y + pad, btnW, innerH);
+        curX += btnW + pad;
 
         var prevRect = new OverlayRect(curX, y + pad, btnW, innerH);
         curX += btnW + pad;
@@ -140,12 +186,30 @@ public readonly record struct SearchOverlayLayout
             Y = y,
             InputBoxRect = inputRect,
             MatchCountRect = badgeRect,
+            RegexToggleRect = regexRect,
+            CaseToggleRect = caseRect,
+            WordToggleRect = wordRect,
+            Flags = flags,
             PrevButtonRect = prevRect,
             NextButtonRect = nextRect,
             CloseButtonRect = closeRect,
             Query = query ?? string.Empty,
             MatchBadgeText = badge
         };
+    }
+
+    /// <summary>The part of the overlay under the device-pixel point (<paramref name="px"/>, <paramref name="py"/>).</summary>
+    public SearchOverlayHit HitTest(float px, float py)
+    {
+        if (!new OverlayRect(X, Y, Width, Height).Contains(px, py)) return SearchOverlayHit.None;
+        if (PrevButtonRect.Contains(px, py)) return SearchOverlayHit.Previous;
+        if (NextButtonRect.Contains(px, py)) return SearchOverlayHit.Next;
+        if (CloseButtonRect.Contains(px, py)) return SearchOverlayHit.Close;
+        if (RegexToggleRect.Contains(px, py)) return SearchOverlayHit.ToggleRegex;
+        if (CaseToggleRect.Contains(px, py)) return SearchOverlayHit.ToggleCase;
+        if (WordToggleRect.Contains(px, py)) return SearchOverlayHit.ToggleWord;
+        if (InputBoxRect.Contains(px, py)) return SearchOverlayHit.Input;
+        return SearchOverlayHit.Panel;
     }
 }
 

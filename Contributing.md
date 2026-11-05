@@ -54,6 +54,8 @@ dotnet test --project tests/Dotty.App.Tests/Dotty.App.Tests.csproj -c Release --
 
 If a test command reports zero tests, check whether dotnet on PATH is a wrapper injecting raw MSBuild switches into dotnet test; use the installed .NET SDK executable directly to diagnose. See the [testing guide](docs/Testing.md) for test scope and additional procedures. The performance test project is a benchmark executable, not one of the test projects. Benchmark results are workload- and machine-specific; see [Performance](docs/Performance.md) for recorded evidence and its limits.
 
+Two guards apply to terminal and configuration changes. Adding a configuration option requires a matching entry in the option catalog behind `dotty +explain-config`; `ConfigCatalogTests` fails otherwise (see [Adding an option](docs/Configuration.md#adding-an-option)). Terminal-sequence changes can move the esctest2 conformance results; the `esctest-linux` CI job reports them and starts gating on regressions and unexpected passes once `tests/esctest/expected-failures.txt` carries a captured baseline, so update that file in the same change when a fix makes an expected failure pass (see [Conformance](docs/Conformance.md)).
+
 ## Code and review practices
 
 - Match existing conventions: four-space indentation, braces on control structures, PascalCase for public types/members, and camelCase for locals. Keep changes focused and preserve neighboring code style.

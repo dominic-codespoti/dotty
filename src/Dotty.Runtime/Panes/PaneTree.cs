@@ -16,6 +16,11 @@ public sealed class PaneTree : IDisposable
     private readonly object _exitLock = new();
     private readonly Func<IPty>? _ptyFactory;
     private bool _isDisposed;
+    private LeafPane? _zoomed;
+    private LeafPane[]? _zoomedView;
+    private float _cellWidth;
+    private float _cellHeight;
+    private float _dividerThickness = 2f;
 
     public event Action<LeafPane, LeafPane>? ActivePaneChanged;
     public event Action? TopologyChanged;
@@ -29,6 +34,7 @@ public sealed class PaneTree : IDisposable
     {
         _leaves = null;
         _leavesView = null;
+        _zoomed = null;
     }
 
     public PaneNode Root
@@ -57,6 +63,7 @@ public sealed class PaneTree : IDisposable
 
             var previous = _activePane;
             _activePane = value;
+            _zoomed = null;
             ActivePaneChanged?.Invoke(previous, value);
         }
     }
@@ -113,7 +120,7 @@ public sealed class PaneTree : IDisposable
         if (!ContainsLeaf(target))
             throw new InvalidOperationException("Target pane does not belong to this pane tree.");
 
-        string? effectiveWorkingDirectory = workingDirectory ?? target.Session.CurrentWorkingDirectory;
+        string? effectiveWorkingDirectory = workingDirectory ?? target.Session.InheritableWorkingDirectory;
         string? effectiveShell = shell ?? target.Session.LaunchShell;
         bool effectiveShellIsExecutable = shell is null && target.Session.LaunchShellIsExecutable;
         var session = CreateSession(Math.Max(1, target.Rows), Math.Max(1, target.Columns));
@@ -121,10 +128,13 @@ public sealed class PaneTree : IDisposable
         Subscribe(newPane);
         if (!string.IsNullOrEmpty(effectiveWorkingDirectory) || !string.IsNullOrEmpty(effectiveShell))
         {
+            // The new session has the target's grid, so the target's text-area pixel size is the matching start size.
             session.StartWithOptions(
                 shell: effectiveShell,
                 workingDirectory: effectiveWorkingDirectory,
-                shellIsExecutable: effectiveShellIsExecutable);
+                shellIsExecutable: effectiveShellIsExecutable,
+                initialPixelWidth: target.PixelWidth,
+                initialPixelHeight: target.PixelHeight);
         }
         var parent = target.Parent;
 
@@ -206,7 +216,116 @@ public sealed class PaneTree : IDisposable
     {
         ThrowIfDisposed();
         if (totalWidth <= 0 || totalHeight <= 0) return;
-        LayoutNode(_root, new PaneRect(0, 0, totalWidth, totalHeight), cellWidth, cellHeight, dividerThickness);
+        _cellWidth = cellWidth;
+        _cellHeight = cellHeight;
+        _dividerThickness = dividerThickness;
+        var full = new PaneRect(0, 0, totalWidth, totalHeight);
+        if (_zoomed is { } zoomed)
+        {
+            HideNode(_root, zoomed);
+            LayoutNode(zoomed, full, cellWidth, cellHeight, dividerThickness);
+            return;
+        }
+        LayoutNode(_root, full, cellWidth, cellHeight, dividerThickness);
+    }
+
+    /// <summary>The zoomed pane (filling the tab while the others are hidden), or null.</summary>
+    public LeafPane? ZoomedPane => _zoomed;
+
+    /// <summary>Panes to draw: the zoomed pane alone while zoomed, otherwise <see cref="Leaves"/>.</summary>
+    public IReadOnlyList<LeafPane> VisibleLeaves
+    {
+        get
+        {
+            if (_zoomed is null) return Leaves;
+            if (_zoomedView is null || !ReferenceEquals(_zoomedView[0], _zoomed)) _zoomedView = [_zoomed];
+            return _zoomedView;
+        }
+    }
+
+    /// <summary>Zooms the active pane, or restores the split layout when already zoomed. False with a single pane.</summary>
+    public bool ToggleZoom()
+    {
+        ThrowIfDisposed();
+        if (_zoomed != null)
+        {
+            _zoomed = null;
+            return true;
+        }
+        if (_root is LeafPane) return false;
+        _zoomed = _activePane;
+        return true;
+    }
+
+    /// <summary>Resets every split to an even 50/50 ratio. False when there is no split.</summary>
+    public bool Equalize()
+    {
+        ThrowIfDisposed();
+        return EqualizeNode(_root);
+    }
+
+    private static bool EqualizeNode(PaneNode node)
+    {
+        if (node is not SplitPaneNode split) return false;
+        split.SplitRatio = 0.5f;
+        EqualizeNode(split.First);
+        EqualizeNode(split.Second);
+        return true;
+    }
+
+    /// <summary>
+    /// Moves the divider of the active pane's nearest split along the direction's axis by <paramref name="cells"/>
+    /// cells (Left/Up shrink the first child). False when no such split exists or the tree is zoomed.
+    /// </summary>
+    public bool ResizeActive(PaneDirection direction, int cells = 1)
+    {
+        ThrowIfDisposed();
+        if (_zoomed != null) return false;
+        var axis = direction is PaneDirection.Left or PaneDirection.Right ? SplitDirection.Vertical : SplitDirection.Horizontal;
+        PaneNode child = _activePane;
+        while (child.Parent is SplitPaneNode parent)
+        {
+            if (parent.Direction == axis)
+            {
+                float cell = axis == SplitDirection.Vertical ? _cellWidth : _cellHeight;
+                float length = axis == SplitDirection.Vertical ? parent.Bounds.Width : parent.Bounds.Height;
+                float available = Math.Max(0, length - _dividerThickness);
+                if (cell <= 0 || available <= 0) return false;
+                float sign = direction is PaneDirection.Left or PaneDirection.Up ? -1f : 1f;
+                parent.SplitRatio = PaneResizeMath.RatioAfterStep(parent.SplitRatio, available, sign * cells * cell,
+                    PaneResizeMath.MinPixels(axis, _cellWidth, _cellHeight));
+                return true;
+            }
+            child = parent;
+        }
+        return false;
+    }
+
+    /// <summary>Drags <paramref name="split"/>'s divider so its centre follows the pointer (layout pixels).</summary>
+    public void DragDivider(SplitPaneNode split, float x, float y)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(split);
+        var b = split.Bounds;
+        float min = PaneResizeMath.MinPixels(split.Direction, _cellWidth, _cellHeight);
+        split.SplitRatio = split.Direction == SplitDirection.Vertical
+            ? PaneResizeMath.RatioFromPointer(x, b.X, b.Width, _dividerThickness, min)
+            : PaneResizeMath.RatioFromPointer(y, b.Y, b.Height, _dividerThickness, min);
+    }
+
+    private static void HideNode(PaneNode node, LeafPane keep)
+    {
+        switch (node)
+        {
+            case LeafPane leaf when !ReferenceEquals(leaf, keep):
+                leaf.Bounds = default;
+                break;
+            case SplitPaneNode split:
+                split.DividerBounds = default;
+                HideNode(split.First, keep);
+                HideNode(split.Second, keep);
+                break;
+        }
     }
 
     private static void LayoutNode(PaneNode node, PaneRect bounds, float cellWidth, float cellHeight, float dividerThickness)
@@ -219,11 +338,17 @@ public sealed class PaneTree : IDisposable
                 {
                     var cols = Math.Max(1, (int)Math.Floor(bounds.Width / cellWidth));
                     var rows = Math.Max(1, (int)Math.Floor(bounds.Height / cellHeight));
-                    if (cols != leaf.Columns || rows != leaf.Rows)
+                    // Cell pixels use the same rounding as the host's cell metrics (rounded physical size, at least 1).
+                    int pixelWidth = cols * Math.Max(1, (int)MathF.Round(cellWidth));
+                    int pixelHeight = rows * Math.Max(1, (int)MathF.Round(cellHeight));
+                    if (cols != leaf.Columns || rows != leaf.Rows
+                        || pixelWidth != leaf.PixelWidth || pixelHeight != leaf.PixelHeight)
                     {
                         leaf.Columns = cols;
                         leaf.Rows = rows;
-                        leaf.Session.Resize(cols, rows);
+                        leaf.PixelWidth = pixelWidth;
+                        leaf.PixelHeight = pixelHeight;
+                        leaf.Session.Resize(cols, rows, pixelWidth, pixelHeight);
                     }
                 }
                 break;
@@ -238,12 +363,16 @@ public sealed class PaneTree : IDisposable
         float firstWidth, firstHeight, secondWidth, secondHeight;
         float secondX, secondY;
         PaneRect divider;
+        split.Bounds = bounds;
+        float ratio = PaneResizeMath.ClampRatio(split.SplitRatio,
+            Math.Max(0, (split.Direction == SplitDirection.Horizontal ? bounds.Height : bounds.Width) - dividerThickness),
+            PaneResizeMath.MinPixels(split.Direction, cellWidth, cellHeight));
 
         if (split.Direction == SplitDirection.Horizontal)
         {
             var availableHeight = Math.Max(0, bounds.Height - dividerThickness);
             firstWidth = bounds.Width;
-            firstHeight = availableHeight * split.SplitRatio;
+            firstHeight = availableHeight * ratio;
             secondWidth = bounds.Width;
             secondHeight = availableHeight - firstHeight;
 
@@ -255,7 +384,7 @@ public sealed class PaneTree : IDisposable
         else
         {
             var availableWidth = Math.Max(0, bounds.Width - dividerThickness);
-            firstWidth = availableWidth * split.SplitRatio;
+            firstWidth = availableWidth * ratio;
             firstHeight = bounds.Height;
             secondWidth = availableWidth - firstWidth;
             secondHeight = bounds.Height;
@@ -297,15 +426,7 @@ public sealed class PaneTree : IDisposable
     {
         if (node is SplitPaneNode split)
         {
-            var div = split.DividerBounds;
-            var expanded = new PaneRect(
-                div.X - hitTolerance,
-                div.Y - hitTolerance,
-                div.Width + (hitTolerance * 2),
-                div.Height + (hitTolerance * 2)
-            );
-
-            if (expanded.ContainsInclusive(x, y))
+            if (PaneResizeMath.IsNear(split.DividerBounds, x, y, hitTolerance))
             {
                 return split;
             }

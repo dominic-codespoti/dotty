@@ -148,7 +148,7 @@ public class TerminalAdapterSyncUpdateTests
         Assert.Equal(7, buffer.CursorRow);
         Assert.Equal(2, buffer.CursorCol);
 
-        adapter.OnTab();
+        adapter.OnTab(1);
 
         Assert.Equal(7, buffer.CursorRow);
         Assert.Equal(8, buffer.CursorCol);

@@ -30,6 +30,19 @@ public sealed class LuaAllocationTests : IDisposable
     }
 
     [Fact]
+    public void HasStatusFormatterTracksTheUpdateStatusHookWithoutAllocating()
+    {
+        Assert.False(_host.Hooks.HasStatusFormatter);
+        Assert.True(_host.ExecuteString("dotty.on('update_status', function() return 'fixed status' end)"));
+        Assert.True(_host.Hooks.HasStatusFormatter);
+
+        bool present = true;
+        // The host reads this every frame and in every idle wait.
+        AllocationAssert.NoAllocations(() => present &= _host.Hooks.HasStatusFormatter);
+        Assert.True(present);
+    }
+
+    [Fact]
     public void TryFormatStatusDoesNotAllocateAfterWarmup()
     {
         Assert.True(_host.ExecuteString("dotty.on('update_status', function() return 'fixed status' end)"));

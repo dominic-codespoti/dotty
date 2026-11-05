@@ -9,7 +9,11 @@ using Silk.NET.GLFW;
 
 namespace Dotty.Silk;
 
-public readonly record struct ImePreeditState(string Text, int CaretIndex, int SelectionStart, int SelectionLength)
+/// <summary>
+/// Immutable preedit snapshot. <paramref name="SelectionStart"/>/<paramref name="SelectionLength"/> span the
+/// focused clause; <paramref name="Clauses"/> holds every clause boundary (empty for unconverted text).
+/// </summary>
+public readonly record struct ImePreeditState(string Text, int CaretIndex, int SelectionStart, int SelectionLength, PreeditClauses Clauses = default)
 {
     public static readonly ImePreeditState Empty = new(string.Empty, 0, 0, 0);
     public bool IsActive => !string.IsNullOrEmpty(Text);
@@ -75,7 +79,15 @@ public readonly record struct ImePreeditState(string Text, int CaretIndex, int S
         int selectionStartUtf16 = Utf16IndexAtScalar(composition, selectionStartScalar);
         int selectionEndUtf16 = Utf16IndexAtScalar(composition, selectionStartScalar + selectionLengthScalar);
         int caretUtf16 = blockCount == 0 ? composition.Length : selectionEndUtf16;
-        state = new ImePreeditState(composition, caretUtf16, selectionStartUtf16, selectionEndUtf16 - selectionStartUtf16);
+        Span<int> clauseEnds = blockCount <= 64 ? stackalloc int[blockCount] : new int[blockCount];
+        int clauseEndScalar = 0;
+        for (int i = 0; i < blockCount; i++)
+        {
+            clauseEndScalar += blockSizes[i];
+            clauseEnds[i] = Utf16IndexAtScalar(composition, clauseEndScalar);
+        }
+        state = new ImePreeditState(composition, caretUtf16, selectionStartUtf16, selectionEndUtf16 - selectionStartUtf16,
+            new PreeditClauses(clauseEnds));
         return true;
     }
 

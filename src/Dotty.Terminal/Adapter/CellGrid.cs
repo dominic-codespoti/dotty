@@ -104,9 +104,7 @@ public sealed class CellGrid
                 newCells[r, c] = _cells[r, c];
                 newCold[r, c] = _coldCells[r, c];
             }
-        for (int r = copyRows; r < rows; r++)
-            for (int c = 0; c < columns; c++)
-                newCold[r, c].GraphemeIndex = -1;
+        // Newly added cold cells are default(ColdCell), which is the empty cell.
 
         _cells = newCells;
         _coldCells = newCold;

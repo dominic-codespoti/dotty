@@ -34,6 +34,12 @@ public struct CellHot
         set => PackedFlags = value ? (byte)(PackedFlags | 0x08) : (byte)(PackedFlags & ~0x08);
     }
 
+    public bool IsProtected
+    {
+        get => (PackedFlags & 0x10) != 0;
+        set => PackedFlags = value ? (byte)(PackedFlags | 0x10) : (byte)(PackedFlags & ~0x10);
+    }
+
     public readonly bool IsEmpty => Rune == 0 && (PackedFlags & 0x02) == 0;
 
     public void Reset()

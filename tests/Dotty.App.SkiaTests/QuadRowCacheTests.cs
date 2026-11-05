@@ -1,4 +1,5 @@
 using System;
+using Dotty.Terminal.Adapter;
 using Dotty.Rendering.Gpu;
 using SkiaSharp;
 using Xunit;
@@ -208,6 +209,53 @@ public sealed class QuadRowCacheTests
         // Out-of-bounds invalidation does not throw
         cache.InvalidateRow(99);
         cache.InvalidateRow(-1);
+    }
+
+    [Fact]
+    public void ApplyTextOptions_blink_phase_invalidates_only_blinking_rows_and_faint_change_invalidates_all()
+    {
+        var cache = new QuadRowCache();
+        cache.EnsureGeometry(rows: 3, columns: 10, cellW: 10f, cellH: 20f);
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true));
+        void FillAll()
+        {
+            for (int r = 0; r < 3; r++)
+            {
+                ref var e = ref cache.GetEntryRef(r);
+                e.Valid = true;
+                e.HasBlinkingText = r == 1;
+            }
+        }
+
+        FillAll();
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true));
+        Assert.True(cache.GetEntryRef(0).Valid && cache.GetEntryRef(1).Valid && cache.GetEntryRef(2).Valid);
+
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: false));
+        Assert.True(cache.GetEntryRef(0).Valid);
+        Assert.False(cache.GetEntryRef(1).Valid);
+        Assert.False(cache.GetEntryRef(1).HasBlinkingText);
+        Assert.True(cache.GetEntryRef(2).Valid);
+
+        FillAll();
+        cache.ApplyTextOptions(new TextAttributeOptions(0.6f, BlinkVisible: false));
+        Assert.False(cache.GetEntryRef(0).Valid || cache.GetEntryRef(1).Valid || cache.GetEntryRef(2).Valid);
+    }
+
+    [Fact]
+    public void ApplyTextOptions_special_color_change_invalidates_cached_rows()
+    {
+        var cache = new QuadRowCache();
+        cache.EnsureGeometry(rows: 1, columns: 1, cellW: 10f, cellH: 20f);
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true));
+        cache.GetEntryRef(0).Valid = true;
+
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true)
+        {
+            SpecialColors = new SpecialColorSettings(0xFF123456, 0, 0, 0, 0, 1),
+        });
+
+        Assert.False(cache.GetEntryRef(0).Valid);
     }
 
     [Fact]

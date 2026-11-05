@@ -41,35 +41,50 @@ public readonly struct GlyphInfo
 /// <summary>
 /// Atlas lookup key. Deliberately has NO foreground color: the atlas stores
 /// either grayscale coverage or intrinsic premultiplied color, so one entry
-/// serves every foreground color/alpha. Typeface identity is by instance — canvases share
-/// resolved typefaces through a static cache, so same-family instances compare
-/// equal in practice.
+/// serves every foreground color/alpha. Typeface identity is by instance: the host
+/// resolves each configured family once and reuses that instance across reloads,
+/// zoom and resize (W4-B7), so keys stay stable. <see cref="Style"/> separates
+/// regular, bold, italic and bold-italic rasterizations of the same grapheme. <see cref="CellSpan"/> (1 or 2) is the
+/// number of cells a constrained glyph is fitted into (<see cref="GlyphCellSpan"/>).
 /// </summary>
 public readonly struct GlyphKey : IEquatable<GlyphKey>
 {
     public readonly string Grapheme;
     public readonly SKTypeface Typeface;
     public readonly float TextSize;
-    public readonly bool Bold;
+    public readonly GlyphStyle Style;
+    public readonly byte CellSpan;
 
-    public GlyphKey(string grapheme, SKTypeface typeface, float textSize, bool bold)
+    /// <param name="cellSpan">1 or 2; 0 derives it from the grapheme's Unicode width.</param>
+    public GlyphKey(string grapheme, SKTypeface typeface, float textSize, GlyphStyle style, byte cellSpan = 0)
     {
         Grapheme = grapheme ?? string.Empty;
         Typeface = typeface ?? SKTypeface.Default;
         TextSize = textSize;
-        Bold = bold;
+        Style = style;
+        CellSpan = cellSpan switch
+        {
+            1 => 1,
+            0 => Dotty.Terminal.Adapter.UnicodeWidth.GetWidth(Grapheme) >= 2 ? (byte)2 : (byte)1,
+            _ => 2,
+        };
     }
+
+    public bool IsBold => (Style & GlyphStyle.Bold) != 0;
+
+    public bool IsItalic => (Style & GlyphStyle.Italic) != 0;
 
     public bool Equals(GlyphKey other) =>
         string.Equals(Grapheme, other.Grapheme, StringComparison.Ordinal) &&
         ReferenceEquals(Typeface, other.Typeface) &&
         TextSize.Equals(other.TextSize) &&
-        Bold == other.Bold;
+        Style == other.Style &&
+        CellSpan == other.CellSpan;
 
     public override bool Equals(object? obj) => obj is GlyphKey other && Equals(other);
 
     public override int GetHashCode() =>
-        HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Bold);
+        HashCode.Combine(Grapheme, RuntimeHelpers.GetHashCode(Typeface), TextSize, Style, CellSpan);
 }
 /// <summary>One changed rectangle in an atlas page bitmap.</summary>
 public readonly struct AtlasDirtyRegion
@@ -91,22 +106,23 @@ public readonly struct AtlasDirtyRegion
 /// <summary>
 /// Two-page glyph atlas: A8 coverage for monochrome glyphs and lazily allocated
 /// premultiplied RGBA for intrinsic-color glyphs. Rasterizes graphemes once per
-/// (grapheme, typeface, size, bold) key and stores tight-bounds placement.
+/// (grapheme, typeface, size, style) key and stores tight-bounds placement.
 /// Mutation and atlas packing are lock-protected. Glyph lookup reads an immutable
 /// copy-on-write map; bitmap access remains lock-protected for texture upload.
 /// </summary>
-public sealed class GlyphAtlas : IDisposable
+public sealed partial class GlyphAtlas : IDisposable
 {
     public const int MaxAtlasSize = 4096;   // Each page capped independently; A8 1 B/px, RGBA 4 B/px.
     private const int DefaultInitialSize = 1024;
     private const int Padding = 2;          // gap between entries (sampling bleed)
     private const int MaxGlyphDimension = 512;
-    private const float MinFallbackScale = 0.5f;
-    private const float MaxFallbackScale = 1.5f;
     private const string FallbackGrapheme = "\uFFFD";
+    /// <summary>Horizontal skew of synthetic italic (<see cref="GlyphStyle.Italic"/>): x += -SkewX × (height above the baseline).</summary>
+    public const float SyntheticItalicSkewX = -0.25f;
     private readonly object _lock = new();
     private readonly SKTypeface _typeface;
     private readonly float _textSize;
+    private readonly RasterPolicy _rasterPolicy;
     private readonly float _primaryBaseline;
     private readonly float _primaryCellHeight;
     private FontFallbackChain? _fallbackChain;
@@ -147,6 +163,9 @@ public sealed class GlyphAtlas : IDisposable
     private bool _glyphMapDirty;
     private int _publishedMapCopyCount;
     private int _contentVersion;
+    private int _layoutEpoch;
+    private bool _needsRebuild;
+    private int _rebuildCount;
     /// <summary>Recency stamp + refcount, maintained by <see cref="GlyphAtlasService"/> under its lock.</summary>
     internal long LastUsedStamp { get; set; }
     internal int RefCount { get; set; }
@@ -160,6 +179,8 @@ public sealed class GlyphAtlas : IDisposable
 
     public SKTypeface Typeface => _typeface;
     public float TextSize => _textSize;
+    /// <summary>Hinting and antialiasing used for every glyph; part of the atlas identity.</summary>
+    public RasterPolicy RasterPolicy => _rasterPolicy;
     public FontFallbackChain? FallbackChain
     {
         get => Volatile.Read(ref _fallbackChain);
@@ -172,6 +193,9 @@ public sealed class GlyphAtlas : IDisposable
                 previous.SymbolMapChanged -= OnSymbolMapChanged;
             if (value != null)
                 value.SymbolMapChanged += OnSymbolMapChanged;
+            // Glyphs drawn with the previous chain may resolve to other faces now.
+            if (previous != null)
+                Rebuild();
         }
     }
     public int Width => Volatile.Read(ref _width);
@@ -295,10 +319,12 @@ public sealed class GlyphAtlas : IDisposable
         public int Height;
         public int X;
     }
-    public GlyphAtlas(SKTypeface typeface, float textSize, int initialSize = DefaultInitialSize, FontFallbackChain? fallbackChain = null)
+    public GlyphAtlas(SKTypeface typeface, float textSize, int initialSize = DefaultInitialSize, FontFallbackChain? fallbackChain = null,
+        RasterPolicy rasterPolicy = default)
     {
         _typeface = typeface ?? SKTypeface.Default;
         _textSize = textSize > 0 ? textSize : 12f;
+        _rasterPolicy = rasterPolicy;
         using (var primaryFont = new SKFont(_typeface, _textSize))
         {
             var metrics = primaryFont.Metrics;
@@ -306,6 +332,7 @@ public sealed class GlyphAtlas : IDisposable
             _primaryCellHeight = MathF.Max(1f,
                 MathF.Ceiling(-metrics.Ascent) + 1f +
                 MathF.Ceiling(metrics.Descent) + 1f);
+            InitDefaultCellGeometry(primaryFont);
         }
         FallbackChain = fallbackChain;
         int size = Math.Clamp(initialSize, 64, MaxAtlasSize);
@@ -317,7 +344,7 @@ public sealed class GlyphAtlas : IDisposable
         // Reserve a replacement glyph before normal content can fill the
         // atlas. This keeps the frame builder's failure path visible instead
         // of silently dropping a glyph when growth reaches MaxAtlasSize.
-        var fallbackKey = new GlyphKey(FallbackGrapheme, _typeface, _textSize, bold: false);
+        var fallbackKey = new GlyphKey(FallbackGrapheme, _typeface, _textSize, GlyphStyle.Regular);
         if (EnsureGlyph(fallbackKey, out var fallbackGlyph))
         {
             _fallbackGlyph = fallbackGlyph;
@@ -423,13 +450,34 @@ public sealed class GlyphAtlas : IDisposable
         }
     }
 
-    private void OnSymbolMapChanged(object? sender, EventArgs args)
+    private void OnSymbolMapChanged(object? sender, EventArgs args) => Rebuild();
+
+    /// <summary>
+    /// Bumped only when existing entries move or disappear (rebuild, symbol-map or fallback-chain change). Adding a
+    /// glyph or growing a page keeps every placement, so caches of placed glyphs (composer row caches) key on this
+    /// epoch rather than on <see cref="ContentVersion"/>.
+    /// </summary>
+    public int LayoutEpoch => Volatile.Read(ref _layoutEpoch);
+
+    /// <summary>
+    /// Set when a glyph could not be placed because a page reached <see cref="MaxAtlasSize"/>. The frame owner calls
+    /// <see cref="Rebuild"/> at a frame boundary; the frame that then runs re-ensures its visible glyphs.
+    /// </summary>
+    public bool NeedsRebuild => Volatile.Read(ref _needsRebuild);
+
+    /// <summary>
+    /// Drops every entry (both pages keep their size), re-reserves the tofu glyph, schedules a full upload and bumps
+    /// <see cref="LayoutEpoch"/> and <see cref="ContentVersion"/>. Call between frames: placements handed out before
+    /// the call are invalid afterwards.
+    /// </summary>
+    public void Rebuild()
     {
         lock (_lock)
         {
             if (_disposed)
                 return;
             _map.Clear();
+            ClearSpritesLocked();
             _publishedMap = GlyphMapSnapshot.Empty;
             _glyphMapDirty = false;
             _shelves.Clear();
@@ -448,7 +496,10 @@ public sealed class GlyphAtlas : IDisposable
                 _colorFullUploadRequired = true;
             }
             _hasFallbackGlyph = false;
-            var fallbackKey = new GlyphKey(FallbackGrapheme, _typeface, _textSize, bold: false);
+            Volatile.Write(ref _needsRebuild, false);
+            Volatile.Write(ref _layoutEpoch, unchecked(_layoutEpoch + 1));
+            _rebuildCount++;
+            var fallbackKey = new GlyphKey(FallbackGrapheme, _typeface, _textSize, GlyphStyle.Regular);
             if (EnsureGlyph(fallbackKey, out var fallbackGlyph))
             {
                 _fallbackGlyph = fallbackGlyph;
@@ -457,6 +508,9 @@ public sealed class GlyphAtlas : IDisposable
             PublishPendingGlyphs();
         }
     }
+
+    /// <summary>Number of <see cref="Rebuild"/> calls (diagnostics).</summary>
+    public int RebuildCount { get { lock (_lock) return _rebuildCount; } }
     /// <summary>
     /// Publishes all glyphs committed since the previous publication in one
     /// copy-on-write snapshot. Call after a frame/batch has ensured its glyphs.
@@ -466,9 +520,9 @@ public sealed class GlyphAtlas : IDisposable
     {
         lock (_lock)
         {
+            PublishPendingSpritesLocked();
             if (!_glyphMapDirty)
                 return;
-
             Volatile.Write(ref _publishedMap,
                 new GlyphMapSnapshot(new Dictionary<GlyphKey, GlyphInfo>(_map)));
             _glyphMapDirty = false;
@@ -499,7 +553,12 @@ public sealed class GlyphAtlas : IDisposable
             if (raster.IsColor) EnsureColorPage();
 
             if (!TryPlace(raster.Width, raster.Height, raster.IsColor, out int x, out int y))
+            {
+                // The page is at MaxAtlasSize: ask the frame owner to rebuild at
+                // the next frame boundary instead of drawing tofu until restart.
+                Volatile.Write(ref _needsRebuild, true);
                 return false;
+            }
 
             var targetCanvas = raster.IsColor ? _colorCanvas! : _canvas;
             targetCanvas.DrawImage(raster.Image,
@@ -557,121 +616,35 @@ public sealed class GlyphAtlas : IDisposable
     /// </summary>
     private GlyphRaster RasterizeEffective(GlyphKey key)
     {
+        var constraint = GlyphConstraints.ForGrapheme(key.Grapheme);
         var fallbackChain = Volatile.Read(ref _fallbackChain);
         if (fallbackChain == null || string.IsNullOrEmpty(key.Grapheme))
         {
-            return RasterizeTight(key);
+            return constraint.IsNone
+                ? RasterizeTight(key)
+                : RasterizeConstrained(key, key.Typeface, constraint, key.IsBold, key.IsItalic);
         }
 
-        var resolvedTypeface = fallbackChain.ResolveTypefaceForGrapheme(
-            key.Grapheme, key.Bold, out bool isFallback);
-        // The primary font, including its Nerd Font PUA glyphs, keeps the
-        // exact existing raster path. Normalization is only for a resolved
-        // fallback typeface.
-        if (!isFallback || resolvedTypeface == null ||
+        var resolution = fallbackChain.Resolve(key.Grapheme, key.Style);
+        var resolvedTypeface = resolution.Typeface ?? key.Typeface;
+        // The primary family, including its real bold/italic faces, keeps the exact raster path for text; icons are
+        // fitted to the real cell span (W4-C9). Fallback-family text is clamped only when it overflows.
+        bool primary = !resolution.IsFallback ||
             ReferenceEquals(resolvedTypeface, key.Typeface) ||
-            ReferenceEquals(resolvedTypeface, _typeface))
+            ReferenceEquals(resolvedTypeface, _typeface);
+        if (primary && constraint.IsNone)
         {
-            return RasterizeTight(key);
+            return RasterizeTightCore(key, blob: null, typeface: resolvedTypeface,
+                syntheticBold: resolution.SyntheticBold, syntheticItalic: resolution.SyntheticItalic);
         }
-
-        using var fallbackFont = new SKFont(resolvedTypeface, key.TextSize)
-        {
-            Edging = SKFontEdging.Antialias,
-            Subpixel = false,
-            Hinting = SKFontHinting.Full,
-        };
-        var fallbackMetrics = fallbackFont.Metrics;
-        float fallbackHeight = MathF.Max(1f,
-            MathF.Ceiling(-fallbackMetrics.Ascent) + 1f +
-            MathF.Ceiling(fallbackMetrics.Descent) + 1f);
-        float scale = _primaryCellHeight / fallbackHeight;
-        scale = Math.Clamp(scale, MinFallbackScale, MaxFallbackScale);
-        // A fallback's ink can overhang its advance. Reserve the complete
-        // one-cell or wide-cell allocation before rasterizing.
-        float cellWidth = GetCellWidth(key.Grapheme, key.TextSize);
-        float measuredAdvance = MathF.Max(1f, fallbackFont.MeasureText(key.Grapheme) + 1f);
-        scale = MathF.Min(scale, cellWidth / measuredAdvance);
-        scale = MathF.Max(0.05f, scale);
-
-        // Metrics are normally sufficient to fit the cell. Re-rasterize at a
-        // smaller scale when a particular glyph's ink or synthetic bold
-        // stroke still exceeds its hard allocation.
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            var effectiveKey = new GlyphKey(
-                key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Bold);
-            fallbackFont.Size = key.TextSize * scale;
-            var raster = RasterizeTightCore(
-                effectiveKey, blob: null, baselineOverride: _primaryBaseline,
-                maxAdvance: cellWidth, fontOverride: fallbackFont);
-            if (raster.Width <= MathF.Ceiling(cellWidth) &&
-                raster.Height <= MathF.Ceiling(_primaryCellHeight))
-            {
-                return raster;
-            }
-
-            float widthScale = raster.Width > 0 ? cellWidth / raster.Width : 1f;
-            float heightScale = raster.Height > 0 ? _primaryCellHeight / raster.Height : 1f;
-            float correction = MathF.Min(widthScale, heightScale) * 0.98f;
-            raster.Image.Dispose();
-            if (!(correction > 0f) || correction >= 1f)
-            {
-                scale *= 0.5f;
-            }
-            else
-            {
-                scale *= correction;
-            }
-            scale = MathF.Max(0.05f, scale);
-        }
-
-        // The final attempt is still a valid A8 raster. CommitRasterizedGlyph
-        var finalKey = new GlyphKey(key.Grapheme, resolvedTypeface, key.TextSize * scale, key.Bold);
-        fallbackFont.Size = key.TextSize * scale;
-        var finalRaster = RasterizeTightCore(finalKey, blob: null,
-            baselineOverride: _primaryBaseline, maxAdvance: cellWidth,
-            fontOverride: fallbackFont);
-        if (finalRaster.Width > MathF.Ceiling(cellWidth) ||
-            finalRaster.Height > MathF.Ceiling(_primaryCellHeight))
-        {
-            // Do not commit an entry whose tight bounds cannot fit its cell;
-            // the caller will use the reserved tofu glyph instead.
-            return new GlyphRaster(
-                finalRaster.Image, 0, 0, 0, 0,
-                MathF.Min(finalRaster.Advance, cellWidth),
-                _primaryBaseline, 0f, 0f);
-        }
-        return finalRaster;
-    }
-
-    private static float GetCellWidth(string grapheme, float textSize)
-        => textSize * (IsWideGrapheme(grapheme) ? 2f : 1f);
-
-    private static bool IsWideGrapheme(string grapheme)
-    {
-        if (string.IsNullOrEmpty(grapheme) ||
-            !System.Text.Rune.TryGetRuneAt(grapheme, 0, out var rune))
-        {
-            return false;
-        }
-
-        int cp = rune.Value;
-        return (cp >= 0x1100 && cp <= 0x115F) ||
-               cp == 0x2329 || cp == 0x232A ||
-               (cp >= 0x2E80 && cp <= 0xA4CF) ||
-               (cp >= 0xAC00 && cp <= 0xD7A3) ||
-               (cp >= 0xF900 && cp <= 0xFAFF) ||
-               (cp >= 0xFE10 && cp <= 0xFE6F) ||
-               (cp >= 0xFF00 && cp <= 0xFF60) ||
-               (cp >= 0xFFE0 && cp <= 0xFFE6) ||
-               (cp >= 0x1F300 && cp <= 0x1FAFF) ||
-               (cp >= 0x20000 && cp <= 0x3FFFD);
+        return RasterizeConstrained(key, resolvedTypeface,
+            constraint.IsNone ? GlyphConstraint.TextFallback : constraint,
+            resolution.SyntheticBold, resolution.SyntheticItalic);
     }
 
     private GlyphRaster RasterizeTight(GlyphKey key)
     {
-        return RasterizeTightCore(key, blob: null);
+        return RasterizeTightCore(key, blob: null, syntheticBold: key.IsBold, syntheticItalic: key.IsItalic);
     }
     /// <summary>
     /// Same as <see cref="RasterizeTight"/> but rasterizes a pre-shaped
@@ -686,7 +659,7 @@ public sealed class GlyphAtlas : IDisposable
 
     private bool TryRasterizeIntrinsicColor(
         GlyphKey key, SKTextBlob? blob, SKFont font, SKPaint paint,
-        int width, int height, float baseline, float advance, float reportedBaseline,
+        int width, int height, float originX, float baseline, float advance, float reportedBaseline,
         out GlyphRaster raster)
     {
         raster = default;
@@ -704,8 +677,8 @@ public sealed class GlyphAtlas : IDisposable
             var canvas = _colorProbeCanvas!;
             bitmap.Erase(SKColors.Transparent);
             paint.Color = SKColors.White;
-            if (blob != null) canvas.DrawText(blob, 0f, baseline, paint);
-            else canvas.DrawText(key.Grapheme, 0f, baseline, SKTextAlign.Left, font, paint);
+            if (blob != null) canvas.DrawText(blob, originX, baseline, paint);
+            else canvas.DrawText(key.Grapheme, originX, baseline, SKTextAlign.Left, font, paint);
             canvas.Flush();
             bool intrinsic = false;
             int left = width, top = height, right = -1, bottom = -1;
@@ -729,8 +702,8 @@ public sealed class GlyphAtlas : IDisposable
                 {
                     bitmap.Erase(SKColors.Transparent);
                     paint.Color = SKColors.Black;
-                    if (blob != null) canvas.DrawText(blob, 0f, baseline, paint);
-                    else canvas.DrawText(key.Grapheme, 0f, baseline, SKTextAlign.Left, font, paint);
+                    if (blob != null) canvas.DrawText(blob, originX, baseline, paint);
+                    else canvas.DrawText(key.Grapheme, originX, baseline, SKTextAlign.Left, font, paint);
                     canvas.Flush();
                     pixels = (byte*)bitmap.GetPixels();
                     for (int y = top; y <= bottom && !intrinsic; y++)
@@ -755,7 +728,7 @@ public sealed class GlyphAtlas : IDisposable
                 new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None), _rasterBlitPaint);
             cropped.Canvas.Flush();
             raster = new GlyphRaster(cropped.Snapshot(), 0, 0, glyphWidth, glyphHeight, advance,
-                reportedBaseline, left, top - baseline, isColor: true);
+                reportedBaseline, left - originX, top - baseline, isColor: true);
             return true;
         }
     }
@@ -764,25 +737,33 @@ public sealed class GlyphAtlas : IDisposable
         GlyphKey key, SKTextBlob? blob,
         float baselineOverride = float.NaN,
         float maxAdvance = float.PositiveInfinity,
-        SKFont? fontOverride = null)
+        SKFont? fontOverride = null,
+        SKTypeface? typeface = null,
+        bool syntheticBold = false,
+        bool syntheticItalic = false)
     {
         using var ownedFont = fontOverride == null
-            ? new SKFont(key.Typeface, key.TextSize)
+            ? new SKFont(typeface ?? key.Typeface, key.TextSize)
             {
-                Edging = SKFontEdging.Antialias,
+                Edging = _rasterPolicy.SkiaEdging,
                 Subpixel = false,
-                Hinting = SKFontHinting.Full,
+                Hinting = _rasterPolicy.SkiaHinting,
+                SkewX = syntheticItalic ? SyntheticItalicSkewX : 0f,
             }
             : null;
         var font = fontOverride ?? ownedFont!;
+        // W4-C10: multi-scalar graphemes draw HarfBuzz-shaped glyphs; .notdef keeps the per-scalar draw below.
+        bool preShaped = blob != null;
+        using var shapedBlob = preShaped ? null : TryShapeGrapheme(key.Grapheme, font);
+        blob ??= shapedBlob;
         using var paint = new SKPaint
         {
             Color = SKColors.White,
-            IsAntialias = true,
-            // Synthetic bold applies to raw-string glyphs. Pre-shaped blobs
-            // carry their own weight via the run font; no extra stroke.
-            Style = blob == null && key.Bold ? SKPaintStyle.StrokeAndFill : SKPaintStyle.Fill,
-            StrokeWidth = blob == null && key.Bold ? Math.Max(0.5f, key.TextSize * 0.04f) : 0f,
+            IsAntialias = _rasterPolicy.IsAntialias,
+            // Synthetic bold applies to raw-string glyphs whose family has no
+            // heavier face. Pre-shaped blobs carry their own weight via the run font.
+            Style = !preShaped && syntheticBold ? SKPaintStyle.StrokeAndFill : SKPaintStyle.Fill,
+            StrokeWidth = !preShaped && syntheticBold ? Math.Max(0.5f, key.TextSize * 0.04f) : 0f,
         };
 
         var fm = font.Metrics;
@@ -803,19 +784,26 @@ public sealed class GlyphAtlas : IDisposable
             advance = MathF.Ceiling(font.MeasureText(key.Grapheme)) + 1f;
         }
         float boundedAdvance = MathF.Min(advance, maxAdvance);
-        int width = Math.Max(1, (int)advance);
+        // A skewed (synthetic italic) raw-string glyph leans right above the baseline and left below it:
+        // widen the scratch surface on both sides and draw from originX so no ink is clipped.
+        float lean = !preShaped ? MathF.Max(0f, -font.SkewX) : 0f;
+        float originX = MathF.Ceiling(lean * descent);
+        int width = Math.Max(1, (int)(advance + originX + MathF.Ceiling(lean * ascent)));
         int height = Math.Max(1, (int)(ascent + descent));
 
-        if (TryRasterizeIntrinsicColor(key, blob, font, paint, width, height, drawBaseline, boundedAdvance, reportedBaseline, out var colorRaster))
+        // Monochrome faces (no CBDT/CBLC/sbix/COLR/SVG table) go straight to one A8 raster pass; only colour
+        // faces and pre-shaped blobs (whose run fonts are not known here) take the intrinsic-colour probe.
+        if ((preShaped || ColorFontTables.IsColorFace(font.Typeface ?? key.Typeface))
+            && TryRasterizeIntrinsicColor(key, blob, font, paint, width, height, originX, drawBaseline, boundedAdvance, reportedBaseline, out var colorRaster))
             return colorRaster;
 
         using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Alpha8, SKAlphaType.Premul));
         var canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
         if (blob != null)
-            canvas.DrawText(blob, 0f, drawBaseline, paint);
+            canvas.DrawText(blob, originX, drawBaseline, paint);
         else
-            canvas.DrawText(key.Grapheme, 0f, drawBaseline, SKTextAlign.Left, font, paint);
+            canvas.DrawText(key.Grapheme, originX, drawBaseline, SKTextAlign.Left, font, paint);
         canvas.Flush();
 
         using var pixmap = new SKPixmap();
@@ -855,7 +843,7 @@ public sealed class GlyphAtlas : IDisposable
 
         return new GlyphRaster(
             surface.Snapshot(), left, top, w, h,
-            boundedAdvance, reportedBaseline, left, top - drawBaseline);
+            boundedAdvance, reportedBaseline, left - originX, top - drawBaseline);
     }
 
     private bool TryPlace(int width, int height, bool color, out int x, out int y)
@@ -957,6 +945,7 @@ public sealed class GlyphAtlas : IDisposable
             _colorCanvas?.Dispose();
             _colorBitmap?.Dispose();
             _rasterBlitPaint.Dispose();
+            DisposeGraphemeShaper();
         }
     }
 }

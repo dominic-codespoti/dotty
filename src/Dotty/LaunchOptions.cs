@@ -10,6 +10,25 @@ public sealed class DottyLaunchOptions
     public bool ShowHelp { get; set; }
     public bool ShowVersion { get; set; }
 
+    /// <summary>Command-line action such as <c>+explain-config</c>; null when launching a terminal. Actions never create a window.</summary>
+    public string? Action { get; set; }
+
+    /// <summary>Positional arguments that followed <see cref="Action"/>.</summary>
+    public IReadOnlyList<string> ActionArguments { get; set; } = [];
+
+    /// <summary>Action-specific flags such as <c>--force</c>, each at most once; only flags the action accepts get here.</summary>
+    public IReadOnlyList<string> ActionFlags { get; set; } = [];
+
+    public bool HasActionFlag(string flag)
+    {
+        foreach (string candidate in ActionFlags)
+        {
+            if (candidate == flag)
+                return true;
+        }
+        return false;
+    }
+
     public string EffectiveWorkingDirectory => WorkingDirectory ?? Environment.CurrentDirectory;
 
     public void ValidateForLaunch()
@@ -96,10 +115,34 @@ public sealed class DottyLaunchOptions
 
 public static class DottyLaunchOptionsParser
 {
+    public const string ExplainConfigAction = "+explain-config";
+    public const string InitConfigAction = "+init-config";
+    public const string ShowConfigAction = "+show-config";
+    public const string ValidateConfigAction = "+validate-config";
+    public const string ListThemesAction = "+list-themes";
+    public const string DiagnoseAction = "+diagnose";
+
+    public const string ForceFlag = "--force";
+    public const string DefaultFlag = "--default";
+    public const string GlFlag = "--gl";
+
+    private sealed record ActionSpec(string Name, int MaxArguments, string[] Flags);
+
+    private static readonly ActionSpec[] Actions =
+    [
+        new(ExplainConfigAction, 1, []),
+        new(InitConfigAction, 0, [ForceFlag]),
+        new(ShowConfigAction, 0, [DefaultFlag]),
+        new(ValidateConfigAction, 0, []),
+        new(ListThemesAction, 0, []),
+        new(DiagnoseAction, 0, [GlFlag]),
+    ];
+
     public const string HelpText = """
 Usage: dotty [--working-directory DIR|-d DIR] [--shell PATH] [--] [COMMAND [ARG...]]
        dotty --help|-h
        dotty --version
+       dotty +ACTION [ARG...]
 
 Options:
   -h, --help                    Show this help and exit
@@ -107,6 +150,19 @@ Options:
   -d, --working-directory DIR   Start in DIR
       --shell PATH              Start PATH as the interactive shell
   --                            End Dotty options; run COMMAND with exact arguments
+
+Actions (print and exit without opening a window):
+  +explain-config [OPTION]      List every config option, or document OPTION
+                                (JSON path or Lua key, e.g. font.size)
+  +init-config [--force]        Write a commented starter config.json; --force
+                                replaces an existing file
+  +show-config [--default]      Print the effective config.json settings as
+                                JSON, or the built-in defaults with --default
+  +validate-config              Check config.json and config.lua; exit 1 and
+                                print file:line errors when something is wrong
+  +list-themes                  List built-in and user theme names
+  +diagnose [--gl]              Print version, platform, paths, config status
+                                and helper locations; --gl also probes OpenGL
 """;
 
     public static DottyLaunchOptions Parse(IReadOnlyList<string> args)
@@ -116,6 +172,9 @@ Options:
         int index = 0;
         bool sawShell = false;
         IReadOnlyList<string>? command = null;
+        List<string>? actionArguments = null;
+        List<string>? actionFlags = null;
+        ActionSpec? spec = null;
 
         while (index < args.Count)
         {
@@ -130,6 +189,18 @@ Options:
                     argv[i] = args[index + i];
                 command = new ReadOnlyCollection<string>(argv);
                 break;
+            }
+
+            if (arg.StartsWith('+'))
+            {
+                if (options.Action is not null)
+                    throw new ArgumentException($"Only one action may be given; found '{options.Action}' and '{arg}'.");
+                spec = FindAction(arg) ?? throw new ArgumentException($"Unknown action '{arg}'.");
+                options.Action = arg;
+                actionArguments = [];
+                actionFlags = [];
+                index++;
+                continue;
             }
 
             switch (arg)
@@ -152,6 +223,20 @@ Options:
                     sawShell = true;
                     break;
                 default:
+                    if (spec is not null && !arg.StartsWith('-'))
+                    {
+                        actionArguments!.Add(arg);
+                        index++;
+                        break;
+                    }
+                    if (spec is not null && Array.IndexOf(spec.Flags, arg) >= 0)
+                    {
+                        if (actionFlags!.Contains(arg))
+                            throw new ArgumentException($"'{arg}' may be given only once.");
+                        actionFlags.Add(arg);
+                        index++;
+                        break;
+                    }
                     throw new ArgumentException($"Unknown option or unexpected argument '{arg}'. Use '--' before a command.");
             }
         }
@@ -160,8 +245,31 @@ Options:
             throw new ArgumentException("Choose either '--help' or '--version'.");
         if (sawShell && command is not null)
             throw new ArgumentException("'--shell' cannot be combined with a command.");
+        if (options.Action is not null)
+        {
+            if (sawShell || options.WorkingDirectory is not null || command is not null)
+                throw new ArgumentException($"'{options.Action}' cannot be combined with '--shell', '--working-directory', or a command.");
+            if (actionArguments!.Count > spec!.MaxArguments)
+            {
+                throw new ArgumentException(spec.MaxArguments == 0
+                    ? $"'{options.Action}' takes no arguments; found '{actionArguments[0]}'."
+                    : $"'{options.Action}' accepts at most one OPTION.");
+            }
+            options.ActionArguments = actionArguments;
+            options.ActionFlags = actionFlags!;
+        }
         options.Command = command;
         return options;
+    }
+
+    private static ActionSpec? FindAction(string name)
+    {
+        foreach (ActionSpec spec in Actions)
+        {
+            if (spec.Name == name)
+                return spec;
+        }
+        return null;
     }
 
     private static string GetValue(IReadOnlyList<string> args, ref int index, string option)

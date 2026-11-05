@@ -69,7 +69,7 @@ public sealed class SilkColorGlyphRenderingTests
             using var typeface = SKTypeface.FromFile(NotoColorEmojiPath);
             Assert.NotNull(typeface);
             using var atlas = new GlyphAtlas(typeface!, 20f, initialSize: 128);
-            Assert.True(atlas.EnsureGlyph(new GlyphKey("😀", typeface!, 20f, bold: false), out GlyphInfo glyph));
+            Assert.True(atlas.EnsureGlyph(new GlyphKey("😀", typeface!, 20f, GlyphStyle.Regular), out GlyphInfo glyph));
             Assert.True(glyph.IsColor);
             Assert.True(glyph.Width < CellWidth && glyph.Height < CellHeight, "Test emoji must fit in the first terminal cell.");
 
@@ -105,7 +105,6 @@ public sealed class SilkColorGlyphRenderingTests
             using var renderer = new SilkTerminalRenderer(gl!, atlas);
             renderer.Render(new[] { cell, clippedCell }, Array.Empty<ChromeQuadInstance>(),
                 atlas.Width, atlas.Height, clipWidth, height, CellWidth, CellHeight,
-                underlineY: 0.85f, strikeY: 0.7f, lineHalf: 0.04f,
                 clearColor: SgrColorArgb.FromRgb(0, 0, 0), frameCaptured: true);
             Assert.Equal((long)atlas.Width * atlas.Height, renderer.R8TexturePayloadBytes);
             Assert.Equal((long)atlas.ColorWidth * atlas.ColorHeight * 4, renderer.Rgba8TexturePayloadBytes);

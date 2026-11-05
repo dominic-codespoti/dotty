@@ -3,6 +3,7 @@ using System.Threading;
 using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Themes;
 using Dotty.Runtime.Config;
+using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Themes;
 using Dotty.Terminal.Adapter;
 
@@ -11,6 +12,9 @@ namespace Dotty.Silk.Config;
 /// <summary>Configuration and theme helper for the Dotty.Silk host.</summary>
 public static class SilkConfig
 {
+    // Stateless and thread-safe: one decoder serves every adapter.
+    private static readonly Dotty.Rendering.Gpu.SkiaImageDecoder ImageDecoder = new();
+
     private static IColorScheme? _cachedTheme;
     private static string? _cachedThemeName;
     private static int _systemPrefersDark = -1;
@@ -125,6 +129,26 @@ public static class SilkConfig
         theme ??= LoadActiveTheme();
         adapter.SetPaletteBaseline(ResolveAnsiPalette(theme));
         adapter.SetDefaultColors($"#{theme.Foreground & 0xFFFFFF:X6}", $"#{theme.Background & 0xFFFFFF:X6}");
+    }
+
+    /// <summary>Applies per-adapter user config (theme, OSC 8 ingest, vt switches) at session creation and on config reload.</summary>
+    public static void ApplyConfigToAdapter(TerminalAdapter adapter, IColorScheme? theme = null)
+    {
+        if (adapter == null) return;
+        ApplyThemeToAdapter(adapter, theme);
+        HyperlinkIngestConfig.Apply(adapter, UserConfigService.Current.Hyperlinks);
+        VtAdapterConfig.Apply(adapter, UserConfigService.Current.Vt);
+        ApplyGraphicsToAdapter(adapter);
+    }
+
+    /// <summary>
+    /// Applies the Kitty graphics settings and the shared PNG decoder. Also used for split panes, which are created
+    /// outside <see cref="ApplyConfigToAdapter"/> and picked up by the host's session subscription pass.
+    /// </summary>
+    public static void ApplyGraphicsToAdapter(TerminalAdapter adapter)
+    {
+        if (adapter == null) return;
+        adapter.ConfigureGraphics(UserConfigService.Current.ToKittyGraphicsOptions(), ImageDecoder);
     }
 
     public static (SgrColorArgb Foreground, SgrColorArgb Background) InitializeTheme(

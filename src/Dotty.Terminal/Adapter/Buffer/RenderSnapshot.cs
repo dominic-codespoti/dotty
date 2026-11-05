@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using Dotty.Terminal.Graphics;
 using Dotty.Abstractions.Config;
 namespace Dotty.Terminal.Adapter;
 
@@ -9,7 +10,7 @@ namespace Dotty.Terminal.Adapter;
 /// outside the lock, so the UI thread never blocks the PTY writer for the
 /// whole raster and the raster never races a partial parse. Its storage is
 /// retained by the owning buffer and reused after <see cref="Dispose"/>.
-public sealed class RenderSnapshot : IRenderSource, IDisposable
+public sealed partial class RenderSnapshot : IRenderSource, IDisposable
 {
     private int _disposed = 1;
     private TerminalBuffer? _owner;
@@ -17,20 +18,20 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     private CellHot[] _cellsStorage = Array.Empty<CellHot>();
     private ColdCell[] _coldStorage = Array.Empty<ColdCell>();
     private int[] _rowMapStorage = Array.Empty<int>();
-    private int[] _rowMaxColStorage = Array.Empty<int>();
     private ulong[] _rowGenerationsStorage = Array.Empty<ulong>();
     private int[] _rowOffsetsStorage = Array.Empty<int>();
     public CellHot[] Cells = Array.Empty<CellHot>();
     public ColdCell[] Cold = Array.Empty<ColdCell>();
     public int[] RowMap = Array.Empty<int>();        // physical row per visible logical row
-    public int[] RowMaxCol = Array.Empty<int>();     // per physical row
-    public int Head;
-    public int TotalRows;
     public ulong[] RowGenerationsArray = Array.Empty<ulong>(); // per visible logical row
 
     public ReadOnlySpan<ulong> RowGenerations =>
         RowGenerationsArray.AsSpan(0, Math.Min(Rows, RowGenerationsArray.Length));
     private CellAttributes[] _styles = Array.Empty<CellAttributes>();
+    // Append-only URI table captured by reference from the owner; entries below
+    // _hyperlinkCount never change, so lookups need no lock.
+    private string[] _hyperlinkTable = Array.Empty<string>();
+    private int _hyperlinkCount;
     public int ScrollbackCount { get; set; }
     public int Rows { get; set; }
     public int Columns { get; set; }
@@ -38,8 +39,14 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     public int CursorRow { get; set; }
     public int CursorCol { get; set; }
     public ulong GlobalGeneration;
+    /// <summary><see cref="TerminalBuffer.ViewTopAbsoluteRow"/> at capture: converts content-anchored selections to this frame's rows.</summary>
+    public long ViewTopAbsoluteRow;
     public TerminalCursorShape CursorShape { get; set; } = TerminalCursorShape.Block;
     public bool CursorBlinking { get; set; } = true;
+    /// <inheritdoc cref="TerminalBuffer.CursorStyleIsDefault"/>
+    public bool CursorStyleIsDefault { get; set; } = true;
+    /// <summary>DECTCEM (<c>CSI ? 25 h/l</c>) state at capture time; false hides the cursor.</summary>
+    public bool CursorVisible { get; set; } = true;
 
     /// <summary>Materialized scrollback text for the visible range, newest = 0.</summary>
     public string[] ScrollbackText = Array.Empty<string>();
@@ -48,9 +55,52 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
 
     /// <summary>
     /// Per-visible-row offset into the compact <see cref="Cells"/>/<see cref="Cold"/>
-    /// arrays (visible-row capture only). Empty when the full-arena capture was used.
+    /// arrays. Empty until the snapshot is captured.
     /// </summary>
     public int[] RowOffsets = Array.Empty<int>();
+
+    private KittyRenderSnapshot? _graphicsPool;
+
+    /// <summary>
+    /// Image placements visible in this snapshot (each holding a lease on its pixels), or null when the capture
+    /// found none. Released, and set back to null, by <see cref="Dispose"/>.
+    /// </summary>
+    public KittyRenderSnapshot? Graphics { get; private set; }
+
+    /// <summary>
+    /// Capture seam: returns this snapshot's pooled, empty <see cref="KittyRenderSnapshot"/> and exposes it as
+    /// <see cref="Graphics"/>. The pooled instance survives <see cref="Dispose"/> (its leases are released, the
+    /// storage is kept), so a steady-state capture allocates nothing.
+    /// </summary>
+    internal KittyRenderSnapshot BeginGraphics()
+    {
+        ReleaseGraphics();
+        KittyRenderSnapshot graphics = _graphicsPool ??= new KittyRenderSnapshot();
+        Graphics = graphics;
+        return graphics;
+    }
+
+    /// <summary>
+    /// Attaches a caller-built <see cref="KittyRenderSnapshot"/>; this snapshot takes ownership and releases its
+    /// leases on <see cref="Dispose"/> (or when another graphics snapshot replaces it).
+    /// </summary>
+    internal void AttachGraphics(KittyRenderSnapshot graphics)
+    {
+        ArgumentNullException.ThrowIfNull(graphics);
+        if (ReferenceEquals(graphics, Graphics))
+            return;
+        ReleaseGraphics();
+        Graphics = graphics;
+    }
+
+    private void ReleaseGraphics()
+    {
+        KittyRenderSnapshot? graphics = Graphics;
+        if (graphics is null)
+            return;
+        Graphics = null;
+        graphics.Reset();
+    }
 
     /// <summary>
     /// Compact per-frame capture: copies only the visible rows' cell slices
@@ -69,26 +119,28 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         int cursorCol,
         TerminalCursorShape cursorShape = TerminalCursorShape.Block,
         bool cursorBlinking = true,
+        bool cursorStyleIsDefault = true,
+        bool cursorVisible = true,
         int scrollOffset = 0)
     {
         int rows = screen.Rows;
         int cols = screen.Columns;
         int visibleCellCount = rows * cols;
         var snap = owner.RentRenderSnapshot();
+        owner.GetHyperlinkTable(out snap._hyperlinkTable, out snap._hyperlinkCount);
         snap.Rows = rows;
         snap.Columns = cols;
-        snap.TotalRows = screen.TotalRows;
-        snap.Head = screen.Head;
         snap.ScrollbackCount = scrollbackCount;
         snap.IsAlternateScreenActive = altActive;
         snap.CursorRow = scrollOffset > 0 ? cursorRow + scrollOffset : cursorRow;
         snap.CursorCol = cursorCol;
         snap.CursorShape = cursorShape;
         snap.CursorBlinking = cursorBlinking;
+        snap.CursorStyleIsDefault = cursorStyleIsDefault;
+        snap.CursorVisible = cursorVisible;
         snap._styles = styles;
         snap.ScrollbackText = Array.Empty<string>();
         snap.CapturedSbStart = 0;
-        snap.RowMaxCol = Array.Empty<int>();
 
         EnsureCapacity(ref snap._cellsStorage, visibleCellCount);
         EnsureCapacity(ref snap._coldStorage, visibleCellCount);
@@ -133,67 +185,6 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         return snap;
     }
 
-    internal static RenderSnapshot Capture(
-        TerminalBuffer owner,
-        Screen screen,
-        ulong[] rowGenerations,
-        CellAttributes[] styles,
-        int scrollbackCount,
-        bool altActive,
-        int cursorRow,
-        int cursorCol,
-        TerminalCursorShape cursorShape = TerminalCursorShape.Block,
-        bool cursorBlinking = true)
-    {
-        int rows = screen.Rows;
-        int columns = screen.Columns;
-        int totalRows = screen.TotalRows;
-        int cellCount = totalRows * columns;
-        var snap = owner.RentRenderSnapshot();
-        snap.Rows = rows;
-        snap.Columns = columns;
-        snap.TotalRows = totalRows;
-        snap.Head = screen.Head;
-        snap.ScrollbackCount = scrollbackCount;
-        snap.IsAlternateScreenActive = altActive;
-        snap.CursorRow = cursorRow;
-        snap.CursorCol = cursorCol;
-        snap.CursorShape = cursorShape;
-        snap.CursorBlinking = cursorBlinking;
-        snap._styles = styles;
-        snap.ScrollbackText = Array.Empty<string>();
-        snap.CapturedSbStart = 0;
-        snap.RowOffsets = Array.Empty<int>();
-
-        EnsureCapacity(ref snap._cellsStorage, cellCount);
-        EnsureCapacity(ref snap._coldStorage, cellCount);
-        EnsureCapacity(ref snap._rowMaxColStorage, totalRows);
-        EnsureCapacity(ref snap._rowMapStorage, rows);
-        EnsureCapacity(ref snap._rowGenerationsStorage, Math.Max(1, rows));
-        snap.Cells = snap._cellsStorage;
-        snap.Cold = snap._coldStorage;
-        snap.RowMaxCol = snap._rowMaxColStorage;
-        snap.RowMap = snap._rowMapStorage;
-        snap.RowGenerationsArray = snap._rowGenerationsStorage;
-
-        unsafe
-        {
-            fixed (CellHot* pCells = snap.Cells)
-            fixed (ColdCell* pCold = snap.Cold)
-            {
-                System.Buffer.MemoryCopy((void*)screen.CellsPtr, pCells, (long)cellCount * sizeof(CellHot), (long)cellCount * sizeof(CellHot));
-                System.Buffer.MemoryCopy((void*)screen.ColdCellsPtr, pCold, (long)cellCount * sizeof(ColdCell), (long)cellCount * sizeof(ColdCell));
-            }
-        }
-
-        Array.Copy(screen.RowMaxCol, snap.RowMaxCol, totalRows);
-        for (int row = 0; row < rows; row++)
-            snap.RowMap[row] = screen.GetPhysicalRow(row);
-        int copyGens = Math.Min(rowGenerations.Length, rows);
-        Array.Copy(rowGenerations, snap.RowGenerationsArray, copyGens);
-        return snap;
-    }
-
     internal void Activate(TerminalBuffer owner)
     {
         _owner = owner;
@@ -215,25 +206,27 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         long bytes = (long)_cellsStorage.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<CellHot>()
             + (long)_coldStorage.Length * System.Runtime.CompilerServices.Unsafe.SizeOf<ColdCell>()
             + (long)_rowMapStorage.Length * sizeof(int)
-            + (long)_rowMaxColStorage.Length * sizeof(int)
             + (long)_rowGenerationsStorage.Length * sizeof(ulong)
             + (long)_rowOffsetsStorage.Length * sizeof(int)
             + (long)ScrollbackText.Length * IntPtr.Size;
         if (bytes != 0) BufferMemoryMetrics.ChangeSnapshotCapacity(bytes, 0);
+        ReleaseScrollbackRows();
         _cellsStorage = Array.Empty<CellHot>();
         _coldStorage = Array.Empty<ColdCell>();
         _rowMapStorage = Array.Empty<int>();
-        _rowMaxColStorage = Array.Empty<int>();
         _rowGenerationsStorage = Array.Empty<ulong>();
         _rowOffsetsStorage = Array.Empty<int>();
         Cells = Array.Empty<CellHot>();
         Cold = Array.Empty<ColdCell>();
         RowMap = Array.Empty<int>();
-        RowMaxCol = Array.Empty<int>();
         RowGenerationsArray = Array.Empty<ulong>();
         RowOffsets = Array.Empty<int>();
         ScrollbackText = Array.Empty<string>();
         _styles = Array.Empty<CellAttributes>();
+        _hyperlinkTable = Array.Empty<string>();
+        _hyperlinkCount = 0;
+        ReleaseGraphics();
+        _graphicsPool = null;
     }
 
     public void Dispose()
@@ -246,13 +239,16 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         Cells = Array.Empty<CellHot>();
         Cold = Array.Empty<ColdCell>();
         RowMap = Array.Empty<int>();
-        RowMaxCol = Array.Empty<int>();
         RowGenerationsArray = Array.Empty<ulong>();
         RowOffsets = Array.Empty<int>();
         if (ScrollbackText.Length != 0)
             BufferMemoryMetrics.ChangeSnapshotCapacity((long)ScrollbackText.Length * IntPtr.Size, 0);
         ScrollbackText = Array.Empty<string>();
+        ReleaseScrollbackRows();
         _styles = Array.Empty<CellAttributes>();
+        _hyperlinkTable = Array.Empty<string>();
+        _hyperlinkCount = 0;
+        ReleaseGraphics();
         NextPooled = null;
         owner?.ReturnRenderSnapshot(this);
     }
@@ -260,19 +256,13 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     public ReadOnlySpan<CellHot> GetRowCells(int row)
     {
         if (row < 0 || row >= Rows) return default;
-        if (RowOffsets.Length > 0)
-            return new ReadOnlySpan<CellHot>(Cells, RowOffsets[row], Columns);
-        int pRow = RowMap[row];
-        return new ReadOnlySpan<CellHot>(Cells, pRow * Columns, Columns);
+        return new ReadOnlySpan<CellHot>(Cells, RowOffsets[row], Columns);
     }
 
     public ReadOnlySpan<ColdCell> GetRowColdCells(int row)
     {
         if (row < 0 || row >= Rows) return default;
-        if (RowOffsets.Length > 0)
-            return new ReadOnlySpan<ColdCell>(Cold, RowOffsets[row], Columns);
-        int pRow = RowMap[row];
-        return new ReadOnlySpan<ColdCell>(Cold, pRow * Columns, Columns);
+        return new ReadOnlySpan<ColdCell>(Cold, RowOffsets[row], Columns);
     }
 
     public ulong GetRowGeneration(int row)
@@ -288,6 +278,9 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
         return ref _styles[styleId];
     }
 
+    public string? GetHyperlinkUrl(ushort id) =>
+        TerminalBuffer.LookupHyperlink(_hyperlinkTable, _hyperlinkCount, id);
+
     public string GetScrollbackLineText(int index)
     {
         int offset = index - CapturedSbStart;
@@ -297,51 +290,23 @@ public sealed class RenderSnapshot : IRenderSource, IDisposable
     }
 
     /// <summary>
-    /// Grapheme-aware text of one scrollback line from the copied arena
-    /// (newest = 0). Used by search so it never touches the live buffer.
-    /// </summary>
-    public string GetScrollbackRowText(int scrollbackIndex)
-    {
-        if (scrollbackIndex < 0 || scrollbackIndex >= ScrollbackCount) return string.Empty;
-        int total = TotalRows;
-        int pRow = (Head - 1 - scrollbackIndex + total * 2) % total;
-        int maxCol = RowMaxCol[pRow];
-        if (maxCol < 0) return string.Empty;
-        return BuildRowText(pRow, maxCol);
-    }
-
-    /// <summary>
-    /// Grapheme-aware text of one visible row from the copied arena.
+    /// Grapheme-aware text of one visible row from the copied rows.
     /// </summary>
     public string GetVisibleRowText(int row)
     {
         if (row < 0 || row >= Rows || Columns <= 0) return string.Empty;
-        // CaptureVisible compacts rows and records their offsets; the full
-        // capture keeps the physical ring map and uses arena row indices.
-        int rowIndex = RowOffsets.Length > 0 ? RowOffsets[row] / Columns : RowMap[row];
-        return BuildRowText(rowIndex, Columns - 1);
+        return BuildRowText(RowOffsets[row] / Columns, Columns - 1);
     }
 
     private string BuildRowText(int pRow, int maxCol)
     {
         int offset = pRow * Columns;
-        using var sb = ZStr.CreateStringBuilder(maxCol + 1);
-        for (int i = 0; i <= maxCol; i++)
-        {
-            var cell = Cells[offset + i];
-            if (cell.IsContinuation || cell.Rune == 0)
-            {
-                sb.Append(' ');
-                continue;
-            }
-            var cold = Cold[offset + i];
-            var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
-            if (string.IsNullOrEmpty(grapheme))
-                sb.Append(' ');
-            else
-                sb.Append(grapheme);
-        }
-        return sb.ToString();
+        return RowText.Build(
+            new ReadOnlySpan<CellHot>(Cells, offset, Columns),
+            new ReadOnlySpan<ColdCell>(Cold, offset, Columns),
+            0,
+            maxCol,
+            ContinuationPolicy.SpaceCell);
     }
 
     public string GetDebugInfo()

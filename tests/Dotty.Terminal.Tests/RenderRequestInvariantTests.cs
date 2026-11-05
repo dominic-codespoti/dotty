@@ -37,6 +37,8 @@ public sealed class RenderRequestInvariantTests
     [InlineData("Set tab stop and tab then text", "\u001b[1;1H\u001bH\tZ")]
     [InlineData("Alternate screen 1049 enter and leave", "\u001b[?1049hALT\u001b[?1049l")]
     [InlineData("Alternate screen 47 enter and leave", "\u001b[?47hALT\u001b[?47l")]
+    [InlineData("Alternate screen 1047 enter and leave", "\u001b[?1047hALT\u001b[?1047l")]
+    [InlineData("DECSTR soft reset", "\u001b[3;4r\u001b[?6h\u001b[!p")]
     [InlineData("Reverse index", "\u001b[1;1H\u001bM")]
     [InlineData("Save and restore cursor with text", "\u001b[s\u001b[2;2HQ\u001b[uZ")]
     [InlineData("Full reset RIS", "\u001b[c\u001b[31m\u001b[2J\u001bc")]

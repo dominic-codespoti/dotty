@@ -94,4 +94,73 @@ public enum TerminalAction
 
     /// <summary>Select and copy the latest command's output.</summary>
     CopyCommandOutput,
+
+    /// <summary>Scroll the active pane's scrollback up by half a page.</summary>
+    ScrollPageUp,
+
+    /// <summary>Scroll the active pane's scrollback down by half a page.</summary>
+    ScrollPageDown,
+
+    /// <summary>Scroll the active pane's scrollback up one line.</summary>
+    ScrollLineUp,
+
+    /// <summary>Scroll the active pane's scrollback down one line.</summary>
+    ScrollLineDown,
+
+    /// <summary>Scroll the active pane to the top of its scrollback.</summary>
+    ScrollToTop,
+
+    /// <summary>Scroll the active pane back to the live screen.</summary>
+    ScrollToBottom,
+
+    /// <summary>Select the active pane's scrollback and screen.</summary>
+    SelectAll,
+
+    /// <summary>Discard the active pane's scrollback; the visible screen stays.</summary>
+    ClearScrollback,
+
+    /// <summary>Re-read the configuration files.</summary>
+    ReloadConfig,
+
+    /// <summary>Paste the primary selection into the active pane.</summary>
+    PasteSelection,
+
+    /// <summary>Select the next search match (only while the search overlay is open).</summary>
+    SearchNext,
+
+    /// <summary>Select the previous search match (only while the search overlay is open).</summary>
+    SearchPrevious,
+
+    /// <summary>Copy the selection when there is one; otherwise the key goes to the application.</summary>
+    CopyOrSend,
+
+    /// <summary>Move the active tab one place to the left.</summary>
+    MoveTabLeft,
+
+    /// <summary>Move the active tab one place to the right.</summary>
+    MoveTabRight,
+
+    /// <summary>Show or hide the tab bar.</summary>
+    ToggleTabBar,
+
+    /// <summary>Write the binding's text argument to the active pane (<c>send_text:&lt;escaped&gt;</c>).</summary>
+    SendText,
+
+    /// <summary>Move the active pane's nearest vertical divider one cell left.</summary>
+    ResizePaneLeft,
+
+    /// <summary>Move the active pane's nearest vertical divider one cell right.</summary>
+    ResizePaneRight,
+
+    /// <summary>Move the active pane's nearest horizontal divider one row up.</summary>
+    ResizePaneUp,
+
+    /// <summary>Move the active pane's nearest horizontal divider one row down.</summary>
+    ResizePaneDown,
+
+    /// <summary>Zoom the active pane to fill the tab, or restore the split layout.</summary>
+    ZoomPane,
+
+    /// <summary>Reset every split in the tab to an even ratio.</summary>
+    EqualizePanes,
 }

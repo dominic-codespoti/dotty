@@ -23,10 +23,12 @@ public sealed class UnixPty : IPty
     private Stream? _errorStream;
     private string? _controlSocketPath;
     private Stream? _controlSocketStream;
-    private (int Columns, int Rows)? _pendingResize;
+    private (int Columns, int Rows, int PixelWidth, int PixelHeight)? _pendingResize;
     private readonly object _controlWriteLock = new();
     private int _startupColumns = 80;
     private int _startupRows = 24;
+    private int _startupPixelWidth;
+    private int _startupPixelHeight;
     private bool _isDisposed;
     private bool _isStarted;
     private readonly object _stateLock = new();
@@ -82,19 +84,22 @@ public sealed class UnixPty : IPty
         string? workingDirectory = null,
         System.Collections.Generic.IDictionary<string, string>? environmentVariables = null,
         System.Collections.Generic.IReadOnlyList<string>? command = null,
-        bool shellIsExecutable = false)
+        bool shellIsExecutable = false,
+        int initialPixelWidth = 0,
+        int initialPixelHeight = 0)
     {
         lock (_stateLock)
         {
             if (_isStarted)
                 throw new InvalidOperationException("PTY session is already started.");
 
-            string? helperExe = FindHelperExecutableForCurrentProcess();
-            if (string.IsNullOrEmpty(helperExe))
+            PtyHelperResolution helper = PtyHelperLocator.ResolveForCurrentProcess();
+            string? helperExe = helper.Path;
+            if (helperExe is null)
             {
                 throw new PtyException(
                     PtyErrorCode.NativeHelperMissing,
-                    "The pty-helper executable was not found. Place it beside the application or add it to PATH.");
+                    $"The pty-helper executable was not found. Place it beside the application or set {PtyHelperLocator.OverrideVariable}. {helper.Describe()}");
             }
 
             if (!IsExecutable(helperExe))
@@ -170,18 +175,22 @@ public sealed class UnixPty : IPty
             _controlSocketPath = controlPath;
             _startupColumns = Math.Max(1, columns);
             _startupRows = Math.Max(1, rows);
+            _startupPixelWidth = ClampPixels(initialPixelWidth);
+            _startupPixelHeight = ClampPixels(initialPixelHeight);
             _pendingResize = null;
             psi.EnvironmentVariables["DOTTY_INITIAL_COLS"] = _startupColumns.ToString();
             psi.EnvironmentVariables["DOTTY_INITIAL_ROWS"] = _startupRows.ToString();
+            psi.EnvironmentVariables["DOTTY_INITIAL_XPIXEL"] = _startupPixelWidth.ToString();
+            psi.EnvironmentVariables["DOTTY_INITIAL_YPIXEL"] = _startupPixelHeight.ToString();
 
-            // Add environment variables before forcing terminal identity.
+            // Add environment variables before setting terminal identity.
             if (environmentVariables != null)
             {
                 foreach (var kvp in environmentVariables)
                     psi.EnvironmentVariables[kvp.Key] = kvp.Value;
             }
 
-            psi.EnvironmentVariables["TERM"] = "xterm-256color";
+            psi.EnvironmentVariables["TERM"] = TerminalEnvironment.Term(environmentVariables);
             psi.EnvironmentVariables["COLORTERM"] = "truecolor";
 
             try
@@ -247,10 +256,12 @@ public sealed class UnixPty : IPty
     }
 
     /// <inheritdoc />
-    public void Resize(int columns, int rows)
+    public void Resize(int columns, int rows, int pixelWidth, int pixelHeight)
     {
         columns = Math.Max(1, columns);
         rows = Math.Max(1, rows);
+        pixelWidth = ClampPixels(pixelWidth);
+        pixelHeight = ClampPixels(pixelHeight);
 
         Stream? controlSocket;
         lock (_stateLock)
@@ -261,12 +272,12 @@ public sealed class UnixPty : IPty
             controlSocket = _controlSocketStream;
             if (controlSocket == null)
             {
-                _pendingResize = (columns, rows);
+                _pendingResize = (columns, rows, pixelWidth, pixelHeight);
                 return;
             }
         }
 
-        SendResizeMessage(columns, rows, controlSocket);
+        SendResizeMessage(columns, rows, pixelWidth, pixelHeight, controlSocket);
     }
 
     /// <inheritdoc />
@@ -387,23 +398,29 @@ public sealed class UnixPty : IPty
             }
 
             var stream = new NetworkStream(socket, ownsSocket: true);
-            (int Columns, int Rows)? pending;
-            lock (_stateLock)
+            (int Columns, int Rows, int PixelWidth, int PixelHeight)? pending;
+
+            // Hold the write lock from publishing the stream until the replay is sent: a Resize that sees the
+            // published stream must not reach the helper before the startup/pending sizes, or they would overwrite it.
+            lock (_controlWriteLock)
             {
-                if (_isDisposed)
+                lock (_stateLock)
                 {
-                    stream.Dispose();
-                    return;
+                    if (_isDisposed)
+                    {
+                        stream.Dispose();
+                        return;
+                    }
+
+                    _controlSocketStream = stream;
+                    pending = _pendingResize;
+                    _pendingResize = null;
                 }
 
-                _controlSocketStream = stream;
-                pending = _pendingResize;
-                _pendingResize = null;
+                SendResizeMessage(_startupColumns, _startupRows, _startupPixelWidth, _startupPixelHeight, stream);
+                if (pending.HasValue)
+                    SendResizeMessage(pending.Value.Columns, pending.Value.Rows, pending.Value.PixelWidth, pending.Value.PixelHeight, stream);
             }
-
-            SendResizeMessage(_startupColumns, _startupRows, stream);
-            if (pending.HasValue)
-                SendResizeMessage(pending.Value.Columns, pending.Value.Rows, stream);
         }
         catch (Exception ex)
         {
@@ -412,7 +429,7 @@ public sealed class UnixPty : IPty
         }
     }
 
-    private void SendResizeMessage(int cols, int rows, Stream? controlSocket = null)
+    private void SendResizeMessage(int cols, int rows, int pixelWidth, int pixelHeight, Stream? controlSocket = null)
     {
         controlSocket ??= _controlSocketStream;
         if (controlSocket == null)
@@ -422,19 +439,9 @@ public sealed class UnixPty : IPty
         {
             try
             {
-                Span<byte> message = stackalloc byte[64];
-                int offset = 0;
-                "{\"type\":\"resize\",\"cols\":"u8.CopyTo(message);
-                offset += "{\"type\":\"resize\",\"cols\":"u8.Length;
-                Utf8Formatter.TryFormat(cols, message[offset..], out int written);
-                offset += written;
-                ",\"rows\":"u8.CopyTo(message[offset..]);
-                offset += ",\"rows\":"u8.Length;
-                Utf8Formatter.TryFormat(rows, message[offset..], out written);
-                offset += written;
-                "}\n"u8.CopyTo(message[offset..]);
-                offset += "}\n"u8.Length;
-                controlSocket.Write(message[..offset]);
+                Span<byte> message = stackalloc byte[ResizeMessageMaxBytes];
+                int length = FormatResizeMessage(message, cols, rows, pixelWidth, pixelHeight);
+                controlSocket.Write(message[..length]);
                 controlSocket.Flush();
             }
             catch (Exception ex)
@@ -442,6 +449,44 @@ public sealed class UnixPty : IPty
                 SetError(PtyErrorCode.ResizeFailed, ex.Message);
             }
         }
+    }
+
+    /// <summary>Upper bound of <see cref="FormatResizeMessage"/> output: fixed text plus four 10-digit ints.</summary>
+    internal const int ResizeMessageMaxBytes = 128;
+
+    /// <summary>Clamps a pixel dimension to the <c>unsigned short</c> range of <c>struct winsize</c>; negatives become 0 (unknown).</summary>
+    internal static int ClampPixels(int pixels) => Math.Clamp(pixels, 0, ushort.MaxValue);
+
+    /// <summary>
+    /// Writes the newline-terminated resize control line understood by pty-helper:
+    /// <c>{"type":"resize","cols":N,"rows":M,"xpixel":W,"ypixel":H}</c>.
+    /// </summary>
+    /// <returns>Number of bytes written.</returns>
+    internal static int FormatResizeMessage(Span<byte> message, int cols, int rows, int pixelWidth, int pixelHeight)
+    {
+        int offset = 0;
+        AppendLiteral(message, ref offset, "{\"type\":\"resize\",\"cols\":"u8);
+        AppendInt(message, ref offset, cols);
+        AppendLiteral(message, ref offset, ",\"rows\":"u8);
+        AppendInt(message, ref offset, rows);
+        AppendLiteral(message, ref offset, ",\"xpixel\":"u8);
+        AppendInt(message, ref offset, ClampPixels(pixelWidth));
+        AppendLiteral(message, ref offset, ",\"ypixel\":"u8);
+        AppendInt(message, ref offset, ClampPixels(pixelHeight));
+        AppendLiteral(message, ref offset, "}\n"u8);
+        return offset;
+    }
+
+    private static void AppendLiteral(Span<byte> message, ref int offset, ReadOnlySpan<byte> literal)
+    {
+        literal.CopyTo(message[offset..]);
+        offset += literal.Length;
+    }
+
+    private static void AppendInt(Span<byte> message, ref int offset, int value)
+    {
+        Utf8Formatter.TryFormat(value, message[offset..], out int written);
+        offset += written;
     }
 
     private static bool IsInteractiveShell(string executable)
@@ -535,64 +580,6 @@ public sealed class UnixPty : IPty
         throw new PtyException(
             PtyErrorCode.ControlSocketUnavailable,
             "The temporary directory path is too long for a Unix-domain socket.");
-    }
-
-    internal static string? FindHelperExecutableForCurrentProcess()
-    {
-        try
-        {
-            string baseDirectory = AppContext.BaseDirectory;
-            string adjacent = Path.Combine(baseDirectory, "pty-helper");
-            if (File.Exists(adjacent))
-                return Path.GetFullPath(adjacent);
-
-            var current = new DirectoryInfo(baseDirectory);
-            for (int i = 0; i < 16 && current != null; i++)
-            {
-                string repoCandidate = Path.Combine(
-                    current.FullName,
-                    "src",
-                    "Dotty.NativePty",
-                    "bin",
-                    "pty-helper");
-                string projectCandidate = Path.Combine(
-                    current.FullName,
-                    "Dotty.NativePty",
-                    "bin",
-                    "pty-helper");
-
-                if (File.Exists(repoCandidate))
-                    return Path.GetFullPath(repoCandidate);
-                if (File.Exists(projectCandidate))
-                    return Path.GetFullPath(projectCandidate);
-
-                current = current.Parent;
-            }
-        }
-        catch
-        {
-        }
-
-        string? pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var directory in pathEnv.Split(
-                Path.PathSeparator,
-                StringSplitOptions.RemoveEmptyEntries))
-            {
-                try
-                {
-                    string candidate = Path.Combine(directory, "pty-helper");
-                    if (File.Exists(candidate))
-                        return Path.GetFullPath(candidate);
-                }
-                catch
-                {
-                }
-            }
-        }
-
-        return null;
     }
 
     internal static bool IsExecutable(string path)

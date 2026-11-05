@@ -1,6 +1,7 @@
 using Dotty.Abstractions.Config;
 using System;
 using System.Numerics;
+using Dotty.Runtime.Config;
 using Dotty.Runtime.ContextMenu;
 using Dotty.Runtime.Hyperlinks;
 using Dotty.Runtime.Input;
@@ -12,8 +13,14 @@ using Silk.NET.Input;
 
 namespace Dotty.Silk.Input;
 
+/// <summary>
+/// Pointer-hit geometry. <paramref name="CellWidth"/>/<paramref name="CellHeight"/>, padding, offsets
+/// and sizes are device (framebuffer) pixels; <paramref name="WindowUnitsToDevice"/> converts GLFW pointer
+/// positions to device pixels; <paramref name="ContentScale"/> scales logical chrome lengths.
+/// </summary>
 public readonly record struct TerminalMouseGeometry(
-    float Scale,
+    float ContentScale,
+    float WindowUnitsToDevice,
     float CellWidth,
     float CellHeight,
     float PaddingLeft,
@@ -40,18 +47,50 @@ public interface ITerminalMouseHost
     void CopySelection();
     void PasteClipboard();
     void PasteClipboard(LeafPane targetPane);
+
+    /// <summary>What a middle click does outside mouse reporting (live configuration).</summary>
+    MiddleClickAction MiddleClick { get; }
+
+    /// <summary>Wheel multiplier, alternate scroll and reporting bypass modifier (live configuration).</summary>
+    MouseInputSettings MouseInput { get; }
+
+    /// <summary>Word characters, block modifier and clear rules (live <c>selection</c> configuration).</summary>
+    SelectionSettings SelectionInput => SelectionOptions.Resolve(UserConfigService.Current.Selection);
+
+    /// <summary>Pastes the PRIMARY selection into <paramref name="targetPane"/> through the shared paste router.</summary>
+    void PastePrimary(LeafPane targetPane);
+
+    /// <summary>A user-made local selection was completed by releasing the left button (copy-on-select hook).</summary>
+    void OnLocalSelectionFinished(LeafPane pane);
     void CreateTab(TerminalTab activeTab);
     void ClearTerminal(TerminalTab activeTab);
-    void OpenHyperlink(string url);
+    /// <summary>Activates a clicked link. <paramref name="displayText"/> is the visible text of an explicit (OSC 8) link, null for detected links.</summary>
+    void OpenHyperlink(string url, HyperlinkSource source, string? displayText);
+
+    /// <summary>Scan options for hover and click (e.g. OSC 8 links disabled by configuration).</summary>
+    HyperlinkScanOptions HyperlinkScan { get; }
     bool TryExecuteAction(TerminalAction action);
     void SetPointerCursor(StandardCursor cursor);
+
+    /// <summary>
+    /// A left click at device pixels on the search overlay (▲ ▼ × buttons, toggles, input box). True when the click
+    /// landed on the overlay and was handled.
+    /// </summary>
+    bool TryClickSearchOverlay(float deviceX, float deviceY) => false;
+
+    /// <summary>Menu label of the chord bound to <paramref name="action"/> in the live binding table; null when unbound.</summary>
+    string? GetShortcutLabel(TerminalAction action) => null;
 }
 
 public sealed class TerminalMouseController
 {
     private readonly ITerminalMouseHost _host;
     private readonly Func<long> _clockMilliseconds;
-    private readonly TerminalInputEncoder _inputEncoder = new();
+    private MouseMotionFilter _motionFilter;
+    private LeafPane? _motionFilterPane;
+    private ScrollAccumulator _scrollAccumulator;
+    private LeafPane? _scrollAccumulatorPane;
+    private bool _scrollAccumulatorReports;
 
     private long _lastClickTimestampMs;
     private Vector2 _lastClickPosition;
@@ -61,8 +100,11 @@ public sealed class TerminalMouseController
     private int _reportingButtons;
     private LeafPane? _reportingPane;
     private LeafPane? _selectionPane;
+    private bool _selectionMoved;
     private LeafPane? _scrollbarPane;
     private Vector2 _lastContentPointer;
+    private SplitPaneNode? _hoveredDivider;
+    private SplitPaneNode? _draggedDivider;
 
     private readonly record struct PaneHit(
         LeafPane? Pane,
@@ -141,8 +183,8 @@ public sealed class TerminalMouseController
     {
         var geom = _host.Geometry;
         return (
-            position.X * geom.Scale - geom.PaddingLeft,
-            position.Y * geom.Scale - geom.TopOffset - geom.PaddingTop);
+            position.X * geom.WindowUnitsToDevice - geom.PaddingLeft,
+            position.Y * geom.WindowUnitsToDevice - geom.TopOffset - geom.PaddingTop);
     }
 
     private PaneHit HitTest(TerminalTab tab, Vector2 position, LeafPane? forcedPane = null)
@@ -160,8 +202,8 @@ public sealed class TerminalMouseController
         float relX = x - pane.Bounds.X;
         float relY = y - pane.Bounds.Y;
         var geom = _host.Geometry;
-        float cellW = geom.CellWidth * geom.Scale;
-        float cellH = geom.CellHeight * geom.Scale;
+        float cellW = geom.CellWidth;
+        float cellH = geom.CellHeight;
         int col = cellW > 0f
             ? Math.Clamp((int)MathF.Floor(relX / cellW), 0, Math.Max(0, pane.Columns - 1))
             : 0;
@@ -176,22 +218,38 @@ public sealed class TerminalMouseController
         HitTestContent(tab, x, y, forcedPane);
 
 
-    private void SendMouse(LeafPane pane, int button, int row, int col, bool press, bool move)
+    private void SendMouse(LeafPane pane, int button, in PaneHit hit, MouseEventKind kind)
     {
         var adapter = pane.Session.Adapter;
-        Span<byte> bytes = stackalloc byte[32];
-        int length = _inputEncoder.EncodeMouseEvent(
+        var report = new MouseReport(
             adapter.CurrentMouseMode,
             adapter.CurrentMouseEncoding,
             button,
-            Math.Clamp(row, 0, Math.Max(0, pane.Rows - 1)),
-            Math.Clamp(col, 0, Math.Max(0, pane.Columns - 1)),
-            press,
-            move,
-            GetCurrentKeyModifiers(),
-            bytes);
-        if (length != 0)
+            kind,
+            Math.Clamp(hit.ViewColumn, 0, Math.Max(0, pane.Columns - 1)),
+            Math.Clamp(hit.ViewRow, 0, Math.Max(0, pane.Rows - 1)),
+            PixelOffset(hit.RelativeX, pane.Bounds.Width),
+            PixelOffset(hit.RelativeY, pane.Bounds.Height),
+            GetCurrentKeyModifiers());
+        Span<byte> bytes = stackalloc byte[MouseEncoder.MaxSequenceLength];
+        int length = MouseEncoder.Encode(report, bytes);
+        if (length == 0)
+            return;
+
+        if (!ReferenceEquals(_motionFilterPane, pane))
+        {
+            _motionFilter.Reset();
+            _motionFilterPane = pane;
+        }
+        if (_motionFilter.Admit(report))
             pane.Session.WriteInput(bytes[..length]);
+    }
+
+    // SGR-pixels position: framebuffer pixels from the pane origin, clamped into the pane (drags may leave it).
+    private static int PixelOffset(float relative, float extent)
+    {
+        float last = MathF.Max(0f, MathF.Ceiling(extent) - 1f);
+        return (int)Math.Clamp(MathF.Floor(relative), 0f, last);
     }
 
     private static int ReportingButton(int pressedButtons)
@@ -202,8 +260,17 @@ public sealed class TerminalMouseController
         return 3;
     }
 
+    private bool ReportingBypassed() => _host.MouseInput.ReportBypassModifier switch
+    {
+        MouseReportBypassModifier.Shift => _host.Shift,
+        MouseReportBypassModifier.Ctrl => _host.Ctrl,
+        MouseReportBypassModifier.Alt => _host.Alt,
+        MouseReportBypassModifier.Super => _host.Super,
+        _ => false,
+    };
+
     private bool Reports(LeafPane pane) =>
-        !_host.Shift && pane.Session.Adapter.MouseReportingEnabled;
+        !ReportingBypassed() && pane.Session.Adapter.MouseReportingEnabled;
 
     public void HandleMouseDown(IMouse mouse, MouseButton button)
     {
@@ -212,8 +279,8 @@ public sealed class TerminalMouseController
         var geom = _host.Geometry;
 
         var pos = mouse.Position;
-        float physX = pos.X * geom.Scale;
-        float physY = pos.Y * geom.Scale;
+        float physX = pos.X * geom.WindowUnitsToDevice;
+        float physY = pos.Y * geom.WindowUnitsToDevice;
         _lastContentPointer = ContentVector(pos);
         int mask = ButtonMask(button);
         if (_reportingPane != null && _reportingButtons != 0 && mask != 0)
@@ -221,22 +288,25 @@ public sealed class TerminalMouseController
             _pressedButtons |= mask;
             _reportingButtons |= mask;
             var reportHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-            SendMouse(_reportingPane, ButtonNumber(button), reportHit.ViewRow, reportHit.ViewColumn,
-                press: true, move: false);
+            SendMouse(_reportingPane, ButtonNumber(button), reportHit, MouseEventKind.Press);
             return;
         }
         var activeContextMenu = _host.ActiveContextMenu;
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
             var menuLayout = ContextMenuLayout.Calculate(activeContextMenu, geom.FramebufferWidth, geom.FramebufferHeight,
-                geom.CellWidth * geom.Scale, geom.CellHeight * geom.Scale);
+                geom.CellWidth, geom.CellHeight);
             int hitItemIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
             activeContextMenu.HoveredIndex = hitItemIndex;
             if (hitItemIndex >= 0) activeContextMenu.ExecuteHovered();
             else activeContextMenu.Close();
-            _host.ActiveContextMenu = null;
+            if (ReferenceEquals(_host.ActiveContextMenu, activeContextMenu))
+                _host.ActiveContextMenu = null;
             return;
         }
+
+        if (button == MouseButton.Left && _host.TryClickSearchOverlay(physX, physY))
+            return;
 
         if (geom.ShowTabBar && physY < geom.TopOffset)
         {
@@ -254,6 +324,14 @@ public sealed class TerminalMouseController
             return;
         }
 
+        if (button == MouseButton.Left && HoverDivider(activeTab, geom) is { } divider)
+        {
+            _draggedDivider = divider;
+            _pressedButtons |= mask;
+            _host.SetPointerCursor(ResizeCursor(divider));
+            return;
+        }
+
         var hit = HitTest(activeTab, pos);
         var pane = hit.Pane;
         bool insidePane = pane != null && hit.Inside;
@@ -266,8 +344,7 @@ public sealed class TerminalMouseController
                 _reportingPane = pane!;
                 _pressedButtons |= mask;
                 _reportingButtons |= mask;
-                SendMouse(pane!, ButtonNumber(button), hit.ViewRow, hit.ViewColumn,
-                    press: true, move: false);
+                SendMouse(pane!, ButtonNumber(button), hit, MouseEventKind.Press);
                 return;
             }
         }
@@ -275,7 +352,7 @@ public sealed class TerminalMouseController
         // The scrollbar is the owner of a click in its strip, including Ctrl+clicks.
         if (button == MouseButton.Left && insidePane &&
             pane!.Session.Adapter.Buffer.ScrollbackCount > 0 &&
-            IsInScrollbarHitArea(hit.RelativeX, pane.Bounds.Width, geom.CellWidth * geom.Scale, geom.Scale))
+            IsInScrollbarHitArea(hit.RelativeX, pane.Bounds.Width, geom.CellWidth, geom.ContentScale))
         {
             _pressedButtons |= mask;
             ResetClickSequence();
@@ -294,11 +371,10 @@ public sealed class TerminalMouseController
         if (_host.Ctrl && button == MouseButton.Left && insidePane)
         {
             // Never use the hover cache for activation: the buffer and scroll offset may have changed.
-            var clickedLink = FindLink(pane!, hit.ViewRow, hit.ViewColumn);
-            if (clickedLink.HasValue)
+            if (TryFindLink(pane!, hit.ViewRow, hit.ViewColumn, out HyperlinkSpan clickedLink, out string? displayText))
             {
                 ResetClickSequence();
-                _host.OpenHyperlink(clickedLink.Value.Url);
+                _host.OpenHyperlink(clickedLink.Url, clickedLink.Source, displayText);
                 return;
             }
         }
@@ -306,7 +382,15 @@ public sealed class TerminalMouseController
         _pressedButtons |= mask;
         if (button == MouseButton.Middle && insidePane)
         {
-            _host.PasteClipboard(pane!);
+            switch (_host.MiddleClick)
+            {
+                case MiddleClickAction.PrimaryPaste:
+                    _host.PastePrimary(pane!);
+                    break;
+                case MiddleClickAction.ClipboardPaste:
+                    _host.PasteClipboard(pane!);
+                    break;
+            }
             return;
         }
 
@@ -324,6 +408,7 @@ public sealed class TerminalMouseController
         }
         var localPane = pane!;
         _selectionPane = localPane;
+        _selectionMoved = false;
         _scrollbarPane = null;
         IsDraggingScrollbar = false;
         IsScrollbarHovered = false;
@@ -338,22 +423,48 @@ public sealed class TerminalMouseController
         _lastClickPosition = pos;
         _lastClickPane = localPane;
 
+        var selection = localPane.Selection;
+        var settings = _host.SelectionInput;
+        selection.WordChars = settings.WordChars;
         if (_clickCount >= 3)
-            localPane.Selection.SelectLine(hit.LogicalRow, localPane.Columns);
+        {
+            if (_host.Ctrl)
+                selection.SelectZone(hit.LogicalRow, hit.ViewColumn);
+            else
+                selection.SelectLine(hit.LogicalRow);
+        }
         else if (_clickCount == 2)
-            localPane.Selection.SelectWord(localPane.Session.Adapter.Buffer, hit.LogicalRow, hit.ViewColumn);
+            selection.SelectWord(hit.LogicalRow, hit.ViewColumn);
+        else if (IsHeld(settings.RectangleModifier))
+            selection.StartSelection(hit.LogicalRow, hit.ViewColumn, SelectionMode.Block);
+        else if (_host.Shift && selection.HasSelection)
+        {
+            selection.ExtendSelection(hit.LogicalRow, hit.ViewColumn);
+            _selectionMoved = true;
+        }
         else
-            localPane.Selection.StartSelection(hit.LogicalRow, hit.ViewColumn, SelectionMode.Character);
+            selection.StartSelection(hit.LogicalRow, hit.ViewColumn, SelectionMode.Character);
         _host.SetPointerCursor(StandardCursor.IBeam);
     }
+
+    private bool IsHeld(RectangleSelectionModifier modifier) => modifier switch
+    {
+        RectangleSelectionModifier.Alt => _host.Alt,
+        RectangleSelectionModifier.Ctrl => _host.Ctrl,
+        RectangleSelectionModifier.Shift => _host.Shift,
+        RectangleSelectionModifier.Super => _host.Super,
+        _ => false,
+    };
+
     private void OpenTabContextMenu(int tabIndex, Vector2 position, TerminalMouseGeometry geometry)
     {
-        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.Scale, position.Y * geometry.Scale,
+        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.WindowUnitsToDevice, position.Y * geometry.WindowUnitsToDevice,
             DefaultContextMenus.BuildTabMenu(
                 onSplitRight: () => _host.TryExecuteAction(TerminalAction.SplitVertical),
                 onSplitDown: () => _host.TryExecuteAction(TerminalAction.SplitHorizontal),
                 onNewTab: () => _host.TryExecuteAction(TerminalAction.NewTab),
-                onClose: () => _host.TabManager.CloseTab(_host.TabManager.Tabs[tabIndex])));
+                onClose: () => _host.TabManager.CloseTab(_host.TabManager.Tabs[tabIndex]),
+                shortcutFor: _host.GetShortcutLabel));
     }
 
     private void OpenTerminalContextMenu(
@@ -363,19 +474,12 @@ public sealed class TerminalMouseController
         TerminalMouseGeometry geometry)
     {
         LeafPane contextPane = pane ?? activeTab.ActivePane;
-        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.Scale, position.Y * geometry.Scale,
+        _host.ActiveContextMenu = new ContextMenuModel(position.X * geometry.WindowUnitsToDevice, position.Y * geometry.WindowUnitsToDevice,
             DefaultContextMenus.BuildTerminalMenu(
                 hasSelection: contextPane.Selection.HasSelection,
                 onCopy: () => _host.TryExecuteAction(TerminalAction.Copy),
                 onPaste: () => _host.TryExecuteAction(TerminalAction.Paste),
-                onSelectAll: () =>
-                {
-                    if (contextPane.Rows > 0 && contextPane.Columns > 0)
-                    {
-                        contextPane.Selection.StartSelection(-contextPane.ScrollOffset, 0, SelectionMode.Character);
-                        contextPane.Selection.UpdateSelection(contextPane.Rows - 1 - contextPane.ScrollOffset, contextPane.Columns - 1);
-                    }
-                },
+                onSelectAll: () => contextPane.Selection.SelectAll(),
                 onSplitRight: () =>
                 {
                     if (ReferenceEquals(contextPane, activeTab.ActivePane))
@@ -395,8 +499,24 @@ public sealed class TerminalMouseController
                 onCopyCommandOutput: () => _host.TryExecuteAction(TerminalAction.CopyCommandOutput),
                 hasShellPrompts: contextPane.Session.Adapter.Buffer.GetPromptMarks().Count > 0,
                 onPreviousPrompt: () => _host.TryExecuteAction(TerminalAction.PreviousPrompt),
-                onNextPrompt: () => _host.TryExecuteAction(TerminalAction.NextPrompt)));
+                onNextPrompt: () => _host.TryExecuteAction(TerminalAction.NextPrompt),
+                shortcutFor: _host.GetShortcutLabel));
     }
+
+    /// <summary>The divider under the pointer, with hover hysteresis (see <see cref="PaneResizeMath"/>).</summary>
+    private SplitPaneNode? HoverDivider(TerminalTab tab, TerminalMouseGeometry geom)
+    {
+        float scale = Math.Max(1f, geom.ContentScale);
+        float x = _lastContentPointer.X, y = _lastContentPointer.Y;
+        bool keep = _hoveredDivider != null &&
+            PaneResizeMath.IsNear(_hoveredDivider.DividerBounds, x, y, PaneResizeMath.KeepTolerance * scale);
+        _hoveredDivider = PaneResizeMath.ResolveHover(_hoveredDivider, keep,
+            keep ? null : tab.PaneTree.HitTestDivider(x, y, PaneResizeMath.EnterTolerance * scale));
+        return _hoveredDivider;
+    }
+
+    private static StandardCursor ResizeCursor(SplitPaneNode divider) =>
+        divider.Direction == SplitDirection.Vertical ? StandardCursor.HResize : StandardCursor.VResize;
 
     private Vector2 ContentVector(Vector2 position)
     {
@@ -418,11 +538,24 @@ public sealed class TerminalMouseController
         _lastClickPosition = default;
         _lastClickPane = null;
     }
-    private HyperlinkSpan? FindLink(LeafPane pane, int viewRow, int viewColumn)
+    private bool TryFindLink(LeafPane pane, int viewRow, int viewColumn, out HyperlinkSpan link, out string? displayText)
     {
         using var snapshot = pane.Session.Adapter.Buffer.CaptureRenderSnapshotVisible(
             scrollOffset: pane.ScrollOffset, sbStart: 0, sbEnd: -1);
-        return HyperlinkScanner.FindLinkAt(snapshot, viewRow, viewColumn);
+        HyperlinkSpan? found = HyperlinkScanner.FindLinkAt(snapshot, viewRow, viewColumn, _host.HyperlinkScan);
+        if (!found.HasValue)
+        {
+            link = default;
+            displayText = null;
+            return false;
+        }
+
+        link = found.Value;
+        // Read from the same snapshot that produced the span so the policy sees what the user clicked.
+        displayText = link.Source == HyperlinkSource.Explicit
+            ? HyperlinkScanner.GetSpanText(snapshot, link)
+            : null;
+        return true;
     }
 
     public void HandleMouseMove(IMouse mouse, Vector2 position)
@@ -434,15 +567,14 @@ public sealed class TerminalMouseController
         HoveredTabIndex = -1;
         HoveredTabHitType = TabBarHitType.None;
         var geom = _host.Geometry;
-        float physX = position.X * geom.Scale;
-        float physY = position.Y * geom.Scale;
+        float physX = position.X * geom.WindowUnitsToDevice;
+        float physY = position.Y * geom.WindowUnitsToDevice;
         if (_reportingPane != null && _reportingButtons != 0)
         {
-            if (!_host.Shift)
+            if (!ReportingBypassed())
             {
                 var reportHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-                SendMouse(_reportingPane, ReportingButton(_reportingButtons), reportHit.ViewRow, reportHit.ViewColumn,
-                    press: true, move: true);
+                SendMouse(_reportingPane, ReportingButton(_reportingButtons), reportHit, MouseEventKind.Motion);
             }
             return;
         }
@@ -451,7 +583,7 @@ public sealed class TerminalMouseController
         if (activeContextMenu != null && activeContextMenu.IsVisible)
         {
             var menuLayout = ContextMenuLayout.Calculate(activeContextMenu, geom.FramebufferWidth, geom.FramebufferHeight,
-                geom.CellWidth * geom.Scale, geom.CellHeight * geom.Scale);
+                geom.CellWidth, geom.CellHeight);
             bool actionable = ContextMenuHitTester.TryHitInteractiveItem(menuLayout, physX, physY, out int item) &&
                 item >= 0 && item < activeContextMenu.Items.Count && activeContextMenu.Items[item].Action != null;
             activeContextMenu.HoveredIndex = ContextMenuHitTester.HitTest(menuLayout, physX, physY);
@@ -474,10 +606,22 @@ public sealed class TerminalMouseController
             return;
         }
 
+        if (_draggedDivider != null && LeftMouseDown)
+        {
+            activeTab.PaneTree.DragDivider(_draggedDivider, _lastContentPointer.X, _lastContentPointer.Y);
+            _host.SetPointerCursor(ResizeCursor(_draggedDivider));
+            return;
+        }
+        if (_selectionPane == null && !IsDraggingScrollbar && HoverDivider(activeTab, geom) is { } divider)
+        {
+            _host.SetPointerCursor(ResizeCursor(divider));
+            return;
+        }
+
         var hit = HitTest(activeTab, position);
         IsScrollbarHovered = hit.Pane != null && hit.Inside &&
             hit.Pane.Session.Adapter.Buffer.ScrollbackCount > 0 &&
-            IsInScrollbarHitArea(hit.RelativeX, hit.Pane.Bounds.Width, geom.CellWidth * geom.Scale, geom.Scale);
+            IsInScrollbarHitArea(hit.RelativeX, hit.Pane.Bounds.Width, geom.CellWidth, geom.ContentScale);
 
         if (IsDraggingScrollbar && _scrollbarPane != null && LeftMouseDown)
         {
@@ -495,28 +639,25 @@ public sealed class TerminalMouseController
         {
             var selectionPane = _selectionPane!;
             var selectionHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, selectionPane);
-            var selection = selectionPane.Selection;
-            if (selection.Mode == SelectionMode.Line)
-                selection.UpdateLineSelection(selectionHit.LogicalRow, selectionPane.Columns);
-            else
-                selection.UpdateSelection(selectionHit.LogicalRow, selectionHit.ViewColumn);
+            selectionPane.Selection.UpdateSelection(selectionHit.LogicalRow, selectionHit.ViewColumn);
+            _selectionMoved = true;
 
             // Keep a local drag local even when the pointer crosses a split boundary.
             _host.SetPointerCursor(StandardCursor.IBeam);
             return;
         }
 
-        if (!_host.Shift && hit.Pane != null && hit.Inside &&
+        if (!ReportingBypassed() && hit.Pane != null && hit.Inside &&
             hit.Pane.Session.Adapter.CurrentMouseMode == TerminalAdapter.MouseMode.AnyEvent)
         {
-            SendMouse(hit.Pane, 3, hit.ViewRow, hit.ViewColumn, press: true, move: true);
+            SendMouse(hit.Pane, MouseEncoder.ButtonNone, hit, MouseEventKind.Motion);
             return;
         }
 
         if (_host.Ctrl && hit.Pane != null && hit.Inside)
         {
             bool hoveredLink = HyperlinkScanner.ContainsLinkAt(
-                hit.Pane.Session.Adapter.Buffer, hit.ViewRow, hit.ViewColumn);
+                hit.Pane.Session.Adapter.Buffer, hit.ViewRow, hit.ViewColumn, _host.HyperlinkScan);
             _host.SetPointerCursor(hoveredLink ? StandardCursor.Hand : StandardCursor.IBeam);
         }
         else
@@ -534,7 +675,7 @@ public sealed class TerminalMouseController
         if (_reportingPane != null && (_reportingButtons & mask) != 0)
         {
             var hit = HitTestAtContent(_host.ActiveTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-            SendMouse(_reportingPane, ButtonNumber(button), hit.ViewRow, hit.ViewColumn, press: false, move: false);
+            SendMouse(_reportingPane, ButtonNumber(button), hit, MouseEventKind.Release);
             _reportingButtons &= ~mask;
             if (_reportingButtons == 0)
                 _reportingPane = null;
@@ -543,25 +684,29 @@ public sealed class TerminalMouseController
         _pressedButtons &= ~mask;
         if (button == MouseButton.Left)
         {
+            if (_selectionPane is { } finished && !IsDraggingScrollbar && finished.Selection.HasSelection &&
+                (_selectionMoved || _clickCount >= 2))
+                _host.OnLocalSelectionFinished(finished);
             IsDraggingScrollbar = false;
+            _draggedDivider = null;
             _scrollbarPane = null;
             _selectionPane = null;
+            _selectionMoved = false;
         }
     }
 
     public void HandleMouseScroll(IMouse mouse, ScrollWheel wheel)
     {
-        if (wheel.Y == 0f) return;
+        if (wheel.X == 0f && wheel.Y == 0f) return;
 
         var activeTab = _host.ActiveTab;
         if (activeTab == null) return;
         if (_reportingPane != null && _reportingButtons != 0)
         {
-            if (!_host.Shift)
+            if (!ReportingBypassed())
             {
                 var reportHit = HitTestAtContent(activeTab, _lastContentPointer.X, _lastContentPointer.Y, _reportingPane);
-                SendMouse(_reportingPane, wheel.Y > 0f ? 64 : 65, reportHit.ViewRow, reportHit.ViewColumn,
-                    press: true, move: false);
+                ReportWheel(_reportingPane, reportHit, wheel);
             }
             return;
         }
@@ -574,15 +719,67 @@ public sealed class TerminalMouseController
 
         if (Reports(pane))
         {
-            SendMouse(pane, wheel.Y > 0f ? 64 : 65, hit.ViewRow, hit.ViewColumn, press: true, move: false);
+            ReportWheel(pane, hit, wheel);
             return;
         }
 
-        int lines = Math.Max(1, (int)Math.Ceiling(Math.Abs(wheel.Y) * 3));
-        if (wheel.Y > 0f)
-            pane.ScrollUp(lines, pane.Session.Adapter.Buffer.ScrollbackCount);
+        // Local scrolling and alternate scroll are vertical only.
+        var settings = _host.MouseInput;
+        int lines = AccumulateScroll(pane, reports: false, 0f, wheel.Y, settings.ScrollMultiplier).Vertical;
+        if (lines == 0) return;
+
+        var adapter = pane.Session.Adapter;
+        if (settings.AlternateScroll && adapter.AlternateScrollMode &&
+            adapter.Buffer.IsAlternateScreenActive && !adapter.MouseReportingEnabled)
+        {
+            SendAlternateScroll(pane, lines, adapter.ApplicationCursorKeysEnabled);
+            return;
+        }
+
+        if (lines > 0)
+            pane.ScrollUp(lines, adapter.Buffer.ScrollbackCount);
         else
-            pane.ScrollDown(lines);
+            pane.ScrollDown(-lines);
+    }
+
+    // One wheel report per notch (the multiplier is for local lines; applications apply their own), both axes.
+    private void ReportWheel(LeafPane pane, in PaneHit hit, ScrollWheel wheel)
+    {
+        var steps = AccumulateScroll(pane, reports: true, wheel.X, wheel.Y, 1.0);
+        SendWheelButtons(pane, hit, steps.Vertical, MouseEncoder.WheelUp, MouseEncoder.WheelDown);
+        SendWheelButtons(pane, hit, steps.Horizontal, MouseEncoder.WheelLeft, MouseEncoder.WheelRight);
+    }
+
+    private void SendWheelButtons(LeafPane pane, in PaneHit hit, int steps, int positiveButton, int negativeButton)
+    {
+        int button = steps > 0 ? positiveButton : negativeButton;
+        for (int i = Math.Abs(steps); i > 0; i--)
+            SendMouse(pane, button, hit, MouseEventKind.Press);
+    }
+
+    // The carry belongs to one pane and one target (reports vs local lines); switching either starts afresh.
+    private ScrollSteps AccumulateScroll(LeafPane pane, bool reports, float deltaX, float deltaY, double multiplier)
+    {
+        if (!ReferenceEquals(_scrollAccumulatorPane, pane) || _scrollAccumulatorReports != reports)
+        {
+            _scrollAccumulator.Reset();
+            _scrollAccumulatorPane = pane;
+            _scrollAccumulatorReports = reports;
+        }
+        return _scrollAccumulator.Add(deltaX, deltaY, multiplier);
+    }
+
+    private static void SendAlternateScroll(LeafPane pane, int lines, bool applicationCursorKeys)
+    {
+        Span<byte> bytes = stackalloc byte[48];
+        bool up = lines > 0;
+        int remaining = Math.Abs(lines);
+        while (remaining > 0)
+        {
+            int length = MouseEncoder.EncodeAlternateScroll(up, applicationCursorKeys, remaining, bytes);
+            pane.Session.WriteInput(bytes[..length]);
+            remaining -= length / 3;
+        }
     }
 
     /// <summary>
@@ -627,7 +824,7 @@ public sealed class TerminalMouseController
             return false;
         }
 
-        float cellHeight = _host.Geometry.CellHeight * _host.Geometry.Scale;
+        float cellHeight = _host.Geometry.CellHeight;
         int lines = cellHeight > 0f
             ? Math.Clamp((int)MathF.Min(8f, MathF.Ceiling(overshoot / cellHeight)), 1, 8)
             : 1;
@@ -642,10 +839,7 @@ public sealed class TerminalMouseController
         var selection = pane.Selection;
         int oldRow = selection.ActiveRow;
         int oldColumn = selection.ActiveColumn;
-        if (selection.Mode == SelectionMode.Line)
-            selection.UpdateLineSelection(hit.LogicalRow, pane.Columns);
-        else
-            selection.UpdateSelection(hit.LogicalRow, hit.ViewColumn);
+        selection.UpdateSelection(hit.LogicalRow, hit.ViewColumn);
         return changed || oldRow != selection.ActiveRow || oldColumn != selection.ActiveColumn;
     }
 
@@ -654,7 +848,12 @@ public sealed class TerminalMouseController
         _pressedButtons = 0;
         _reportingButtons = 0;
         _reportingPane = null;
+        _motionFilter.Reset();
+        _motionFilterPane = null;
+        _scrollAccumulator.Reset();
+        _scrollAccumulatorPane = null;
         _selectionPane = null;
+        _selectionMoved = false;
         _scrollbarPane = null;
         IsDraggingScrollbar = false;
         IsScrollbarHovered = false;

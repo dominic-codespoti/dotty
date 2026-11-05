@@ -1,7 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Dotty.Abstractions.Config;
+using Dotty.Rendering.Gpu;
 using SkiaSharp;
 
 namespace Dotty.Silk.Rendering;
@@ -11,35 +11,16 @@ namespace Dotty.Silk.Rendering;
 /// </summary>
 public static class FontMetricsService
 {
-    private readonly struct MeasureKey : IEquatable<MeasureKey>
-    {
-        private readonly SKTypeface _typeface;
-        private readonly float _fontSize;
-        private readonly double _lineHeight;
-        private readonly float _scale;
+    /// <summary>
+    /// Entry bound of the shared metrics cache. Each distinct face, size, line height and scale
+    /// takes one entry; zoom steps and monitor moves stay far below this.
+    /// </summary>
+    internal const int MetricsCacheCapacity = 32;
 
-        public MeasureKey(SKTypeface typeface, float fontSize, double lineHeight, float scale)
-        {
-            _typeface = typeface;
-            _fontSize = fontSize;
-            _lineHeight = lineHeight;
-            _scale = scale;
-        }
-
-        public bool Equals(MeasureKey other) =>
-            ReferenceEquals(_typeface, other._typeface)
-            && _fontSize.Equals(other._fontSize)
-            && _lineHeight.Equals(other._lineHeight)
-            && _scale.Equals(other._scale);
-
-        public override bool Equals(object? obj) => obj is MeasureKey other && Equals(other);
-        public override int GetHashCode() =>
-            HashCode.Combine(RuntimeHelpers.GetHashCode(_typeface), _fontSize, _lineHeight, _scale);
-    }
-
-    private readonly record struct CellMetrics(float Width, float Height);
     private static readonly object MetricsLock = new();
-    private static readonly Dictionary<MeasureKey, CellMetrics> MetricsCache = new();
+    private static readonly CellMetricsCache SharedMetricsCache = new(MetricsCacheCapacity);
+    private static readonly ConditionalWeakTable<SKTypeface, TypefaceIdentity> Identities = new();
+
     /// <summary>
     /// Matches the first available font family from a comma-separated list, falling back to <see cref="SKTypeface.Default"/>.
     /// </summary>
@@ -65,60 +46,84 @@ public static class FontMetricsService
     }
 
     /// <summary>
-    /// Measures character cell width and height in device pixels, accounting for font metrics, line height, and DPI scale.
+    /// Measures the cell for <paramref name="typeface"/> in whole device pixels: size, baseline and
+    /// decoration strokes (see <see cref="CellMetricsCalculator"/>). This is the thin Skia adapter: it
+    /// fills a <see cref="FontMetricsInput"/> from <see cref="SKFontMetrics"/> at the device font size.
+    /// Results are cached by value (typeface family and style plus the normalized options) in a bounded
+    /// least-recently-used cache, so equal inputs never re-measure and the cache never grows past
+    /// <see cref="MetricsCacheCapacity"/> entries.
     /// </summary>
-    public static (float CellWidth, float CellHeight) MeasureCell(SKTypeface typeface, float fontSize, double lineHeight, float scale)
+    internal static CellMetrics MeasureCell(SKTypeface typeface, in CellMetricsOptions options)
     {
-        ArgumentNullException.ThrowIfNull(typeface);
-
-        fontSize = float.IsFinite(fontSize)
-            ? Math.Clamp(fontSize, 1f, 512f)
-            : (float)DottyDefaults.FontSize;
-        lineHeight = double.IsFinite(lineHeight)
-            ? Math.Clamp(lineHeight, 0.1, 8.0)
-            : 1.0;
-        scale = float.IsFinite(scale)
-            ? Math.Clamp(scale, 0.1f, 16f)
-            : 1.0f;
-
-        var key = new MeasureKey(typeface, fontSize, lineHeight, scale);
         lock (MetricsLock)
         {
-            if (MetricsCache.TryGetValue(key, out CellMetrics cached))
-                return (cached.Width, cached.Height);
-
-            CellMetrics measured = MeasureCellCore(typeface, fontSize, lineHeight, scale);
-            MetricsCache.Add(key, measured);
-            return (measured.Width, measured.Height);
+            return MeasureCell(SharedMetricsCache, typeface, options);
         }
     }
 
-    private static CellMetrics MeasureCellCore(SKTypeface typeface, float fontSize, double lineHeight, float scale)
+    /// <summary>
+    /// <see cref="MeasureCell(SKTypeface, in CellMetricsOptions)"/> against an explicit cache.
+    /// The caller synchronizes access to <paramref name="cache"/>.
+    /// </summary>
+    internal static CellMetrics MeasureCell(CellMetricsCache cache, SKTypeface typeface, in CellMetricsOptions options)
     {
-        float scaledFontSize = fontSize * scale;
-        using var font = new SKFont(typeface, scaledFontSize)
-        {
-            // Keep cell metrics identical to the A8 glyph atlas raster policy.
-            // Subpixel coverage requires RGB channels and cannot be represented
-            // by the single-channel atlas.
-            Subpixel = false,
-            Hinting = SKFontHinting.Full,
-            Edging = SKFontEdging.Antialias,
-        };
+        ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(typeface);
+
+        var normalized = Normalize(options);
+        var key = new CellMetricsKey(GetIdentity(typeface), normalized);
+        if (cache.TryGet(key, out CellMetrics cached))
+            return cached;
+
+        CellMetrics measured = CellMetricsCalculator.Compute(ReadFontMetrics(typeface, normalized.FontSizePx, normalized.Raster), normalized);
+        cache.Set(key, measured);
+        return measured;
+    }
+
+    /// <summary>Clamps non-finite or out-of-range options so equal effective inputs share one cache entry.</summary>
+    internal static CellMetricsOptions Normalize(in CellMetricsOptions options)
+    {
+        float scale = float.IsFinite(options.ContentScale) && options.ContentScale > 0f
+            ? Math.Clamp(options.ContentScale, DisplayScale.MinScale, DisplayScale.MaxScale)
+            : 1f;
+        float fontSize = float.IsFinite(options.FontSizePx)
+            ? Math.Clamp(options.FontSizePx, 1f, 4096f)
+            : CellMetricsCalculator.PointsToPixels(DottyDefaults.FontSize, scale);
+        double lineHeight = double.IsFinite(options.LineHeight)
+            ? Math.Clamp(options.LineHeight, 0.1, 8.0)
+            : 1.0;
+        return options with { FontSizePx = fontSize, LineHeight = lineHeight, ContentScale = scale };
+    }
+
+    /// <summary>
+    /// Value identity of <paramref name="typeface"/>, read from Skia once per wrapper object
+    /// (the family name read allocates) and remembered for the wrapper's lifetime.
+    /// </summary>
+    internal static TypefaceIdentity GetIdentity(SKTypeface typeface) =>
+        Identities.GetValue(
+            typeface,
+            static face => new TypefaceIdentity(face.FamilyName ?? string.Empty, face.FontWeight, face.FontWidth, face.FontSlant));
+
+    private static FontMetricsInput ReadFontMetrics(SKTypeface typeface, float fontSizePx, RasterPolicy raster)
+    {
+        // The same policy object configures the glyph atlas fonts (GlyphAtlas), so metrics and raster agree.
+        using var font = new SKFont(typeface, fontSizePx);
+        raster.ApplyTo(font);
 
         var fm = font.Metrics;
-        float ascent = float.IsFinite(fm.Ascent) ? MathF.Abs(fm.Ascent) : scaledFontSize;
-        float descent = float.IsFinite(fm.Descent) ? MathF.Abs(fm.Descent) : 0f;
-        float glyphHeight = MathF.Max(scaledFontSize, ascent + descent);
-        float glyphAdvance = float.IsFinite(fm.AverageCharacterWidth)
-            ? MathF.Max(0.5f, fm.AverageCharacterWidth)
-            : scaledFontSize * 0.6f;
+        float advance = float.IsFinite(fm.AverageCharacterWidth) ? MathF.Max(0.5f, fm.AverageCharacterWidth) : float.NaN;
         float wideGlyphAdvance = font.MeasureText("W");
         if (float.IsFinite(wideGlyphAdvance))
-            glyphAdvance = MathF.Max(glyphAdvance, wideGlyphAdvance);
+            advance = float.IsFinite(advance) ? MathF.Max(advance, wideGlyphAdvance) : wideGlyphAdvance;
 
-        float cellWidth = MathF.Round(MathF.Max(4, glyphAdvance / scale));
-        float cellHeight = MathF.Round(MathF.Max(fontSize * (float)lineHeight, glyphHeight / scale));
-        return new CellMetrics(cellWidth, cellHeight);
+        return new FontMetricsInput(
+            Ascent: fm.Ascent,
+            Descent: fm.Descent,
+            Advance: advance,
+            UnderlinePosition: fm.UnderlinePosition ?? float.NaN,
+            UnderlineThickness: fm.UnderlineThickness ?? float.NaN,
+            StrikeoutPosition: fm.StrikeoutPosition ?? float.NaN,
+            StrikeoutThickness: fm.StrikeoutThickness ?? float.NaN,
+            XHeight: fm.XHeight);
     }
 }

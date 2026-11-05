@@ -71,11 +71,24 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     private int _scrollTop = 0;
     private int _scrollBottom;
     private bool _originMode;
+    private bool _leftRightMarginMode;
+    private int _leftMargin;
+    private int _rightMargin;
+    private bool _reverseWraparound;
+    private bool _extendedReverseWraparound;
+    private bool _protectionActive;
+    private bool _respectIsoProtection;
     private bool _isAlternate;
     private int _savedTotalScrolled = 0;
-    private bool _hasAlternateSavedCursor = false;
-    private CursorState _alternateSavedCursorState;
+    private SavedCursor _mainSavedCursor;
+    private SavedCursor _alternateSavedCursor;
+    private bool _hasMainSavedCursor;
+    private bool _hasAlternateSavedCursor;
 
+    private readonly record struct SavedCursor(CursorState Cursor, bool ProtectionActive, bool OriginMode);
+
+    /// <summary>Optional real-scroll notification used only while DEC smooth scrolling is enabled.</summary>
+    internal Action<int, int, int, int, bool>? SmoothScrollRequested { get; set; }
     private ulong[] _rowGenerations = Array.Empty<ulong>();
     private int _disposed;
     private readonly object _snapshotPoolGate = new();
@@ -86,6 +99,11 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     /// Read it while holding <see cref="SyncRoot"/> when a consistent frame value is required.
     /// </summary>
     public ulong Generation => _globalGeneration;
+    internal int ScrollTop => _scrollTop;
+    internal int ScrollBottom => _scrollBottom;
+    internal int LeftMargin => _leftMargin;
+    internal int RightMargin => _rightMargin;
+
 
     // Motion epochs: travel with content across scrolls (rotated like the
     // Screen ring) and are bumped only for rows whose content actually changed
@@ -96,15 +114,28 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     // so the composer's per-row classification cache can key on identity
     // without false hits after a scroll rotation.
 
-    private List<string> _hyperlinks = new List<string> { string.Empty };
-    private Dictionary<string, ushort> _hyperlinkLookup = new Dictionary<string, ushort>();
+    /// <summary>A buffer with the built-in scrollback policy (<see cref="ScrollbackPolicy.Default"/>).</summary>
+    public TerminalBuffer(int rows = 24, int columns = 80)
+        : this(rows, columns, ScrollbackPolicy.Default)
+    {
+    }
 
-    public TerminalBuffer(int rows = 24, int columns = 80, int scrollbackCapacity = 10000)
+    /// <summary>A buffer that keeps exactly <paramref name="scrollbackCapacity"/> history lines at any size (no byte cap).</summary>
+    public TerminalBuffer(int rows, int columns, int scrollbackCapacity)
+        : this(rows, columns, ScrollbackPolicy.Fixed(scrollbackCapacity))
+    {
+    }
+
+    /// <summary>
+    /// A buffer whose history capacity is <c>scrollbackPolicy.CapacityFor(rows, columns)</c>, recomputed on every
+    /// resize: under a byte cap a wider (or taller) screen keeps fewer lines, and a narrower one more.
+    /// </summary>
+    public TerminalBuffer(int rows, int columns, ScrollbackPolicy scrollbackPolicy)
     {
         Rows = rows;
         Columns = columns;
         _rowGenerations = new ulong[rows];
-        _screens = new ScreenManager(rows, columns, scrollbackCapacity);
+        _screens = new ScreenManager(rows, columns, scrollbackPolicy);
         _writer = CreateWriter();
         _scrollBottom = rows - 1;
         InitializeTabStops();
@@ -119,42 +150,54 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         {
             if (rows == Rows && cols == Columns)
                 return;
-            ResizeWithReflow(rows, cols);
+            try
+            {
+                ResizeWithReflow(rows, cols);
+            }
+            catch
+            {
+                // A failure between capturing and rebasing the placement anchors must not leave them at stale rows.
+                AbandonGraphicsReflow();
+                throw;
+            }
         }
     }
 
+    /// <summary>DECSET/DECRST 1049 saves and restores the ordinary main-screen cursor slot.</summary>
     public void SetAlternateScreen(bool active)
     {
         if (active == _isAlternate)
             return;
+        if (active)
+            SaveCursor();
+        _screens.SetAlternate(active, clearOnEnter: true, clearOnExit: true);
+        SwitchScreenState(active);
+        if (!active)
+            RestoreCursor();
+    }
 
+    /// <summary>DECSET/DECRST 47 retains alternate contents; 1047 clears them before exit.</summary>
+    public void SwitchAlternateScreen(int mode, bool active)
+    {
+        if (mode is not (47 or 1047))
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        if (active == _isAlternate)
+            return;
+        _screens.SetAlternate(active, clearOnEnter: false, clearOnExit: mode == 1047);
+        SwitchScreenState(active);
+    }
+
+    private void SwitchScreenState(bool active)
+    {
+        BumpCoordinateEpoch();
         if (active)
         {
-            _hasAlternateSavedCursor = true;
-            _alternateSavedCursorState = _cursor.CaptureState();
-
-            // Save main screen scrollback count and reset for alt screen.
-            // Alt screen has no scrollback, so any LineFeed/ScrollUpLines
-            // calls while in alt mode must not corrupt the main screen count.
             _savedTotalScrolled = _totalScrolled;
             _totalScrolled = 0;
         }
-
-        _screens.SetAlternate(active);
-        _isAlternate = active;
-
-        if (!active)
-        {
-            // Restore main screen scrollback count and cursor, discarding
-            // whatever accumulated while the alt screen was active.
+        else
             _totalScrolled = _savedTotalScrolled;
-            if (_hasAlternateSavedCursor)
-            {
-                _cursor.RestoreState(_alternateSavedCursorState, Rows, Columns);
-                _hasAlternateSavedCursor = false;
-            }
-        }
-
+        _isAlternate = active;
         MarkAllRowsDirty();
     }
 
@@ -162,7 +205,7 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
     public void SetScrollRegion(int top1Based, int bottom1Based)
     {
-        int newTop = Math.Max(0, top1Based - 1);
+        int newTop = Math.Clamp(top1Based - 1, 0, Rows - 1);
         int newBottom = Math.Clamp(bottom1Based - 1, 0, Rows - 1);
         if (newTop < newBottom)
         {
@@ -175,41 +218,96 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             _scrollBottom = Rows - 1;
         }
 
-        // DECSTBM homes the cursor after setting margins.
-        _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
-    }
-    public ushort GetOrCreateHyperlinkId(string uri) =>
-        GetOrCreateHyperlinkId(uri.AsSpan());
-
-    internal ushort GetOrCreateHyperlinkId(ReadOnlySpan<char> uri)
-    {
-        if (uri.IsEmpty)
-            return 0;
-
-        var lookup = _hyperlinkLookup.GetAlternateLookup<ReadOnlySpan<char>>();
-        if (lookup.TryGetValue(uri, out ushort id))
-            return id;
-
-        string value = uri.ToString();
-        ushort idx = (ushort)_hyperlinks.Count;
-        _hyperlinks.Add(value);
-        _hyperlinkLookup[value] = idx;
-        return idx;
+        HomeCursor();
     }
 
-    /// <summary>
-    /// Gets the hyperlink URL for a given hyperlink ID.
-    /// Returns null if the ID is invalid or not found.
-    /// </summary>
-    public string? GetHyperlinkUrl(ushort hyperlinkId)
+    public bool LeftRightMarginMode => _leftRightMarginMode;
+    public bool ReverseWraparound => _reverseWraparound;
+    public bool ExtendedReverseWraparound => _extendedReverseWraparound;
+
+    private int EffectiveLeftMargin => _leftRightMarginMode ? _leftMargin : 0;
+    private int EffectiveRightMargin => _leftRightMarginMode ? _rightMargin : Columns - 1;
+
+    internal int WriteLeftMargin => EffectiveLeftMargin;
+    internal int GetWriteRightMargin(int column) =>
+        _leftRightMarginMode && column <= _rightMargin ? _rightMargin : Columns - 1;
+
+    internal bool IsProtectionActive => _protectionActive;
+    internal bool RespectIsoProtection => _respectIsoProtection;
+
+    internal void SetIsoProtection(bool active)
     {
-        if (hyperlinkId == 0 || hyperlinkId >= _hyperlinks.Count)
+        _protectionActive = active;
+        if (active)
+            _respectIsoProtection = true;
+    }
+
+    internal void SetDecProtection(int mode)
+    {
+        if ((uint)mode > 2) return;
+        _protectionActive = mode == 1;
+        _respectIsoProtection = false;
+    }
+
+    public void SetLeftRightMarginMode(bool enabled)
+    {
+        if (_leftRightMarginMode == enabled)
+            return;
+
+        _leftRightMarginMode = enabled;
+        _leftMargin = 0;
+        _rightMargin = Columns - 1;
+    }
+
+    public void SetHorizontalMargins(int left1Based, int right1Based)
+    {
+        int left = left1Based == 0 ? 0 : left1Based - 1;
+        int right = right1Based == 0 || right1Based > Columns ? Columns - 1 : right1Based - 1;
+        if (left < 0 || right >= Columns || left >= right)
+            return;
+
+        _leftMargin = left;
+        _rightMargin = right;
+        HomeCursor();
+    }
+
+    public void SetReverseWrapMode(int mode, bool enabled)
+    {
+        if (mode == 45)
+            _reverseWraparound = enabled;
+        else if (mode == 1045)
+            _extendedReverseWraparound = enabled;
+    }
+
+    public void ScreenAlignmentTest(in CellAttributes attributes)
+    {
+        _originMode = false;
+        _scrollTop = 0;
+        _scrollBottom = Rows - 1;
+        _leftMargin = 0;
+        _rightMargin = Columns - 1;
+
+
+        Span<char> fill = stackalloc char[128];
+        fill.Fill('E');
+        for (int row = 0; row < Rows; row++)
         {
-            return null;
+            ActiveBuffer.ClearRowContinuation(row);
+            for (int col = 0; col < Columns;)
+            {
+                int length = Math.Min(fill.Length, Columns - col);
+                SetCursor(row, col);
+                _writer.WriteText(fill[..length], in attributes);
+                col += length;
+            }
         }
-        return _hyperlinks[hyperlinkId];
+
+        HomeCursor();
+        MarkAllRowsDirty();
     }
+
+    private void HomeCursor() =>
+        _cursor.Set(_originMode ? _scrollTop : 0, _originMode ? EffectiveLeftMargin : 0, Rows, Columns);
 
     private int _totalScrolled = 0;
     private readonly List<PromptMark> _promptMarks = new();
@@ -219,35 +317,64 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
     public int CursorRow => _cursor.Row;
     public int CursorCol => _cursor.Col;
+    public int CursorColForReport => _originMode ? _cursor.Col - EffectiveLeftMargin : _cursor.Col;
     public bool CursorVisible => _cursor.Visible;
     public TerminalCursorShape CursorShape { get; private set; } = TerminalCursorShape.Block;
     public bool CursorBlinking { get; private set; } = true;
 
+    /// <summary>
+    /// True until the application selects a style with DECSCUSR 1-6, and again after DECSCUSR 0, DECSTR or RIS.
+    /// The renderer then draws the configured <c>cursor.shape</c>/<c>cursor.blink</c> instead of
+    /// <see cref="CursorShape"/>/<see cref="CursorBlinking"/> (which hold the VT default, a blinking block).
+    /// </summary>
+    public bool CursorStyleIsDefault { get; private set; } = true;
+
+    /// <summary>Applies an explicit application cursor style (DECSCUSR 1-6).</summary>
     public void SetCursorStyle(TerminalCursorShape shape, bool blinking)
     {
         CursorShape = shape;
         CursorBlinking = blinking;
+        CursorStyleIsDefault = false;
+    }
+
+    /// <summary>Returns to the user's configured default cursor style (DECSCUSR 0, DECSTR, RIS).</summary>
+    public void ResetCursorStyle()
+    {
+        CursorShape = TerminalCursorShape.Block;
+        CursorBlinking = true;
+        CursorStyleIsDefault = true;
     }
 
     public void SetCursorVisible(bool visible) => _cursor.SetVisible(visible);
 
 
-    // Saved cursor state for DECSC/DECRC
-    private bool _hasSavedCursor = false;
-    private CursorState _savedCursorState;
+    // Saved cursor state is independent for the main and alternate screens.
+    private bool HasSavedCursor => _isAlternate ? _hasAlternateSavedCursor : _hasMainSavedCursor;
+    private SavedCursor ActiveSavedCursor => _isAlternate ? _alternateSavedCursor : _mainSavedCursor;
 
     public void SaveCursor()
     {
-        _hasSavedCursor = true;
-        _savedCursorState = _cursor.CaptureState();
+        var state = new SavedCursor(_cursor.CaptureState(), _protectionActive, _originMode);
+        if (_isAlternate)
+        {
+            _alternateSavedCursor = state;
+            _hasAlternateSavedCursor = true;
+        }
+        else
+        {
+            _mainSavedCursor = state;
+            _hasMainSavedCursor = true;
+        }
     }
 
     public void RestoreCursor()
     {
-        if (!_hasSavedCursor) return;
-        _cursor.RestoreState(_savedCursorState, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
-        _hasSavedCursor = false;
+        if (!HasSavedCursor)
+            return;
+        var state = ActiveSavedCursor;
+        _cursor.RestoreState(state.Cursor, Rows, Columns);
+        _protectionActive = state.ProtectionActive;
+        _originMode = state.OriginMode;
         MarkAllRowsDirty();
     }
 
@@ -290,7 +417,8 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
     public void ClearAllTabStops()
     {
-        InitializeTabStops();
+        if (_tabStops is not null)
+            Array.Clear(_tabStops, 0, Columns);
     }
 
     public int GetNextTabStopFrom(int col)
@@ -400,33 +528,35 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     public void ClearScrollback()
     {
         _totalScrolled = 0;
+        BumpCoordinateEpoch();
         _promptMarks.Clear();
-    }
-
-    /// <summary>
-    /// Aggressively reduces scrollback to a smaller size while keeping the session running.
-    /// This is used when a tab becomes inactive to free memory while preserving some context.
-    /// The Screen's ring buffer cannot be partially trimmed; this only adjusts the count.
-    /// </summary>
-    public void TrimScrollback(int maxLines)
-    {
-        if (maxLines < 0) maxLines = 0;
-        int trimStart = _totalScrolled - maxLines; // lines being dropped
-        if (trimStart > 0)
-            _promptMarks.RemoveAll(m => m.AbsoluteRow < trimStart);
-        _totalScrolled = Math.Min(_totalScrolled, maxLines);
+        // Blank the rows that held history and return their pages to the OS; the visible screen stays.
+        ActiveBuffer.DiscardHistory();
+        // Only the history goes: the floor is the first visible row, so visible placements stay.
+        DiscardGraphicsHistory(wholeRing: false);
+        if (!_isAlternate)
+            RaiseHistoryInvalidated(HistoryDiscardReason.Cleared);
     }
 
     public void FullReset()
     {
-        // RIS - Reset to Initial State
+        // RIS - Reset to Initial State: leave the alternate screen, clear everything, then the DECSTR core.
+        if (_isAlternate)
+            SetAlternateScreen(false);
         _screens.ClearAll();
+        // RIS deletes every image of both screens (the configured limits stay with the manager).
+        if (_screens.ClearImageStores())
+            BumpGraphicsGeneration();
         _cursor.Reset();
         _bracketedPaste = false;
-        _hasSavedCursor = false;
         InitializeTabStops();
         _totalScrolled = 0;
+        BumpCoordinateEpoch();
+        _savedTotalScrolled = 0;
+        ResetFullOnlyState();
+        ApplySoftResetCore();
         MarkAllRowsDirty();
+        RaiseHistoryInvalidated(HistoryDiscardReason.Reset);
     }
 
     public void ScrollUpLines(int n)
@@ -439,75 +569,193 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         ScrollRegionDown(_scrollTop, _scrollBottom, n);
     }
 
-    /// <summary>
-    /// Shared SU/CSI-S/LF-at-region-bottom implementation: scrolls content up
-    /// by n rows inside [top..bottom], rotates motion epochs with the content,
-    /// bumps the exposed bottom band, and records the scroll for the renderer.
-    /// </summary>
+    /// <summary>Scrolls a vertical region upward, preserving the full-width ring/history fast path.</summary>
     private void ScrollRegionUp(int top, int bottom, int n)
     {
         if (n <= 0) return;
+        int left = EffectiveLeftMargin;
+        int right = EffectiveRightMargin;
+        bool partialWidth = left != 0 || right != Columns - 1;
+        bool smoothableRegion = !partialWidth;
+        if (smoothableRegion)
+            SmoothScrollRequested?.Invoke(-1, n, top, bottom, true);
         int height = bottom - top + 1;
-        int delta = ActiveBuffer.ScrollUpRegion(top, bottom, n);
-        if (delta <= 0) return;
-        if (top == 0)
-            unchecked { _totalScrolled += delta; }
+        int delta;
+        if (partialWidth)
+        {
+            delta = ActiveBuffer.ScrollRectangle(top, bottom, left, right, n);
+            if (delta <= 0)
+            {
+                if (smoothableRegion) SmoothScrollRequested?.Invoke(-1, 0, top, bottom, false);
+                return;
+            }
+        }
+        else
+        {
+            delta = ActiveBuffer.ScrollUpRegion(top, bottom, n);
+            if (delta <= 0)
+            {
+                if (smoothableRegion) SmoothScrollRequested?.Invoke(-1, 0, top, bottom, false);
+                return;
+            }
+            if (top == 0)
+                unchecked { _totalScrolled += delta; }
+        }
 
-        // Identity generations: the whole region changed; classification and
-        // glyph caches must re-examine every row. (Motion epochs removed
-        // 2026-08-26: RowScrollEpochs had no readers — the composer keys its
-        // per-row cache on identity generations only.)
+        if (_screens.ActiveImages is { HasPlacements: true } images)
+        {
+            if (partialWidth)
+            {
+                if (images.OnRectangleScrolled(top, bottom, left, right, delta, Rows) != 0)
+                    BumpGraphicsGeneration();
+            }
+            else
+            {
+                if (top == 0 && bottom == Rows - 1)
+                    images.OnRingRotatedUp(delta, ActiveBuffer.ScrollbackCapacity);
+                else
+                    images.OnRegionScrolled(top, bottom, delta, Rows);
+                BumpGraphicsGeneration();
+            }
+        }
+
         BumpIdentity(top, height);
+        if (smoothableRegion) SmoothScrollRequested?.Invoke(-1, delta, top, bottom, false);
     }
 
-    /// <summary>
-    /// Shared SD/CSI-T/RI-at-region-top implementation: scrolls content down by
-    /// n rows inside [top..bottom], rotating motion epochs and bumping the
-    /// exposed top band (which holds restored scrollback or blanked rows).
-    /// </summary>
+    /// <summary>Scrolls a vertical region downward, using the ring only when the full screen width moves.</summary>
     private void ScrollRegionDown(int top, int bottom, int n)
     {
         if (n <= 0) return;
         int clampedLines = Math.Min(n, bottom - top + 1);
+        int left = EffectiveLeftMargin;
+        int right = EffectiveRightMargin;
+        bool partialWidth = left != 0 || right != Columns - 1;
+        bool smoothableRegion = !partialWidth;
+        if (smoothableRegion)
+            SmoothScrollRequested?.Invoke(1, n, top, bottom, true);
+        int height = bottom - top + 1;
+
+        if (partialWidth)
+        {
+            int delta = ActiveBuffer.ScrollRectangle(top, bottom, left, right, -n);
+            if (delta <= 0)
+            {
+                return;
+            }
+            if (_screens.ActiveImages is { HasPlacements: true } partialImages
+                && partialImages.OnRectangleScrolled(top, bottom, left, right, -delta, Rows) != 0)
+                BumpGraphicsGeneration();
+            BumpIdentity(top, height);
+            return;
+        }
+
         int restoredFromScrollback = 0;
         bool isFullScreenRegion = top == 0 && bottom == Rows - 1;
         if (isFullScreenRegion)
-            restoredFromScrollback = Math.Min(_totalScrolled, clampedLines);
+        {
+            int retainedHistory = Math.Max(0, Math.Min(_totalScrolled, ActiveBuffer.ScrollbackCapacity));
+            restoredFromScrollback = Math.Min(retainedHistory, clampedLines);
+        }
 
         ActiveBuffer.ScrollDownRegion(top, bottom, n);
         if (top == 0 && _totalScrolled > 0)
             unchecked { _totalScrolled = Math.Max(0, _totalScrolled - clampedLines); }
 
-        // Full-screen reverse scrolling should reveal history until scrollback is
-        // exhausted, then fall back to the terminal's blank-line insertion.
         if (isFullScreenRegion)
         {
             int blankLines = clampedLines - restoredFromScrollback;
             for (int row = 0; row < blankLines; row++)
                 ActiveBuffer.ClearRow(row);
+            if (blankLines > 0)
+                ActiveBuffer.ClearRowContinuation(blankLines);
         }
 
-        int height = bottom - top + 1;
+        if (_screens.ActiveImages is { HasPlacements: true } images)
+        {
+            if (isFullScreenRegion)
+                images.OnRingRotatedDown(clampedLines, Rows);
+            else
+                images.OnRegionScrolled(top, bottom, -clampedLines, Rows);
+            BumpGraphicsGeneration();
+        }
+
         BumpIdentity(top, height);
+        if (smoothableRegion) SmoothScrollRequested?.Invoke(1, clampedLines, top, bottom, false);
     }
+
+    public void LineFeed()
+    {
+        Index();
+        if (NewLineMode)
+            CarriageReturn();
+    }
+
+    private void IndexCore()
+    {
+        _cursor.SetWrapPending(false);
+        int row = _cursor.Row;
+        if (row == _scrollBottom)
+        {
+            if (_cursor.Col >= EffectiveLeftMargin && _cursor.Col <= EffectiveRightMargin)
+                ScrollRegionUp(_scrollTop, _scrollBottom, 1);
+            return;
+        }
+
+        if (row < Rows - 1)
+            _cursor.MoveBy(1, 0, Rows, Columns);
+    }
+
+    /// <summary>Autowrap line advance. True when the cursor advances or a multi-row region scrolls.</summary>
+    internal bool WrapToNextLine()
+    {
+        int row = _cursor.Row;
+        bool advances = row < Rows - 1
+            && (row != _scrollBottom
+                || (_cursor.Col >= EffectiveLeftMargin && _cursor.Col <= EffectiveRightMargin
+                    && _scrollTop < _scrollBottom));
+        if (row == _scrollBottom && _scrollTop < _scrollBottom
+            && _cursor.Col >= EffectiveLeftMargin && _cursor.Col <= EffectiveRightMargin)
+            advances = true;
+        Index();
+        CarriageReturn();
+        _cursor.SetWrapPending(false);
+        return advances;
+    }
+
+    /// <summary>IND (ESC D): line index without carriage return.</summary>
+    public void Index() => IndexCore();
+
+    /// <summary>NEL (ESC E): index first, then carriage return.</summary>
+    public void NextLine()
+    {
+        Index();
+        CarriageReturn();
+    }
+
+    public void ReverseIndex()
+    {
+        _cursor.SetWrapPending(false);
+        int row = _cursor.Row;
+        if (row == _scrollTop)
+        {
+            if (_cursor.Col >= EffectiveLeftMargin && _cursor.Col <= EffectiveRightMargin)
+                ScrollRegionDown(_scrollTop, _scrollBottom, 1);
+            return;
+        }
+
+        if (row > 0)
+            _cursor.MoveBy(-1, 0, Rows, Columns);
+    }
+
 
     public void SetCursor(int row, int col)
     {
-        // When origin mode (DECOM) is enabled, cursor coordinates are relative
-        // to the current scroll region. The adapter passes 0-based params
-        // (converted from 1-based by the parser adapter), so we need to
-        // translate them into absolute coordinates when origin mode is on.
-        if (_originMode)
-        {
-            int absRow = _scrollTop + row;
-            int clampedRow = Math.Clamp(absRow, _scrollTop, _scrollBottom);
-            _cursor.Set(clampedRow, Math.Clamp(col, 0, Columns - 1), Rows, Columns);
-        }
-        else
-        {
-            _cursor.Set(Math.Clamp(row, 0, Rows - 1), Math.Clamp(col, 0, Columns - 1), Rows, Columns);
-        }
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
+        long translatedRow = (long)(_originMode ? _scrollTop : 0) + row;
+        long translatedColumn = (long)(_originMode ? EffectiveLeftMargin : 0) + col;
+        int clampedRow = (int)Math.Clamp(translatedRow, _originMode ? _scrollTop : 0, _originMode ? _scrollBottom : Rows - 1);
+        int clampedColumn = (int)Math.Clamp(translatedColumn, _originMode ? EffectiveLeftMargin : 0, _originMode ? EffectiveRightMargin : Columns - 1);
+        _cursor.Set(clampedRow, clampedColumn, Rows, Columns);
     }
 
     public readonly struct ScrollbackLine
@@ -639,48 +887,6 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     }
 
     /// <summary>
-    /// Captures the render state under the caller's SyncRoot hold: one bounded
-    /// memcpy of the cell arenas plus style/generation/scrollback metadata.
-    /// The returned snapshot is immutable and can be rasterized without holding
-    /// the buffer lock.
-    /// The visible scrollback range [<paramref name="sbStart"/>, <paramref name="sbEnd"/>]
-    /// (negative row indices, -1 = newest) is materialized as text.
-    /// </summary>
-    public RenderSnapshot CaptureRenderSnapshot(int sbStart, int sbEnd)
-    {
-        var styles = StyleSet.CaptureStylesShared();
-        var snapshot = RenderSnapshot.Capture(
-            this,
-            ActiveBuffer,
-            _rowGenerations,
-            styles,
-            ScrollbackCount,
-            IsAlternateScreenActive,
-            CursorRow,
-            CursorCol,
-            CursorShape,
-            CursorBlinking);
-        snapshot.GlobalGeneration = Generation;
-
-        int count = sbEnd - sbStart + 1;
-        if (count > 0)
-        {
-            snapshot.CapturedSbStart = sbStart;
-            var text = new string[count];
-            BufferMemoryMetrics.ChangeSnapshotCapacity(0, (long)count * IntPtr.Size);
-            for (int r = sbStart; r <= sbEnd; r++)
-            {
-                int idx = r + ScrollbackCount;
-                idx = Math.Max(0, Math.Min(ScrollbackCount - 1, idx));
-                text[r - sbStart] = GetScrollbackLine(idx).Text ?? string.Empty;
-            }
-            snapshot.ScrollbackText = text;
-        }
-
-        return snapshot;
-    }
-
-    /// <summary>
     /// Per-frame render capture (B-lite): copies only the visible rows' cell
     /// slices instead of the whole arena. The raster reads ~viewport-rows x
     /// columns; a full-arena memcpy per content frame is pure overhead.
@@ -699,8 +905,12 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
             CursorCol,
             CursorShape,
             CursorBlinking,
+            CursorStyleIsDefault,
+            CursorVisible,
             scrollOffset);
         snapshot.GlobalGeneration = Generation;
+        snapshot.ViewTopAbsoluteRow = _totalScrolled;
+        CaptureGraphics(snapshot, scrollOffset);
 
         int count = sbEnd - sbStart + 1;
         if (count > 0)
@@ -727,103 +937,155 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         return ActiveBuffer.GetColdCell(row, col);
     }
 
-    public void MoveCursorTo(int row, int col)
+
+    public void MoveCursorToScreenColumn(int column) =>
+        _cursor.Set(_cursor.Row, column, Rows, Columns);
+
+    public void SetCursorColumn(int column)
     {
-        // When origin mode (DECOM) is enabled, cursor coordinates are relative
-        // to the current scroll region. The adapter passes 0-based params
-        // (converted from 1-based by the parser adapter), so we need to
-        // translate them into absolute coordinates when origin mode is on.
-        if (_originMode)
-        {
-            int absRow = _scrollTop + row;
-            int clampedRow = Math.Clamp(absRow, _scrollTop, _scrollBottom);
-            _cursor.Set(clampedRow, Math.Clamp(col, 0, Columns - 1), Rows, Columns);
-        }
-        else
-        {
-            _cursor.Set(Math.Clamp(row, 0, Rows - 1), Math.Clamp(col, 0, Columns - 1), Rows, Columns);
-        }
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
+        int minimum = _originMode ? EffectiveLeftMargin : 0;
+        int maximum = _originMode ? EffectiveRightMargin : Columns - 1;
+        int absolute = (int)Math.Clamp((long)minimum + column, minimum, maximum);
+        _cursor.Set(_cursor.Row, absolute, Rows, Columns);
     }
+
+    public void SetCursorRow(int row)
+    {
+        int minimum = _originMode ? _scrollTop : 0;
+        int maximum = _originMode ? _scrollBottom : Rows - 1;
+        int absolute = (int)Math.Clamp((long)minimum + row, minimum, maximum);
+        _cursor.Set(absolute, _cursor.Col, Rows, Columns);
+    }
+
     public void SetOriginMode(bool enabled)
     {
         _originMode = enabled;
-        // DECOM resets the cursor to the current home position.
-        _cursor.Set(_originMode ? _scrollTop : 0, 0, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
-        // Changing origin may change visible content; mark all rows dirty.
+        HomeCursor();
         MarkAllRowsDirty();
     }
 
     public bool OriginMode => _originMode;
 
+
+    private void GetDirectionalBounds(out int top, out int bottom, out int left, out int right)
+    {
+        top = _cursor.Row < _scrollTop ? 0 : _scrollTop;
+        bottom = _cursor.Row > _scrollBottom ? Rows - 1 : _scrollBottom;
+        left = _cursor.Col < EffectiveLeftMargin ? 0 : EffectiveLeftMargin;
+        right = _cursor.Col > EffectiveRightMargin ? Columns - 1 : EffectiveRightMargin;
+    }
+
+    private void GetAbsoluteBounds(out int top, out int bottom, out int left, out int right)
+    {
+        top = _originMode ? _scrollTop : 0;
+        bottom = _originMode ? _scrollBottom : Rows - 1;
+        left = _originMode ? EffectiveLeftMargin : 0;
+        right = _originMode ? EffectiveRightMargin : Columns - 1;
+    }
+
+    public void MoveCursorHorizontalRelative(int n)
+    {
+        GetAbsoluteBounds(out _, out _, out int left, out int right);
+        int col = (int)Math.Clamp((long)_cursor.Col + n, left, right);
+        _cursor.Set(_cursor.Row, col, Rows, Columns);
+    }
+
+    public void MoveCursorVerticalRelative(int n)
+    {
+        GetAbsoluteBounds(out int top, out int bottom, out _, out _);
+        int row = (int)Math.Clamp((long)_cursor.Row + n, top, bottom);
+        _cursor.Set(row, _cursor.Col, Rows, Columns);
+    }
+
     public void MoveCursorBy(int dRow, int dCol)
     {
-        int newRow = _cursor.Row + dRow;
-        int newCol = _cursor.Col + dCol;
-
-        if (_originMode)
-        {
-            newRow = Math.Clamp(newRow, _scrollTop, _scrollBottom);
-        }
-        else
-        {
-            newRow = Math.Clamp(newRow, 0, Rows - 1);
-        }
-
-        newCol = Math.Clamp(newCol, 0, Columns - 1);
-        _cursor.Set(newRow, newCol, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
+        GetDirectionalBounds(out int top, out int bottom, out int left, out int right);
+        int row = dRow == 0 ? _cursor.Row : (int)Math.Clamp((long)_cursor.Row + dRow, top, bottom);
+        int col = dCol == 0 ? _cursor.Col : (int)Math.Clamp((long)_cursor.Col + dCol, left, right);
+        _cursor.Set(row, col, Rows, Columns);
     }
 
     public void CarriageReturn()
     {
-        _cursor.CarriageReturn();
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
+        int left = EffectiveLeftMargin;
+        int column = _cursor.Col >= left || _originMode ? left : 0;
+        _cursor.Set(_cursor.Row, column, Rows, Columns);
     }
 
-    public void LineFeed()
+    public void MoveCursorBack(int n)
     {
-        // If the cursor is at the bottom of the scroll region, scroll only
-        // that region. This implements DECSTBM semantics used by applications
-        // like Neovim.
-        if (_cursor.Row == _scrollBottom)
+        long remaining = Math.Max(1, n);
+        int left = EffectiveLeftMargin;
+        int right = EffectiveRightMargin;
+        if (_cursor.Col < left)
+            left = 0;
+
+        bool reverseWrap = _autoWrap && (_reverseWraparound || _extendedReverseWraparound);
+        if (reverseWrap && _cursor.WrapPending)
+            remaining--;
+
+        int row = _cursor.Row;
+        int col = _cursor.Col;
+        if (remaining > 0 && _autoWrap && _extendedReverseWraparound)
         {
-            ScrollRegionUp(_scrollTop, _scrollBottom, 1);
-            return;
+            long withinRow = col - left;
+            if (remaining <= withinRow)
+            {
+                col -= (int)remaining;
+                remaining = 0;
+            }
+
+            if (remaining > 0)
+            {
+                int top = row >= _scrollTop && row <= _scrollBottom ? _scrollTop : 0;
+                int bottom = row >= _scrollTop && row <= _scrollBottom ? _scrollBottom : Rows - 1;
+                long width = right - left + 1L;
+                long regionHeight = bottom - top + 1L;
+                long position = (row - top) * width + col - left;
+                long cycle = width * regionHeight;
+                position = (position - remaining % cycle + cycle) % cycle;
+                row = top + (int)(position / width);
+                col = left + (int)(position % width);
+            }
+        }
+        else
+        {
+            int top = row >= _scrollTop && row <= _scrollBottom ? _scrollTop : 0;
+            while (remaining > 0)
+            {
+                long withinRow = col - left;
+                if (remaining <= withinRow)
+                {
+                    col -= (int)remaining;
+                    break;
+                }
+
+                remaining -= withinRow + 1;
+                if (!_autoWrap || !_reverseWraparound || row <= top
+                    || !ActiveBuffer.GetRowContinuesPrevious(row))
+                {
+                    col = left;
+                    break;
+                }
+
+                row--;
+                col = right;
+            }
         }
 
-        // If the cursor has escaped below the scroll-bottom, ignore LF.
-        // Some apps (Neovim) intentionally write the statusline on the last
-        // row which is outside the scroll region and expect LF to be ignored.
-        if (_cursor.Row > _scrollBottom)
-        {
-            return;
-        }
-
-        // Otherwise behave like a normal line feed (move cursor down).
-        _cursor.MoveBy(1, 0, Rows, Columns);
-        ActiveBuffer.ClearRowContinuation(_cursor.Row);
+        _cursor.Set(row, col, Rows, Columns);
     }
-    public void ReverseIndex()
-    {
-        if (_cursor.Row == _scrollTop)
-        {
-            ScrollDownLines(1);
-            ActiveBuffer.ClearRowContinuation(_cursor.Row);
-            return;
-        }
 
-        if (_cursor.Row <= _scrollBottom)
-        {
-            _cursor.MoveBy(-1, 0, Rows, Columns);
-            ActiveBuffer.ClearRowContinuation(_cursor.Row);
-        }
-    }
 
     public void EraseLine(int mode)
     {
-        _eraser.EraseLine(ActiveBuffer, _cursor, Columns, mode);
+        _eraser.EraseLine(ActiveBuffer, _cursor, Columns, mode, RespectIsoProtection);
+        MarkRowDirty(_cursor.Row);
+    }
+
+    internal void EraseLineSelective(int mode)
+    {
+        _eraser.EraseLine(ActiveBuffer, _cursor, Columns, mode, respectProtection: !RespectIsoProtection);
         MarkRowDirty(_cursor.Row);
     }
 
@@ -832,20 +1094,9 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (count <= 0) return;
         int row = _cursor.Row;
         int col = _cursor.Col;
-        int cols = Columns;
-        // Shift cells to the right
-        for (int c = cols - 1; c >= col + count; c--)
-        {
-            ref var dst = ref ActiveBuffer.GetCellRef(row, c);
-            var src = ActiveBuffer.GetCell(row, c - count);
-            dst = src;
-            var srcCold = ActiveBuffer.GetColdCell(row, c - count);
-            ActiveBuffer.GetColdCellRef(row, c) = srcCold;
-        }
-        // Clear inserted region
-        ActiveBuffer.ClearColumns(row, col, col + count);
-        // Clean orphaned continuations in the shifted range
-        CleanRowContinuations(row, col + count, cols);
+        int right = EffectiveRightMargin;
+        if (col < EffectiveLeftMargin || col > right) return;
+        ActiveBuffer.InsertColumns(row, col, right, count);
         MarkRowDirty(row);
     }
 
@@ -854,45 +1105,89 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         if (count <= 0) return;
         int row = _cursor.Row;
         int col = _cursor.Col;
-        int cols = Columns;
-        int endShift = cols - count;
-        for (int c = col; c < endShift; c++)
-        {
-            ref var dst = ref ActiveBuffer.GetCellRef(row, c);
-            var src = ActiveBuffer.GetCell(row, c + count);
-            dst = src;
-            var srcCold = ActiveBuffer.GetColdCell(row, c + count);
-            ActiveBuffer.GetColdCellRef(row, c) = srcCold;
-        }
-        // Clear trailing cells
-        ActiveBuffer.ClearColumns(row, Math.Max(0, endShift), cols);
-        // Clean orphaned continuations in the copied range
-        CleanRowContinuations(row, col, cols);
+        int right = EffectiveRightMargin;
+        if (col < EffectiveLeftMargin || col > right) return;
+        ActiveBuffer.DeleteColumns(row, col, right, count);
         MarkRowDirty(row);
     }
 
-    private void CleanRowContinuations(int row, int startCol, int endCol)
+    public void InsertColumns(int count) => EditColumnsAtCursor(count, insert: true);
+
+    public void DeleteColumns(int count) => EditColumnsAtCursor(count, insert: false);
+
+    /// <summary>Moves the cursor left, or shifts the horizontal scroll region right at its left margin.</summary>
+    public void BackIndex()
     {
-        var buf = ActiveBuffer;
-        for (int c = startCol; c < endCol && c < Columns; c++)
+        int left = EffectiveLeftMargin;
+        if (_cursor.Col != left)
         {
-            ref var cell = ref buf.GetCellRef(row, c);
-            if (!cell.IsContinuation) continue;
-            bool valid = c > 0;
-            if (valid)
+            MoveCursorBack(1);
+            return;
+        }
+        if (_cursor.Row < _scrollTop || _cursor.Row > _scrollBottom)
+            return;
+
+        EditColumnRegion(left, EffectiveRightMargin, 1, insert: true);
+    }
+
+    /// <summary>Moves the cursor right, or shifts the horizontal scroll region left at its right margin.</summary>
+    public void ForwardIndex()
+    {
+        int right = EffectiveRightMargin;
+        if (_cursor.Col != right)
+        {
+            MoveCursorBy(0, 1);
+            return;
+        }
+        if (_cursor.Row < _scrollTop || _cursor.Row > _scrollBottom)
+            return;
+
+        EditColumnRegion(EffectiveLeftMargin, right, 1, insert: false);
+    }
+
+    private void EditColumnsAtCursor(int count, bool insert)
+    {
+        if (count <= 0) return;
+        int row = _cursor.Row;
+        int col = _cursor.Col;
+        int right = EffectiveRightMargin;
+        if (row < _scrollTop || row > _scrollBottom
+            || col < EffectiveLeftMargin || col > right)
+            return;
+
+        count = (int)Math.Min((long)count, (long)right - col + 1);
+        EditColumnRegion(col, right, count, insert);
+    }
+
+    private void EditColumnRegion(int left, int right, int count, bool insert)
+    {
+        bool followingRowHasLink = _scrollBottom + 1 < Rows
+            && ActiveBuffer.GetRowContinuesPrevious(_scrollBottom + 1);
+        for (int row = _scrollTop; row <= _scrollBottom; row++)
+        {
+            if (insert)
+                ActiveBuffer.InsertColumns(row, left, right, count);
+            else
             {
-                var prev = buf.GetCellRef(row, c - 1);
-                valid = !prev.IsContinuation && prev.Rune != 0 && prev.Width == 2;
-            }
-            if (!valid)
-            {
-                cell.Reset();
-                buf.GetColdCellRef(row, c).Reset();
+                ActiveBuffer.DeleteColumns(row, left, right, count);
+                if (row + 1 < Rows)
+                    ActiveBuffer.ClearRowContinuation(row + 1);
             }
         }
-        ActiveBuffer.RecalculateRowMaxCol(row);
-        ActiveBuffer.RecalculateRowEndCol(row);
+
+        NotifyColumnsScrolled(left, right, insert ? -count : count);
+        MarkRowRangeDirty(_scrollTop, _scrollBottom - _scrollTop + 1);
+        if (followingRowHasLink && !ActiveBuffer.GetRowContinuesPrevious(_scrollBottom + 1))
+            MarkRowDirty(_scrollBottom + 1);
     }
+
+    private void NotifyColumnsScrolled(int left, int right, int delta)
+    {
+        if (_screens.ActiveImages is { HasPlacements: true } images
+            && images.OnColumnsScrolled(_scrollTop, _scrollBottom, left, right, delta, Rows) != 0)
+            BumpGraphicsGeneration();
+    }
+
 
     public void EraseCharacters(int count)
     {
@@ -900,65 +1195,83 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
         int row = _cursor.Row;
         int start = Math.Clamp(_cursor.Col, 0, Columns - 1);
-        int endExclusive = Math.Min(Columns, start + count);
+        // Saturated parameters (CSI 99999999999 X) must not overflow start + count.
+        int endExclusive = (int)Math.Min((long)Columns, (long)start + count);
 
-        ActiveBuffer.ClearColumns(row, start, endExclusive);
+        if (RespectIsoProtection)
+            ActiveBuffer.ClearUnprotectedColumns(row, start, endExclusive);
+        else
+            ActiveBuffer.ClearColumns(row, start, endExclusive);
 
         MarkRowDirty(row);
     }
 
-    public void InsertLines(int count)
-    {
-        if (count <= 0) return;
-        int top = _scrollTop;
-        int bottom = _scrollBottom;
-        int row = Math.Clamp(_cursor.Row, top, bottom);
-        int regionHeight = bottom - row + 1;
-        if (count >= regionHeight)
-        {
-            // clear region: every row is exposed; use ClearRow (vectorized)
-            // instead of per-cell ClearCell which does 2× row scan per cell.
-            for (int r = row; r <= bottom; r++)
-                ActiveBuffer.ClearRow(r);
-            MarkRowRangeDirty(row, bottom - row + 1);
-            return;
-        }
-        // Row memmoves carry cell content and row metadata together.
-        ActiveBuffer.ShiftRegionDown(row, bottom, count);
-        BumpIdentity(row, regionHeight);
-    }
+    public void InsertLines(int count) => InsertOrDeleteLines(count, insert: true);
 
-    public void DeleteLines(int count)
+    public void DeleteLines(int count) => InsertOrDeleteLines(count, insert: false);
+
+    private void InsertOrDeleteLines(int count, bool insert)
     {
         if (count <= 0) return;
-        int top = _scrollTop;
+        int row = _cursor.Row;
         int bottom = _scrollBottom;
-        int row = Math.Clamp(_cursor.Row, top, bottom);
-        int regionHeight = bottom - row + 1;
-        if (count >= regionHeight)
+        int left = EffectiveLeftMargin;
+        int right = EffectiveRightMargin;
+        if (row < _scrollTop || row > bottom || _cursor.Col < left || _cursor.Col > right)
+            return;
+
+        int height = bottom - row + 1;
+        count = Math.Min(count, height);
+        bool partialWidth = left != 0 || right != Columns - 1;
+        int delta = insert ? -count : count;
+        if (partialWidth)
         {
-            // clear region: every row is exposed; use ClearRow (vectorized)
+            ActiveBuffer.ScrollRectangle(row, bottom, left, right, delta);
+        }
+        else if (count == height)
+        {
             for (int r = row; r <= bottom; r++)
                 ActiveBuffer.ClearRow(r);
-            MarkRowRangeDirty(row, bottom - row + 1);
-            return;
+            ActiveBuffer.ClearRowContinuation(bottom + 1);
         }
-        // Row memmoves carry cell content and row metadata together; deleted
-        // rows are discarded, never pushed into scrollback.
-        ActiveBuffer.ShiftRegionUp(row, bottom, count);
-        BumpIdentity(row, regionHeight);
+        else if (insert)
+        {
+            ActiveBuffer.ShiftRegionDown(row, bottom, count);
+        }
+        else
+        {
+            ActiveBuffer.ShiftRegionUp(row, bottom, count);
+        }
+
+        if (_screens.ActiveImages is { HasPlacements: true } images)
+        {
+            int changed = partialWidth
+                ? images.OnRectangleScrolled(row, bottom, left, right, delta, Rows)
+                : images.OnRegionScrolled(row, bottom, delta, Rows);
+            if (changed != 0)
+                BumpGraphicsGeneration();
+        }
+        BumpIdentity(row, height);
     }
 
     public void EraseDisplay(int mode)
     {
-        var reset = _eraser.EraseDisplay(ActiveBuffer, _cursor, Rows, Columns, mode);
+        var reset = _eraser.EraseDisplay(ActiveBuffer, _cursor, Rows, Columns, mode, RespectIsoProtection, selective: false);
         if (reset)
         {
             _cursor.Reset();
         }
         if (mode == 2)
         {
+            _totalScrolled = 0;
             MarkAllRowsDirty();
+            // ED 2 discards history and image placements even when ISO-protected text survives.
+            DiscardGraphicsHistory(wholeRing: true);
+            if (!_isAlternate)
+            {
+                BumpCoordinateEpoch();
+                RaiseHistoryInvalidated(HistoryDiscardReason.Cleared);
+            }
         }
         else if (mode == 0)
         {
@@ -968,6 +1281,17 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
         {
             MarkRowRangeDirty(0, _cursor.Row + 1);
         }
+    }
+
+    internal void EraseDisplaySelective(int mode)
+    {
+        _eraser.EraseDisplay(ActiveBuffer, _cursor, Rows, Columns, mode, respectProtection: !RespectIsoProtection, selective: true);
+        if (mode == 2)
+            MarkAllRowsDirty();
+        else if (mode == 0)
+            MarkRowRangeDirty(_cursor.Row, Rows - _cursor.Row);
+        else if (mode == 1)
+            MarkRowRangeDirty(0, _cursor.Row + 1);
     }
 
     public void WriteText(ReadOnlySpan<char> text, string? foreground, string? background = null, bool bold = false)
@@ -1021,31 +1345,12 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
 
     public string GetRowText(int row)
     {
-        using var sb = ZStr.CreateStringBuilder(Columns);
         var buf = _screens.Active;
-        for (int j = 0; j < Columns; j++)
-        {
-            var cell = buf.GetCell(row, j);
-            var cold = buf.GetColdCell(row, j);
-            if (cell.IsContinuation)
-            {
-                sb.Append(' ');
-            }
-            else
-            {
-                var grapheme = GraphemeHelper.Resolve(cell.Rune, cold.GraphemeIndex);
-                if (string.IsNullOrEmpty(grapheme))
-                {
-                    sb.Append(' ');
-                }
-                else
-                {
-                    sb.Append(grapheme);
-                }
-            }
-        }
-
-        return sb.ToString();
+        var hot = buf.GetRowCells(row);
+        // An out-of-range row reads as blank cells (as GetCell reports for it).
+        if (hot.IsEmpty)
+            return new string(' ', Columns);
+        return RowText.Build(hot, buf.GetRowColdCells(row), 0, Columns - 1, ContinuationPolicy.SpaceCell);
     }
 
     private BufferTextWriter CreateWriter()
@@ -1132,8 +1437,11 @@ public partial class TerminalBuffer : IRenderSource, IDisposable
     public void ClearScreen()
     {
         _screens.ClearAll();
+        BumpCoordinateEpoch();
+        DiscardAllGraphicsPlacements();
         _cursor.Reset();
         MarkAllRowsDirty();
+        RaiseHistoryInvalidated(HistoryDiscardReason.Reset);
     }
 
     public string GetDebugInfo()

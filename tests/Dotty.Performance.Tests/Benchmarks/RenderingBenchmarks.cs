@@ -33,9 +33,9 @@ public class RenderingBenchmarks : PerformanceTestBase
     private readonly int[] _cursorRows = new int[100];
     private readonly int[] _cursorColumns = new int[100];
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
 
         _parser80x24 = CreateParser(24, 80);
         _parser120x40 = CreateParser(40, 120);

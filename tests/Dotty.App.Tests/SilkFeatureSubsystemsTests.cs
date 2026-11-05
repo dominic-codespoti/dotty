@@ -283,19 +283,6 @@ public class SearchEngineSubsystemTests
     }
 }
 
-public class FontFallbackSubsystemTests
-{
-    [Fact]
-    public void FontFallbackChain_ResolvesFallbackForMissingGlyph()
-    {
-        var primary = SKTypeface.Default;
-        var chain = new FontFallbackChain(primary);
-
-        var resolved = chain.ResolveTypefaceForGrapheme("A", bold: false);
-        Assert.NotNull(resolved);
-    }
-}
-
 public class HyperlinkSubsystemTests
 {
     [Fact]

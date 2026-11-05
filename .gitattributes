@@ -1,0 +1,2 @@
+# Shell-integration scripts are executed by bash/zsh/fish: CRLF breaks them (notably zsh/bash on Windows checkouts).
+shell-integration/** text eol=lf

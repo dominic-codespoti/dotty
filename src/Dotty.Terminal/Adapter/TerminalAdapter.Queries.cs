@@ -9,24 +9,12 @@ public partial class TerminalAdapter
 {
     public void OnRequestMode(int mode, bool isPrivate)
     {
-        // DECRQM: 1=set, 2=reset, 3=permanently set, 4=permanently reset, 0=not recognized.
-        // Only modes Dotty actually tracks report set/reset; everything else is 0.
-        int state = (mode, isPrivate) switch
-        {
-            (1, true) => ApplicationCursorKeysEnabled ? 1 : 2, // DECCKM
-            (6, true) => _buffer.OriginMode ? 1 : 2, // DECOM
-            (7, true) => _buffer.AutoWrap ? 1 : 2, // DECAWM
-            (25, true) => _buffer.CursorVisible ? 1 : 2, // DECTCEM
-            (1000, true) => CurrentMouseMode == MouseMode.Normal ? 1 : 2,
-            (1002, true) => CurrentMouseMode == MouseMode.ButtonEvent ? 1 : 2,
-            (1003, true) => CurrentMouseMode == MouseMode.AnyEvent ? 1 : 2,
-            (1004, true) => FocusReportingEnabled ? 1 : 2,
-            (1006, true) => CurrentMouseEncoding == MouseEncoding.SGR ? 1 : 2,
-            (1049, true) => _buffer.IsAlternateScreenActive ? 1 : 2,
-            (2004, true) => _buffer.BracketedPasteMode ? 1 : 2,
-            (2026, true) => SynchronizedUpdateActive ? 1 : 2,
-            _ => 0,
-        };
+        if (_conformanceLevel < 3)
+            return;
+
+        // DECRQM: 1=set, 2=reset, 3=permanently set, 4=permanently reset.
+        // The status table lives in TerminalAdapter.ModeReports.cs.
+        int state = GetModeStatus(mode, isPrivate);
         var handler = ReplyRequested;
         if (handler is null)
             return;
@@ -64,7 +52,7 @@ public partial class TerminalAdapter
     {
         var handler = ReplyRequested;
         if (handler is null || requestHex.IsEmpty) return;
-        Span<char> valueHex = stackalloc char[64];
+        Span<char> valueHex = stackalloc char[128];
         int valueLength = GetCapabilityValueHex(requestHex, valueHex);
         if (valueLength < 0) return;
         int total = 5 + requestHex.Length + 1 + valueLength + 2;
@@ -101,13 +89,13 @@ public partial class TerminalAdapter
         ReadOnlySpan<char> decoded = key[..(requestHex.Length / 2)];
         ReadOnlySpan<char> value = decoded switch
         {
-            _ when decoded.SequenceEqual("TN") => "dotty",
+            _ when decoded.SequenceEqual("TN") => _termName,
             _ when decoded.SequenceEqual("Co") => "256",
             _ when decoded.SequenceEqual("RGB") => "8/8/8",
             _ => ReadOnlySpan<char>.Empty,
         };
         bool isKittyKeyboard = decoded.SequenceEqual("kitty-keyboard");
-        if (value.IsEmpty && !isKittyKeyboard)
+        if (value.IsEmpty && !isKittyKeyboard && !TerminfoCapabilities.TryGetString(decoded, out value))
             return -1;
         if (isKittyKeyboard)
         {

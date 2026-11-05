@@ -14,6 +14,13 @@
     <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
   </PropertyGroup>
 
+  <!-- `dotnet publish -c Release` (the shipped artifacts) resolves pty-helper only from the install layout; every
+       other build, including Release test and CI builds, may also walk the source tree and PATH (PtyHelperLocator).
+       `dotnet publish` sets _IsPublishing as a global property, so referencing projects pass it down. -->
+  <PropertyGroup Condition="'$(_IsPublishing)' == 'true' And '$(Configuration)' == 'Release'">
+    <DefineConstants>$(DefineConstants);DOTTY_PUBLISHED_LAYOUT</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\Dotty.Abstractions\Dotty.Abstractions.csproj" />
   </ItemGroup>
@@ -25,4 +32,15 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
   </ItemGroup>
+
+  <!-- On Linux/macOS every build also builds the POSIX pty-helper (bin/pty-helper) with the checked-in Makefile, so a
+       fresh clone runs and tests without a manual `make` step. Incremental: skipped while the binary is newer than the
+       source. Without a C compiler the build warns instead of failing; `make -C src/Dotty.NativePty` remains the manual
+       path. Set DottySkipPtyHelperBuild=true to opt out. -->
+  <Target Name="BuildUnixPtyHelper" BeforeTargets="Build"
+          Condition="!$([MSBuild]::IsOSPlatform('Windows')) And '$(DottySkipPtyHelperBuild)' != 'true'"
+          Inputs="$(MSBuildProjectDirectory)/pty-helper.c;$(MSBuildProjectDirectory)/Makefile"
+          Outputs="$(MSBuildProjectDirectory)/bin/pty-helper">
+    <Exec Command="make -C &quot;$(MSBuildProjectDirectory)&quot;" ContinueOnError="WarnAndContinue" />
+  </Target>
 </Project>

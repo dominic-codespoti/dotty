@@ -7,6 +7,7 @@ using Dotty.Abstractions.Config;
 using Dotty.Abstractions.Parser;
 using Dotty.Abstractions.Pty;
 using Dotty.NativePty;
+using Dotty.Runtime.Config;
 using Dotty.Terminal.Adapter;
 using Dotty.Terminal.Parser;
 
@@ -59,6 +60,8 @@ public partial class TerminalSession : IDisposable
     private bool _hasReceivedInitialResize = false;
     private int _initialCols = 0;
     private int _initialRows = 0;
+    private int _initialPixelWidth = 0;
+    private int _initialPixelHeight = 0;
     private int _isStarted;
     private int _pendingOutputChunks;
     private long _ptyBytesRead;
@@ -139,7 +142,10 @@ public partial class TerminalSession : IDisposable
     public long PtyBytesParsed => Interlocked.Read(ref _ptyBytesParsed);
 
     public event Action<byte[]>? RawInputReceived;
-    public event Action<string>? ClipboardWriteRequested;
+    public event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
+
+    /// <summary>Raised on the PTY consumer thread for an OSC 52 clipboard query (<c>ESC ] 52 ; c ; ? ST</c>); handlers must not block.</summary>
+    public event Action<Dotty.Abstractions.Clipboard.ClipboardReadRequest>? ClipboardReadRequested;
     public event Action<string>? TitleChanged;
     public event Action? RenderScheduled;
     public event Action? PaletteChanged;
@@ -168,7 +174,7 @@ public partial class TerminalSession : IDisposable
     }
 
     public TerminalSession(int rows = 24, int columns = 80)
-        : this(rows, columns, PtyFactory.Create, checkPtySupport: true)
+        : this(rows, columns, () => PtyFactory.Create(UserConfigService.Current.Graphics.WindowsPassthrough), checkPtySupport: true)
     {
     }
 
@@ -186,17 +192,18 @@ public partial class TerminalSession : IDisposable
         _ptyFactory = ptyFactory ?? throw new ArgumentNullException(nameof(ptyFactory));
         _checkPtySupport = checkPtySupport;
         Parser = new BasicAnsiParser();
-        // The arena is allocated at construction; honor the configured scrollback
-        // depth here so the default (5k) actually applies instead of the
-        // TerminalBuffer fallback (10k).
-        var scrollbackLines = DottyDefaults.ScrollbackLines;
-        if (scrollbackLines <= 0)
-            scrollbackLines = 5000;
-        Adapter = new TerminalAdapter(rows: rows, columns: columns, scrollbackCapacity: scrollbackLines);
+        // The arena is allocated at construction, so the configured scrollback policy is resolved here; a later
+        // config change only affects sessions created afterwards. The buffer keeps the policy: under a byte cap the
+        // history capacity is recomputed for the new size on every resize.
+        ScrollbackPolicy scrollbackPolicy = UserConfigService.Current.Scrollback.ToPolicy();
+        Adapter = new TerminalAdapter(rows: rows, columns: columns, scrollbackPolicy: scrollbackPolicy);
+        Adapter.SetTerminalIdentity(DottyVersion.Describe(), TerminalAdapter.DefaultTermName);
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;
-        Adapter.ClipboardWriteRequested += text => ClipboardWriteRequested?.Invoke(text);
+        Adapter.RawReplyBytesRequested += OnAdapterRawReplyBytesRequested;
+        Adapter.ClipboardWriteRequested += request => ClipboardWriteRequested?.Invoke(request);
+        Adapter.ClipboardReadRequested += request => ClipboardReadRequested?.Invoke(request);
         Adapter.TitleChanged += title => TitleChanged?.Invoke(title);
         Adapter.PaletteChanged += () => PaletteChanged?.Invoke();
     }
@@ -217,8 +224,14 @@ public partial class TerminalSession : IDisposable
             LaunchShellIsExecutable = false;
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
+            _initialPixelWidth = 0;
+            _initialPixelHeight = 0;
             _hasReceivedInitialResize = false;
-            _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows, workingDirectory: LaunchWorkingDirectory);
+            ShellLaunch integration = PrepareShellIntegration(shell, false, null);
+            TermSelection term = SelectTerm();
+            _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows, workingDirectory: LaunchWorkingDirectory,
+                       environmentVariables: BuildLaunchEnvironment(null, integration.Environment, term),
+                       command: integration.Command);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }
@@ -229,12 +242,23 @@ public partial class TerminalSession : IDisposable
         }
     }
 
+    /// <summary>Starts the session's PTY with a shell or command; later calls do nothing.</summary>
+    /// <param name="shell">Shell executable or legacy shell command; null selects the platform default.</param>
+    /// <param name="workingDirectory">Initial child working directory, or null for the default.</param>
+    /// <param name="environmentVariables">Optional additional child environment variables.</param>
+    /// <param name="command">Optional exact argv to execute directly, including argv[0].</param>
+    /// <param name="shellIsExecutable">True when <paramref name="shell"/> is a literal executable path.</param>
+    /// <param name="initialPixelWidth">Text-area width in physical pixels the PTY starts with (so the child's first
+    /// <c>TIOCGWINSZ</c> already reports it), or 0 when unknown.</param>
+    /// <param name="initialPixelHeight">Text-area height in physical pixels, or 0 when unknown.</param>
     public void StartWithOptions(
         string? shell = null,
         string? workingDirectory = null,
         IDictionary<string, string>? environmentVariables = null,
         IReadOnlyList<string>? command = null,
-        bool shellIsExecutable = false)
+        bool shellIsExecutable = false,
+        int initialPixelWidth = 0,
+        int initialPixelHeight = 0)
     {
         if (!BeginStart()) return;
         try
@@ -251,10 +275,16 @@ public partial class TerminalSession : IDisposable
             LaunchWorkingDirectory = Path.GetFullPath(workingDirectory ?? GetDefaultLaunchWorkingDirectory());
             _initialCols = Adapter.Buffer?.Columns ?? 80;
             _initialRows = Adapter.Buffer?.Rows ?? 24;
+            _initialPixelWidth = Math.Max(0, initialPixelWidth);
+            _initialPixelHeight = Math.Max(0, initialPixelHeight);
             _hasReceivedInitialResize = false;
+            ShellLaunch integration = PrepareShellIntegration(shell, shellIsExecutable, command);
+            TermSelection term = SelectTerm();
             _pty.Start(shell: shell, columns: _initialCols, rows: _initialRows,
-                       workingDirectory: LaunchWorkingDirectory, environmentVariables: environmentVariables,
-                       command: command, shellIsExecutable: shellIsExecutable);
+                       workingDirectory: LaunchWorkingDirectory,
+                       environmentVariables: BuildLaunchEnvironment(environmentVariables, integration.Environment, term),
+                       command: integration.Command ?? command, shellIsExecutable: shellIsExecutable,
+                       initialPixelWidth: _initialPixelWidth, initialPixelHeight: _initialPixelHeight);
             _readCancellation = new CancellationTokenSource();
             StartPtyPipeline(_readCancellation.Token);
         }
@@ -369,6 +399,32 @@ public partial class TerminalSession : IDisposable
         if (_disposed || data.IsEmpty || _pty?.InputStream == null) return;
         QueuePtyInputWrite(data);
     }
+    /// <summary>
+    /// Routes bytes originating from user keyboard/text/paste input. Unlike <see cref="WriteInput"/>, this path
+    /// honors KAM and locally echoes the exact serialized bytes through the normal terminal parser when SRM is set.
+    /// Protocol replies and reports must continue to use <see cref="WriteInput"/> directly.
+    /// </summary>
+    public void WriteUserInput(ReadOnlySpan<byte> data)
+    {
+        if (_disposed || data.IsEmpty || _pty?.InputStream == null)
+            return;
+
+        var buffer = Adapter.Buffer;
+        bool echo;
+        lock (buffer.SyncRoot)
+        {
+            if (Adapter.KeyboardActionModeLocked)
+                return;
+            echo = Adapter.LocalEchoEnabled;
+            if (echo)
+                Parser.Feed(data);
+        }
+
+        QueuePtyInputWrite(data);
+        if (echo)
+            Adapter.FlushRender();
+    }
+
 
     public void SendFocusReport(bool focused)
     {
@@ -385,6 +441,11 @@ public partial class TerminalSession : IDisposable
     {
         if (!reply.IsEmpty)
             QueuePtyInputAsciiWrite(reply);
+    }
+    private void OnAdapterRawReplyBytesRequested(ReadOnlyMemory<byte> reply)
+    {
+        if (!reply.IsEmpty)
+            QueuePtyInputWrite(reply.Span);
     }
 
     private void QueuePtyInputWrite(ReadOnlySpan<byte> data)
@@ -589,8 +650,15 @@ public partial class TerminalSession : IDisposable
         }
     }
 
-    public void Resize(int cols, int rows)
+    /// <summary>
+    /// Resizes the grid and forwards the size to the PTY. <paramref name="pixelWidth"/>/<paramref name="pixelHeight"/>
+    /// are the physical pixel size of the text area (0 when unknown); a pixel-only change (zoom, DPI)
+    /// is forwarded even when the grid is unchanged so <c>TIOCGWINSZ</c> stays accurate.
+    /// </summary>
+    public void Resize(int cols, int rows, int pixelWidth, int pixelHeight)
     {
+        if (pixelWidth < 0) pixelWidth = 0;
+        if (pixelHeight < 0) pixelHeight = 0;
         try
         {
             lock (Adapter.Buffer.SyncRoot)
@@ -603,16 +671,21 @@ public partial class TerminalSession : IDisposable
         if (!_hasReceivedInitialResize)
         {
             _hasReceivedInitialResize = true;
-            if (cols == _initialCols && rows == _initialRows) return;
+            if (cols == _initialCols && rows == _initialRows
+                && pixelWidth == _initialPixelWidth && pixelHeight == _initialPixelHeight)
+                return;
         }
 
-        if (cols != _initialCols || rows != _initialRows)
+        if (cols != _initialCols || rows != _initialRows
+            || pixelWidth != _initialPixelWidth || pixelHeight != _initialPixelHeight)
         {
             try
             {
-                _pty?.Resize(cols, rows);
+                _pty?.Resize(cols, rows, pixelWidth, pixelHeight);
                 _initialCols = cols;
                 _initialRows = rows;
+                _initialPixelWidth = pixelWidth;
+                _initialPixelHeight = pixelHeight;
             }
             catch { }
         }
@@ -954,6 +1027,7 @@ public partial class TerminalSession : IDisposable
         _ptyOutputSpaceAvailable.Set();
         _ptyOutputAvailable.Set();
         try { Adapter.ReplyRequested -= OnAdapterReplyRequested; } catch { }
+        try { Adapter.RawReplyBytesRequested -= OnAdapterRawReplyBytesRequested; } catch { }
         try { if (_pty != null) _pty.ProcessExited -= OnPtyProcessExited; } catch { }
         try { _pty?.Dispose(); } catch { }
         if (!onInputThread)

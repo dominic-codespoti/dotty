@@ -48,6 +48,46 @@ public sealed class QueryAllocationTests
         AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001bP+q544E;436F\u001b\\"));
 
     [Fact]
+    public void RepeatedXtgettcapTerminfoCapabilityQueryDoesNotAllocate() =>
+        AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001bP+q53796E63;5373\u001b\\")); // Sync;Ss
+
+    [Fact]
+    public void RepeatedIdentityQueriesDoNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b[>q"),
+            Encoding.UTF8.GetBytes("\u001b[>0q"),
+            Encoding.UTF8.GetBytes("\u001b[>c"));
+
+    [Fact]
     public void RepeatedModifyOtherKeysSetResetDoesNotAllocate() =>
         AssertNoAllocations(CreateParser(), Encoding.UTF8.GetBytes("\u001b[>4;1m"), Encoding.UTF8.GetBytes("\u001b[>4;0m"), Encoding.UTF8.GetBytes("\u001b[>4m"));
+
+    [Fact]
+    public void RepeatedApcPmSosDiscardDoesNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b_Gi=31,s=1,v=1,a=q;AAAAAAAAAAAAAAAAAAAAAAAA\u001b\\"),
+            Encoding.UTF8.GetBytes("\u001b^privacy\u001b\\"),
+            Encoding.UTF8.GetBytes("\u001bXstart\u001b\\"));
+
+    [Fact]
+    public void RepeatedRoutedCsiHooksDoNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b[!p"),
+            Encoding.UTF8.GetBytes("\u001b[?998n"),
+            Encoding.UTF8.GetBytes("\u001b[8;24;80t"),
+            Encoding.UTF8.GetBytes("\u001b[7;1;1;1;1;2*y"),
+            Encoding.UTF8.GetBytes("\u001b[?2027h"));
+
+    [Fact]
+    public void RepeatedDecrqmTableQueriesDoNotAllocate() =>
+        AssertNoAllocations(
+            CreateParser(),
+            Encoding.UTF8.GetBytes("\u001b[?2027$p"),
+            Encoding.UTF8.GetBytes("\u001b[?2033$p"),
+            Encoding.UTF8.GetBytes("\u001b[?1049$p"),
+            Encoding.UTF8.GetBytes("\u001b[?4294967303$p"),
+            Encoding.UTF8.GetBytes("\u001b[12$p"));
 }

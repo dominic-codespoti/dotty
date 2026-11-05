@@ -22,15 +22,13 @@ public static class SilkGlShaders
         flat out vec4 vBg;
         out vec2 vUv;
         out vec2 vColorUv;
-        out float vCornerY;
         flat out uint vFlags;
+        flat out vec2 vClipY;
         const uint FLAG_WIDE = 2u;      // CellFlags.WideCell
-        const uint FLAG_DECOR = 128u;   // CellFlags.DecorOnly
 
         void main()
         {
             bool wide = (aFlags & FLAG_WIDE) != 0u;
-            vCornerY = aCorner.y;
             vec2 cell = vec2(uCellPx.x * (wide ? 2.0 : 1.0), uCellPx.y);
             vec2 origin = aGridPx;
             vec2 size = cell;
@@ -39,7 +37,7 @@ public static class SilkGlShaders
                 // Atlas coverage is rasterized at device-pixel positions.
                 // Snap only the destination origin; keeping the atlas-derived
                 // size unchanged preserves its 1:1 dimensions.
-                origin += vec2(aMetrics.z, aMetrics.y - aMetrics.w);
+                origin += vec2(aMetrics.z, aMetrics.y);
                 origin = floor(origin + vec2(0.5));
                 size = aAtlasPx.zw;
                 vUv = (aAtlasPx.xy + aCorner * size) / uAtlasSize;
@@ -61,11 +59,12 @@ public static class SilkGlShaders
                              1.0 - 2.0 * p.y / uFramebufferPx.y);
             gl_Position = vec4(clip, 0.0, 1.0);
             // QuadFrameBuilder resolves inverse colors before upload. Keep the
-            // shader pass focused on coverage and decoration, so inverse
-            // video is not applied a second time.
+            // shader pass focused on coverage, so inverse video is not applied
+            // a second time.
             vFg = aFg;
             vBg = aBg;
             vFlags = aFlags;
+            vClipY = vec2(aMetrics.x, aMetrics.w);
         }
         """;
 
@@ -74,43 +73,65 @@ public static class SilkGlShaders
         uniform sampler2D uColorAtlas;
         uniform sampler2D uAtlas;
         uniform int uPass;
-        uniform float uUnderlineY;   // fraction of cell height
-        uniform float uStrikeY;
-        uniform float uLineHalf;     // half thickness, fraction
         flat in vec4 vFg;
         flat in vec4 vBg;
         in vec2 vUv;
         in vec2 vColorUv;
-        in float vCornerY;
         flat in uint vFlags;
+        flat in vec2 vClipY;
+        uniform vec2 uFramebufferPx;
         out vec4 fragColor;
-        const uint FLAG_DECOR = 128u;   // CellFlags.DecorOnly
-        const uint FLAG_UNDERLINE = 8u;
-        const uint FLAG_STRIKE = 16u;
-        const uint FLAG_OVERLINE = 32u;
         const uint FLAG_COLOR_GLYPH = 64u;
+
+        // Coverage correction (text.blending); mirrors CoverageCorrection.Correct in Dotty.Rendering.Gpu.
+        // 0 native (coverage unchanged), 1 linear, 2 linear-corrected with uTextContrast.
+        uniform int uTextBlend;
+        uniform float uTextContrast;
+        float srgbToLinear(float c)
+        {
+            c = clamp(c, 0.0, 1.0);
+            return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4);
+        }
+        float linearToSrgb(float l)
+        {
+            l = clamp(l, 0.0, 1.0);
+            return l <= 0.0031308 ? l * 12.92 : 1.055 * pow(l, 1.0 / 2.4) - 0.055;
+        }
+        float luminance(vec3 c)
+        {
+            return 0.2126 * srgbToLinear(c.r) + 0.7152 * srgbToLinear(c.g) + 0.0722 * srgbToLinear(c.b);
+        }
+        float correctCoverage(float coverage, vec3 fg, vec3 bg)
+        {
+            float a = clamp(coverage, 0.0, 1.0);
+            float fgLuma = luminance(fg);
+            float bgLuma = luminance(bg);
+            float pf = linearToSrgb(fgLuma);
+            float pb = linearToSrgb(bgLuma);
+            float d = pf - pb;
+            if (abs(d) >= 1.0 / 255.0)
+            {
+                float target = linearToSrgb(bgLuma + (fgLuma - bgLuma) * a);
+                a = clamp((target - pb) / d, 0.0, 1.0);
+            }
+            if (uTextBlend == 2)
+            {
+                float k = clamp(uTextContrast, 0.0, 1.0) * clamp(0.5 + 0.5 * (pb - pf), 0.0, 1.0);
+                a = clamp(a + k * a * (1.0 - a), 0.0, 1.0);
+            }
+            return a;
+        }
 
         void main()
         {
+            if (vClipY.y > vClipY.x) {
+                float screenY = uFramebufferPx.y - gl_FragCoord.y;
+                if (screenY < vClipY.x || screenY >= vClipY.y) discard;
+            }
             if (uPass == 0) {
                 if (vBg.a <= 0.001) discard;
                 fragColor = vec4(vBg.rgb * vBg.a, vBg.a);
                 return;
-            }
-            if ((vFlags & FLAG_DECOR) != 0u)
-            {
-                // Decoration-only instance: the quad covers the cell; draw
-                // the bars at their metric fractions, discard elsewhere.
-                if ((vFlags & FLAG_UNDERLINE) != 0u &&
-                    abs(vCornerY - uUnderlineY) <= uLineHalf)
-                { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
-                if ((vFlags & FLAG_STRIKE) != 0u &&
-                    abs(vCornerY - uStrikeY) <= uLineHalf)
-                { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
-                if ((vFlags & FLAG_OVERLINE) != 0u &&
-                    abs(vCornerY) <= uLineHalf)
-                { fragColor = vec4(vFg.rgb * vFg.a, vFg.a); return; }
-                discard;
             }
             if ((vFlags & FLAG_COLOR_GLYPH) != 0u) {
                 vec4 colorGlyph = texture(uColorAtlas, vColorUv);
@@ -119,6 +140,7 @@ public static class SilkGlShaders
             } else {
                 float coverage = texture(uAtlas, vUv).r;
                 if (coverage <= 0.001) discard;
+                if (uTextBlend != 0) coverage = correctCoverage(coverage, vFg.rgb, vBg.rgb);
                 fragColor = vec4(vFg.rgb * coverage * vFg.a, coverage * vFg.a);
             }
         }

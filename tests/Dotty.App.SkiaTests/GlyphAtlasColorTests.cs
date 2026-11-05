@@ -25,7 +25,7 @@ public sealed class GlyphAtlasColorTests
         using var colorAtlas = new GlyphAtlas(colorTypeface!, 20f, initialSize: 128);
         long bytesBeforeColorGlyph = colorAtlas.SizeBytes;
         Assert.True(colorAtlas.EnsureGlyph(
-            new GlyphKey("😀", colorTypeface!, 20f, bold: false), out GlyphInfo colorGlyph));
+            new GlyphKey("😀", colorTypeface!, 20f, GlyphStyle.Regular), out GlyphInfo colorGlyph));
         Assert.True(colorGlyph.IsColor);
         Assert.True(GlyphAtlas.IntrinsicColorProbeScratchBytes > 0);
         var buffer = new TerminalBuffer(rows: 1, columns: 2);
@@ -63,7 +63,7 @@ public sealed class GlyphAtlasColorTests
 
         using var monoAtlas = new GlyphAtlas(SKTypeface.Default, 16f, initialSize: 128);
         Assert.True(monoAtlas.EnsureGlyph(
-            new GlyphKey("A", SKTypeface.Default, 16f, bold: false), out GlyphInfo monoGlyph));
+            new GlyphKey("A", SKTypeface.Default, 16f, GlyphStyle.Regular), out GlyphInfo monoGlyph));
         Assert.False(monoGlyph.IsColor);
         Assert.Null(monoAtlas.ColorAtlasBitmap);
         Assert.Equal(128 * 128, monoAtlas.SizeBytes);

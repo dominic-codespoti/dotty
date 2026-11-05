@@ -24,23 +24,15 @@ Available built-in names:
 
 ## Transparency
 
-Window opacity is configured with `window.opacity` in `config.json`:
-
-```json
-{
-  "theme": "DarkPlus",
-  "window": { "opacity": 0.9 }
-}
-```
-
-Opacity affects the whole window. The current host does not expose
-platform-specific transparency or blur APIs; actual compositor behavior can vary
-by platform.
+A theme's `opacity` (0–1) multiplies `window.opacity`; only the default
+background becomes translucent, text and chrome stay opaque (see
+[Configuration](Configuration.md#window)). The window must start translucent:
+the alpha framebuffer is a creation-time hint, so a theme that becomes
+translucent later (for example through `themeAuto`) stays opaque until restart.
+There is no blur support.
 
 ---
 
-Use values between `0` and `1`; `1` is fully opaque. Lower opacity can reduce
-readability, so test it with the desktop background and font colors you use.
 User-defined color themes are JSON files in `<config-directory>/themes`; see
 [Custom Themes](CustomThemeArchitecture.md) for the schema and loader behavior.
 
@@ -481,3 +473,9 @@ normal text and 3:1 for large text.
 ## See Also
 
 - [Configuration Guide](Configuration.md) - Full configuration documentation
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C12: theme `opacity` multiplies `window.opacity` (background only). |

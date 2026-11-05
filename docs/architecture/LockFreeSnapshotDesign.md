@@ -36,9 +36,10 @@ With contention ruled out, the render-path drain penalty decomposes into:
    composition, OpenGL submission, and the desktop compositor. The parser thread
    can be preempted; lock-freedom does not fix preemption.
 2. **Per-frame work.** The visible capture used by the host copies row cell
-   slices, generations, styles, and cursor state; the full capture API also
-   materializes scrollback text for diagnostics. The OpenGL scene builder then
-   resolves every visible row into cell instances.
+   slices, generations, styles, and cursor state; it does not materialize
+   scrollback text. (The former full capture was removed; search uses a
+   separate capture, `CaptureRenderSnapshotForSearch`.) The OpenGL scene builder
+   then resolves every visible row into cell instances.
 3. **Render-thread CPU.** `QuadFrameBuilder` rebuilds visible row instances on
    each presented frame even when flood output leaves many rows
    content-identical. A row-instance cache addresses this cost more directly
@@ -96,8 +97,10 @@ reference swap; renderer never blocks, never retries.
 
 **Tier 0 — remove dead per-frame work (partly present):**
 - `CaptureRenderSnapshotVisible` already copies only visible cell slices and
-  does not materialize scrollback text. The full capture API retains text for
-  diagnostics; do not add it to the visible host capture.
+  does not materialize scrollback text. The full capture API was removed;
+  scrollback text is only captured, as compact cells, by
+  `CaptureRenderSnapshotForSearch` for search. Do not add it to the visible host
+  capture.
 - `CaptureStyles()` still allocates a fresh array per capture. Cache it behind
   a style-generation counter only after measuring the lifetime and ownership
   rules.

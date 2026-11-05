@@ -32,9 +32,59 @@ The configuration table is readable and writable at any depth. Fields exposed to
 | `theme_auto` | boolean | `false` |
 | `selection_color` | string or `nil` | `nil` |
 | `font.family` | string | `"JetBrainsMono Nerd Font Mono, JetBrains Mono, Fira Code, Cascadia Code, monospace"` |
-| `font.size` | number | `14` |
+| `font.size` | number | `11.25` (points) |
 | `font.line_height` | number | `1.25` |
+| `font.adjust_cell_width`, `font.adjust_cell_height` | string | `""` (`"2"` logical px or `"10%"`) |
 | `font.symbol_map` | array of strings | empty |
+| `font.ligatures` | string (`"never"`, `"cursor"`, `"always"`) | `"cursor"` |
+| `font.hinting` | string (`"none"`, `"slight"`, `"normal"`, `"full"`) | `"full"` |
+| `font.antialias` | string (`"gray"`, `"none"`) | `"gray"` |
+| `text.blending` | string (`"native"`, `"linear"`, `"linear-corrected"`) | `"native"` |
+| `text.contrast` | number | `0.5` (0–1, used by `linear-corrected`) |
+| `text.minimum_contrast` | number | `1` (off; WCAG ratio 1–21) |
+| `search.regex`, `search.case_sensitive`, `search.whole_word` | boolean | `false` |
+| `clipboard.allow_osc52_write` | boolean | `false` |
+| `clipboard.osc52_read` | string (`"deny"`, `"ask"`, `"allow"`) | `"deny"` |
+| `clipboard.osc52_read_limit_bytes` | integer | `1048576` (clamped to 1 through 8388608) |
+| `clipboard.confirm_paste` | boolean | `true` |
+| `clipboard.bracketed_paste_is_safe` | boolean | `true` |
+| `bell.attention` | boolean | `true` |
+| `bell.visual` | boolean | `false` |
+| `bell.audible` | boolean | `false` (accepted; no sound is played on any platform yet) |
+| `hyperlinks.osc8` | boolean | `true` |
+| `hyperlinks.confirm` | string (`"risky"`, `"always"`, `"never"`) | `"risky"` |
+| `hyperlinks.allowed_schemes` | array of strings | `{"http", "https", "mailto", "file", "ssh", "git"}` |
+| `keyboard.left_alt` | string (`"auto"`, `"meta"`, `"compose"`) | `"auto"` |
+| `keyboard.right_alt` | string (`"auto"`, `"meta"`, `"compose"`) | `"auto"` |
+| `mouse.copy_on_select` | string (`"none"`, `"primary"`, `"clipboard"`, `"both"`) | `"none"` |
+| `mouse.scroll_multiplier` | number | `3` |
+| `mouse.alternate_scroll` | string (`"auto"`, `"off"`) | `"auto"` |
+| `mouse.report_bypass_modifier` | string (`"shift"`, `"ctrl"`, `"alt"`, `"super"`, `"none"`) | `"shift"` |
+| `mouse.middle_click_action` | string (`"primary-paste"`, `"clipboard-paste"`, `"ignore"`) | `"clipboard-paste"` |
+| `selection.word_chars` | string | `"@-./_~?&=%+#"` |
+| `selection.clear_on_copy` | boolean | `true` |
+| `selection.clear_on_typing` | boolean | `true` |
+| `selection.rectangle_modifier` | string (`"alt"`, `"ctrl"`, `"shift"`, `"super"`, `"none"`) | `"alt"` |
+| `vt.window_resize_allowed` | boolean | `false` |
+| `vt.checksum_report_enabled` | boolean | `false` |
+| `shell_integration` | string (`"none"`, `"detect"`) | `"none"` |
+| `term` | string | `"xterm-256color"` (see [`term`](../Configuration.md#term)) |
+| `scrollback.limit_lines` | integer | `5000` (`0` = no history, at most `1000000`) |
+| `scrollback.limit_bytes` | integer | `67108864` (`0` = no byte cap; raw ring bytes `(lines + rows) * columns * 12`) |
+| `graphics.kitty_protocol` | boolean | `false` |
+| `graphics.image_storage_limit_mib` | integer | `320` (non-positive = default, at most `4096`) |
+| `graphics.max_payload_mib` | integer | `65` (non-positive = default, at most `1024`) |
+| `graphics.allow_file_transfer` | boolean | `true` |
+| `graphics.allow_temp_file_transfer` | boolean | `true` |
+| `graphics.allow_shared_memory` | boolean | `true` |
+| `graphics.windows_passthrough` | boolean | `false` (Windows only, experimental) |
+
+The `graphics.*` keys behave exactly like the JSON [`graphics`](../Configuration.md#graphics) options and control the [Kitty graphics protocol](../KittyGraphics.md), which is off by default. For example `dotty.config.graphics.kitty_protocol = true` turns it on. The settings are re-applied to running panes on reload except `graphics.windows_passthrough`, which is read when a PTY is created (`needs runtime verification`).
+The clipboard and hyperlink keys behave exactly like the JSON `clipboard` and `hyperlinks` options in the [configuration reference](../Configuration.md#clipboard). In particular `clipboard.osc52_read = "allow"` lets any program that can write to the terminal read the clipboard without a prompt; prefer `"ask"`.
+The `bell.*` keys behave exactly like the JSON [`bell`](../Configuration.md#bell) options and are read at each bell; the `bell` event below fires for every bell regardless of them.
+The `font.hinting`/`font.antialias` and `text.*` keys behave exactly like the JSON [`font`](../Configuration.md#font) and [`text`](../Configuration.md#text) options; the `text.*` keys are read every frame.
+The `keyboard.*` keys behave exactly like the JSON [`keyboard`](../Configuration.md#keyboard) options and are read at the next key press; for example `dotty.config.keyboard.left_alt = "meta"` makes the left Option key Meta on macOS.
+The `mouse`, `vt`, and `shell_integration` keys behave exactly like the JSON [`mouse`](../Configuration.md#mouse), [`vt`](../Configuration.md#vt), and [`shellIntegration`](../Configuration.md#shellintegration) options. `mouse.copy_on_select` takes a string, so the Ghostty-style `"true"`/`"false"` spellings are strings here too. The two `vt` switches are off by default because they let a program resize the window or read the screen back; see the configuration reference for the security rationale. Reload behavior: `mouse.*` and `vt.window_resize_allowed` are read live, `vt.checksum_report_enabled` is applied to sessions on reload, and `shell_integration` applies to tabs and panes created after the reload. Run `dotty +explain-config OPTION` (JSON path or Lua key) for the type, default, and scope of any key.
 `font.symbol_map` entries use `U+START-END: Preferred Font, Fallback Font`; the first installed family that contains the glyph wins. OpenType features and ligatures are not supported: rendering is one grapheme per terminal cell.
 Nested reads and writes work directly. `dotty.config.apply_table(table)` and its alias `dotty.config.apply(table)` apply recognized values recursively. Assigning a table to a nested section applies its fields; assigning a table to `keybindings` replaces the map. Reads of `keybindings` return a copy. Unknown fields are ignored.
 
@@ -43,7 +93,7 @@ dotty.config.font.size = 16
 print(dotty.config.font.size)
 dotty.config.apply_table {
   theme = "TokyoNight",
-  window = { opacity = 0.95 },
+  window = { padding = { left = 10 } },
   cursor = { blink_interval_ms = 600 },
 }
 ```
@@ -52,23 +102,22 @@ Wrong value types raise a Lua error naming the configuration path, such as `dott
 
 ## Key bindings
 
-Register a Lua callback or a `TerminalAction` name with `dotty.bind(chord, callback_or_action)`. Chords use the same syntax and normalization as `config.json` keybindings: modifier names `ctrl`, `shift`, `alt`, and `super`, followed by a key name, joined with `+` (for example, `ctrl+shift+t` or `alt+1`). Invalid chords raise a Lua error. A Lua binding takes precedence over the JSON binding for the same chord. A callback that returns exactly `false` declines the key and lets default handling continue; every other return value, including `nil`, handles it.
+Register a Lua callback or an action name with `dotty.bind(chord, callback_or_action)`. Chords use the same syntax, aliases, `physical:` prefix and layout-aware matching as `config.json` keybindings (see [Configuration](../Configuration.md#keybindings)); for example `ctrl+shift+t`, `cmd+k` or `alt+1`. Invalid chords raise a Lua error that says why. A Lua binding takes precedence over the JSON binding for the same chord. A callback that returns exactly `false` declines the key and lets default handling continue; every other return value, including `nil`, handles it.
 
 ```lua
 dotty.bind("ctrl+shift+t", function()
   dotty.tabs.new()
 end)
 
-dotty.bind("alt+1", "SwitchTab1")
+dotty.bind("alt+1", "switch_tab_1")
+dotty.bind("ctrl+alt+u", "send_text:\\x15")
 ```
 
-Action names are case-insensitive. Passing `"None"` removes the Lua binding for that chord. Unknown action names raise a Lua error. The supported names are:
-
-`NewTab`, `CloseTab`, `NextTab`, `PreviousTab`, `SwitchTab1`, `SwitchTab2`, `SwitchTab3`, `SwitchTab4`, `SwitchTab5`, `SwitchTab6`, `SwitchTab7`, `SwitchTab8`, `SwitchTab9`, `Copy`, `Paste`, `Clear`, `ToggleFullscreen`, `ZoomIn`, `ZoomOut`, `ResetZoom`, `Search`, `DuplicateTab`, `CloseOtherTabs`, `Quit`, `SplitVertical`, `SplitHorizontal`, `FocusPaneLeft`, `FocusPaneRight`, `FocusPaneUp`, `FocusPaneDown`, and `ClosePane`.
+Action names are the snake_case names listed in [Configuration](../Configuration.md#keybindings) (`new_tab`, `copy_or_send`, `send_text:<escaped text>`, …); the older enum names such as `SwitchTab1` are accepted too, case-insensitively. Passing `"none"` removes the Lua binding for that chord. Unknown action names and malformed `send_text` arguments raise a Lua error. `dotty.action(name)` accepts the same names.
 
 ## Actions
 
-`dotty.action(name)` runs a supported action by name and returns `true` if the host ran it, otherwise `false`. An unknown name or `"None"` raises a Lua error. `dotty.actions` is an array of supported action names and excludes `"None"`. `dotty.action` is unavailable during config evaluation.
+`dotty.action(name)` runs a supported action by name and returns `true` if the host ran it, otherwise `false`. An unknown name or `"none"` raises a Lua error. `dotty.actions` is an array of the snake_case action names and excludes `"none"`. `dotty.action` is unavailable during config evaluation.
 
 ## Tabs and panes
 
@@ -107,9 +156,10 @@ Register callbacks with `dotty.on(name, function(...) ... end)`. Event callbacks
 | `pane_focused` | `tab`, `pane` | When the focused pane changes; `pane` is the newly focused pane. |
 | `pane_layout_changed` | `tab` | When the pane layout changes. |
 | `format_tab_title` | `tab` | Value hook: the first non-empty string sets the title used in the window title and tab bar; otherwise the terminal title is used. |
-| `open_url` | `url` (string) | Value hook: return `true` to mark the URL as handled. |
+| `open_url` | `url` (string), `source` (string) | Value hook run when a link is activated (Ctrl+click) **after** structural validation and the hard scheme blocks but **before** the scheme allowlist and confirmation prompts. `url` is the canonical, ASCII, control-character-free URL; `source` is `"explicit"` for an OSC 8 link or `"detected"` for a URL found in text. Return `true` to mark the link handled, which skips the built-in open and any prompt (so a handling hook is responsible for its own safety checks); `false` continues with the built-in policy. Hooks run in registration order and the first non-`nil` result decides, so only the first hook that returns a value is consulted; a hook that raises an error is skipped. A callback declared with one parameter ignores `source`. |
 | `update_status` | none | Value hook: the first non-empty string is shown in the tab bar status area. Refreshed about once per second and when tabs are added, closed, or activated, the active tab title changes, window focus changes, or configuration changes. |
 | `clipboard_write` | `pane`, `text` (string) | Value hook for OSC 52 clipboard writes: the global `allowOsc52Write` setting must be enabled; with permission enabled, no hook or a non-vetoing result allows the write, while an explicit `false` or callback invocation error denies it. Hook errors remain logged through normal Lua diagnostics. |
+| `clipboard_read` | `pane`, `selection` (string, `"clipboard"` or `"primary"`) | Value hook for OSC 52 clipboard reads: only consulted when `clipboard.osc52_read` is `ask` or `allow`, just before the clipboard (or, on X11 only, the PRIMARY selection) is read and the reply or prompt is produced. `"primary"` is only passed on X11; elsewhere primary-only requests are dropped before the hook. The first non-`nil` result decides: `false` denies (no reply is sent), anything else allows; a callback invocation error denies; no hook allows. The hook cannot grant a read when the policy is `deny`. |
 
 Lua errors from script evaluation, API calls, and callbacks are logged and stored as the latest Lua error. While an error is stored, it takes precedence over `update_status` and appears in the tab bar as `⚠ Lua: ` followed by the first error line (truncated to 120 characters). A successful config evaluation clears the stored error; a successful callback does not.
 
@@ -150,3 +200,12 @@ dotty.on("update_status", function()
   return os.date("%H:%M:%S")
 end)
 ```
+
+## Changelog
+
+| Date | Change |
+|------|--------|
+| 2026-11-01 | W4-C2: `font.size` is in points (default 11.25); added `font.adjust_cell_width`, `font.adjust_cell_height`. |
+| 2026-11-01 | W4-C15/C16: `dotty.bind`/`dotty.action` take snake_case action names and `send_text:`; chords match like `config.json` keybindings; added `search.regex`, `search.case_sensitive`, `search.whole_word`. |
+| 2026-11-01 | W4-C5: added `font.hinting`, `font.antialias`, `text.blending`, `text.contrast`, `text.minimum_contrast`. |
+| 2026-11-01 | W4-C11: added `font.ligatures`. |

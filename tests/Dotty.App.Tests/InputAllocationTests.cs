@@ -62,19 +62,17 @@ public sealed class InputAllocationTests
         Assert.Equal("\x1b[1;2A", System.Text.Encoding.ASCII.GetString(bytes.AsSpan(0, length)));
         length = encoder.Encode(TerminalKey.Delete, TerminalKeyModifiers.Control, bytes);
         Assert.Equal("\x1b[3;5~", System.Text.Encoding.ASCII.GetString(bytes.AsSpan(0, length)));
-        length = encoder.EncodeMouseEvent(
+        var report = new MouseReport(
             Dotty.Terminal.Adapter.TerminalAdapter.MouseMode.Normal,
             Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGR,
-            0, 3, 4, true, false, TerminalKeyModifiers.None, bytes);
-        Assert.Equal("\x1b[<0;5;4M", System.Text.Encoding.ASCII.GetString(bytes.AsSpan(0, length)));
+            0, MouseEventKind.Press, 3, 4, 0, 0, TerminalKeyModifiers.None);
+        length = MouseEncoder.Encode(report, bytes);
+        Assert.Equal("\x1b[<0;4;5M", System.Text.Encoding.ASCII.GetString(bytes.AsSpan(0, length)));
         for (int i = 0; i < 100; i++)
         {
             SilkKeyMapper.Encode(Key.Up, false, true, false, false, bytes);
             encoder.Encode(TerminalKey.Delete, TerminalKeyModifiers.Control, bytes);
-            encoder.EncodeMouseEvent(
-                Dotty.Terminal.Adapter.TerminalAdapter.MouseMode.Normal,
-                Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGR,
-                0, 3, 4, true, false, TerminalKeyModifiers.None, bytes);
+            MouseEncoder.Encode(report, bytes);
         }
 
         AllocationAssert.NoAllocations(() =>
@@ -83,12 +81,49 @@ public sealed class InputAllocationTests
             {
                 SilkKeyMapper.Encode(Key.Up, false, true, false, false, bytes);
                 encoder.Encode(TerminalKey.Delete, TerminalKeyModifiers.Control, bytes);
-                encoder.EncodeMouseEvent(
-                    Dotty.Terminal.Adapter.TerminalAdapter.MouseMode.Normal,
-                    Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGR,
-                    0, 3, 4, true, false, TerminalKeyModifiers.None, bytes);
+                MouseEncoder.Encode(report, bytes);
             }
         }, measuredIterationsPerWindow: 1);
+    }
+
+    [Fact]
+    public void MouseEncoderEveryEncodingAndScrollModelAllocateNothingAfterWarmup()
+    {
+        var bytes = new byte[MouseEncoder.MaxSequenceLength * 4];
+        var encodings = new[]
+        {
+            Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.Default,
+            Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.UTF8,
+            Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.URXVT,
+            Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGR,
+            Dotty.Terminal.Adapter.TerminalAdapter.MouseEncoding.SGRPixels,
+        };
+        var filter = new MouseMotionFilter();
+        var accumulator = new ScrollAccumulator();
+        int written = 0;
+
+        void Run()
+        {
+            written = 0;
+            foreach (var encoding in encodings)
+            {
+                var press = new MouseReport(Dotty.Terminal.Adapter.TerminalAdapter.MouseMode.AnyEvent, encoding,
+                    0, MouseEventKind.Press, 150, 7, 1203, 117, TerminalKeyModifiers.Shift | TerminalKeyModifiers.Control);
+                var motion = press with { Kind = MouseEventKind.Motion, Column = 151, PixelX = 1204 };
+                var release = press with { Kind = MouseEventKind.Release };
+                written += MouseEncoder.Encode(press, bytes) > 0 ? 1 : 0;
+                written += MouseEncoder.Encode(motion, bytes) > 0 ? 1 : 0;
+                written += MouseEncoder.Encode(release, bytes) > 0 ? 1 : 0;
+                filter.Admit(press);
+                filter.Admit(motion);
+            }
+            accumulator.Add(0.1, -0.3, 3.0);
+            MouseEncoder.EncodeAlternateScroll(up: true, applicationCursorKeys: true, count: 3, bytes);
+        }
+
+        Run();
+        Assert.Equal(15, written);
+        AllocationAssert.NoAllocations(Run, measuredIterationsPerWindow: 100);
     }
 
     [Fact]
@@ -141,5 +176,29 @@ public sealed class InputAllocationTests
                 controller.HandleMouseMove(null!, new Vector2(30, 30));
             }
         }, measuredIterationsPerWindow: 1);
+    }
+
+    [Fact]
+    public void MouseReportingMotionAndWheelAllocateNothingAfterWarmup()
+    {
+        using var host = new TerminalMouseControllerTests.FakeTerminalMouseHost();
+        var tab = host.TabManager.CreateTab(cols: 80, rows: 24);
+        host.TabManager.SelectTab(tab);
+        tab.PaneTree.Layout(800, 480, 10, 20);
+        tab.ActivePane.Session.Parser.Feed(Encoding.UTF8.GetBytes("\u001b[?1003h\u001b[?1016h"));
+        var controller = new TerminalMouseController(host);
+        var mouse = new TerminalMouseControllerTests.FakeMouse { Position = new Vector2(30, 30) };
+
+        void Run()
+        {
+            for (int i = 0; i < 100; i++)
+            {
+                controller.HandleMouseMove(mouse, new Vector2(30, 30));
+                controller.HandleMouseMove(mouse, new Vector2(45, 30));
+                controller.HandleMouseScroll(mouse, new ScrollWheel(0.5f, 1f));
+            }
+        }
+
+        AllocationAssert.NoAllocations(Run, measuredIterationsPerWindow: 1);
     }
 }

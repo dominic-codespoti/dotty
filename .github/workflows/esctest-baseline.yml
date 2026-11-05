@@ -1,0 +1,102 @@
+name: esctest Baseline
+
+# Manual capture of tests/esctest/expected-failures.txt. The file is always uploaded as the
+# 'esctest-expectations' artifact; it is committed back only when 'commit' is 'true'
+# (default false: expectations shrink via reviewed PRs, not automation). Downloading the
+# artifact and committing it in a PR is the expected flow. Committing the file arms the CI
+# esctest gate (it carries the '# baseline-captured:' marker).
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit the regenerated expectations back to the branch'
+        required: false
+        default: 'false'
+      quarantine_not_run:
+        description: 'Add skip entries for tests that hung or crashed during capture'
+        required: false
+        default: 'false'
+
+env:
+  DOTNET_VERSION: '11.0.x'
+
+# Least privilege: read-only by default; the capture job alone may push (opt-in input 'commit').
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Capture esctest baseline (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup .NET ${{ env.DOTNET_VERSION }}
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+          dotnet-quality: 'preview'
+
+      - name: Python version
+        run: python3 --version
+
+      - name: Install GUI conformance prerequisites
+        run: sudo apt-get update && sudo apt-get install -y xvfb openbox xauth x11-utils xdotool cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
+
+      - name: Build native pty-helper
+        run: make -C src/Dotty.NativePty
+
+      - name: Build conformance host and Dotty GUI
+        run: |
+          dotnet restore tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj
+          dotnet build tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj -c Release --no-restore
+          dotnet restore src/Dotty/Dotty.csproj
+          dotnet build src/Dotty/Dotty.csproj -c Release --no-restore
+      - name: Capture expectations
+        shell: bash
+        env:
+          QUARANTINE_NOT_RUN: ${{ inputs.quarantine_not_run }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "$QUARANTINE_NOT_RUN" = "true" ]; then extra+=(--quarantine-not-run); fi
+          python3 scripts/esctest/run_esctest.py --update-expectations --jobs 2 --out artifacts/esctest ${extra[@]+"${extra[@]}"}
+
+      - name: Upload expectations
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: esctest-expectations
+          path: tests/esctest/expected-failures.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload esctest results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: esctest-baseline-results
+          path: artifacts/esctest/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Commit expectations back
+        if: inputs.commit == 'true'
+        shell: bash
+        env:
+          TARGET_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/esctest/expected-failures.txt
+          if git diff --cached --quiet; then
+            echo "No expectation changes to commit."
+            exit 0
+          fi
+          git commit -m "Capture esctest expectations on ubuntu-latest runner"
+          git push origin "HEAD:refs/heads/$TARGET_REF"

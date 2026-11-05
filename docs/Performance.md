@@ -358,6 +358,25 @@ boundaries, and generation observations are not an atomic pipeline snapshot or
 a GPU/compositor fence. A null model generation means the diagnostic lock
 attempt failed, not that the terminal model is empty.
 
+`STATS` also carries `frameTimings`: p50/p95/max over the newest 512 frames of
+compose, render, swap-call, present-interval and input-to-swap time
+(`FrameTimings`, a fixed ring that allocates nothing per frame; field meanings
+in [E2E testing](E2ETesting.md#host-control-interface)). They are the inputs for
+the data-gated rendering decisions (vsync, instance packing, upload coalescing):
+no number has been recorded yet, so none is quoted here.
+
+Idle wakeups: CI gates the X11 idle process at 150 context switches/s
+(`scripts/perf/idle_wakeups.py --max-switches-per-s 150` in `ci.yml`). Wave 4
+B11 removed idle wake sources (safety cap 100 ms → 1000 ms after the
+wake-coverage test, Lua status poll only with an `update_status` hook, no blink,
+Lua or theme polling while iconified). The gate is deliberately unchanged:
+plan-11 sets the new figure from a measured median, and none has been recorded
+for this build. To be measured later with
+`python3 scripts/perf/idle_wakeups.py --max-switches-per-s 150 -- xvfb-run -a dotnet run --project src/Dotty -c Release`
+(focused and unfocused, before and after), then tightened to a margin above
+the new median. Refresh-rate-derived content pacing (`DOTTY_REFRESH_PACING=1`)
+stays opt-in until the `frameTimings` data supports making it the default.
+
 ### Focused CPU follow-up
 
 Use the direct profiler for a cheap, CPU-only workload matrix when the
@@ -703,12 +722,142 @@ are cumulative growth/traffic, not retained ownership. Do not subtract managed
 heap estimates from RSS to label the remainder as GPU memory.
 
 Tab/pane disposal releases model ownership once stopped workers and outstanding
-snapshots no longer need it. After resize/reflow completes, both the completed
-destination and reset spare native arena trim unused capacity to the current
-screen geometry. This does not drop active cells or change history/reflow policy;
-native realloc may move/copy the arena. It runs at resize completion, not per key
-or render frame. Lifecycle measurements and their single-observation caveats are
-recorded in [Rendering](Rendering.md).
+snapshots no longer need it. Screen cell arenas are reserved virtual memory that
+is committed lazily (`VirtualArena`: Linux `mmap`/`madvise`, macOS `mmap` remap,
+Windows `VirtualAlloc`/decommit, `calloc` + zeroing fallback), so
+`terminalArenaCapacityBytes` is reserved size and the new
+`terminalArenaCommittedBoundBytes` (`LiveArenaCommittedBoundBytes`: dirty rows x
+columns x 12 B over live screens) is only an upper bound of committed pages, not
+a resident measurement; it can be exceeded by up to 64 KiB per small cleared
+range that is zeroed in place. `terminalArenaBackend` names the backend in use.
+After a resize/reflow the old source screen is parked as a spare with zero
+committed bytes but its virtual reservation, so a resize back and forth
+allocates nothing; a spare is always reset to the requested size and ring
+capacity before reuse. ED 2 / CSI 3 J on the main screen, RIS, and leaving the
+alternate screen discard history and return pages to the OS. Details and the
+`HistoryInvalidated` / `HistoryFloorAbsoluteRow` contract are in
+[Rendering](Rendering.md#lazily-committed-cell-arenas). Whether this lowers RSS/PSS
+is a hypothesis until measured with the harness below; the earlier recorded
+arena figures in Rendering predate lazy commit. Lifecycle measurements and
+their single-observation caveats are recorded in [Rendering](Rendering.md).
+
+### Scrollback memory measurement
+
+Two tools, both report-only for resident memory (only deterministic counters are
+asserted):
+
+- Headless probe: `dotnet run --project tests/Dotty.Performance.Tests -c Release -- --mode scrollback-memory [--probe-tabs 1,20 --probe-history 0,500,5000 --probe-cols 80,200]`
+  builds N terminals with seeded history and walks the stages fresh, resize x2,
+  alt enter/exit, ED 2, CSI 3 J, printing every `BufferMemorySnapshot` counter
+  (discovered by reflection) next to RSS/PSS/GC heap with the runtime baseline
+  subtracted.
+- GUI harness: `python3 scripts/perf/scrollback_memory.py --app <published dotty> [--out artifacts/perf/scrollback-memory] [--tabs 1 20] [--history 0 500 5000] [--cols 80 200] [--reps 3] [--settle 3.0] [--step-delay 0.5]`
+  drives the real host through `DOTTY_TEST_PORT` (`ACTION:NewTab`, `TYPE:`,
+  `RESIZE:`, `MEMORY`) under `xvfb-run`, samples the Dotty process from
+  `/proc/<pid>/smaps_rollup` (Linux only) after each stage and writes
+  `summary.json` / `summary.md`. The headline is the median marginal per-tab PSS,
+  `(PSS at max tabs - PSS at min tabs) / (max - min)`. Its pure functions are
+  covered by `scripts/perf/tests/test_scrollback_memory.py`.
+
+Protocol: build once, run both tools on the same machine with the same
+matrix on the commit before and after the change, keep `--reps` at 3 or more,
+report medians with the per-repetition spread, and treat PSS differences inside
+that spread as noise. No result from either tool is recorded in this repository.
+
+### New benchmark classes and gating rules
+
+| Class | Category | Keys cover |
+|---|---|---|
+| `ParserScanBenchmarks` | `Parser`, `Scan` | printable run scan, CJK/grapheme, REP, scroll regions; scan/CJK methods feed one pre-built 64 KiB array per invoke (result is ns per 64 KiB) |
+| `ParserOscBenchmarks` | `Parser`, `Osc` | changing OSC 0 titles, OSC 52 writes (4 KiB / 64 KiB / oversize), OSC 8, OSC 133 cycles |
+| `ReflowBenchmarks` | `Memory`, `Reflow` | resize away and back over a populated 10,000-line scrollback (per reflow) |
+| `TextFormatBenchmarks` | `Memory`, `Text` | search over visible rows, selection text, `GetScrollbackLine`, and one scrollback search that times `CaptureRenderSnapshotForSearch` plus search |
+| `ParserScanExperiments` | `Experiment`, `Scan` | scanner variants; runs only with `--filter experiment`, never feeds baselines or regression checks |
+| `KittyApcDecodeBenchmarks` | `Graphics`, `Transmit` | a 64 MiB `f=24` transfer in 4 KiB chunks with graphics disabled (scan and discard), in 4 KiB chunks with decode and store, and as a single APC |
+| `KittyRgbaTransmitBenchmarks` | `Graphics`, `Transmit` | `f=32` 4096x4096 transmit including premultiply |
+| `KittyInflateBenchmarks` | `Graphics`, `Transmit` | `o=z` `f=32` 4096x4096 transmit (inflate plus premultiply) |
+| `KittyPlacementScrollBenchmarks` | `Graphics`, `Placements` | full-screen scrolling with 10,000 placements and region scrolling with 1,000 placements, each next to a control that omits the placements or the scroll |
+| `KittySnapshotBenchmarks` | `Graphics`, `Snapshot` | render-snapshot capture with 1,000 visible placements, next to a no-placement control |
+| `KittyLockHoldProbe` | `Graphics`, `Experiment`, `LockProbe` | samples how long `SyncRoot` is held while a 64 MiB PNG payload is processed, next to a plain-text control |
+
+The six Kitty graphics classes are **experiments only**: they are absent from
+`Program.BenchmarkTypes`, so they have no entries in `baselines.json`, are never
+gated and run only for `--filter experiment`. They use only public API (the
+performance project has no `InternalsVisibleTo`): `TerminalAdapter.ConfigureGraphics`,
+the parser, the adapter's buffer and the public `GraphicsMemoryMetrics` counters. Each
+`GlobalSetup` checks the effect of its stream through those counters and throws
+when a payload was rejected (a rejected payload would otherwise look like a very
+fast benchmark), and each fixture disposes its adapters and reports any drift of
+the process-wide counters on stderr. The PNG cases use a fake decoder that fills
+pixels, so they measure Dotty's buffering, inflate and store, not SkiaSharp.
+
+Hypotheses to test, none measured: (1) with graphics disabled the APC path costs
+about what the existing bulk parser benchmarks cost; (2) decode-and-store cost is
+dominated by base64 decoding and premultiply, not by store bookkeeping;
+(3) full-screen scrolling with many placements stays O(1) per scroll thanks to the
+ring-head rotation and the cached end-row bound, while region scrolling visits the
+placements; (4) snapshot capture with no placements adds nothing visible next to
+the existing capture benchmarks; (5) `KittyLockHoldProbe` shows the lock is
+released during the heavy phase, so the longest sampled hold stays near the
+control's. Allocation guards for the same paths are `KittyAllocationTests`
+(Terminal.Tests) and `Compose_WithVisibleImagesAllocatesNothingAfterWarmup` in
+`RenderingAllocationTests` (App.Tests); like all tests in this change set they have
+not been run. The existing parser benchmarks are the regression guard for the
+non-graphics path and were not modified.
+
+Rules: the baseline key is the benchmark `Description`, so gated benchmarks must
+not use `[Params]` (one method per variant). The `experiment` filter is a valid
+category for `--filter`. The existing `Resize:` benchmarks use scrollback 0 and
+about 500 cells, so they cannot see reflow cost, and any benchmark built on a
+scrollback-0 buffer measures only the visible grid (the "Search: ... visible rows"
+text benchmarks do this deliberately). `ReflowBenchmarks` and `TextFormatBenchmarks`
+opt out of the no-GC region; `DOTTY_REFLOW_BENCH_MEMORY=1` prints heap sizes at
+fixture setup (never part of the gate). No numbers from these classes are
+recorded here.
+
+### Reflow
+
+Resize reflow maps cursors, saved cursors and prompt marks with an anchor-only
+mapping (`ReflowMapping.BeginAnchors` / `AddAnchor` / `TryMap`): the source
+positions that matter are registered up front and located lazily while the
+destination is written, instead of recording a per-cell dictionary and per-line
+unit lists. The expected gain is lower allocation and time on large scrollbacks;
+that is a hypothesis until `ReflowBenchmarks` is run on both commits. The ring
+capacity of every reflow destination is `ScrollbackPolicy.CapacityFor(rows, columns)`,
+so it follows the column count under the byte cap, and rows beyond it are
+discarded through the history-discard path.
+
+Safety net: `LegacyDenseReflowMapping` (frozen dictionary-based oracle) is
+compared against the live mapping after random resizes
+(`ReflowRandomizedEquivalenceTests`, seeds 1-48, and a variant with a
+byte-capped policy), together with `ReflowAnchorMappingOracleTests` and
+`ScrollbackCapacityReflowTests`. The recorded-golden layer
+(`Goldens/reflow-canonical.txt`) must be generated on the **pre-change** commit
+with `DOTTY_RECORD_REFLOW_GOLDENS=1 dotnet test tests/Dotty.App.Tests --filter ReflowRandomizedEquivalenceTests`
+and committed. That file does not exist in the repository, so that test reports
+as skipped rather than passing.
+
+### Text extraction
+
+`RowText` is the single row-to-text implementation (hot/cold cells to UTF-16,
+with a `ContinuationPolicy` for wide-glyph placeholders); screen rows,
+snapshots, `GetRowText` and the search engine all go through it. `SearchEngine`
+was changed to avoid per-row allocations, and scrollback search now works: it
+runs over the compact scrollback copy taken by
+`TerminalBuffer.CaptureRenderSnapshotForSearch`, which the host takes per
+search keystroke, while the per-frame capture stays visible-rows only. The
+allocation reduction is a hypothesis until `TextFormatBenchmarks` and the
+allocation tests are run.
+
+### OSC bulk scan
+
+While an OSC is open the parser consumes payload bytes up to the next C0 control
+in one scan, and a whole OSC contained in one input chunk is dispatched
+directly from the input without copying it into the sequence buffer. OSC 52 is
+decoded from the UTF-8 bytes (`OnOperatingSystemCommandUtf8`, strict base64
+straight from bytes) without materializing a `string`; payloads the byte path
+cannot handle fall back to the char path. Expected gains are hypotheses until
+`ParserOscBenchmarks` is run.
 
 ### Steady-state allocation policy
 
@@ -854,6 +1003,11 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 | 2026-10-02 | Added real Neovim scrolling/compositor-visible benchmark guidance, measurement caveats, and artifact/cleanup details |
 | 2026-10-05 | Recorded portable AOT throughput, partial Neovim evidence, and capture-lifecycle cancellation limits |
 | 2026-09-24 | Added the steady-state zero-allocation policy and measurement harness |
+| 2026-10-28 | Wave 3: lazily committed cell arenas and committed-bound/backend `MEMORY` fields (earlier arena figures marked pre-lazy-commit); scrollback config (default 5000 lines, 64 MiB cap, capacity follows columns on resize); new scan/OSC/reflow/text benchmark classes and `experiment` filter; `--mode scrollback-memory` and `scripts/perf/scrollback_memory.py`; anchor-only reflow mapping; single `RowText` and working scrollback search; OSC bulk scan and bytes-native OSC 52. Gains are hypotheses until measured |
+| 2026-10-28 | Fixes: selection maps scrollback row -1 to the newest history line; reverse index (RI) with limited or zero scrollback capacity |
+| 2026-10-28 | Kitty graphics: six experiment-only benchmark classes (`KittyApcDecodeBenchmarks`, `KittyRgbaTransmitBenchmarks`, `KittyInflateBenchmarks`, `KittyPlacementScrollBenchmarks`, `KittySnapshotBenchmarks`, `KittyLockHoldProbe`), no baselines, no measured numbers; every expectation is a hypothesis |
+| 2026-10-30 | Wave 4 A6: `STATS` `frameTimings` (compose/render/swap/present-interval/input-to-swap percentiles), real `WAIT_FOR_IDLE`, `SCREENSHOT:`, `GL`, `DOTTY_GL_INFO`/`DOTTY_GL_DEBUG`; no measurements yet |
+| 2026-10-30 | Wave 4 B11: `FramePlanner` extraction, opt-in refresh-rate content pacing, idle safety cap 1000 ms behind `HostWakeCoverageTests`, Lua status poll only with an `update_status` hook, no polling while iconified; idle CI gate unchanged until measured |
 
 ---
 
@@ -861,4 +1015,4 @@ public void ProcessLarge(ReadOnlySpan<byte> input)
 - [Dotty Parsing Performance](Parsing.md)
 - [.NET Performance Best Practices](https://docs.microsoft.com/en-us/dotnet/framework/performance/)
 
-*Last updated: 2026-10-05*
+*Last updated: 2026-10-28*

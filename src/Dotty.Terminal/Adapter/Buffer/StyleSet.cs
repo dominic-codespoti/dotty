@@ -79,11 +79,11 @@ public class StyleSet
         return state.IdToStyle;
     }
 
-    public bool RemapAnsiPalette(ReadOnlySpan<uint> previousPalette, ReadOnlySpan<uint> currentPalette)
+    public bool RemapPalette(ReadOnlySpan<uint> colors)
     {
-        if (previousPalette.Length != 16 || currentPalette.Length != 16)
+        if (colors.Length != 256)
         {
-            throw new ArgumentException("ANSI palettes must contain exactly 16 colors.");
+            throw new ArgumentException("Palette must contain exactly 256 colors.", nameof(colors));
         }
 
         bool changed = false;
@@ -95,57 +95,27 @@ public class StyleSet
             for (int i = 1; i < current.Length; i++)
             {
                 var style = current[i];
-                var remapped = RemapAnsiPalette(style, previousPalette, currentPalette);
-                if (remapped.Equals(style))
+                style.RemapPalette(colors);
+                if (style.Equals(current[i]))
                     continue;
 
                 remappedStyles ??= new CellAttributes[current.Length];
                 if (!changed)
                     Array.Copy(current, remappedStyles, current.Length);
-                remappedStyles[i] = remapped;
+                remappedStyles[i] = style;
                 changed = true;
             }
 
             if (!changed)
-            {
                 return false;
-            }
 
             var finalStyles = remappedStyles!;
             var finalStyleToId = new Dictionary<CellAttributes, ushort>(finalStyles.Length);
             for (ushort id = 0; id < finalStyles.Length; id++)
-            {
                 finalStyleToId[finalStyles[id]] = id;
-            }
             Volatile.Write(ref _state, new PublishedState(finalStyleToId, finalStyles));
         }
 
         return true;
-    }
-    private static CellAttributes RemapAnsiPalette(in CellAttributes style, ReadOnlySpan<uint> previousPalette, ReadOnlySpan<uint> currentPalette)
-    {
-        var remapped = style;
-        remapped.Foreground = RemapAnsiColor(style.Foreground, previousPalette, currentPalette);
-        remapped.Background = RemapAnsiColor(style.Background, previousPalette, currentPalette);
-        remapped.UnderlineColor = RemapAnsiColor(style.UnderlineColor, previousPalette, currentPalette);
-        return remapped;
-    }
-
-    private static SgrColorArgb RemapAnsiColor(SgrColorArgb color, ReadOnlySpan<uint> previousPalette, ReadOnlySpan<uint> currentPalette)
-    {
-        if (color.IsEmpty)
-        {
-            return color;
-        }
-
-        for (int i = 0; i < 16; i++)
-        {
-            if (color.Argb == previousPalette[i])
-            {
-                return new SgrColorArgb(currentPalette[i]);
-            }
-        }
-
-        return color;
     }
 }

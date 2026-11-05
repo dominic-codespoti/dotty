@@ -4,407 +4,315 @@ using SkiaSharp;
 
 namespace Dotty.Rendering.Gpu;
 
+/// <summary>Result of resolving a grapheme cluster and style to a face.</summary>
+public readonly struct FontResolution
+{
+    public FontResolution(IFontFace face, bool isFallback, bool syntheticBold, bool syntheticItalic)
+    {
+        Face = face;
+        IsFallback = isFallback;
+        SyntheticBold = syntheticBold;
+        SyntheticItalic = syntheticItalic;
+    }
+
+    /// <summary>The face to draw with (the styled face when one is installed).</summary>
+    public IFontFace Face { get; }
+
+    /// <summary>False when the face belongs to the primary (first installed) family; true for every other face.</summary>
+    public bool IsFallback { get; }
+
+    /// <summary>Bold was requested but no heavier face of the family is installed: embolden the outline.</summary>
+    public bool SyntheticBold { get; }
+
+    /// <summary>Italic was requested but no italic/oblique face of the family is installed: skew the outline.</summary>
+    public bool SyntheticItalic { get; }
+
+    /// <summary>The Skia typeface of <see cref="Face"/>, or null for a non-Skia (test) face.</summary>
+    public SKTypeface? Typeface => (Face as SkiaFontFace)?.Typeface;
+}
+
 /// <summary>
-/// Maintains an ordered fallback chain of <see cref="SKTypeface"/> instances (e.g. Primary Monospace
-/// -> Symbols Nerd Font Mono -> Noto Sans CJK / Noto Color Emoji / system fallbacks).
-/// Resolves the appropriate typeface for a grapheme or codepoint to ensure seamless multi-font fallback.
+/// Ordered font fallback chain. The configured <c>font.family</c> list is the fallback order (Ghostty semantics):
+/// every installed family of the list, in order, followed by a built-in tail of symbol, CJK and emoji families,
+/// followed by at most <see cref="MaxDynamicFaces"/> faces the system matched for otherwise uncovered scalars.
+/// <c>font.symbolMap</c> faces are tried first. Face choice per cluster is <see cref="ClusterFontSelector"/>; bold and
+/// italic then use the family's real styled face when installed (for the primary family, the configured
+/// <c>font.boldFamily</c>/<c>italicFamily</c>/<c>boldItalicFamily</c> first) and fall back to synthetic emboldening
+/// or skew. Every cache is bounded.
 /// </summary>
 public sealed class FontFallbackChain : IDisposable
 {
-    private static readonly string[] MonospaceFallbackNames =
-    {
-        "JetBrains Mono",
-        "JetBrainsMono Nerd Font Mono",
-        "JetBrainsMono NF",
-        "Fira Code",
-        "FiraCode Nerd Font",
-        "Cascadia Code",
-        "Cascadia Mono",
-        "SF Mono",
-        "Ubuntu Mono",
-        "Consolas",
-        "Liberation Mono",
-        "DejaVu Sans Mono",
-        "Courier New",
-        "monospace"
-    };
+    /// <summary>Upper bound of faces appended at runtime from system character matching.</summary>
+    public const int MaxDynamicFaces = 16;
 
-    private static readonly string[] SymbolFallbackNames =
+    /// <summary>Entry bound of the per-(cluster, style) resolution cache.</summary>
+    public const int ResolutionCacheCapacity = 4096;
+
+    /// <summary>Entry bound of the symbol-map family cache.</summary>
+    public const int FamilyCacheCapacity = 64;
+
+    /// <summary>Families appended after the configured list; skipped when not installed.</summary>
+    public static IReadOnlyList<string> TailFamilies { get; } = new[]
     {
         "Symbols Nerd Font Mono",
         "Symbols Nerd Font",
-        "Nerd Font Symbols",
-        "Powerline Symbols"
-    };
-
-    private static readonly string[] CjkFallbackNames =
-    {
         "Noto Sans CJK SC",
-        "Noto Sans CJK TC",
         "Noto Sans CJK JP",
         "Noto Sans CJK KR",
+        "Noto Sans CJK TC",
         "Noto Sans SC",
-        "Noto Sans TC",
-        "Noto Sans JP",
-        "Noto Sans KR",
         "Microsoft YaHei",
         "PingFang SC",
-        "WenQuanYi Micro Hei"
-    };
-
-    private static readonly string[] EmojiFallbackNames =
-    {
+        "WenQuanYi Micro Hei",
         "Noto Color Emoji",
         "Apple Color Emoji",
         "Segoe UI Emoji",
-        "Twitter Color Emoji",
-        "EmojiOne Color"
+        "Noto Sans Symbols 2",
+        "Noto Sans Symbols",
     };
 
-    private readonly List<SKTypeface> _typefaces = new();
-    private readonly bool _ownsTypefaces;
-    private readonly Dictionary<string, SKTypeface> _resolutionCache = new(StringComparer.Ordinal);
-    private readonly Dictionary<int, SKTypeface> _singleRuneResolutionCache = new();
+    private readonly IFontCatalog _catalog;
+    private readonly List<IFontFace> _faces = new();
+    private readonly int _configuredCount;
+    private readonly LruCache<(string Grapheme, GlyphStyle Style), FontResolution> _resolutions =
+        new(ResolutionCacheCapacity);
+    private readonly Dictionary<(IFontFace Face, GlyphStyle Style), IFontFace> _styledFaces = new();
+    private readonly LruCache<string, IFontFace?> _familyFaces = new(FamilyCacheCapacity, StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
-    private bool _disposed;
+    private SymbolMap? _symbolMap;
+
+    /// <summary>Builds the chain for <paramref name="options"/>: configured families, then <see cref="TailFamilies"/>.</summary>
+    public FontFallbackChain(FontOptions options, IFontCatalog catalog)
+        : this(options, catalog, includeTail: true)
+    {
+    }
+
+    public FontFallbackChain(FontOptions options, IFontCatalog catalog, bool includeTail)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(catalog);
+        Options = options;
+        _catalog = catalog;
+        var regular = options.RegularStyle;
+        foreach (string family in options.Families)
+            AddConfigured(catalog.MatchFamily(family, regular));
+        if (includeTail)
+            foreach (string family in TailFamilies)
+                AddConfigured(catalog.MatchFamily(family, regular));
+        if (_faces.Count == 0)
+            _faces.Add(catalog.DefaultFace);
+        _configuredCount = _faces.Count;
+    }
+
+    /// <summary>A chain over explicit typefaces (primary first) without the built-in tail.</summary>
+    public FontFallbackChain(SKTypeface primaryTypeface, IEnumerable<SKTypeface>? fallbacks = null)
+    {
+        Options = FontOptions.Default;
+        _catalog = SkiaFontCatalog.Shared;
+        AddConfigured(SkiaFontFace.Wrap(primaryTypeface ?? SKTypeface.Default));
+        if (fallbacks != null)
+            foreach (var typeface in fallbacks)
+                if (typeface != null)
+                    AddConfigured(SkiaFontFace.Wrap(typeface));
+        _configuredCount = _faces.Count;
+    }
+
+    /// <summary>A chain rooted at <paramref name="primaryTypeface"/> followed by the installed <see cref="TailFamilies"/>.</summary>
+    public static FontFallbackChain CreateDefault(SKTypeface? primaryTypeface = null)
+    {
+        var catalog = SkiaFontCatalog.Shared;
+        var fallbacks = new List<SKTypeface>();
+        foreach (string family in TailFamilies)
+            if (catalog.MatchFamily(family, FontFaceStyle.Regular) is SkiaFontFace face)
+                fallbacks.Add(face.Typeface);
+        return new FontFallbackChain(primaryTypeface ?? SKTypeface.Default, fallbacks);
+    }
+
+    public FontOptions Options { get; }
+
+    /// <summary>Parsed <c>font.features</c>, kept for shaping.</summary>
+    public IReadOnlyList<FontFeature> Features => Options.Features;
+
+    public IFontFace PrimaryFace => _faces[0];
+
+    /// <summary>The Skia typeface of <see cref="PrimaryFace"/> (<see cref="SKTypeface.Default"/> for a non-Skia face).</summary>
+    public SKTypeface PrimaryTypeface => (PrimaryFace as SkiaFontFace)?.Typeface ?? SKTypeface.Default;
+
+    /// <summary>Snapshot of the chain in order (configured, tail, then dynamically matched faces).</summary>
+    public IReadOnlyList<IFontFace> Faces
+    {
+        get { lock (_lock) return _faces.ToArray(); }
+    }
+
+    public int DynamicFaceCount
+    {
+        get { lock (_lock) return _faces.Count - _configuredCount; }
+    }
+
+    public int ResolutionCacheCount
+    {
+        get { lock (_lock) return _resolutions.Count; }
+    }
 
     /// <summary>
-    /// Optional per-range overrides checked before the generic chain.
-    /// Replacing the map clears resolution caches and notifies atlas owners when entries change.
+    /// Optional per-range overrides checked before the chain. Replacing the map with different entries clears the
+    /// resolution cache and raises <see cref="SymbolMapChanged"/> so atlases drop glyphs drawn with the old faces.
     /// </summary>
     public SymbolMap? SymbolMap
     {
         get { lock (_lock) return _symbolMap; }
         set
         {
-            bool changed;
             lock (_lock)
             {
-                changed = !(_symbolMap?.HasSameEntries(value) ?? value == null);
-                if (!changed)
+                if (_symbolMap?.HasSameEntries(value) ?? value == null)
                     return;
                 _symbolMap = value;
-                _resolutionCache.Clear();
-                _singleRuneResolutionCache.Clear();
+                _resolutions.Clear();
             }
             SymbolMapChanged?.Invoke(this, EventArgs.Empty);
         }
     }
+
     public event EventHandler? SymbolMapChanged;
-    private SymbolMap? _symbolMap;
-    /// <summary>
-    /// Gets the primary (index 0) typeface in the chain.
-    /// </summary>
-    public SKTypeface PrimaryTypeface => _typefaces.Count > 0 ? _typefaces[0] : SKTypeface.Default;
 
-    /// <summary>
-    /// Gets the list of typefaces in the chain.
-    /// </summary>
-    public IReadOnlyList<SKTypeface> Typefaces => _typefaces;
-
-    /// <summary>
-    /// Initializes a new fallback chain with the specified primary typeface and optional fallback typefaces.
-    /// </summary>
-    public FontFallbackChain(SKTypeface primaryTypeface, IEnumerable<SKTypeface>? fallbacks = null, bool ownsTypefaces = false)
+    /// <summary>Resolves the face, fallback classification and synthetic flags for a cluster in a style.</summary>
+    public FontResolution Resolve(string grapheme, GlyphStyle style = GlyphStyle.Regular)
     {
-        _ownsTypefaces = ownsTypefaces;
-        var primary = primaryTypeface ?? SKTypeface.Default;
-        _typefaces.Add(primary);
-
-        if (fallbacks != null)
-        {
-            foreach (var fb in fallbacks)
-            {
-                if (fb != null && !ContainsTypeface(fb))
-                {
-                    _typefaces.Add(fb);
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Initializes a new fallback chain with a list of typefaces. The first typeface is treated as primary.
-    /// </summary>
-    public FontFallbackChain(IEnumerable<SKTypeface> typefaces, bool ownsTypefaces = false)
-    {
-        _ownsTypefaces = ownsTypefaces;
-        if (typefaces != null)
-        {
-            foreach (var tf in typefaces)
-            {
-                if (tf != null && !ContainsTypeface(tf))
-                {
-                    _typefaces.Add(tf);
-                }
-            }
-        }
-
-        if (_typefaces.Count == 0)
-        {
-            _typefaces.Add(SKTypeface.Default);
-        }
-    }
-
-    private bool ContainsTypeface(SKTypeface tf)
-    {
-        for (int i = 0; i < _typefaces.Count; i++)
-        {
-            if (ReferenceEquals(_typefaces[i], tf) ||
-                string.Equals(_typefaces[i].FamilyName, tf.FamilyName, StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Creates a default fallback chain rooted at the given primary typeface, automatically
-    /// discovering available system fallbacks (Nerd Font Symbols, CJK, Emoji, and generic monospace).
-    /// </summary>
-    public static FontFallbackChain CreateDefault(SKTypeface? primaryTypeface = null)
-    {
-        var primary = primaryTypeface ?? SKTypeface.Default;
-        var fallbacks = new List<SKTypeface>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        if (!string.IsNullOrEmpty(primary.FamilyName))
-        {
-            seen.Add(primary.FamilyName);
-        }
-
-        void AddFamilies(string[] names)
-        {
-            for (int i = 0; i < names.Length; i++)
-            {
-                var name = names[i];
-                if (!seen.Add(name)) continue;
-
-                try
-                {
-                    var matched = SKFontManager.Default.MatchFamily(name);
-                    if (matched != null)
-                    {
-                        if (!seen.Add(matched.FamilyName))
-                        {
-                            // Already have a typeface with this family name
-                            continue;
-                        }
-                        fallbacks.Add(matched);
-                    }
-                }
-                catch
-                {
-                    // Ignore font discovery errors
-                }
-            }
-        }
-
-        // 1. Symbol and Nerd Font fallbacks (for icons, Powerline, git branch glyphs)
-        AddFamilies(SymbolFallbackNames);
-
-        // 2. Monospace coding fallbacks
-        AddFamilies(MonospaceFallbackNames);
-
-        // 3. CJK font fallbacks
-        AddFamilies(CjkFallbackNames);
-
-        // 4. Emoji font fallbacks
-        AddFamilies(EmojiFallbackNames);
-
-        return new FontFallbackChain(primary, fallbacks);
-    }
-
-    /// <summary>
-    /// Adds a fallback typeface to the end of the chain.
-    /// </summary>
-    public void AddFallback(SKTypeface typeface)
-    {
-        ArgumentNullException.ThrowIfNull(typeface);
-        lock (_lock)
-        {
-            if (!ContainsTypeface(typeface))
-            {
-                _typefaces.Add(typeface);
-                _resolutionCache.Clear();
-                _singleRuneResolutionCache.Clear();
-            }
-        }
-    }
-
-    /// <summary>
-    /// Resolves the matching <see cref="SKTypeface"/> for the given grapheme.
-    /// Checks if the primary typeface contains the glyph (or measures > 0 without fallback missing character);
-    /// if not, checks fallback typefaces in order, and finally queries <see cref="SKFontManager.Default.MatchCharacter"/>.
-    /// </summary>
-    public SKTypeface ResolveTypefaceForGrapheme(string grapheme, bool bold = false)
-        => ResolveTypefaceForGrapheme(grapheme, bold, out _);
-
-    /// <summary>
-    /// Resolves a grapheme and reports whether the result came from a
-    /// fallback typeface. The primary typeface is never classified as a
-    /// fallback, even when the caller supplied an equivalent font instance.
-    /// </summary>
-    public SKTypeface ResolveTypefaceForGrapheme(
-        string grapheme, bool bold, out bool isFallback)
-    {
+        style &= GlyphStyle.Bold | GlyphStyle.Italic;
         if (string.IsNullOrEmpty(grapheme))
-        {
-            isFallback = false;
-            return PrimaryTypeface;
-        }
-
+            return new FontResolution(PrimaryFace, false, false, false);
         lock (_lock)
         {
-            if (_resolutionCache.TryGetValue(grapheme, out var cached))
-            {
-                isFallback = !ReferenceEquals(cached, PrimaryTypeface);
+            if (_resolutions.TryGetValue((grapheme, style), out var cached))
                 return cached;
-            }
-
-            var resolved = ResolveTypefaceCore(grapheme);
-            _resolutionCache[grapheme] = resolved;
-            isFallback = !ReferenceEquals(resolved, PrimaryTypeface);
+            var resolved = ResolveCore(grapheme, style);
+            _resolutions.Set((grapheme, style), resolved);
             return resolved;
         }
     }
 
-    private SKTypeface ResolveTypefaceCore(string grapheme)
+    private FontResolution ResolveCore(string grapheme, GlyphStyle style)
     {
-        int firstRune = GetFirstCodepoint(grapheme);
-
-        // 0. Explicit symbol-map override wins over primary and fallbacks.
-        SymbolMap? symbolMap;
-        lock (_lock) { symbolMap = _symbolMap; }
-        if (symbolMap != null && firstRune > 0)
+        var candidates = new List<IFontFace>(_faces.Count + 2);
+        int baseCp = ClusterFontSelector.GetCoverageBase(grapheme);
+        if (_symbolMap != null && baseCp > 0 && _symbolMap.TryResolveFamilies(baseCp, out var families))
         {
-            var mapped = symbolMap.ResolveTypeface(firstRune);
-            if (mapped != null && TypefaceContainsGrapheme(mapped, grapheme, firstRune))
-                return mapped;
+            foreach (string family in families)
+                if (FamilyFace(family) is { } face && !candidates.Contains(face))
+                    candidates.Add(face);
+        }
+        int symbolCount = candidates.Count;
+        candidates.AddRange(_faces);
+
+        int index = ClusterFontSelector.Select(grapheme, candidates, symbolCount);
+        IFontFace regular;
+        if (index >= 0)
+        {
+            regular = candidates[index];
+        }
+        else
+        {
+            regular = MatchDynamic(grapheme, baseCp) ?? PrimaryFace;
         }
 
-        // 1. Check primary typeface
-        if (_typefaces.Count > 0 && TypefaceContainsGrapheme(_typefaces[0], grapheme, firstRune))
-        {
-            return _typefaces[0];
-        }
+        bool isFallback = !IsPrimaryFamily(regular);
+        if (style == GlyphStyle.Regular)
+            return new FontResolution(regular, isFallback, false, false);
 
-        // 2. Check fallback typefaces in order
-        for (int i = 1; i < _typefaces.Count; i++)
-        {
-            if (TypefaceContainsGrapheme(_typefaces[i], grapheme, firstRune))
-            {
-                return _typefaces[i];
-            }
-        }
-
-        bool singleRune = IsSingleRune(grapheme);
-        if (singleRune && _singleRuneResolutionCache.TryGetValue(firstRune, out var cachedRune))
-        {
-            return cachedRune;
-        }
-
-        // 3. Dynamic system fallback query for the rune if not found in explicit chain
-        if (firstRune > 0)
-        {
-            try
-            {
-                var systemMatch = SKFontManager.Default.MatchCharacter(firstRune);
-                var resolved = systemMatch ?? PrimaryTypeface;
-                if (systemMatch != null && !ContainsTypeface(systemMatch))
-                {
-                    _typefaces.Add(systemMatch);
-                }
-                if (singleRune)
-                {
-                    _singleRuneResolutionCache[firstRune] = resolved;
-                }
-                return resolved;
-            }
-            catch
-            {
-                // Fall back to primary if system match fails.
-                if (singleRune)
-                {
-                    _singleRuneResolutionCache[firstRune] = PrimaryTypeface;
-                }
-            }
-        }
-
-        return PrimaryTypeface;
+        var styled = StyledFace(regular, style, isFallback);
+        if (!ReferenceEquals(styled, regular) && !ClusterFontSelector.Covers(styled, grapheme))
+            styled = regular;
+        bool syntheticBold = (style & GlyphStyle.Bold) != 0 && styled.Weight <= regular.Weight && styled.Weight < Options.BoldWeight;
+        bool syntheticItalic = (style & GlyphStyle.Italic) != 0 && !styled.IsItalic;
+        return new FontResolution(styled, isFallback, syntheticBold, syntheticItalic);
     }
 
-    private static bool IsSingleRune(string grapheme)
+    private bool IsPrimaryFamily(IFontFace face) =>
+        ReferenceEquals(face, _faces[0]) || string.Equals(face.FamilyName, _faces[0].FamilyName, StringComparison.OrdinalIgnoreCase);
+
+    private IFontFace? MatchDynamic(string grapheme, int baseCp)
     {
-        return System.Text.Rune.TryGetRuneAt(grapheme, 0, out var rune)
-            && rune.Utf16SequenceLength == grapheme.Length;
+        if (baseCp <= 0)
+            return null;
+        var match = _catalog.MatchCharacter(baseCp, Options.RegularStyle);
+        if (match == null || !ClusterFontSelector.Covers(match, grapheme))
+            return null;
+        foreach (var face in _faces)
+            if (ReferenceEquals(face, match) || SameFace(face, match))
+                return face;
+        if (_faces.Count - _configuredCount < MaxDynamicFaces)
+            _faces.Add(match);
+        return match;
     }
 
-    private static int GetFirstCodepoint(string grapheme)
+    private IFontFace StyledFace(IFontFace regular, GlyphStyle style, bool isFallback)
     {
-        if (string.IsNullOrEmpty(grapheme)) return 0;
-        if (System.Text.Rune.TryGetRuneAt(grapheme, 0, out var rune))
+        if (_styledFaces.TryGetValue((regular, style), out var cached))
+            return cached;
+        var want = Options.StyleFor(style);
+        IFontFace? styled = null;
+        if (!isFallback)
         {
-            return rune.Value;
+            foreach (string family in Options.FamiliesFor(style))
+                if ((styled = _catalog.MatchFamily(family, want)) != null)
+                    break;
         }
-        return (int)grapheme[0];
+        if (styled == null)
+        {
+            var match = _catalog.MatchFamily(regular.FamilyName, want);
+            if (match != null
+                && string.Equals(match.FamilyName, regular.FamilyName, StringComparison.OrdinalIgnoreCase)
+                && Improves(match, regular, want))
+            {
+                styled = match;
+            }
+        }
+        styled ??= regular;
+        // Bounded by the chain: at most three styles per configured, dynamic or symbol-map face.
+        _styledFaces[(regular, style)] = styled;
+        return styled;
     }
 
-    private static bool TypefaceContainsGrapheme(SKTypeface typeface, string grapheme, int firstRune)
+    // A real styled face is heavier when bold is wanted or slanted when italic is wanted, without losing the
+    // other requested attribute that the regular face already had.
+    private static bool Improves(IFontFace candidate, IFontFace regular, FontFaceStyle want)
     {
-        if (typeface == null) return false;
+        bool heavier = want.Weight > regular.Weight && candidate.Weight > regular.Weight;
+        bool slanted = want.Italic && candidate.IsItalic && !regular.IsItalic;
+        return heavier || slanted;
+    }
 
-        // Fast path for single character / single codepoint using ContainsGlyph
-        if (firstRune > 0)
-        {
-#pragma warning disable CS0618
-            if (!typeface.ContainsGlyph(firstRune))
-            {
-                return false;
-            }
-#pragma warning restore CS0618
-        }
+    private static bool SameFace(IFontFace a, IFontFace b) =>
+        string.Equals(a.FamilyName, b.FamilyName, StringComparison.OrdinalIgnoreCase)
+        && a.Weight == b.Weight && a.IsItalic == b.IsItalic;
 
-        // For multi-char graphemes or verification, ensure all codepoints exist in typeface
-        for (int i = 0; i < grapheme.Length;)
-        {
-            if (!System.Text.Rune.TryGetRuneAt(grapheme, i, out var rune))
-            {
-                i++;
-                continue;
-            }
-            int cp = rune.Value;
-            i += rune.Utf16SequenceLength;
+    private IFontFace? FamilyFace(string family)
+    {
+        if (_familyFaces.TryGetValue(family, out var face))
+            return face;
+        face = _catalog.MatchFamily(family, Options.RegularStyle);
+        _familyFaces.Set(family, face);
+        return face;
+    }
 
-#pragma warning disable CS0618
-            if (!typeface.ContainsGlyph(cp))
-            {
-                return false;
-            }
-#pragma warning restore CS0618
-        }
-
-        return true;
+    private void AddConfigured(IFontFace? face)
+    {
+        if (face == null)
+            return;
+        foreach (var existing in _faces)
+            if (ReferenceEquals(existing, face) || SameFace(existing, face))
+                return;
+        _faces.Add(face);
     }
 
     public void Dispose()
     {
         lock (_lock)
         {
-            if (_disposed) return;
-            _disposed = true;
-            _resolutionCache.Clear();
-
-            if (_ownsTypefaces)
-            {
-                for (int i = 0; i < _typefaces.Count; i++)
-                {
-                    _typefaces[i].Dispose();
-                }
-            }
-            _typefaces.Clear();
-            _singleRuneResolutionCache.Clear();
+            _resolutions.Clear();
+            _styledFaces.Clear();
+            _familyFaces.Clear();
         }
     }
 }

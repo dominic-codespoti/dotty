@@ -507,8 +507,19 @@ public class Osc8ParserTests
         public List<(int code, string payload)> OscCalls { get; } = new();
 
         object? ITerminalHandler.Buffer => null;
+        bool ITerminalHandler.NationalReplacementEnabled => false;
+        void ITerminalHandler.OnSetNationalReplacementMode(bool enabled) { }
+        void ITerminalHandler.OnSetFontShiftMode(bool enabled) { }
+        void ITerminalHandler.OnSetSmoothScroll(bool enabled) { }
+        void ITerminalHandler.OnSetPrinterMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnPrintScreen() { }
+        void ITerminalHandler.OnSetScreenLines(int lines) { }
+        void ITerminalHandler.OnSetAttributeChangeExtent(int mode) { }
+        void ITerminalHandler.OnChangeRectangleAttributes(int top, int left, int bottom, int right, ReadOnlySpan<int> parameters, bool reverse) { }
+        void ITerminalHandler.OnRequestStatusString(ReadOnlySpan<byte> request) { }
+        void ITerminalHandler.OnPrivateDeviceStatusReport(int code, int identifier) { }
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
-        event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
         event Action? ITerminalHandler.PaletteChanged { add { } remove { } }
 
@@ -517,7 +528,25 @@ public class Osc8ParserTests
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }
         void ITerminalHandler.OnPrint(ReadOnlySpan<char> text) => PrintCalls.Add(text.ToString());
         void ITerminalHandler.OnEraseDisplay(int mode) { }
+        void ITerminalHandler.OnSelectiveEraseDisplay(int mode) { }
+        void ITerminalHandler.OnSelectiveEraseLine(int mode) { }
         void ITerminalHandler.OnClearScrollback() { }
+        void ITerminalHandler.OnSetConformanceLevel(int level, int controls) { }
+        void ITerminalHandler.OnSavePrivateMode(int mode) { }
+        void ITerminalHandler.OnRestorePrivateMode(int mode) { }
+        void ITerminalHandler.OnSetTitle(int code, ReadOnlySpan<byte> payload) => OscCalls.Add((code, Encoding.UTF8.GetString(payload)));
+        void ITerminalHandler.OnSetTitleModes(ReadOnlySpan<int> modes, bool enabled) { }
+        void ITerminalHandler.OnInsertColumns(int n) { }
+        void ITerminalHandler.OnDeleteColumns(int n) { }
+        void ITerminalHandler.OnBackIndex() { }
+        void ITerminalHandler.OnForwardIndex() { }
+        void ITerminalHandler.OnCopyRectangle(int top, int left, int bottom, int right, int sourcePage, int destinationTop, int destinationLeft, int destinationPage) { }
+        void ITerminalHandler.OnFillRectangle(uint rune, int top, int left, int bottom, int right) { }
+        void ITerminalHandler.OnEraseRectangle(int top, int left, int bottom, int right, bool selective) { }
+        void ITerminalHandler.OnSetAnsiMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnSetColumnMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnSetMoreFix(bool enabled) { }
+        void ITerminalHandler.OnSwitchAlternateScreen(int mode, bool enabled) { }
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> parameters) { }
         void ITerminalHandler.OnBell() { }
 
@@ -547,6 +576,8 @@ public class Osc8ParserTests
         void ITerminalHandler.OnCursorForward(int n) { }
         void ITerminalHandler.OnCursorBack(int n) { }
         void ITerminalHandler.OnEraseLine(int mode) { }
+        void ITerminalHandler.OnSetIsoProtection(bool active) { }
+        void ITerminalHandler.OnSetDecProtection(int mode) { }
         void ITerminalHandler.OnCarriageReturn() { }
         void ITerminalHandler.OnLineFeed() { }
         void ITerminalHandler.OnSetScrollRegion(int top1Based, int bottom1Based) { }
@@ -572,11 +603,17 @@ public class Osc8ParserTests
         void ITerminalHandler.OnCursorVerticalAbsolute(int row) { }
         void ITerminalHandler.OnCursorNextLine(int n) { }
         void ITerminalHandler.OnCursorPreviousLine(int n) { }
+        void ITerminalHandler.OnHorizontalPositionRelative(int n) { }
+        void ITerminalHandler.OnVerticalPositionRelative(int n) { }
+        void ITerminalHandler.OnSetLeftRightMarginMode(bool enabled) { }
+        void ITerminalHandler.OnSaveCursorOrSetMargins(int left, int right) { }
+        void ITerminalHandler.OnSetReverseWrapMode(int mode, bool enabled) { }
         void ITerminalHandler.OnScrollUp(int n) { }
         void ITerminalHandler.OnScrollDown(int n) { }
         void ITerminalHandler.OnFullReset() { }
+        void ITerminalHandler.OnScreenAlignmentTest() { }
         void ITerminalHandler.OnRepeatCharacter(int n) { }
-        void ITerminalHandler.OnTab() { }
+        void ITerminalHandler.OnTab(int n) { }
         void ITerminalHandler.OnBackTab(int n) { }
         void ITerminalHandler.OnSetKeypadApplicationMode(bool enabled) { }
         void ITerminalHandler.OnSetCursorShape(int shape) { }
@@ -588,7 +625,6 @@ public class Osc8ParserTests
         void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) { }
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) { }
-        void ITerminalHandler.OnWindowReport(int command) { }
     }
 
     #endregion

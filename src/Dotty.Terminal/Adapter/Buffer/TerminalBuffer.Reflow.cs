@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using Dotty.Terminal.Graphics;
 
 namespace Dotty.Terminal.Adapter;
 
 public partial class TerminalBuffer
 {
-    private readonly record struct PromptAnchor(PromptMark Mark, ReflowCursorAnchor Anchor);
+    private readonly record struct PromptAnchor(PromptMark Mark, int Slot);
     private readonly List<PromptAnchor> _promptAnchorScratch = new();
 
     private void ResizeWithReflow(int requestedRows, int requestedColumns)
@@ -35,86 +36,84 @@ public partial class TerminalBuffer
             ? mainLayout
             : alternateLayout!;
 
-        var activeAnchor = oldActiveScreen.GetReflowAnchor(
-            cursorState.Row,
-            cursorState.Column,
-            cursorState.WrapPending,
-            oldActiveScrollback,
-            activeLayout);
+        // The reflow resolves exactly the anchors registered here (the cursor, the saved cursors and the prompt
+        // marks) and keeps no per-cell position table; each anchor is read back by its slot afterwards.
+        var mainMapping = _screens.MainMapping;
+        var alternateMapping = _screens.AlternateMapping;
+        var activeMapping = _isAlternate ? alternateMapping : mainMapping;
+        int markAnchors = _promptMarks.Count;
+        mainMapping.BeginAnchors((!_isAlternate ? 1 : 0) + (_hasMainSavedCursor ? 1 : 0) + (!_isAlternate ? markAnchors : 0));
+        alternateMapping.BeginAnchors((_isAlternate ? 1 : 0) + (_hasAlternateSavedCursor ? 1 : 0) + (_isAlternate ? markAnchors : 0));
 
-        var mainAnchor = _isAlternate
-            ? oldMainScreen.GetReflowAnchor(
-                _alternateSavedCursorState.Row,
-                _alternateSavedCursorState.Column,
-                _alternateSavedCursorState.WrapPending,
-                oldMainScrollback,
-                mainLayout)
-            : activeAnchor;
+        int cursorSlot = activeMapping.AddAnchor(oldActiveScreen.GetReflowAnchor(
+            cursorState.Row, cursorState.Column, cursorState.WrapPending, oldActiveScrollback, activeLayout));
 
-        var alternateAnchor = _isAlternate
-            ? activeAnchor
-            : new ReflowCursorAnchor(0, 0);
-        ReflowCursorAnchor savedAnchor = default;
-        if (_hasSavedCursor)
+        int mainSavedSlot = -1;
+        if (_hasMainSavedCursor)
         {
-            savedAnchor = oldActiveScreen.GetReflowAnchor(
-                _savedCursorState.Row,
-                _savedCursorState.Column,
-                _savedCursorState.WrapPending,
-                oldActiveScrollback,
-                activeLayout);
+            var saved = _mainSavedCursor.Cursor;
+            mainSavedSlot = mainMapping.AddAnchor(oldMainScreen.GetReflowAnchor(
+                saved.Row, saved.Column, saved.WrapPending, oldMainScrollback, mainLayout));
+        }
+        int alternateSavedSlot = -1;
+        if (_hasAlternateSavedCursor && alternateLayout is not null)
+        {
+            var saved = _alternateSavedCursor.Cursor;
+            alternateSavedSlot = alternateMapping.AddAnchor(alternateScreen!.GetReflowAnchor(
+                saved.Row, saved.Column, saved.WrapPending, 0, alternateLayout));
         }
 
         var promptAnchors = CapturePromptAnchors(
             oldActiveScreen,
             activeLayout,
+            activeMapping,
             oldActiveScrollback,
             oldRows,
             oldTotalScrolled);
+        var selectionAnchors = SelectionAnchors;
+        int selectionSlots = CaptureSelectionAnchors(
+            selectionAnchors, oldActiveScreen, activeLayout, activeMapping, oldActiveScrollback, oldRows, oldTotalScrolled);
+
+        // Kitty graphics: the anchored placements of each screen join the reflow like the prompt marks do.
+        var mainImages = WithPlacements(_screens.MainImages);
+        var alternateImages = alternateLayout is null ? null : WithPlacements(_screens.AlternateImages);
+        _graphicsReflowOpen = mainImages is not null || alternateImages is not null;
+        mainImages?.CaptureAnchors(
+            oldMainScrollback,
+            oldRows,
+            RegisterGraphicsAnchors(oldMainScreen, mainLayout, mainMapping, oldMainScrollback));
+        alternateImages?.CaptureAnchors(
+            0,
+            oldRows,
+            RegisterGraphicsAnchors(alternateScreen!, alternateLayout!, alternateMapping, 0));
+        ReflowFaultInjectorForTests?.Invoke();
 
         _screens.Reflow(
             rows,
             columns,
-            mainAnchor,
             mainLayout,
             oldMainScrollback,
-            alternateAnchor,
             alternateLayout,
-            alternateScrollbackRows: 0,
-            out ReflowMapping? mainMapping,
-            out ReflowMapping? alternateMapping);
+            alternateScrollbackRows: 0);
 
         Rows = rows;
         Columns = columns;
 
-        var activeMapping = _isAlternate ? alternateMapping : mainMapping;
-        if (activeMapping is null)
-            throw new InvalidOperationException("Resize reflow did not produce an active mapping.");
-
-        var mappedCursor = MapCursorState(cursorState, activeAnchor, activeMapping, rows, columns);
+        var mappedCursor = MapCursorState(cursorState, activeMapping, cursorSlot, rows, columns);
         _cursor.RestoreState(mappedCursor, rows, columns);
 
-        if (_hasSavedCursor)
+        if (_hasMainSavedCursor && mainSavedSlot >= 0)
         {
-            _savedCursorState = MapCursorState(
-                _savedCursorState,
-                savedAnchor,
-                activeMapping,
-                rows,
-                columns);
+            var saved = _mainSavedCursor;
+            _mainSavedCursor = saved with { Cursor = MapCursorState(saved.Cursor, mainMapping, mainSavedSlot, rows, columns) };
+        }
+        if (_hasAlternateSavedCursor && alternateSavedSlot >= 0)
+        {
+            var saved = _alternateSavedCursor;
+            _alternateSavedCursor = saved with { Cursor = MapCursorState(saved.Cursor, alternateMapping, alternateSavedSlot, rows, columns) };
         }
 
-        if (_isAlternate && _hasAlternateSavedCursor && mainMapping is not null)
-        {
-            _alternateSavedCursorState = MapCursorState(
-                _alternateSavedCursorState,
-                mainAnchor,
-                mainMapping,
-                rows,
-                columns);
-        }
-
-        int newMainScrollback = mainMapping?.NewScrollbackRows ?? 0;
+        int newMainScrollback = mainMapping.NewScrollbackRows;
         if (_isAlternate)
         {
             _savedTotalScrolled = newMainScrollback;
@@ -126,6 +125,22 @@ public partial class TerminalBuffer
         }
 
         RebasePromptMarks(promptAnchors, activeMapping, rows);
+        RebaseSelectionAnchors(selectionAnchors, selectionSlots, activeMapping, rows, columns);
+
+        if (mainImages is not null)
+        {
+            _graphicsAnchorMapping = mainMapping;
+            mainImages.RebaseAnchors(mainMapping.NewScrollbackRows, rows, ResolveGraphicsAnchorDelegate);
+        }
+        if (alternateImages is not null)
+        {
+            _graphicsAnchorMapping = alternateMapping;
+            alternateImages.RebaseAnchors(alternateMapping.NewScrollbackRows, rows, ResolveGraphicsAnchorDelegate);
+        }
+        _graphicsAnchorMapping = null;
+        _graphicsAnchorScreen = null;
+        _graphicsAnchorLayout = null;
+        _graphicsReflowOpen = false;
 
         if (fullScreenScroll)
         {
@@ -137,11 +152,25 @@ public partial class TerminalBuffer
             _scrollTop = Math.Clamp(oldScrollTop, 0, rows - 1);
             _scrollBottom = Math.Clamp(oldScrollBottom, _scrollTop, rows - 1);
         }
+
+        _leftMargin = Math.Clamp(_leftMargin, 0, columns - 1);
+        _rightMargin = _leftMargin == 0 && _rightMargin == oldColumns - 1
+            ? columns - 1
+            : Math.Clamp(_rightMargin, _leftMargin, columns - 1);
+        if (_leftMargin >= _rightMargin)
+        {
+            _leftMargin = 0;
+            _rightMargin = columns - 1;
+        }
         if (_originMode)
         {
             var state = _cursor.CaptureState();
             _cursor.RestoreState(
-                state with { Row = Math.Clamp(state.Row, _scrollTop, _scrollBottom) },
+                state with
+                {
+                    Row = Math.Clamp(state.Row, _scrollTop, _scrollBottom),
+                    Column = Math.Clamp(state.Column, EffectiveLeftMargin, EffectiveRightMargin)
+                },
                 rows,
                 columns);
         }
@@ -151,16 +180,105 @@ public partial class TerminalBuffer
         _writer.ResetRowDirtyCoalescing();
         unchecked { _globalGeneration++; }
         MarkAllRowsDirty();
+
+        // Absolute rows were re-based above (_totalScrolled, prompt marks). History lives on the main screen, so its
+        // mapping says whether the oldest rows were dropped to fit the capacity.
+        RaiseHistoryInvalidated(mainMapping.RetainedStart > 0
+            ? HistoryDiscardReason.CapacityShrunk
+            : HistoryDiscardReason.Rebased);
+    }
+
+    // Registrar/resolver state for the placement anchors of the store being captured or rebased. The delegates are
+    // created once, so a reflow with placements allocates no closure; without placements none of this runs.
+    private Screen? _graphicsAnchorScreen;
+    private Screen.SourceLayout? _graphicsAnchorLayout;
+    private ReflowMapping? _graphicsAnchorMapping;
+    private int _graphicsAnchorScrollback;
+    private AnchorRegistrar? _registerGraphicsAnchorDelegate;
+    private AnchorResolver? _resolveGraphicsAnchorDelegate;
+    private bool _graphicsReflowOpen;
+
+    /// <summary>Test seam: runs between the placement capture and the screen reflow, where a failure strands the captured anchors.</summary>
+    internal Action? ReflowFaultInjectorForTests;
+
+    /// <summary>
+    /// A resize failed (the exception is rethrown by the caller). When it failed between capturing and rebasing the
+    /// placement anchors, the placements' rows are in an unknown state: every placement of both screens is deleted
+    /// and the captured anchors are dropped, so no placement is ever shown at a stale row.
+    /// </summary>
+    private void AbandonGraphicsReflow()
+    {
+        _graphicsAnchorMapping = null;
+        _graphicsAnchorScreen = null;
+        _graphicsAnchorLayout = null;
+        if (!_graphicsReflowOpen)
+            return;
+        _graphicsReflowOpen = false;
+        int deleted = _screens.MainImages?.AbandonAnchors() ?? 0;
+        deleted += _screens.AlternateImages?.AbandonAnchors() ?? 0;
+        if (deleted > 0)
+            BumpGraphicsGeneration();
+    }
+
+    private static KittyImageStore? WithPlacements(KittyImageStore? store) =>
+        store is { HasPlacements: true } ? store : null;
+
+    private AnchorResolver ResolveGraphicsAnchorDelegate => _resolveGraphicsAnchorDelegate ??= ResolveGraphicsAnchor;
+
+    /// <summary>
+    /// The registrar for the placements of <paramref name="screen"/> (mirrors <see cref="CapturePromptAnchors"/>):
+    /// a placement at <c>logicalRow</c> (relative to visible row 0, negative = history) and <c>column</c> becomes a
+    /// <see cref="ReflowCursorAnchor"/> on <paramref name="mapping"/>.
+    /// </summary>
+    private AnchorRegistrar RegisterGraphicsAnchors(
+        Screen screen,
+        Screen.SourceLayout layout,
+        ReflowMapping mapping,
+        int scrollbackRows)
+    {
+        _graphicsAnchorScreen = screen;
+        _graphicsAnchorLayout = layout;
+        _graphicsAnchorMapping = mapping;
+        _graphicsAnchorScrollback = scrollbackRows;
+        return _registerGraphicsAnchorDelegate ??= RegisterGraphicsAnchor;
+    }
+
+    private int RegisterGraphicsAnchor(int logicalRow, int column)
+    {
+        var anchor = _graphicsAnchorScreen!.GetReflowAnchor(
+            logicalRow,
+            column,
+            wrapPending: false,
+            _graphicsAnchorScrollback,
+            _graphicsAnchorLayout!);
+        return _graphicsAnchorMapping!.AddAnchor(anchor);
+    }
+
+    // Same arithmetic as RebasePromptMarks: the chronological index of the landing row is OutputIndex - RetainedStart;
+    // the store itself rejects indexes outside [0, NewScrollbackRows + rows).
+    private bool ResolveGraphicsAnchor(int slot, out long row, out int column)
+    {
+        var mapping = _graphicsAnchorMapping!;
+        if (mapping.TryMap(slot, out var position))
+        {
+            row = position.OutputIndex - mapping.RetainedStart;
+            column = position.Column;
+            return true;
+        }
+
+        row = 0;
+        column = 0;
+        return false;
     }
 
     private static CursorState MapCursorState(
         CursorState original,
-        ReflowCursorAnchor anchor,
         ReflowMapping mapping,
+        int slot,
         int rows,
         int columns)
     {
-        if (mapping.TryMap(anchor, out var position) && !position.InScrollback)
+        if (mapping.TryMap(slot, out var position) && !position.InScrollback)
         {
             return original with
             {
@@ -189,6 +307,7 @@ public partial class TerminalBuffer
     private List<PromptAnchor> CapturePromptAnchors(
         Screen screen,
         Screen.SourceLayout layout,
+        ReflowMapping mapping,
         int scrollbackRows,
         int rows,
         int totalScrolled)
@@ -208,7 +327,7 @@ public partial class TerminalBuffer
                 wrapPending: false,
                 scrollbackRows,
                 layout);
-            anchors.Add(new PromptAnchor(mark, anchor));
+            anchors.Add(new PromptAnchor(mark, mapping.AddAnchor(anchor)));
         }
         return anchors;
     }
@@ -221,7 +340,7 @@ public partial class TerminalBuffer
         _promptMarks.Clear();
         foreach (var entry in anchors)
         {
-            if (!mapping.TryMap(entry.Anchor, out var position))
+            if (!mapping.TryMap(entry.Slot, out var position))
                 continue;
 
             int retainedIndex = position.OutputIndex - mapping.RetainedStart;

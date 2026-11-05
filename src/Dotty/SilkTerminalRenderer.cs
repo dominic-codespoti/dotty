@@ -2,10 +2,11 @@ using System;
 using Silk.NET.OpenGL;
 using Dotty.Rendering.Gpu;
 using Dotty.Terminal.Adapter;
+using Dotty.Silk.Rendering;
 
 namespace Dotty.Silk;
 
-public sealed unsafe class SilkTerminalRenderer : IDisposable
+public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindingCache
 {
     private const int FloatsPerInstance = 19;
 
@@ -28,15 +29,10 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private bool _colorAtlasSamplerSet;
     private int _uPass;
     private int _uAtlas;
-    private int _uUnderlineY;
-    private int _uStrikeY;
-    private int _uLineHalf;
 
     private float[] _staging = Array.Empty<float>();
-    private CellInstance[] _lastInstances = Array.Empty<CellInstance>();
-    private int _lastInstanceCount;
+    private readonly InstanceDelta _instanceDelta = new();
     private bool _disposed;
-    private bool _instanceBufferDirty = true;
     private float _stagedCellW = float.NaN;
     private float _stagedCellH = float.NaN;
     private int _drawInstanceCount;
@@ -44,12 +40,7 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private int _drawMenuCount;
     private int _instanceBufferCapacityBytes;
     private int _stagedMenuInstanceStart = -1;
-    private int[] _sourceOutputStarts = Array.Empty<int>();
-    private int[] _sourceOutputCounts = Array.Empty<int>();
-    private int[] _dirtyInstanceRanges = Array.Empty<int>();
-    private int _dirtyInstanceRangeCount;
-    private int _stagedOutputInstanceCount;
-    private bool _fullInstanceUpload = true;
+
     private float _stagedPaddingLeft = float.NaN;
     private float _stagedPaddingTop = float.NaN;
     private int _stagedBarRows = -1;
@@ -89,12 +80,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     private bool _atlasSizeSet;
     private float _cachedAtlasW;
     private float _cachedAtlasH;
-    private bool _underlineSet;
-    private float _cachedUnderline;
-    private bool _strikeSet;
-    private float _cachedStrike;
-    private bool _lineHalfSet;
-    private float _cachedLineHalf;
     private bool _passSet;
     private int _cachedPass;
     private bool _atlasSamplerSet;
@@ -109,6 +94,19 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     public long Rgba8TexturePayloadBytes => TextureManager.Rgba8TexturePayloadBytes;
     /// <summary>Process-wide retained native pixel storage for color-glyph probes.</summary>
     public static long IntrinsicColorProbeScratchBytes => GlyphAtlas.IntrinsicColorProbeScratchBytes;
+
+    private SilkImageTextureCache? _imageTextures;
+    private SilkImageRenderer? _images;
+    private uint _frameAtlasTexture;
+
+    /// <summary>
+    /// True when the last frame skipped an image texture upload because of the per-frame budget; the host should
+    /// render again (<see cref="WindowFrameReason.ImageUpload"/>).
+    /// </summary>
+    public bool ImageUploadsDeferred => _images?.UploadsDeferred ?? false;
+
+    /// <summary>Estimated GPU bytes of resident image textures; not driver RSS.</summary>
+    public long EstimatedImageTextureBytes => _imageTextures?.EstimatedTextureBytes ?? 0;
 
     public SilkTerminalRenderer(GL gl, GlyphAtlas atlas)
     {
@@ -125,15 +123,13 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         _uColorAtlas = _gl.GetUniformLocation(_program, "uColorAtlas");
         _uPass = _gl.GetUniformLocation(_program, "uPass");
         _uAtlas = _gl.GetUniformLocation(_program, "uAtlas");
-        _uUnderlineY = _gl.GetUniformLocation(_program, "uUnderlineY");
-        _uStrikeY = _gl.GetUniformLocation(_program, "uStrikeY");
-        _uLineHalf = _gl.GetUniformLocation(_program, "uLineHalf");
 
         _gl.Enable(EnableCap.Blend);
         _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
 
         InitBuffers();
         InitChromeBuffers();
+        InitTextBlendUniforms();
     }
 
     public void SetAtlas(GlyphAtlas atlas) => TextureManager.SetAtlas(atlas);
@@ -289,6 +285,12 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     }
 
 
+    /// <summary>
+    /// Alpha of the default background (<see cref="BackgroundOpacity.Resolve"/>); below 255 only shows through
+    /// when the window was created with an alpha framebuffer.
+    /// </summary>
+    public byte BackgroundAlpha { get; set; } = 255;
+
     public void Render(
         ReadOnlySpan<CellInstance> instances,
         ReadOnlySpan<ChromeQuadInstance> chromeQuads,
@@ -298,9 +300,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         int framebufferHeight,
         float cellW,
         float cellH,
-        float underlineY,
-        float strikeY,
-        float lineHalf,
         SgrColorArgb clearColor,
         bool frameCaptured = false,
         float paddingLeft = 0f,
@@ -308,44 +307,43 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         int barRows = 0,
         int scrollbarChromeStart = -1,
         int menuInstanceStart = -1,
-        int menuChromeStart = -1)
+        int menuChromeStart = -1,
+        ImageDrawList? images = null,
+        int underlayChromeCount = 0,
+        ReadOnlySpan<CellTransformRange> transforms = default)
     {
         EnsureNotDisposed();
+        SilkImageRenderer? imageRenderer = BeginImageFrame(images);
 
+        bool stagingCompatible = cellW == _stagedCellW
+            && cellH == _stagedCellH
+            && paddingLeft == _stagedPaddingLeft
+            && paddingTop == _stagedPaddingTop
+            && barRows == _stagedBarRows
+            && menuInstanceStart == _stagedMenuInstanceStart;
         if (frameCaptured)
-            CaptureInstances(instances, cellW, cellH, paddingLeft, paddingTop, barRows, menuInstanceStart);
-
-        if (cellW != _stagedCellW || cellH != _stagedCellH
-            || paddingLeft != _stagedPaddingLeft || paddingTop != _stagedPaddingTop
-            || barRows != _stagedBarRows)
-        {
-            _instanceBufferDirty = true;
-            _fullInstanceUpload = true;
-        }
-        if (menuInstanceStart != _stagedMenuInstanceStart)
-        {
-            _instanceBufferDirty = true;
-            _fullInstanceUpload = true;
-        }
+            _instanceDelta.Capture(instances, stagingCompatible, transforms);
+        if (!stagingCompatible)
+            _instanceDelta.Invalidate();
 
 
         _lastFramebufferWidth = framebufferWidth;
         _lastFramebufferHeight = framebufferHeight;
         _gl.Viewport(0, 0, (uint)framebufferWidth, (uint)framebufferHeight);
-        _gl.ClearColor(clearColor.R / 255f, clearColor.G / 255f, clearColor.B / 255f, 1f);
+        var clear = BackgroundOpacity.PremultipliedClear(clearColor, BackgroundAlpha);
+        _gl.ClearColor(clear.R, clear.G, clear.B, clear.A);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
 
         uint texId = TextureManager.UpdateTexture();
+        _frameAtlasTexture = texId;
         UseProgram(_program);
         Uniform2CellFramebuffer((float)framebufferWidth, (float)framebufferHeight);
         Uniform2CellSize(cellW, cellH);
         Uniform2AtlasSize((float)atlasWidth, (float)atlasHeight);
         Uniform2ColorAtlasSize(Math.Max(1, TextureManager.Atlas.ColorWidth), Math.Max(1, TextureManager.Atlas.ColorHeight));
-        Uniform1Underline(underlineY);
-        Uniform1Strike(strikeY);
-        Uniform1LineHalf(lineHalf);
         BindAtlasTexture(texId);
         Uniform1AtlasSampler();
+        ApplyTextBlendUniforms();
         BindColorAtlasTexture(TextureManager.ColorTextureId);
         if (!_colorAtlasSamplerSet)
         {
@@ -361,152 +359,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             chromeQuads,
             scrollbarChromeStart,
             menuInstanceStart,
-            menuChromeStart);
+            menuChromeStart,
+            images,
+            underlayChromeCount);
+        imageRenderer?.EndFrame();
     }
-    private void CaptureInstances(
-        ReadOnlySpan<CellInstance> instances,
-        float cellW,
-        float cellH,
-        float paddingLeft,
-        float paddingTop,
-        int barRows,
-        int menuInstanceStart)
-    {
-        bool compatible = !_instanceBufferDirty
-            && _lastInstanceCount == instances.Length
-            && _lastInstances.Length >= instances.Length
-            && cellW == _stagedCellW
-            && cellH == _stagedCellH
-            && paddingLeft == _stagedPaddingLeft
-            && paddingTop == _stagedPaddingTop
-            && barRows == _stagedBarRows
-            && menuInstanceStart == _stagedMenuInstanceStart;
-        EnsureLastInstanceCapacity(instances.Length);
-        if (!compatible)
-        {
-            instances.CopyTo(_lastInstances);
-            _lastInstanceCount = instances.Length;
-            _dirtyInstanceRangeCount = 0;
-            _instanceBufferDirty = true;
-            _fullInstanceUpload = true;
-            return;
-        }
-
-        EnsureOutputMapCapacity(instances.Length);
-        _dirtyInstanceRangeCount = 0;
-        int outputInstance = 0;
-        int dirtyStart = -1;
-        bool layoutChanged = false;
-        for (int i = 0; i < instances.Length; i++)
-        {
-            ref readonly var current = ref instances[i];
-            ref readonly var previous = ref _lastInstances[i];
-            bool hasDecoration = (current.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
-            bool hadDecoration = (previous.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
-            if (hasDecoration != hadDecoration)
-            {
-                layoutChanged = true;
-                break;
-            }
-
-            _sourceOutputStarts[i] = outputInstance;
-            int outputCount = hasDecoration ? 2 : 1;
-            _sourceOutputCounts[i] = outputCount;
-            outputInstance += outputCount;
-
-            if (!CellInstancesEqual(current, previous))
-            {
-                if (dirtyStart < 0)
-                    dirtyStart = i;
-            }
-            else if (dirtyStart >= 0)
-            {
-                AddDirtyInstanceRange(dirtyStart, i);
-                dirtyStart = -1;
-            }
-        }
-
-        if (layoutChanged)
-        {
-            instances.CopyTo(_lastInstances);
-            _lastInstanceCount = instances.Length;
-            _dirtyInstanceRangeCount = 0;
-            _instanceBufferDirty = true;
-            _fullInstanceUpload = true;
-            return;
-        }
-
-        if (dirtyStart >= 0)
-            AddDirtyInstanceRange(dirtyStart, instances.Length);
-
-        _stagedOutputInstanceCount = outputInstance;
-        _lastInstanceCount = instances.Length;
-        if (_dirtyInstanceRangeCount == 0)
-        {
-            _instanceBufferDirty = false;
-            _fullInstanceUpload = false;
-            return;
-        }
-
-        for (int range = 0; range < _dirtyInstanceRangeCount; range++)
-        {
-            int start = _dirtyInstanceRanges[range * 2];
-            int end = _dirtyInstanceRanges[range * 2 + 1];
-            instances.Slice(start, end - start).CopyTo(_lastInstances.AsSpan(start));
-        }
-        _instanceBufferDirty = true;
-        _fullInstanceUpload = false;
-    }
-
-    private void EnsureLastInstanceCapacity(int required)
-    {
-        if (_lastInstances.Length >= required)
-            return;
-        int capacity = Math.Max(required, _lastInstances.Length == 0 ? 4096 : _lastInstances.Length * 2);
-        _lastInstances = new CellInstance[capacity];
-    }
-
-    private void EnsureOutputMapCapacity(int required)
-    {
-        if (_sourceOutputStarts.Length < required)
-        {
-            int capacity = Math.Max(required, _sourceOutputStarts.Length == 0 ? 4096 : _sourceOutputStarts.Length * 2);
-            Array.Resize(ref _sourceOutputStarts, capacity);
-            Array.Resize(ref _sourceOutputCounts, capacity);
-        }
-    }
-
-    private void AddDirtyInstanceRange(int start, int end)
-    {
-        int needed = checked((_dirtyInstanceRangeCount + 1) * 2);
-        if (_dirtyInstanceRanges.Length < needed)
-        {
-            int capacity = Math.Max(needed, _dirtyInstanceRanges.Length == 0 ? 16 : _dirtyInstanceRanges.Length * 2);
-            Array.Resize(ref _dirtyInstanceRanges, capacity);
-        }
-        _dirtyInstanceRanges[_dirtyInstanceRangeCount * 2] = start;
-        _dirtyInstanceRanges[_dirtyInstanceRangeCount * 2 + 1] = end;
-        _dirtyInstanceRangeCount++;
-    }
-
-    private static bool CellInstancesEqual(in CellInstance left, in CellInstance right) =>
-        left.Col == right.Col
-        && left.Row == right.Row
-        && left.GlyphX == right.GlyphX
-        && left.GlyphY == right.GlyphY
-        && left.GlyphW == right.GlyphW
-        && left.GlyphH == right.GlyphH
-        && left.OffX == right.OffX
-        && left.OffY == right.OffY
-        && left.FgR == right.FgR
-        && left.FgG == right.FgG
-        && left.FgB == right.FgB
-        && left.FgA == right.FgA
-        && left.Flags == right.Flags
-        && left.BgR == right.BgR
-        && left.BgG == right.BgG
-        && left.BgB == right.BgB
-        && left.BgA == right.BgA;
 
     private void UploadAndDraw(
         float cellW,
@@ -517,78 +374,66 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         ReadOnlySpan<ChromeQuadInstance> chromeQuads,
         int scrollbarChromeStart,
         int menuInstanceStart,
-        int menuChromeStart)
+        int menuChromeStart,
+        ImageDrawList? images,
+        int underlayChromeCount)
     {
-        int cellCount = _lastInstanceCount;
-        if (cellCount > 0 && _instanceBufferDirty)
+        InstanceDelta delta = _instanceDelta;
+        int instanceCount = delta.Count;
+        if (instanceCount > 0 && delta.Dirty)
         {
-            int maxInstances = checked(cellCount * 2);
-            int maxFloats = checked(maxInstances * FloatsPerInstance);
+            // One GPU instance per cell instance: decorations are ordinary sprite instances from the frame builder.
+            int maxFloats = checked(instanceCount * FloatsPerInstance);
             if (_staging.Length < maxFloats)
             {
                 int capacity = Math.Max(maxFloats, _staging.Length == 0 ? 4096 : _staging.Length * 2);
                 _staging = new float[capacity];
             }
 
-            int outputInstanceCount = _stagedOutputInstanceCount;
-            if (_fullInstanceUpload)
-            {
-                EnsureOutputMapCapacity(cellCount);
-                outputInstanceCount = 0;
-                for (int i = 0; i < cellCount; i++)
-                {
-                    _sourceOutputStarts[i] = outputInstanceCount;
-                    ref readonly var instance = ref _lastInstances[i];
-                    bool decorated = (instance.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) != 0;
-                    _sourceOutputCounts[i] = decorated ? 2 : 1;
-                    outputInstanceCount += _sourceOutputCounts[i];
-                }
-            }
-
-            int uploadBytes = checked(outputInstanceCount * FloatsPerInstance * sizeof(float));
-            if (!_fullInstanceUpload && uploadBytes > _instanceBufferCapacityBytes)
-                _fullInstanceUpload = true;
+            int uploadBytes = checked(instanceCount * FloatsPerInstance * sizeof(float));
+            if (!delta.FullUpload && uploadBytes > _instanceBufferCapacityBytes)
+                delta.ForceFullUpload();
+            bool fullUpload = delta.FullUpload;
+            ReadOnlySpan<CellInstance> staged = delta.Instances;
+            ReadOnlySpan<CellTransformRange> transforms = delta.Transforms;
 
             float[] stagingArr = _staging;
-            if (_fullInstanceUpload)
+            if (fullUpload)
             {
-                for (int i = 0; i < cellCount; i++)
+                int transformCursor = 0;
+                for (int i = 0; i < instanceCount; i++)
                 {
-                    ref readonly var instance = ref _lastInstances[i];
-                    WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
-                        cellW, cellH, paddingLeft, paddingTop, barRows);
+                    ref readonly var transform = ref GetEffectiveTransform(transforms, ref transformCursor, i);
+                    WriteCellInstance(stagingArr, i, staged[i],
+                        cellW, cellH, paddingLeft, paddingTop, barRows, transform);
                 }
             }
             else
             {
-                for (int range = 0; range < _dirtyInstanceRangeCount; range++)
+                int transformCursor = 0;
+                for (int range = 0; range < delta.RangeCount; range++)
                 {
-                    int sourceStart = _dirtyInstanceRanges[range * 2];
-                    int sourceEnd = _dirtyInstanceRanges[range * 2 + 1];
-                    for (int i = sourceStart; i < sourceEnd; i++)
+                    (int start, int end) = delta.GetRange(range);
+                    // Dirty ranges are ordered, so the transform cursor also advances only forward.
+                    for (int i = start; i < end; i++)
                     {
-                        ref readonly var instance = ref _lastInstances[i];
-                        WriteCellInstance(stagingArr, _sourceOutputStarts[i], instance,
-                            cellW, cellH, paddingLeft, paddingTop, barRows);
+                        ref readonly var transform = ref GetEffectiveTransform(transforms, ref transformCursor, i);
+                        WriteCellInstance(stagingArr, i, staged[i],
+                            cellW, cellH, paddingLeft, paddingTop, barRows, transform);
                     }
                 }
-            }
 
-            int clampedMenuStart = menuInstanceStart < 0
+            }
+            int menuStart = menuInstanceStart < 0
                 ? -1
-                : Math.Clamp(menuInstanceStart, 0, cellCount);
-            int menuOutputStart = clampedMenuStart < 0
-                ? -1
-                : clampedMenuStart == cellCount
-                    ? outputInstanceCount
-                    : _sourceOutputStarts[clampedMenuStart];
+                : Math.Clamp(menuInstanceStart, 0, instanceCount);
 
             BindVertexArray(_vao);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _instanceVbo);
             EnsureBufferCapacity(ref _instanceBufferCapacityBytes, uploadBytes);
             fixed (float* fp = stagingArr)
             {
-                if (_fullInstanceUpload)
+                if (fullUpload)
                 {
                     // Orphaning is only valid with a complete replacement upload.
                     _gl.BufferData(
@@ -607,15 +452,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 }
                 else
                 {
-                    for (int range = 0; range < _dirtyInstanceRangeCount; range++)
+                    for (int range = 0; range < delta.RangeCount; range++)
                     {
-                        int sourceStart = _dirtyInstanceRanges[range * 2];
-                        int sourceEnd = _dirtyInstanceRanges[range * 2 + 1];
-                        int outputStart = _sourceOutputStarts[sourceStart];
-                        int outputEnd = _sourceOutputStarts[sourceEnd - 1] + _sourceOutputCounts[sourceEnd - 1];
-                        int outputCount = outputEnd - outputStart;
-                        int floatOffset = checked(outputStart * FloatsPerInstance);
-                        int byteCount = checked(outputCount * FloatsPerInstance * sizeof(float));
+                        (int start, int end) = delta.GetRange(range);
+                        int floatOffset = checked(start * FloatsPerInstance);
+                        int byteCount = checked((end - start) * FloatsPerInstance * sizeof(float));
                         _gl.BufferSubData(
                             BufferTargetARB.ArrayBuffer,
                             checked(floatOffset * sizeof(float)),
@@ -625,10 +466,9 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
                 }
             }
 
-            _stagedOutputInstanceCount = outputInstanceCount;
-            _drawInstanceCount = outputInstanceCount;
-            _drawMenuStart = menuOutputStart;
-            _drawMenuCount = menuOutputStart >= 0 ? outputInstanceCount - menuOutputStart : 0;
+            _drawInstanceCount = instanceCount;
+            _drawMenuStart = menuStart;
+            _drawMenuCount = menuStart >= 0 ? instanceCount - menuStart : 0;
             if (_drawMenuStart >= 0)
                 EnsureMenuInstanceAttribs(_drawMenuStart);
             _stagedMenuInstanceStart = menuInstanceStart;
@@ -637,30 +477,25 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
             _stagedPaddingLeft = paddingLeft;
             _stagedPaddingTop = paddingTop;
             _stagedBarRows = barRows;
-            _instanceBufferDirty = false;
-            _fullInstanceUpload = false;
-            _dirtyInstanceRangeCount = 0;
+            delta.MarkUploaded();
         }
-        else if (cellCount == 0 && _instanceBufferDirty)
+        else if (instanceCount == 0 && delta.Dirty)
         {
             _drawInstanceCount = 0;
             _drawMenuStart = menuInstanceStart < 0 ? -1 : 0;
             _drawMenuCount = 0;
-            _stagedOutputInstanceCount = 0;
             _stagedMenuInstanceStart = menuInstanceStart;
             _stagedCellW = cellW;
             _stagedCellH = cellH;
             _stagedPaddingLeft = paddingLeft;
             _stagedPaddingTop = paddingTop;
             _stagedBarRows = barRows;
-            _instanceBufferDirty = false;
-            _fullInstanceUpload = true;
-            _dirtyInstanceRangeCount = 0;
+            delta.MarkUploaded();
         }
 
         bool hasMenuOverlay = menuInstanceStart >= 0
             && menuChromeStart >= 0
-            && menuInstanceStart <= cellCount
+            && menuInstanceStart <= instanceCount
             && _drawMenuStart >= 0
             && _drawMenuStart <= _drawInstanceCount;
         int menuChromeFirst = hasMenuOverlay
@@ -673,16 +508,33 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
 
         UploadChrome(chromeQuads, menuChromeStart);
 
-        // Base backgrounds/chrome/glyphs are drawn first. Scrollbar chrome is
-        // a separate overlay so rightmost glyphs can never cover the thumb.
+        int underlayCount = Math.Clamp(underlayChromeCount, 0, scrollbarChromeFirst);
+
+        // Underlay chrome (pane backgrounds, dividers, active-pane ring) sits below everything the panes draw. Base
+        // backgrounds/chrome/glyphs follow. Scrollbar chrome is a separate overlay so rightmost glyphs can never
+        // cover the thumb.
+        if (underlayCount > 0)
+            DrawChromeRange(0, underlayCount, menuVao: false);
+        DrawImageLayer(ImageLayer.BelowBackground, images);
         DrawCellRange(0, baseInstanceCount, pass: 0, menuVao: false);
-        int baseChromeCount = scrollbarChromeFirst;
+        DrawImageLayer(ImageLayer.BelowText, images);
+        int baseChromeCount = scrollbarChromeFirst - underlayCount;
         if (baseChromeCount > 0)
         {
-            DrawChromeRange(0, baseChromeCount, menuVao: false);
+            if (underlayCount == 0)
+            {
+                DrawChromeRange(0, baseChromeCount, menuVao: false);
+            }
+            else
+            {
+                // The base VAO always starts at instance 0; the offset VAO points past the underlay.
+                EnsureMenuChromeAttribs(underlayCount);
+                DrawChromeRange(underlayCount, baseChromeCount, menuVao: true);
+            }
         }
 
         DrawCellRange(0, baseInstanceCount, pass: 1, menuVao: false);
+        DrawImageLayer(ImageLayer.AboveText, images);
         int scrollbarCount = menuChromeFirst - scrollbarChromeFirst;
         if (scrollbarCount > 0)
         {
@@ -711,10 +563,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         float cellH,
         float paddingLeft,
         float paddingTop,
-        int barRows)
+        int barRows,
+        in CellTransformRange transform)
     {
         float x = cell.Row >= barRows ? paddingLeft + cell.Col * cellW : cell.Col * cellW;
-        float y = cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH;
+        float y = (cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH) + transform.PixelOffsetY;
         int offset = outputIndex * FloatsPerInstance;
         staging[offset] = x;
         staging[offset + 1] = y;
@@ -722,10 +575,10 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         staging[offset + 3] = cell.GlyphY;
         staging[offset + 4] = cell.GlyphW;
         staging[offset + 5] = cell.GlyphH;
-        staging[offset + 6] = 0f;
+        staging[offset + 6] = transform.ClipTop;
         staging[offset + 7] = cell.OffY;
         staging[offset + 8] = cell.OffX;
-        staging[offset + 9] = 0f;
+        staging[offset + 9] = transform.ClipBottom;
         staging[offset + 10] = cell.FgR / 255f;
         staging[offset + 11] = cell.FgG / 255f;
         staging[offset + 12] = cell.FgB / 255f;
@@ -735,31 +588,18 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         staging[offset + 16] = cell.BgB / 255f;
         staging[offset + 17] = cell.BgA / 255f;
         staging[offset + 18] = BitConverter.UInt32BitsToSingle(cell.Flags);
+    }
 
-        if ((cell.Flags & (CellFlags.Underline | CellFlags.Strikethrough | CellFlags.Overline)) == 0)
-            return;
+    private static readonly CellTransformRange NoTransform = default;
 
-        int decoration = (outputIndex + 1) * FloatsPerInstance;
-        float decorationWidth = (cell.Flags & CellFlags.WideCell) != 0 ? cellW * 2f : cellW;
-        staging[decoration] = x;
-        staging[decoration + 1] = y;
-        staging[decoration + 2] = 0f;
-        staging[decoration + 3] = 0f;
-        staging[decoration + 4] = decorationWidth;
-        staging[decoration + 5] = cellH;
-        staging[decoration + 6] = 0f;
-        staging[decoration + 7] = 0f;
-        staging[decoration + 8] = 0f;
-        staging[decoration + 9] = 0f;
-        staging[decoration + 10] = cell.FgR / 255f;
-        staging[decoration + 11] = cell.FgG / 255f;
-        staging[decoration + 12] = cell.FgB / 255f;
-        staging[decoration + 13] = cell.FgA / 255f;
-        staging[decoration + 14] = 0f;
-        staging[decoration + 15] = 0f;
-        staging[decoration + 16] = 0f;
-        staging[decoration + 17] = 0f;
-        staging[decoration + 18] = BitConverter.UInt32BitsToSingle((uint)(cell.Flags | CellFlags.DecorOnly));
+    private static ref readonly CellTransformRange GetEffectiveTransform(
+        ReadOnlySpan<CellTransformRange> transforms, ref int cursor, int index)
+    {
+        while (cursor < transforms.Length && transforms[cursor].End <= index)
+            cursor++;
+        if (cursor < transforms.Length && transforms[cursor].Start <= index)
+            return ref transforms[cursor];
+        return ref NoTransform;
     }
 
     private void DrawCellRange(int firstInstance, int instanceCount, int pass, bool menuVao)
@@ -927,6 +767,36 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         capacityBytes = capacity;
     }
 
+    void IGlBindingCache.UseProgram(uint program) => UseProgram(program);
+    void IGlBindingCache.BindVertexArray(uint vao) => BindVertexArray(vao);
+    void IGlBindingCache.BindTexture2D(uint texture) => BindAtlasTexture(texture);
+
+    private SilkImageRenderer? BeginImageFrame(ImageDrawList? images)
+    {
+        SilkImageRenderer? renderer = _images;
+        if (renderer is null)
+        {
+            // Created on first use so a session that never shows an image pays nothing.
+            if (images is not { DrawCount: > 0 })
+                return null;
+            _imageTextures = new SilkImageTextureCache(_gl, this);
+            renderer = _images = new SilkImageRenderer(_gl, _imageTextures, this);
+        }
+
+        renderer.BeginFrame();
+        return renderer;
+    }
+
+    private void DrawImageLayer(ImageLayer layer, ImageDrawList? images)
+    {
+        if (_images is null || images is null || images.DrawCount == 0)
+            return;
+        _images.DrawLayer(layer, images, (int)_lastFramebufferWidth, (int)_lastFramebufferHeight);
+        // The image pass binds its textures to unit 0, where the glyph pass samples the atlas: put the atlas back
+        // (a cache hit, no GL call, when the layer drew nothing).
+        BindAtlasTexture(_frameAtlasTexture);
+    }
+
     private void UseProgram(uint program)
     {
         if (_boundProgram != program)
@@ -1020,36 +890,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         _cachedColorAtlasH = height;
         _colorAtlasSizeSet = true;
     }
-    private void Uniform1Underline(float value)
-    {
-        if (_underlineSet && _cachedUnderline == value)
-            return;
-
-        _gl.Uniform1(_uUnderlineY, value);
-        _cachedUnderline = value;
-        _underlineSet = true;
-    }
-
-    private void Uniform1Strike(float value)
-    {
-        if (_strikeSet && _cachedStrike == value)
-            return;
-
-        _gl.Uniform1(_uStrikeY, value);
-        _cachedStrike = value;
-        _strikeSet = true;
-    }
-
-    private void Uniform1LineHalf(float value)
-    {
-        if (_lineHalfSet && _cachedLineHalf == value)
-            return;
-
-        _gl.Uniform1(_uLineHalf, value);
-        _cachedLineHalf = value;
-        _lineHalfSet = true;
-    }
-
     private void Uniform1Pass(int pass)
     {
         if (_passSet && _cachedPass == pass)
@@ -1085,6 +925,28 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
+    /// <summary>
+    /// Reads the default framebuffer's back buffer as RGBA8, bottom row first (<c>glReadPixels</c> order), into
+    /// <paramref name="destination"/>. Call on the UI thread after <see cref="Render"/> and before the swap: the
+    /// back buffer is undefined after <c>SwapBuffers</c>. Used by the <c>SCREENSHOT:</c> control command.
+    /// </summary>
+    public void ReadBackBuffer(int width, int height, Span<byte> destination)
+    {
+        EnsureNotDisposed();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        if (destination.Length < (long)width * height * 4)
+            throw new ArgumentException("The destination is smaller than width * height * 4 bytes.", nameof(destination));
+
+        _gl.BindFramebuffer(GLEnum.ReadFramebuffer, 0);
+        _gl.ReadBuffer(GLEnum.Back);
+        _gl.PixelStore(GLEnum.PackAlignment, 1);
+        fixed (byte* pixels = destination)
+        {
+            _gl.ReadPixels(0, 0, (uint)width, (uint)height, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+        }
+    }
+
     private void InvalidateGlStateCache()
     {
         _boundProgram = uint.MaxValue;
@@ -1095,9 +957,6 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
         _cellFramebufferSet = false;
         _cellSizeSet = false;
         _atlasSizeSet = false;
-        _underlineSet = false;
-        _strikeSet = false;
-        _lineHalfSet = false;
         _passSet = false;
         _atlasSamplerSet = false;
         _chromeFramebufferSet = false;
@@ -1107,6 +966,11 @@ public sealed unsafe class SilkTerminalRenderer : IDisposable
     {
         if (!_disposed)
         {
+            _images?.Dispose();
+            _images = null;
+            _imageTextures?.Dispose();
+            _imageTextures = null;
+
             TextureManager.Dispose();
 
             if (_program != 0)

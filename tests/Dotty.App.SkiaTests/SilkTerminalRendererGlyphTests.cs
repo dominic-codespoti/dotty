@@ -60,7 +60,7 @@ public sealed class SilkTerminalRendererGlyphTests
             }
 
             using var atlas = new GlyphAtlas(SKTypeface.Default, 16f, initialSize: 128);
-            var glyphKey = new GlyphKey("A", SKTypeface.Default, 16f, bold: false);
+            var glyphKey = new GlyphKey("A", SKTypeface.Default, 16f, GlyphStyle.Regular);
             Assert.True(atlas.EnsureGlyph(glyphKey, out GlyphInfo glyph));
 
             var cell = new CellInstance
@@ -115,9 +115,6 @@ public sealed class SilkTerminalRendererGlyphTests
                 framebufferHeight,
                 CellWidth,
                 CellHeight,
-                underlineY: 0.85f,
-                strikeY: 0.7f,
-                lineHalf: 0.04f,
                 clearColor: SgrColorArgb.FromRgb(0, 0, 0),
                 frameCaptured: true);
 

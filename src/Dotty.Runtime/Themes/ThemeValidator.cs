@@ -75,15 +75,21 @@ public sealed class ThemeValidator
     {
         var result = new ValidationResult();
 
-        // Try to parse as ThemeDefinition
-        ThemeDefinition? definition;
+        // ThemeRoot documents deserialize as an empty ThemeDefinition because unknown properties
+        // are ignored, so attempt the wrapper shape when the direct definition has no colors.
+        ThemeDefinition? definition = null;
+        JsonException? singleThemeError = null;
         try
         {
             definition = JsonSerializer.Deserialize<ThemeDefinition>(json, ThemeJsonContext.Default.ThemeDefinition);
         }
         catch (JsonException ex)
         {
-            // Try ThemeRoot format
+            singleThemeError = ex;
+        }
+
+        if (definition?.Colors == null)
+        {
             try
             {
                 var root = JsonSerializer.Deserialize<ThemeRoot>(json, ThemeJsonContext.Default.ThemeRoot);
@@ -91,14 +97,18 @@ public sealed class ThemeValidator
                 {
                     definition = root.Themes[0];
                 }
-                else
+                else if (definition == null)
                 {
-                    return ValidationResult.Failure($"Failed to parse JSON: {ex.Message}");
+                    return ValidationResult.Failure($"Failed to parse JSON: {singleThemeError?.Message}");
                 }
+            }
+            catch when (definition == null)
+            {
+                return ValidationResult.Failure($"Failed to parse JSON: {singleThemeError?.Message}");
             }
             catch
             {
-                return ValidationResult.Failure($"Failed to parse JSON: {ex.Message}");
+                // Keep validating a successfully parsed single-theme document below.
             }
         }
 

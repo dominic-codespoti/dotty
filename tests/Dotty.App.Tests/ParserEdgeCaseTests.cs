@@ -33,8 +33,19 @@ public class ParserEdgeCaseTests
         public List<string> FocusReports { get; } = new();
 
         object? ITerminalHandler.Buffer => null;
+        bool ITerminalHandler.NationalReplacementEnabled => false;
+        void ITerminalHandler.OnSetNationalReplacementMode(bool enabled) { }
+        void ITerminalHandler.OnSetFontShiftMode(bool enabled) { }
+        void ITerminalHandler.OnSetSmoothScroll(bool enabled) { }
+        void ITerminalHandler.OnSetPrinterMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnPrintScreen() { }
+        void ITerminalHandler.OnSetScreenLines(int lines) { }
+        void ITerminalHandler.OnSetAttributeChangeExtent(int mode) { }
+        void ITerminalHandler.OnChangeRectangleAttributes(int top, int left, int bottom, int right, ReadOnlySpan<int> parameters, bool reverse) { }
+        void ITerminalHandler.OnRequestStatusString(ReadOnlySpan<byte> request) { }
+        void ITerminalHandler.OnPrivateDeviceStatusReport(int code, int identifier) { }
         event Action<string>? ITerminalHandler.RenderRequested { add { } remove { } }
-        event Action<string>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
+        event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ITerminalHandler.ClipboardWriteRequested { add { } remove { } }
         event Action<string>? ITerminalHandler.TitleChanged { add { } remove { } }
         event Action? ITerminalHandler.PaletteChanged { add { } remove { } }
         void ITerminalHandler.OnHyperlink(string uri) { }
@@ -42,7 +53,24 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.ResizeBuffer(int rows, int cols) { }
         void ITerminalHandler.OnPrint(ReadOnlySpan<char> text) => PrintedText += text.ToString();
         void ITerminalHandler.OnEraseDisplay(int mode) { }
+        void ITerminalHandler.OnSelectiveEraseDisplay(int mode) { }
+        void ITerminalHandler.OnSelectiveEraseLine(int mode) { }
         void ITerminalHandler.OnClearScrollback() { }
+        void ITerminalHandler.OnSetConformanceLevel(int level, int controls) { }
+        void ITerminalHandler.OnSavePrivateMode(int mode) { }
+        void ITerminalHandler.OnRestorePrivateMode(int mode) { }
+        void ITerminalHandler.OnSetTitle(int code, ReadOnlySpan<byte> payload) => Events.Add($"OSC:{code}");
+        void ITerminalHandler.OnSetTitleModes(ReadOnlySpan<int> modes, bool enabled) { }
+        void ITerminalHandler.OnInsertColumns(int n) { }
+        void ITerminalHandler.OnDeleteColumns(int n) { }
+        void ITerminalHandler.OnBackIndex() { }
+        void ITerminalHandler.OnForwardIndex() { }
+        void ITerminalHandler.OnCopyRectangle(int top, int left, int bottom, int right, int sourcePage, int destinationTop, int destinationLeft, int destinationPage) { }
+        void ITerminalHandler.OnFillRectangle(uint rune, int top, int left, int bottom, int right) { }
+        void ITerminalHandler.OnEraseRectangle(int top, int left, int bottom, int right, bool selective) { }
+        void ITerminalHandler.OnSetAnsiMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnSetColumnMode(int mode, bool enabled) { }
+        void ITerminalHandler.OnSetMoreFix(bool enabled) { }
         void ITerminalHandler.OnSetGraphicsRendition(ReadOnlySpan<char> p) => SgrCalls.Add(p.ToString());
         void ITerminalHandler.OnBell() => BellCount++;
         void ITerminalHandler.OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload) => Events.Add($"OSC:{code}");
@@ -52,11 +80,14 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnCursorForward(int n) => Events.Add($"CUF:{n}");
         void ITerminalHandler.OnCursorBack(int n) => Events.Add($"CUB:{n}");
         void ITerminalHandler.OnEraseLine(int mode) => Events.Add($"EL:{mode}");
+        void ITerminalHandler.OnSetIsoProtection(bool active) => Events.Add($"ISO:{active}");
+        void ITerminalHandler.OnSetDecProtection(int mode) => Events.Add($"DECSCA:{mode}");
         void ITerminalHandler.OnCarriageReturn() => Events.Add("CR");
         void ITerminalHandler.OnLineFeed() => Events.Add("LF");
         void ITerminalHandler.OnSetScrollRegion(int top1Based, int bottom1Based) => Events.Add($"DECSTBM:{top1Based},{bottom1Based}");
         void ITerminalHandler.OnSetOriginMode(bool enabled) => Events.Add($"DECOM:{enabled}");
         void ITerminalHandler.OnSetAlternateScreen(bool enabled) => Events.Add($"ALT:{enabled}");
+        void ITerminalHandler.OnSwitchAlternateScreen(int mode, bool enabled) => Events.Add($"ALT{mode}:{enabled}");
         void ITerminalHandler.OnSetCursorVisibility(bool v) => Events.Add($"CURSOR_VIS:{v}");
         void ITerminalHandler.OnSetKeypadApplicationMode(bool en) => Events.Add($"KAM:{en}");
         void ITerminalHandler.OnSetCursorShape(int s) => Events.Add($"DECSCUSR:{s}");
@@ -81,11 +112,17 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnCursorVerticalAbsolute(int r) => CursorVPA = r;
         void ITerminalHandler.OnCursorNextLine(int n) => CursorNextLine = n;
         void ITerminalHandler.OnCursorPreviousLine(int n) => CursorPreviousLine = n;
+        void ITerminalHandler.OnHorizontalPositionRelative(int n) { }
+        void ITerminalHandler.OnVerticalPositionRelative(int n) { }
+        void ITerminalHandler.OnSetLeftRightMarginMode(bool enabled) { }
+        void ITerminalHandler.OnSaveCursorOrSetMargins(int left, int right) { }
+        void ITerminalHandler.OnSetReverseWrapMode(int mode, bool enabled) { }
         void ITerminalHandler.OnScrollUp(int n) => ScrollUpCount = n;
         void ITerminalHandler.OnScrollDown(int n) => ScrollDownCount = n;
         void ITerminalHandler.OnFullReset() => FullResetCount++;
+        void ITerminalHandler.OnScreenAlignmentTest() { }
         void ITerminalHandler.OnRepeatCharacter(int n) => Events.Add($"REP:{n}");
-        void ITerminalHandler.OnTab() => Events.Add("HT");
+        void ITerminalHandler.OnTab(int n) => Events.Add($"HT:{n}");
         void ITerminalHandler.OnBackTab(int n) => Events.Add($"CBT:{n}");
         void ITerminalHandler.OnMouseEvent(int button, int col, int row, bool isPress) => MouseEventCount++;
         void ITerminalHandler.OnSetSynchronizedUpdate(bool en) => Events.Add($"SYNC:{en}");
@@ -93,7 +130,6 @@ public class ParserEdgeCaseTests
         void ITerminalHandler.OnKittyKeyboardCommand(char introducer, int flags, int argument) => Events.Add($"KITTY:{introducer}:{flags}:{argument}");
         void ITerminalHandler.FlushRender() { }
         void ITerminalHandler.OnSetFocusReporting(bool enabled) => FocusReports.Add(enabled ? "FOCUS:True" : "FOCUS:False");
-        void ITerminalHandler.OnWindowReport(int command) { }
     }
 
     private static (BasicAnsiParser, CaptureHandler) Setup()
@@ -246,10 +282,6 @@ public class ParserEdgeCaseTests
         p.Feed("\x1b[3 q"u8);
         Assert.Contains(h.Events, e => e.StartsWith("DECSCUSR:"));
     }
-    [Fact]
-    public void CsiSaveCursor_Wired() { var (p, h) = Setup(); p.Feed("\x1b[s"u8); Assert.Equal(1, h.SaveCursorCount); }
-    [Fact]
-    public void CsiRestoreCursor_Wired() { var (p, h) = Setup(); p.Feed("\x1b[u"u8); Assert.Equal(1, h.RestoreCursorCount); }
 
     // ================================================================
     // DEC private modes
@@ -269,6 +301,19 @@ public class ParserEdgeCaseTests
         var (p, h) = Setup();
         p.Feed("\x1b[?1049l"u8);
         Assert.Contains("ALT:False", h.Events);
+    }
+
+
+    [Fact]
+    public void DecSet1048_RoutesToSaveAndRestoreCursorOnly()
+    {
+        var (p, h) = Setup();
+        p.Feed("\x1b[?1048h"u8);
+        Assert.Equal(1, h.SaveCursorCount);
+        Assert.Equal(0, h.RestoreCursorCount);
+        p.Feed("\x1b[?1048l"u8);
+        Assert.Equal(1, h.RestoreCursorCount);
+        Assert.DoesNotContain(h.Events, e => e.StartsWith("ALT"));
     }
 
     [Fact]

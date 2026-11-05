@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dotty.Abstractions.Config;
+using Dotty.Abstractions.Graphics;
 
 namespace Dotty.Runtime.Config;
 
@@ -22,6 +23,15 @@ public sealed class DottyUserConfig
 
     [JsonPropertyName("cursor")]
     public CursorUserConfig Cursor { get; set; } = new();
+
+    [JsonPropertyName("hyperlinks")]
+    public HyperlinksUserConfig Hyperlinks { get; set; } = new();
+
+    [JsonPropertyName("mouse")]
+    public MouseUserConfig Mouse { get; set; } = new();
+
+    [JsonPropertyName("selection")]
+    public SelectionUserConfig Selection { get; set; } = new();
 
     [JsonPropertyName("theme")]
     public string Theme { get; set; } = "DarkPlus";
@@ -54,26 +64,124 @@ public sealed class DottyUserConfig
     [JsonPropertyName("panes")]
     public PanesUserConfig Panes { get; set; } = new();
 
+    [JsonPropertyName("bell")]
+    public BellUserConfig Bell { get; set; } = new();
+
+    [JsonPropertyName("search")]
+    public SearchUserConfig Search { get; set; } = new();
+
+    [JsonPropertyName("drop")]
+    public DropUserConfig Drop { get; set; } = new();
+
     [JsonPropertyName("keybindings")]
     public System.Collections.Generic.Dictionary<string, string> Keybindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Alt/Option roles (decision K1); read live at each key event.</summary>
+    [JsonPropertyName("keyboard")]
+    public KeyboardUserConfig Keyboard { get; set; } = new();
     [JsonPropertyName("clipboard")]
     public ClipboardUserConfig Clipboard { get; set; } = new();
+
+    /// <summary>Opt-in text printer output; no file is opened unless a path is configured.</summary>
+    [JsonPropertyName("printing")]
+    public PrintingUserConfig Printing { get; set; } = new();
+
+    [JsonPropertyName("vt")]
+    public VtUserConfig Vt { get; set; } = new();
+
+    /// <summary>History limits. Applies to sessions created after a change; existing tabs keep theirs.</summary>
+    [JsonPropertyName("scrollback")]
+    public ScrollbackUserConfig Scrollback { get; set; } = new();
+    /// <summary>
+    /// Shell integration auto-injection: <c>none</c> (default, opt-in) or <c>detect</c>. Any other value
+    /// is treated as <c>none</c>. Applies to sessions created after the change.
+    /// </summary>
+    [JsonPropertyName("shellIntegration")]
+    public string ShellIntegration { get; set; } = "none";
+
+    /// <summary>
+    /// TERM given to new sessions. <c>xterm-256color</c> (default) or a terminfo entry such as <c>xterm-dotty</c>;
+    /// a name whose terminfo entry cannot be found falls back to <c>xterm-256color</c>. Applies to sessions created
+    /// after the change.
+    /// </summary>
+    [JsonPropertyName("term")]
+    public string Term { get; set; } = "xterm-256color";
+
+    /// <summary>Kitty graphics protocol settings. Applies to sessions created after a change.</summary>
+    [JsonPropertyName("graphics")]
+    public GraphicsUserConfig Graphics { get; set; } = new();
+
+    /// <summary>Text blending and contrast (W4-C5); read every frame.</summary>
+    [JsonPropertyName("text")]
+    public TextUserConfig Text { get; set; } = new();
+
+    /// <summary>Normalized Kitty graphics options derived from <see cref="Graphics"/>.</summary>
+    public KittyGraphicsOptions ToKittyGraphicsOptions() => (Graphics ?? new GraphicsUserConfig()).ToOptions();
 }
 public sealed class FontUserConfig
 {
+    /// <summary>Font families in fallback order (comma list); the first installed family is the primary font.</summary>
     [JsonPropertyName("family")]
-    public string Family { get; set; } = "JetBrainsMono Nerd Font Mono, JetBrains Mono, Fira Code, Cascadia Code, monospace";
+    public string Family { get; set; } = DottyDefaults.FontFamily;
 
+    /// <summary>Font size in points; device pixels = points × 96/72 × display content scale.</summary>
     [JsonPropertyName("size")]
-    public double Size { get; set; } = 14.0;
+    public double Size { get; set; } = DottyDefaults.FontSize;
 
     [JsonPropertyName("lineHeight")]
     public double LineHeight { get; set; } = 1.25;
+
+    /// <summary>Cell width adjustment: signed logical pixels (<c>"1"</c>) or percent (<c>"10%"</c>); empty keeps the measured width.</summary>
+    [JsonPropertyName("adjustCellWidth")]
+    public string AdjustCellWidth { get; set; } = string.Empty;
+
+    /// <summary>Cell height adjustment: signed logical pixels (<c>"2"</c>) or percent (<c>"-5%"</c>); extra height is split above and below the text.</summary>
+    [JsonPropertyName("adjustCellHeight")]
+    public string AdjustCellHeight { get; set; } = string.Empty;
 
     /// <summary>Per-range font overrides, checked before the generic fallback chain.</summary>
     [JsonPropertyName("symbolMap")]
     public System.Collections.Generic.List<string> SymbolMap { get; set; } = new();
 
+    /// <summary>Faint (SGR 2) text keeps this share of its colour, mixed toward the cell background (0-1).</summary>
+    [JsonPropertyName("faintOpacity")]
+    public double FaintOpacity { get; set; } = 0.5;
+
+    /// <summary>Draw box drawing, blocks, braille, sextants, octants and Powerline from built-in sprites, not the font.</summary>
+    [JsonPropertyName("builtinGlyphs")]
+    public bool BuiltinGlyphs { get; set; } = true;
+
+    /// <summary>Families for bold text in the primary font (comma list); empty uses the primary family's bold face.</summary>
+    [JsonPropertyName("boldFamily")]
+    public string BoldFamily { get; set; } = string.Empty;
+
+    /// <summary>Families for italic text in the primary font (comma list); empty uses the primary family's italic face.</summary>
+    [JsonPropertyName("italicFamily")]
+    public string ItalicFamily { get; set; } = string.Empty;
+
+    /// <summary>Families for bold italic text in the primary font (comma list); empty uses the primary family's bold italic face.</summary>
+    [JsonPropertyName("boldItalicFamily")]
+    public string BoldItalicFamily { get; set; } = string.Empty;
+
+    /// <summary>Weight of regular text: a CSS weight name or a number 1-1000.</summary>
+    [JsonPropertyName("weight")]
+    public string Weight { get; set; } = DottyDefaults.FontWeight;
+
+    /// <summary>OpenType feature settings for shaping, such as <c>+calt</c>, <c>-liga</c>, <c>cv01=2</c>.</summary>
+    [JsonPropertyName("features")]
+    public System.Collections.Generic.List<string> Features { get; set; } = new();
+
+    /// <summary>Programming ligatures: <c>never</c>, <c>cursor</c> (default; not under the cursor) or <c>always</c>.</summary>
+    [JsonPropertyName("ligatures")]
+    public string Ligatures { get; set; } = "cursor";
+
+    /// <summary>Outline hinting: <c>none</c>, <c>slight</c>, <c>normal</c> or <c>full</c> (default, the historical raster).</summary>
+    [JsonPropertyName("hinting")]
+    public string Hinting { get; set; } = "full";
+
+    /// <summary>Glyph coverage: <c>gray</c> (default) or <c>none</c> (aliased, 1-bit).</summary>
+    [JsonPropertyName("antialias")]
+    public string Antialias { get; set; } = "gray";
 }
 
 public sealed class WindowUserConfig
@@ -84,11 +192,31 @@ public sealed class WindowUserConfig
     [JsonPropertyName("padding")]
     public PaddingUserConfig Padding { get; set; } = new();
 
+    /// <summary>Default-background opacity, 0-1; text, chrome and images stay opaque. Going from 1 to below 1 needs a restart.</summary>
     [JsonPropertyName("opacity")]
     public double Opacity { get; set; } = 1.0;
 
+    /// <summary>Initial window title; tab titles replace it once a tab reports one.</summary>
     [JsonPropertyName("title")]
     public string Title { get; set; } = "Dotty";
+
+    /// <summary>Initial grid width in cells; 0 or less uses the default (80).</summary>
+    [JsonPropertyName("columns")]
+    public int Columns { get; set; }
+
+    /// <summary>Initial grid height in cells; 0 or less uses the default (24).</summary>
+    [JsonPropertyName("rows")]
+    public int Rows { get; set; }
+
+    [JsonPropertyName("startMaximized")]
+    public bool StartMaximized { get; set; }
+
+    [JsonPropertyName("startFullscreen")]
+    public bool StartFullscreen { get; set; }
+
+    /// <summary>Keep the window above other windows (GLFW floating).</summary>
+    [JsonPropertyName("floating")]
+    public bool Floating { get; set; }
 }
 
 public sealed class PaddingUserConfig
@@ -128,11 +256,127 @@ public sealed class CursorUserConfig
 
     [JsonPropertyName("blinkIntervalMs")]
     public int BlinkIntervalMs { get; set; } = 500;
+
+    /// <summary>Cursor drawn while the window is unfocused: <c>hollow</c>, <c>same</c> or <c>hidden</c>.</summary>
+    [JsonPropertyName("unfocusedStyle")]
+    public string UnfocusedStyle { get; set; } = "hollow";
+
+    /// <summary>Text colour inside a block cursor: <c>auto</c> (cell background) or <c>cell-foreground</c>.</summary>
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = "auto";
 }
 public sealed class ClipboardUserConfig
 {
     [JsonPropertyName("allowOsc52Write")]
     public bool AllowOsc52Write { get; set; }
+
+    /// <summary>Default for <see cref="Osc52ReadLimitBytes"/>: 1 MiB.</summary>
+    public const int DefaultOsc52ReadLimitBytes = 1_048_576;
+
+    /// <summary>Upper clamp for <see cref="Osc52ReadLimitBytes"/>: 8 MiB.</summary>
+    public const int MaxOsc52ReadLimitBytes = 8 * 1024 * 1024;
+
+    private int _osc52ReadLimitBytes = DefaultOsc52ReadLimitBytes;
+
+    /// <summary>
+    /// OSC 52 clipboard read (<c>?</c> query) policy: <c>deny</c> (default), <c>ask</c> or <c>allow</c>,
+    /// case-insensitive. Any other value is treated as <c>deny</c> (fail closed); see <c>ClipboardReadModes.Parse</c>.
+    /// </summary>
+    [JsonPropertyName("osc52Read")]
+    public string Osc52Read { get; set; } = "deny";
+
+    /// <summary>
+    /// Largest clipboard payload, in UTF-8 bytes, an OSC 52 read may return. Larger clipboards are dropped
+    /// without a reply. Values are clamped to [1, <see cref="MaxOsc52ReadLimitBytes"/>].
+    /// </summary>
+    [JsonPropertyName("osc52ReadLimitBytes")]
+    public int Osc52ReadLimitBytes
+    {
+        get => _osc52ReadLimitBytes;
+        set => _osc52ReadLimitBytes = Math.Clamp(value, 1, MaxOsc52ReadLimitBytes);
+    }
+
+    [JsonPropertyName("confirmPaste")]
+    public bool ConfirmPaste { get; set; } = true;
+
+    [JsonPropertyName("bracketedPasteIsSafe")]
+    public bool BracketedPasteIsSafe { get; set; } = true;
+}
+public sealed class ScrollbackUserConfig
+{
+    /// <summary>
+    /// Maximum history lines per session: 0 = no history, capped at <see cref="ScrollbackPolicy.HardMaxLines"/>.
+    /// Negative values fall back to the default.
+    /// </summary>
+    [JsonPropertyName("limitLines")]
+    public int LimitLines { get; set; } = DottyDefaults.ScrollbackLines;
+
+    /// <summary>
+    /// Maximum raw ring bytes per session, counted as <c>(lines + rows) * columns * 12</c>; 0 = no byte cap.
+    /// Non-zero values below 1 MiB and negative values fall back to the default. The first limit reached applies.
+    /// </summary>
+    [JsonPropertyName("limitBytes")]
+    public long LimitBytes { get; set; } = DottyDefaults.ScrollbackLimitBytes;
+
+    /// <summary>The normalized policy these settings describe.</summary>
+    public ScrollbackPolicy ToPolicy() => new ScrollbackPolicy(LimitLines, LimitBytes).Normalize();
+}
+public sealed class GraphicsUserConfig
+{
+    /// <summary>Largest accepted <see cref="ImageStorageLimitMiB"/>.</summary>
+    public const int MaxStorageLimitMiB = 4096;
+    /// <summary>Largest accepted <see cref="MaxPayloadMiB"/>.</summary>
+    public const int MaxPayloadMiBLimit = 1024;
+
+    /// <summary>Enable the Kitty graphics protocol (APC G).</summary>
+    [JsonPropertyName("kittyProtocol")]
+    public bool KittyProtocol { get; set; } = DottyDefaults.KittyGraphicsEnabled;
+
+    /// <summary>Per-session image memory budget in MiB; non-positive falls back to the default, capped at 4096.</summary>
+    [JsonPropertyName("imageStorageLimitMiB")]
+    public int ImageStorageLimitMiB { get; set; } = (int)(DottyDefaults.KittyImageStorageLimitBytes / (1024 * 1024));
+
+    /// <summary>Largest single transmission in MiB; non-positive falls back to the default, capped at 1024.</summary>
+    [JsonPropertyName("maxPayloadMiB")]
+    public int MaxPayloadMiB { get; set; } = (int)(DottyDefaults.KittyMaxPayloadBytes / (1024 * 1024));
+
+    /// <summary>Allow <c>t=f</c> regular-file transmission.</summary>
+    [JsonPropertyName("allowFileTransfer")]
+    public bool AllowFileTransfer { get; set; } = true;
+
+    /// <summary>Allow <c>t=t</c> temporary-file transmission.</summary>
+    [JsonPropertyName("allowTempFileTransfer")]
+    public bool AllowTempFileTransfer { get; set; } = true;
+
+    /// <summary>Allow <c>t=s</c> shared-memory transmission.</summary>
+    [JsonPropertyName("allowSharedMemory")]
+    public bool AllowSharedMemory { get; set; } = true;
+
+    /// <summary>
+    /// Windows only, experimental: create the ConPTY with <c>PSEUDOCONSOLE_PASSTHROUGH_MODE</c> so graphics APC is
+    /// not dropped. May change how ConPTY forwards VT; verify on Windows before relying on it. Ignored elsewhere.
+    /// </summary>
+    [JsonPropertyName("windowsPassthrough")]
+    public bool WindowsPassthrough { get; set; } = DottyDefaults.GraphicsWindowsPassthrough;
+
+    /// <summary>The normalized options these settings describe (Direct transmission is always allowed).</summary>
+    public KittyGraphicsOptions ToOptions()
+    {
+        KittyMediaFlags media = KittyMediaFlags.Direct;
+        if (AllowFileTransfer) media |= KittyMediaFlags.File;
+        if (AllowTempFileTransfer) media |= KittyMediaFlags.TempFile;
+        if (AllowSharedMemory) media |= KittyMediaFlags.SharedMemory;
+        return new KittyGraphicsOptions
+        {
+            Enabled = KittyProtocol,
+            StorageLimitBytes = ToBytes(ImageStorageLimitMiB, MaxStorageLimitMiB, DottyDefaults.KittyImageStorageLimitBytes),
+            MaxPayloadBytes = ToBytes(MaxPayloadMiB, MaxPayloadMiBLimit, DottyDefaults.KittyMaxPayloadBytes),
+            Media = media,
+        }.Normalize();
+    }
+
+    private static long ToBytes(int mib, int maxMiB, long defaultBytes) =>
+        mib <= 0 ? defaultBytes : (long)Math.Min(mib, maxMiB) * 1024 * 1024;
 }
 public sealed class PanesUserConfig
 {
@@ -207,7 +451,12 @@ public static class UserConfigService
                 }
                 else
                 {
-                    CreateDefaultConfigFile(path);
+                    // No file means "all defaults". Nothing is written, so later default changes reach
+                    // every user; `dotty +init-config` creates a commented starter file on request. The
+                    // directory is created so the watcher sees a config.json created later.
+                    string? directory = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(directory))
+                        Directory.CreateDirectory(directory);
                 }
             }
             catch (Exception ex)
@@ -221,6 +470,16 @@ public static class UserConfigService
         }
     }
 
+    /// <summary>
+    /// Reads one config file without touching <see cref="Current"/> or the watcher. A file holding
+    /// JSON <c>null</c> yields defaults; malformed JSON throws <see cref="JsonException"/>.
+    /// </summary>
+    public static DottyUserConfig ReadFile(string path) => ReadConfig(path) ?? new DottyUserConfig();
+
+    /// <summary>Indented JSON in the same shape <c>config.json</c> is read in.</summary>
+    public static string Serialize(DottyUserConfig config) =>
+        JsonSerializer.Serialize(config, DottyUserConfigJsonContext.Default.DottyUserConfig);
+
     private static DottyUserConfig? ReadConfig(string path)
     {
         using var stream = new FileStream(
@@ -232,32 +491,22 @@ public static class UserConfigService
             stream,
             DottyUserConfigJsonContext.Default.DottyUserConfig);
         if (config is not null)
+        {
             config.Clipboard ??= new ClipboardUserConfig();
+            config.Printing ??= new PrintingUserConfig();
+            config.Hyperlinks ??= new HyperlinksUserConfig();
+            config.Vt ??= new VtUserConfig();
+            config.Mouse ??= new MouseUserConfig();
+            config.Selection ??= new SelectionUserConfig();
+            config.Scrollback ??= new ScrollbackUserConfig();
+            config.Graphics ??= new GraphicsUserConfig();
+            config.Bell ??= new BellUserConfig();
+            config.Search ??= new SearchUserConfig();
+            config.Drop ??= new DropUserConfig();
+            config.Text ??= new TextUserConfig();
+            config.Keyboard ??= new KeyboardUserConfig();
+        }
         return config;
-    }
-
-    private static void CreateDefaultConfigFile(string path)
-    {
-        string? directory = Path.GetDirectoryName(path);
-        if (string.IsNullOrEmpty(directory))
-            return;
-
-        Directory.CreateDirectory(directory);
-        string tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            var defaultConfig = new DottyUserConfig();
-            string json = JsonSerializer.Serialize(
-                defaultConfig,
-                DottyUserConfigJsonContext.Default.DottyUserConfig);
-            File.WriteAllText(tempPath, json);
-            File.Move(tempPath, path, overwrite: true);
-        }
-        catch (Exception ex)
-        {
-            _lastError = ex.Message;
-            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
-        }
     }
 
     private static void EnsureWatcher(string? directory)

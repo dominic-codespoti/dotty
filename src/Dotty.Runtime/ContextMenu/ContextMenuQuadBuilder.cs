@@ -276,7 +276,7 @@ public static class ContextMenuQuadBuilder
                 continue;
             }
 
-            var key = new GlyphKey(grapheme, typeface, fontSize, isBold);
+            var key = new GlyphKey(grapheme, typeface, fontSize, isBold ? GlyphStyle.Bold : GlyphStyle.Regular);
             if (!atlas.EnsureGlyph(key, out var glyphInfo)
                 && !atlas.TryGetFallbackGlyph(out glyphInfo))
             {
@@ -293,7 +293,7 @@ public static class ContextMenuQuadBuilder
                 Col = (ushort)Math.Max(0, col),
                 Row = (ushort)Math.Max(0, row),
                 OffX = (short)(glyphInfo.LeftBearing + pixelColOffset),
-                OffY = (short)(glyphInfo.BaselineOffset + glyphInfo.TopBearing + extraOffsetY),
+                OffY = QuadFrameBuilder.RoundPixelOffset(glyphInfo.BaselineOffset + glyphInfo.TopBearing + extraOffsetY),
                 GlyphX = (short)glyphInfo.X,
                 GlyphY = (short)glyphInfo.Y,
                 GlyphW = (short)glyphInfo.Width,

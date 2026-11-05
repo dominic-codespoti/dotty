@@ -2,7 +2,6 @@ bin
 obj
 BenchmarkDotNet.Artifacts/
 artifacts/
-.ci-publish/
 /publish/
 *.nupkg
 *.snupkg
@@ -25,3 +24,4 @@ Thumbs.db
 /TestResults/
 tests/TestResults/
 tests/*/TestResults/
+.esctest/

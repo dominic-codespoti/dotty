@@ -63,30 +63,6 @@ public sealed class WindowPresentationGateTests
         public void AdvanceMs(long milliseconds) => _timestamp += milliseconds;
     }
 
-    private const long Idle = 0;
-    private const long LongAgo = 10_000;
-
-    [Theory]
-    [InlineData(false, 2, 6)]
-    [InlineData(false, WindowPresentationGate.ContentFrameMinIntervalMs, 0)]
-    [InlineData(true, 2, 28)]
-    [InlineData(true, WindowPresentationGate.BackloggedFrameIntervalMs, 0)]
-    public void StreamingContentIsHeldToTheIntervalForItsBacklogState(bool backlogged, long sincePresent, long expected)
-    {
-        long now = LongAgo + sincePresent;
-        Assert.Equal(expected, WindowPresentationGate.CoalesceRemainingMs(now, LongAgo, Idle, backlogged));
-    }
-
-    [Fact]
-    public void RecentInteractionAndFirstFrameAreNeverHeldBack()
-    {
-        long now = LongAgo + 1;
-        Assert.Equal(0, WindowPresentationGate.CoalesceRemainingMs(now, LongAgo, now - 1, anyBacklogged: true));
-        Assert.Equal(0, WindowPresentationGate.CoalesceRemainingMs(now, lastPresent: 0, Idle, anyBacklogged: true));
-        Assert.True(WindowPresentationGate.CoalesceRemainingMs(
-            now, LongAgo, now - WindowPresentationGate.InteractiveWindowMs, anyBacklogged: true) > 0);
-    }
-
     [Fact]
     public void InvalidateCoalescesReasonsAndConsumeClearsPendingReasons()
     {
@@ -107,12 +83,60 @@ public sealed class WindowPresentationGateTests
     }
 
     [Fact]
+    public void EveryFrameReasonIsADistinctSingleBit()
+    {
+        int seen = 0;
+        foreach (WindowFrameReason reason in Enum.GetValues<WindowFrameReason>())
+        {
+            if (reason == WindowFrameReason.None)
+                continue;
+
+            int bit = (int)reason;
+            Assert.Equal(1, System.Numerics.BitOperations.PopCount((uint)bit));
+            Assert.Equal(0, seen & bit);
+            seen |= bit;
+        }
+
+        // The image reasons extend the existing 10 bits (0..9) without renumbering any of them.
+        Assert.Equal(1 << 10, (int)WindowFrameReason.ImageAnimation);
+        Assert.Equal(1 << 11, (int)WindowFrameReason.ImageUpload);
+        Assert.Equal(1 << 9, (int)WindowFrameReason.TabOrPane);
+    }
+
+    [Fact]
+    public void ImageReasonsCoalesceWithOthersAndSurviveRequeue()
+    {
+        WindowFrameReason previous = WindowPresentationGate.Consume();
+        try
+        {
+            WindowPresentationGate.Invalidate(WindowFrameReason.ImageAnimation);
+            WindowPresentationGate.Invalidate(WindowFrameReason.ImageUpload | WindowFrameReason.Content);
+
+            WindowFrameReason expected =
+                WindowFrameReason.ImageAnimation | WindowFrameReason.ImageUpload | WindowFrameReason.Content;
+            Assert.Equal(expected, WindowPresentationGate.PendingReasons);
+            Assert.Equal(expected, WindowPresentationGate.Consume());
+            Assert.Equal(WindowFrameReason.None, WindowPresentationGate.PendingReasons);
+
+            // A frame that deferred texture uploads asks for another one with exactly that reason.
+            WindowPresentationGate.Requeue(WindowFrameReason.ImageUpload);
+            Assert.Equal(WindowFrameReason.ImageUpload, WindowPresentationGate.Consume());
+        }
+        finally
+        {
+            WindowPresentationGate.Consume();
+            WindowPresentationGate.Requeue(previous);
+        }
+    }
+
+    [Fact]
     public async Task BackgroundInvalidatePostsWakeButNoneDoesNot()
     {
         WindowFrameReason previous = WindowPresentationGate.Consume();
         int posts = 0;
         HostWake.Shutdown();
-        HostWake.Initialize(() => Interlocked.Increment(ref posts), Environment.CurrentManagedThreadId);
+        // An id no thread has: Task.Run may reuse the test's pool thread, which must not count as the UI thread.
+        HostWake.Initialize(() => Interlocked.Increment(ref posts), -1);
         try
         {
             await Task.Run(() => WindowPresentationGate.Invalidate(WindowFrameReason.Content), TestContext.Current.CancellationToken);

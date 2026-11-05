@@ -7,20 +7,6 @@ namespace Dotty.App.Tests
     public class FontHelpersTests
     {
         [Theory]
-        [InlineData(0xE0B6, true)] // PUA powerline-ish
-        [InlineData(0xE0B4, true)] // PUA
-        [InlineData(0x2500, true)] // box-drawing
-        [InlineData(0x2022, true)] // bullet
-        [InlineData(0x41, false)]  // 'A'
-        [InlineData(0x20, false)]  // space
-        [InlineData(0x1F600, true)] // emoji
-        public void IsLikelySymbol_ReturnsExpected(int codepoint, bool expected)
-        {
-            var result = FontHelpers.IsLikelySymbol(codepoint);
-            Assert.Equal(expected, result);
-        }
-
-        [Theory]
         [InlineData("Material Symbols Sharp", true)]
         [InlineData("Segoe MDL2 Assets", true)]
         [InlineData("JetBrains Mono", false)]
@@ -32,16 +18,28 @@ namespace Dotty.App.Tests
             Assert.Equal(expected, result);
         }
 
-        [Fact]
-        public void DefaultFontStack_PrioritizesMonospaceBeforeSymbolFonts()
+        // Decision F3: OS stacks with no Nerd Font assumed; monospace faces precede the emoji/symbol faces,
+        // because the list is also the fallback order.
+        [Theory]
+        [InlineData(DottyDefaults.FontFamilyLinux, "monospace", "Noto Color Emoji")]
+        [InlineData(DottyDefaults.FontFamilyMacOS, "Menlo", "Apple Color Emoji")]
+        [InlineData(DottyDefaults.FontFamilyWindows, "Cascadia Mono", "Segoe UI Emoji")]
+        public void DefaultFontStacks_PutMonospaceFirstAndEmojiAfter(string stack, string first, string emoji)
         {
-            var stack = DottyDefaults.FontFamily;
-            var monospaceIndex = stack.IndexOf("Cascadia Code", System.StringComparison.OrdinalIgnoreCase);
-            var symbolIndex = stack.IndexOf("Material Symbols Sharp", System.StringComparison.OrdinalIgnoreCase);
+            var families = Dotty.Rendering.Gpu.FontOptions.ParseFamilyList(stack);
+            Assert.Equal(first, families[0]);
+            Assert.Contains(emoji, families);
+            Assert.DoesNotContain(families, f => f.Contains("Nerd", System.StringComparison.OrdinalIgnoreCase));
+        }
 
-            Assert.True(monospaceIndex >= 0, "Default stack should include a common monospace fallback");
-            Assert.True(symbolIndex >= 0, "Default stack should include Material Symbols for icon fallback");
-            Assert.True(monospaceIndex < symbolIndex, "Monospace fonts must appear before symbol fonts");
+        [Fact]
+        public void DefaultFontFamily_IsTheStackOfThisOs()
+        {
+            string expected = System.OperatingSystem.IsMacOS() ? DottyDefaults.FontFamilyMacOS
+                : System.OperatingSystem.IsWindows() ? DottyDefaults.FontFamilyWindows
+                : DottyDefaults.FontFamilyLinux;
+            Assert.Equal(expected, DottyDefaults.FontFamily);
+            Assert.Equal(expected, new Dotty.Runtime.Config.DottyUserConfig().Font.Family);
         }
     }
 }

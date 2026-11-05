@@ -70,6 +70,51 @@ public sealed class RenderingAllocationTests
     }
 
     [Fact]
+    public void Compose_WrappedSelectionAllocatesNothingAfterWarmup()
+    {
+        const int rows = 40;
+        const int columns = 120;
+        using var tab = new TerminalTab(rows: rows, columns: columns);
+        var buffer = tab.Session.Adapter.Buffer;
+        for (int row = 0; row < rows; row += 2)
+        {
+            buffer.SetCursor(row, row % 7);
+            buffer.WriteText("selected text with gaps".AsSpan(), CellAttributes.Default);
+        }
+        tab.ActivePane.Selection.StartSelection(1, 17);
+        tab.ActivePane.Selection.UpdateSelection(rows - 2, 9);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 512);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var padding = NoPadding();
+        var overlay = new SearchOverlayRenderState(false, string.Empty, -1, 0, null);
+
+        AllocationAssert.NoAllocations(Compose);
+
+        void Compose() => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            selectionColor: new SgrColorArgb(0x803385DB),
+            framebufferWidth: columns * 10,
+            framebufferHeight: rows * 20,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: 1,
+            rows: rows,
+            columns: columns,
+            padding: padding,
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: overlay,
+            activeContextMenu: null);
+    }
+
+    [Fact]
     public void Compose_OneLineScrollAllocatesNothingAfterWarmup()
     {
         const int rows = 60;
@@ -237,6 +282,66 @@ public sealed class RenderingAllocationTests
     }
 
     [Fact]
+    public void Compose_WithVisibleImagesAllocatesNothingAfterWarmup()
+    {
+        using var tab = new TerminalTab(rows: 4, columns: 20);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        using var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        using var first = Dotty.Terminal.Graphics.ImagePixels.Allocate(2, 2, Dotty.Terminal.Graphics.ImagePixelFormat.Rgba8Premultiplied);
+        using var second = Dotty.Terminal.Graphics.ImagePixels.Allocate(2, 2, Dotty.Terminal.Graphics.ImagePixelFormat.Rgb8);
+        var placements = new[]
+        {
+            new Dotty.Terminal.Graphics.KittyRenderPlacement
+            {
+                Pixels = first, ImageSerial = first.Serial, ViewRow = 0, Col = 1, Cols = 3, Rows = 2,
+                U1 = 1f, V1 = 1f, Z = -1, ImageId = 1, PlacementId = 1,
+            },
+            new Dotty.Terminal.Graphics.KittyRenderPlacement
+            {
+                Pixels = second, ImageSerial = second.Serial, ViewRow = 1, Col = 4, Cols = 2, Rows = 2,
+                U1 = 1f, V1 = 1f, Z = 0, ImageId = 2, PlacementId = 1,
+            },
+        };
+        composer.LeafSnapshotCaptured = (_, snapshot) =>
+        {
+            Dotty.Terminal.Graphics.KittyRenderSnapshot graphics = snapshot.BeginGraphics();
+            for (int i = 0; i < placements.Length; i++)
+                graphics.Add(placements[i]);
+            graphics.NextAnimationDeadlineTicks = 123;
+        };
+        var theme = BuiltInThemes.DarkPlus;
+        var padding = NoPadding();
+        var overlay = new SearchOverlayRenderState(false, string.Empty, -1, 0, null);
+
+        for (int i = 0; i < 8; i++)
+            Compose();
+        Assert.Equal(2, Compose().ImageDraws.DrawCount);
+        AllocationAssert.NoAllocations(() => Compose());
+
+        TerminalSceneFrame Compose() => composer.Compose(
+            tab,
+            manager,
+            theme,
+            new SgrColorArgb(theme.Foreground),
+            selectionColor: new SgrColorArgb(0x803385DB),
+            framebufferWidth: 400,
+            framebufferHeight: 160,
+            cellWidth: 10,
+            cellHeight: 20,
+            scale: 1,
+            rows: 4,
+            columns: 20,
+            padding: padding,
+            showTabBar: false,
+            cursorVisible: false,
+            scrollbarHovered: false,
+            scrollbarDragging: false,
+            searchOverlay: overlay,
+            activeContextMenu: null);
+    }
+
+    [Fact]
     public void CenteredOffset_ComputesWithoutAllocationsAfterWarmup()
     {
         var typeface = SKTypeface.Default;
@@ -253,10 +358,10 @@ public sealed class RenderingAllocationTests
     {
         var typeface = SKTypeface.Default;
         for (int i = 0; i < 8; i++)
-            _ = FontMetricsService.MeasureCell(typeface, 14f, 1.2, 1f);
+            _ = FontMetricsService.MeasureCell(typeface, new CellMetricsOptions(14f, 1.2, 1f));
 
         AllocationAssert.NoAllocations(
-            () => _ = FontMetricsService.MeasureCell(typeface, 14f, 1.2, 1f),
+            () => _ = FontMetricsService.MeasureCell(typeface, new CellMetricsOptions(14f, 1.2, 1f)),
             measuredIterationsPerWindow: 100);
     }
 

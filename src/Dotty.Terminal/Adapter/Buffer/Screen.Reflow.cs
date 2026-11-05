@@ -12,10 +12,18 @@ public unsafe partial class Screen
         internal int Identity { get; private set; }
         internal List<ReflowCell> Cells { get; } = new();
 
+        // Where the line landed in the destination, recorded by EmitLogicalLine: the output index of its first
+        // row and how many consecutive output rows it occupies. Anchor resolution reads these instead of a
+        // per-cell position table.
+        internal int FirstOutputRow;
+        internal int OutputRowCount;
+
         internal void Reset(int identity)
         {
             Identity = identity;
             Cells.Clear();
+            FirstOutputRow = 0;
+            OutputRowCount = 0;
         }
     }
 
@@ -23,17 +31,15 @@ public unsafe partial class Screen
     {
         internal int LogicalLine = -1;
         internal int UnitStart;
-        internal List<SourceUnit> Units { get; } = new();
+        internal int PhysicalRow = -1;
 
         internal void Reset()
         {
             LogicalLine = -1;
             UnitStart = 0;
-            Units.Clear();
+            PhysicalRow = -1;
         }
     }
-
-    internal readonly record struct SourceUnit(int Column, int Width, int Offset);
 
     internal sealed class SourceLayout
     {
@@ -96,11 +102,15 @@ public unsafe partial class Screen
     internal sealed class EmittedRow
     {
         public bool ContinuesPrevious { get; private set; }
+
+        /// <summary>Offset, within its logical line, of the first cell this row holds.</summary>
+        public int LineOffset { get; private set; }
         public List<ReflowCell> Cells { get; } = new();
 
-        public void Reset(bool continuesPrevious)
+        public void Reset(bool continuesPrevious, int lineOffset)
         {
             ContinuesPrevious = continuesPrevious;
+            LineOffset = lineOffset;
             Cells.Clear();
         }
     }
@@ -115,26 +125,20 @@ public unsafe partial class Screen
         internal void BeginEmission(
             int rows,
             int columns,
-            SourceLayout layout,
-            int sourceColumns,
-            ReflowMapping mapping)
+            SourceLayout layout)
         {
             Emitted.Clear();
             _emittedUsed = 0;
-            mapping.Reset(rows, columns);
 
-            long positionCount = 0;
             long emittedRows = 0;
             foreach (var line in layout.Lines)
             {
                 if (line.Cells.Count == 0)
                 {
-                    positionCount += sourceColumns;
                     emittedRows++;
                     continue;
                 }
 
-                positionCount += line.Cells.Count + 1L;
                 int lineRows = 1;
                 int usedColumns = 0;
                 foreach (var cell in line.Cells)
@@ -150,9 +154,6 @@ public unsafe partial class Screen
                 emittedRows += lineRows;
             }
 
-            mapping.EnsureCapacity(
-                positionCount > int.MaxValue ? int.MaxValue : (int)positionCount,
-                layout.Lines.Count);
             int requiredRows = emittedRows > int.MaxValue
                 ? int.MaxValue
                 : Math.Max(rows, (int)emittedRows);
@@ -168,18 +169,18 @@ public unsafe partial class Screen
         }
 
 
-        internal EmittedRow AddEmittedRow(bool continuesPrevious)
+        internal EmittedRow AddEmittedRow(bool continuesPrevious, int lineOffset = 0)
         {
             EmittedRow row;
             if (_emittedUsed < _emittedPool.Count)
             {
                 row = _emittedPool[_emittedUsed];
-                row.Reset(continuesPrevious);
+                row.Reset(continuesPrevious, lineOffset);
             }
             else
             {
                 row = new EmittedRow();
-                row.Reset(continuesPrevious);
+                row.Reset(continuesPrevious, lineOffset);
                 _emittedPool.Add(row);
             }
 
@@ -204,6 +205,7 @@ public unsafe partial class Screen
             int logicalRow = index - retainedScrollbackRows;
             int physicalRow = GetPhysicalRow(logicalRow);
             var sourceRow = layout.AddRow();
+            sourceRow.PhysicalRow = physicalRow;
             bool continuesPrevious = RowContinuesPrevious[physicalRow];
             if (!continuesPrevious)
             {
@@ -219,54 +221,59 @@ public unsafe partial class Screen
 
             sourceRow.LogicalLine = currentLine.Identity;
             sourceRow.UnitStart = currentLine.Cells.Count;
-            int rowEnd = RowEndCol[physicalRow];
-            if (rowEnd < 0)
-                rowEnd = FindFallbackRowEnd(physicalRow);
-            if (rowEnd >= 0)
+            int rowEnd = SourceRowEnd(physicalRow);
+            for (int column = 0; column <= rowEnd; column++)
             {
-                rowEnd = Math.Min(rowEnd, Columns - 1);
-                for (int column = 0; column <= rowEnd; column++)
-                {
-                    ref var hot = ref UnsafeAsRef<CellHot>(
-                        _cellsPtr,
-                        physicalRow * Columns + column);
-                    if (hot.IsContinuation)
-                    {
-                        if (sourceRow.Units.Count > 0)
-                        {
-                            var previous = sourceRow.Units[^1];
-                            if (previous.Column + previous.Width > column)
-                                continue;
-                        }
-                        // A continuation without a base is an orphan cell.
-                        continue;
-                    }
+                int width = SourceUnitWidth(physicalRow, column, rowEnd);
+                if (width == 0)
+                    continue; // a continuation cell belongs to the unit before it (an orphan one is dropped)
 
-                    int width = 1;
-                    if (hot.Width > 1 && column + 1 <= rowEnd && column + 1 < Columns)
-                    {
-                        ref var continuation = ref UnsafeAsRef<CellHot>(
-                            _cellsPtr,
-                            physicalRow * Columns + column + 1);
-                        if (continuation.IsContinuation)
-                            width = 2;
-                    }
-
-                    var normalizedHot = hot;
-                    normalizedHot.Width = (byte)width;
-                    var cold = UnsafeAsRef<ColdCell>(
-                        _coldCellsPtr,
-                        physicalRow * Columns + column);
-                    int offset = currentLine.Cells.Count;
-                    currentLine.Cells.Add(new ReflowCell(normalizedHot, cold, width));
-                    sourceRow.Units.Add(new SourceUnit(column, width, offset));
-                }
+                var normalizedHot = UnsafeAsRef<CellHot>(_cellsPtr, physicalRow * Columns + column);
+                normalizedHot.Width = (byte)width;
+                var cold = UnsafeAsRef<ColdCell>(
+                    _coldCellsPtr,
+                    physicalRow * Columns + column);
+                currentLine.Cells.Add(new ReflowCell(normalizedHot, cold, width));
             }
 
             previousSourceRow = sourceRow;
         }
 
         return layout;
+    }
+
+    // The raw reads of a source row's cells used to build the layout and to locate an anchor in it. Both go
+    // through these two helpers, so a change of how historical rows are stored touches only them.
+
+    /// <summary>Last column of the source row that takes part in a reflow, or -1 for a row without content.</summary>
+    private int SourceRowEnd(int physicalRow)
+    {
+        int rowEnd = RowEndCol[physicalRow];
+        if (rowEnd < 0)
+            rowEnd = FindFallbackRowEnd(physicalRow);
+        return rowEnd < 0 ? -1 : Math.Min(rowEnd, Columns - 1);
+    }
+
+    /// <summary>
+    /// Width (1 or 2) of the layout unit that starts at <paramref name="column"/>, or 0 when the cell is a
+    /// continuation cell and therefore not a unit of its own.
+    /// </summary>
+    private int SourceUnitWidth(int physicalRow, int column, int rowEnd)
+    {
+        int index = physicalRow * Columns + column;
+        ref var hot = ref UnsafeAsRef<CellHot>(_cellsPtr, index);
+        if (hot.IsContinuation)
+            return 0;
+
+        if (hot.Width > 1
+            && column + 1 <= rowEnd
+            && column + 1 < Columns
+            && UnsafeAsRef<CellHot>(_cellsPtr, index + 1).IsContinuation)
+        {
+            return 2;
+        }
+
+        return 1;
     }
 
 
@@ -287,50 +294,68 @@ public unsafe partial class Screen
             return new ReflowCursorAnchor(0, 0, wrapPending);
 
         int col = Math.Clamp(column, 0, Columns - 1);
-        if (row.Units.Count == 0)
-            return new ReflowCursorAnchor(row.LogicalLine, col, wrapPending);
 
+        // The unit offset is found by scanning the source row up to the column (O(columns), once per anchor)
+        // instead of reading a per-unit table built for every row. Unit i of the row has line offset
+        // UnitStart + i, because the layout appended the row's units consecutively.
+        int rowEnd = SourceRowEnd(row.PhysicalRow);
         int offset = row.UnitStart;
-        foreach (var unit in row.Units)
+        int unitCount = 0;
+        for (int unitColumn = 0; unitColumn <= rowEnd; unitColumn++)
         {
-            if (col <= unit.Column)
+            int width = SourceUnitWidth(row.PhysicalRow, unitColumn, rowEnd);
+            if (width == 0)
+                continue;
+
+            int unitOffset = row.UnitStart + unitCount;
+            unitCount++;
+            if (col <= unitColumn)
                 break;
-            if (col < unit.Column + unit.Width)
+            if (col < unitColumn + width)
             {
-                offset = unit.Offset;
+                offset = unitOffset;
                 break;
             }
-            offset = unit.Offset + 1;
+            offset = unitOffset + 1;
         }
+
+        // A row without units (blank row) is addressed by column.
+        if (unitCount == 0)
+            offset = col;
 
         return new ReflowCursorAnchor(row.LogicalLine, offset, wrapPending);
     }
 
 
 
+    /// <summary>
+    /// Reflows this screen's <paramref name="layout"/> into a <paramref name="rows"/> x <paramref name="columns"/>
+    /// screen whose ring keeps up to <paramref name="destinationScrollbackCapacity"/> history rows (the capacity may
+    /// differ from this screen's: it follows the column count under a byte cap; when it is smaller than the history
+    /// being carried over, the oldest rows are dropped). The anchors registered on <paramref name="mapping"/>
+    /// beforehand (<see cref="ReflowMapping.AddAnchor"/>) are resolved against the result; nothing else is tracked
+    /// per cell.
+    /// </summary>
     internal Screen ReflowWithOptions(
         int rows,
         int columns,
-        ReflowCursorAnchor anchor,
         SourceLayout layout,
         ReflowWorkspace workspace,
         ReflowMapping mapping,
         int scrollbackRows,
         bool includeScrollback,
+        int destinationScrollbackCapacity,
         Screen? destination = null)
     {
         rows = Math.Max(1, rows);
         columns = Math.Max(1, columns);
         int retainedScrollbackRows = NormalizeScrollbackRows(scrollbackRows);
-        workspace.BeginEmission(rows, columns, layout, Columns, mapping);
+        mapping.Reset(rows, columns);
+        workspace.BeginEmission(rows, columns, layout);
         var emitted = workspace.Emitted;
 
         foreach (var line in layout.Lines)
-        {
-            int mappingLength = line.Cells.Count == 0 ? Columns : line.Cells.Count;
-            mapping.SetLineLength(line.Identity, mappingLength);
-            EmitLogicalLine(line, columns, Columns, workspace, mapping);
-        }
+            EmitLogicalLine(line, columns, workspace);
 
         // Blank rows at the end of a viewport are padding, not scrollback.
         // Remove them before selecting the retained chronological stream so a
@@ -354,27 +379,30 @@ public unsafe partial class Screen
             }
         }
 
-        int targetTotal = (includeScrollback ? _scrollbackCapacity : 0) + rows;
+        int targetTotal = (includeScrollback ? destinationScrollbackCapacity : 0) + rows;
         if (!hasData && retainedScrollbackRows == 0)
             targetTotal = rows;
         int retainedStart = Math.Max(0, emitted.Count - targetTotal);
         int retainedCount = emitted.Count - retainedStart;
         int newScrollbackRows = includeScrollback
-            ? Math.Min(_scrollbackCapacity, Math.Max(0, retainedCount - rows))
+            ? Math.Min(destinationScrollbackCapacity, Math.Max(0, retainedCount - rows))
             : 0;
         mapping.RetainedStart = retainedStart;
         mapping.NewScrollbackRows = newScrollbackRows;
+        ResolveAnchors(mapping, layout, emitted, Columns, columns);
 
         Screen resized;
         if (destination is null)
         {
-            resized = new Screen(rows, columns, _scrollbackCapacity);
+            resized = new Screen(rows, columns, destinationScrollbackCapacity);
         }
         else
         {
             resized = destination;
-            resized.ResetForReflow(rows, columns);
+            resized.ResetForReflow(rows, columns, destinationScrollbackCapacity);
         }
+        // History is written at the end of the destination ring, outside the visible-window extent.
+        resized.NoteReflowDestinationHistory(newScrollbackRows);
 
         for (int index = 0; index < retainedCount; index++)
         {
@@ -388,14 +416,6 @@ public unsafe partial class Screen
                 startsLogicalLine: index == 0);
         }
 
-        if (mapping.TryMap(anchor, out var anchorPosition))
-        {
-            mapping.Row = anchorPosition.Row;
-            mapping.Column = anchorPosition.Column;
-            mapping.WrapPending = anchorPosition.WrapPending;
-            mapping.InScrollback = anchorPosition.InScrollback;
-            mapping.IsMapped = true;
-        }
         return resized;
     }
 
@@ -411,7 +431,7 @@ public unsafe partial class Screen
             var hot = UnsafeAsRef<CellHot>(_cellsPtr, offset + column);
             var cold = UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + column);
             if (hot.Rune != 0 || hot.PackedFlags != 0 || hot.StyleId != 0
-                || cold.HyperlinkId != 0 || cold.GraphemeIndex >= 0)
+                || cold.HyperlinkId != 0 || cold.GraphemeIndex != -1)
             {
                 return column;
             }
@@ -422,32 +442,18 @@ public unsafe partial class Screen
     private static void EmitLogicalLine(
         LogicalLine line,
         int columns,
-        int sourceColumns,
-        ReflowWorkspace workspace,
-        ReflowMapping mapping)
+        ReflowWorkspace workspace)
     {
         var emitted = workspace.Emitted;
+        line.FirstOutputRow = emitted.Count;
         if (line.Cells.Count == 0)
         {
-            int emptyOutputIndex = emitted.Count;
             workspace.AddEmittedRow(continuesPrevious: false);
-            for (int offset = 0; offset < sourceColumns; offset++)
-            {
-                mapping.Add(
-                    line.Identity,
-                    offset,
-                    new ReflowPosition(
-                        -1,
-                        Math.Min(offset, columns - 1),
-                        false,
-                        false,
-                        emptyOutputIndex));
-            }
+            line.OutputRowCount = 1;
             return;
         }
 
         var row = workspace.AddEmittedRow(continuesPrevious: false);
-        int outputIndex = emitted.Count - 1;
         int usedColumns = 0;
 
         for (int offset = 0; offset < line.Cells.Count; offset++)
@@ -456,24 +462,124 @@ public unsafe partial class Screen
             int width = cell.Width == 2 && columns >= 2 ? 2 : 1;
             if (usedColumns + width > columns)
             {
-                row = workspace.AddEmittedRow(continuesPrevious: true);
-                outputIndex = emitted.Count - 1;
+                row = workspace.AddEmittedRow(continuesPrevious: true, offset);
                 usedColumns = 0;
             }
 
-            mapping.Add(
-                line.Identity,
-                offset,
-                new ReflowPosition(-1, usedColumns, false, false, outputIndex));
             row.Cells.Add(cell with { Width = width });
             usedColumns += width;
         }
 
-        int endColumn = Math.Max(0, Math.Min(columns - 1, usedColumns));
-        mapping.Add(
-            line.Identity,
-            line.Cells.Count,
-            new ReflowPosition(-1, endColumn, false, false, outputIndex));
+        line.OutputRowCount = emitted.Count - line.FirstOutputRow;
+    }
+
+    private static void ResolveAnchors(
+        ReflowMapping mapping,
+        SourceLayout layout,
+        List<EmittedRow> emitted,
+        int sourceColumns,
+        int columns)
+    {
+        for (int slot = 0; slot < mapping.AnchorCount; slot++)
+        {
+            if (TryResolveAnchor(mapping, mapping.GetAnchor(slot), layout, emitted, sourceColumns, columns, out var position))
+                mapping.SetPosition(slot, position);
+        }
+    }
+
+    /// <summary>
+    /// Where <paramref name="anchor"/> lands: the position of its (line, offset) cell in the emitted rows, found
+    /// from the line's recorded output rows and the row cells, in O(log rows + columns) per anchor.
+    /// </summary>
+    /// <remarks>
+    /// The result equals what the former dense table gave: the anchor's offset is first limited to the last cell
+    /// of its line when a wrap is pending and to the line length, and when the output row of that offset was
+    /// trimmed out of the retained window the nearest lower offset that is still inside it is used. Output rows
+    /// only grow with the offset, so that nearest offset is the target itself when it is inside the window and
+    /// nothing when its row precedes the window. A row of a line with cells never follows the window: only the
+    /// blank rows of cell-less lines are trimmed from the end. A line without cells occupies a single output row and
+    /// every offset below the source column count maps onto it by column.
+    /// </remarks>
+    private static bool TryResolveAnchor(
+        ReflowMapping mapping,
+        ReflowCursorAnchor anchor,
+        SourceLayout layout,
+        List<EmittedRow> emitted,
+        int sourceColumns,
+        int columns,
+        out ReflowPosition position)
+    {
+        position = default;
+        var lines = layout.Lines;
+        if ((uint)anchor.LogicalLine >= (uint)lines.Count)
+            return false;
+
+        var line = lines[anchor.LogicalLine];
+        int cellCount = line.Cells.Count;
+        int length = cellCount == 0 ? sourceColumns : cellCount;
+        int target = Math.Max(0, anchor.CellOffset);
+        if (anchor.WrapPending && length > 0)
+            target = Math.Min(target, length - 1);
+        target = Math.Min(target, length);
+
+        int windowStart = mapping.RetainedStart;
+        int windowEnd = windowStart + mapping.NewScrollbackRows + mapping.NewRows;
+
+        int outputIndex;
+        int column;
+        if (cellCount == 0)
+        {
+            outputIndex = line.FirstOutputRow;
+            if (outputIndex < windowStart || outputIndex >= windowEnd)
+                return false;
+
+            column = Math.Min(Math.Min(target, sourceColumns - 1), columns - 1);
+        }
+        else
+        {
+            int firstRow = line.FirstOutputRow;
+            int rowIndex = FindEmittedRowIndex(emitted, firstRow, line.OutputRowCount, target);
+            outputIndex = firstRow + rowIndex;
+            // The window ends at the last emitted row, and only blank rows (never a row of a line with cells) are
+            // trimmed from the end, so a row at or after the window end cannot occur here.
+            if (outputIndex < windowStart || outputIndex >= windowEnd)
+                return false;
+
+            var row = emitted[outputIndex];
+            int used = 0;
+            for (int i = 0, count = target - row.LineOffset; i < count; i++)
+                used += row.Cells[i].Width;
+
+            // The offset one past the last cell is the end of the line's last row (never beyond its last column).
+            column = target == cellCount ? Math.Max(0, Math.Min(columns - 1, used)) : used;
+        }
+
+        int retainedIndex = outputIndex - windowStart;
+        bool inScrollback = retainedIndex < mapping.NewScrollbackRows;
+        position = new ReflowPosition(
+            inScrollback ? -1 : retainedIndex - mapping.NewScrollbackRows,
+            column,
+            anchor.WrapPending,
+            inScrollback,
+            outputIndex);
+        return true;
+    }
+
+    // Index (within the line's output rows) of the last row whose first cell offset is at most offset.
+    private static int FindEmittedRowIndex(List<EmittedRow> emitted, int firstRow, int rowCount, int offset)
+    {
+        int low = 0;
+        int high = rowCount - 1;
+        while (low < high)
+        {
+            int middle = (low + high + 1) >> 1;
+            if (emitted[firstRow + middle].LineOffset <= offset)
+                low = middle;
+            else
+                high = middle - 1;
+        }
+
+        return low;
     }
 
 
@@ -500,7 +606,7 @@ public unsafe partial class Screen
             hot.IsContinuation = false;
             UnsafeAsRef<CellHot>(destination._cellsPtr, offset + usedColumns) = hot;
             UnsafeAsRef<ColdCell>(destination._coldCellsPtr, offset + usedColumns) = cell.Cold;
-            if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex >= 0)
+            if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex != -1)
                 hasCold = true;
             if (hot.Rune != 0 && hot.Rune != 32)
                 rowMaxCol = usedColumns;
@@ -513,10 +619,11 @@ public unsafe partial class Screen
                     IsContinuation = true,
                     HasHyperlink = hot.HasHyperlink,
                     HasGrapheme = hot.HasGrapheme,
+                    IsProtected = hot.IsProtected,
                 };
                 UnsafeAsRef<CellHot>(destination._cellsPtr, offset + usedColumns + 1) = continuation;
                 UnsafeAsRef<ColdCell>(destination._coldCellsPtr, offset + usedColumns + 1) = cell.Cold;
-                if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex >= 0)
+                if (cell.Cold.HyperlinkId != 0 || cell.Cold.GraphemeIndex != -1)
                     hasCold = true;
             }
 

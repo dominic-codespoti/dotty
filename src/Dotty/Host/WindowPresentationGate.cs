@@ -18,31 +18,19 @@ public enum WindowFrameReason
     Selection = 1 << 7,
     Atlas = 1 << 8,
     TabOrPane = 1 << 9,
+    /// <summary>An animated image's next frame is due (Kitty graphics).</summary>
+    ImageAnimation = 1 << 10,
+    /// <summary>Image textures were left un-uploaded by the per-frame upload budget; render again.</summary>
+    ImageUpload = 1 << 11,
 }
 
+/// <summary>
+/// Accumulates frame invalidation reasons across threads and wakes the UI loop. Pacing (when a dirty frame may
+/// present) is decided by <see cref="FramePlanner"/>.
+/// </summary>
 public static class WindowPresentationGate
 {
-    public const int BackloggedFrameIntervalMs = 30;
-    public const int ContentFrameMinIntervalMs = 8;
-    public const int InteractiveWindowMs = 250;
-
     private static int _pendingReasons = (int)WindowFrameReason.Initial;
-
-    /// <summary>
-    /// Milliseconds a content-only frame should still be held back; 0 means present now.
-    /// Streaming output is capped at <see cref="ContentFrameMinIntervalMs"/> so rendering
-    /// does not interrupt the PTY consumer on every flush, and at the wider
-    /// <see cref="BackloggedFrameIntervalMs"/> while the consumer is behind. Recent
-    /// interaction and the first frame after idle are never held back.
-    /// </summary>
-    public static long CoalesceRemainingMs(long now, long lastPresent, long lastInteraction, bool anyBacklogged)
-    {
-        if (lastPresent == 0 || now - lastInteraction < InteractiveWindowMs)
-            return 0;
-
-        int interval = anyBacklogged ? BackloggedFrameIntervalMs : ContentFrameMinIntervalMs;
-        return Math.Max(0L, interval - (now - lastPresent));
-    }
 
     public static bool ShouldPresent(TerminalAdapter? adapter) =>
         adapter is null || !adapter.SynchronizedUpdateHolding;

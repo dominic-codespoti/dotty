@@ -5,101 +5,182 @@ namespace Dotty.Terminal.Adapter;
 
 public partial class TerminalAdapter
 {
-    private void HandleOscPalette(ReadOnlySpan<char> payload)
+    private void HandleOscPalette(int code, ReadOnlySpan<char> payload)
     {
-        lock (_paletteSync) HandleOscPaletteLocked(payload);
+        lock (_paletteSync)
+        {
+            Span<char> color = stackalloc char[18];
+            TerminalPalette palette = Volatile.Read(ref _palette);
+            bool paletteChanged = false, specialChanged = false;
+            int position = 0;
+            while (position < payload.Length)
+            {
+                int separator = payload[position..].IndexOf(';');
+                if (separator < 0) break;
+                ReadOnlySpan<char> field = payload.Slice(position, separator);
+                position += separator + 1;
+                separator = payload[position..].IndexOf(';');
+                ReadOnlySpan<char> spec = separator < 0 ? payload[position..] : payload.Slice(position, separator);
+                position = separator < 0 ? payload.Length : position + separator + 1;
+                if (!TryParseColorNumber(field, code == 5 ? 4 : 260, out int index)) continue;
+                int specialIndex = code == 5 ? index : index - 256;
+                if (spec.SequenceEqual("?"))
+                {
+                    WriteRgb(specialIndex >= 0 ? _specialColors.Get(specialIndex) : palette[index], color);
+                    SendColorReply(code, index, color);
+                }
+                else if (OscColorParser.TryParse(spec, out uint argb))
+                {
+                    if (specialIndex >= 0) specialChanged |= SetSpecialColor(specialIndex, argb);
+                    else paletteChanged |= palette.Set(index, argb);
+                }
+            }
+            if (paletteChanged) RemapPaletteStyles();
+            if (paletteChanged || specialChanged) NotifyPaletteChanged();
+        }
     }
 
-    private void HandleOscPaletteLocked(ReadOnlySpan<char> payload)
+    private void HandleOscPaletteReset(int code, ReadOnlySpan<char> payload)
     {
-        Span<char> color = stackalloc char[18];
-        Span<uint> previous = stackalloc uint[16];
-        TerminalPalette palette = Volatile.Read(ref _palette);
-        int pos = 0;
-        while (pos < payload.Length)
+        lock (_paletteSync)
         {
-            int semi = payload[pos..].IndexOf(';');
-            if (semi < 0) return;
-            ReadOnlySpan<char> indexField = payload.Slice(pos, semi);
-            pos += semi + 1;
-            semi = payload[pos..].IndexOf(';');
-            ReadOnlySpan<char> spec = semi < 0 ? payload[pos..] : payload.Slice(pos, semi);
-            pos = semi < 0 ? payload.Length : pos + semi + 1;
-            if (!TryParsePaletteIndex(indexField, out int index)) continue;
-            if (spec.SequenceEqual("?"))
+            TerminalPalette palette = Volatile.Read(ref _palette);
+            bool paletteChanged = false, specialChanged = false;
+            if (payload.IsEmpty)
             {
-                WriteRgb(palette[index], color);
-                SendColorReply(4, index, color);
-                continue;
+                specialChanged = ResetAllSpecialColors();
+                if (code == 104) paletteChanged = palette.ResetAll();
             }
-            if (!TryParseColorSpec(spec, out uint argb)) continue;
-            bool remap = index < 16 && palette[index] != argb;
-            if (remap) palette.EffectiveAnsi16.CopyTo(previous);
-            if (!palette.Set(index, argb)) continue;
-            if (remap) RemapAnsiStyles(previous);
+            else
+            {
+                int position = 0;
+                while (position <= payload.Length)
+                {
+                    int separator = payload[position..].IndexOf(';');
+                    ReadOnlySpan<char> field = separator < 0 ? payload[position..] : payload.Slice(position, separator);
+                    position = separator < 0 ? payload.Length + 1 : position + separator + 1;
+                    if (!TryParseColorNumber(field, code == 105 ? 4 : 260, out int index)) continue;
+                    int specialIndex = code == 105 ? index : index - 256;
+                    if (specialIndex >= 0) specialChanged |= ResetSpecialColor(specialIndex);
+                    else paletteChanged |= palette.Reset(index);
+                }
+            }
+            if (paletteChanged) RemapPaletteStyles();
+            if (paletteChanged || specialChanged) NotifyPaletteChanged();
+        }
+    }
+
+    private void HandleOscSpecialMode(ReadOnlySpan<char> payload)
+    {
+        int separator = payload.IndexOf(';');
+        if (separator <= 0 || separator == payload.Length - 1 ||
+            !TryParseColorNumber(payload[..separator], 5, out int index)) return;
+        bool enabled = false;
+        foreach (char digit in payload[(separator + 1)..])
+        {
+            if (digit is < '0' or > '9') return;
+            enabled |= digit != '0';
+        }
+        lock (_paletteSync)
+        {
+            byte mask = (byte)(1 << index);
+            byte modes = enabled ? (byte)(_specialColors.Modes | mask) : (byte)(_specialColors.Modes & ~mask);
+            if (modes == _specialColors.Modes) return;
+            _specialColors = _specialColors with { Modes = modes };
             NotifyPaletteChanged();
         }
     }
 
-    private void HandleOscPaletteReset(ReadOnlySpan<char> payload)
+    private bool SetSpecialColor(int index, uint value)
     {
-        lock (_paletteSync) HandleOscPaletteResetLocked(payload);
+        _specialColorOverrides |= (byte)(1 << index);
+        if (_specialColors.Get(index) == value) return false;
+        _specialColors = _specialColors.Set(index, value);
+        return true;
     }
 
-    private void HandleOscPaletteResetLocked(ReadOnlySpan<char> payload)
+    private bool ResetSpecialColor(int index)
     {
-        Span<uint> previous = stackalloc uint[16];
-        TerminalPalette palette = Volatile.Read(ref _palette);
-        palette.EffectiveAnsi16.CopyTo(previous);
+        _specialColorOverrides &= (byte)~(1 << index);
+        if (_specialColors.Get(index) == _specialColorDefaultArgb) return false;
+        _specialColors = _specialColors.Set(index, _specialColorDefaultArgb);
+        return true;
+    }
+
+    private bool ResetAllSpecialColors()
+    {
         bool changed = false;
-        if (payload.IsEmpty)
+        for (int index = 0; index < 5; index++) changed |= ResetSpecialColor(index);
+        return changed;
+    }
+
+    private bool RefreshSpecialColorDefaults(uint foreground)
+    {
+        if (_specialColorDefaultArgb == foreground) return false;
+        _specialColorDefaultArgb = foreground;
+        bool changed = false;
+        for (int index = 0; index < 5; index++)
         {
-            changed = palette.ResetAll();
+            if ((_specialColorOverrides & (1 << index)) != 0 || _specialColors.Get(index) == foreground) continue;
+            _specialColors = _specialColors.Set(index, foreground);
+            changed = true;
         }
-        else
+        return changed;
+    }
+
+    private static bool TryParseColorNumber(ReadOnlySpan<char> field, int maximum, out int value)
+    {
+        value = 0;
+        if (field.IsEmpty) return false;
+        foreach (char digit in field)
         {
-            int pos = 0;
-            while (pos <= payload.Length)
-            {
-                int semi = payload[pos..].IndexOf(';');
-                ReadOnlySpan<char> token = semi < 0 ? payload[pos..] : payload.Slice(pos, semi);
-                pos = semi < 0 ? payload.Length + 1 : pos + semi + 1;
-                if (token.IsEmpty || !TryParsePaletteIndex(token, out int index)) continue;
-                changed |= palette.Reset(index);
-            }
+            if (digit is < '0' or > '9') return false;
+            value = value * 10 + digit - '0';
+            if (value > maximum) return false;
         }
-        if (!changed) return;
-        RemapAnsiStyles(previous);
-        NotifyPaletteChanged();
+        return true;
     }
 
     private void HandleOscDynamicColor(int code, ReadOnlySpan<char> payload)
     {
-        if (payload.SequenceEqual("?"))
+        lock (_paletteSync)
         {
-            uint value = code switch
-            {
-                10 => DefaultForegroundOverrideArgb ?? ParseHexDefault(DefaultForegroundThemeHex),
-                11 => DefaultBackgroundOverrideArgb ?? ParseHexDefault(DefaultBackgroundThemeHex),
-                _ => 0xFFFFFFFFu,
-            };
             Span<char> color = stackalloc char[18];
-            WriteRgb(value, color);
-            SendColorReply(code, color);
-            return;
+            bool changed = false;
+            int position = 0;
+            while (position <= payload.Length && code <= 12)
+            {
+                int separator = payload[position..].IndexOf(';');
+                ReadOnlySpan<char> spec = separator < 0 ? payload[position..] : payload.Slice(position, separator);
+                position = separator < 0 ? payload.Length + 1 : position + separator + 1;
+                if (spec.SequenceEqual("?"))
+                {
+                    uint value = code switch
+                    {
+                        10 => DefaultForegroundOverrideArgb ?? ParseHexDefault(DefaultForegroundThemeHex),
+                        11 => DefaultBackgroundOverrideArgb ?? ParseHexDefault(DefaultBackgroundThemeHex),
+                        _ => 0xFFFFFFFFu,
+                    };
+                    WriteRgb(value, color);
+                    SendColorReply(code, color);
+                }
+                else if (code != 12 && OscColorParser.TryParse(spec, out uint argb))
+                {
+                    if (code == 10 && DefaultForegroundOverrideArgb != argb)
+                    {
+                        Volatile.Write(ref _defaultForegroundOverrideArgb, unchecked((int)argb));
+                        changed = true;
+                    }
+                    else if (code == 11 && DefaultBackgroundOverrideArgb != argb)
+                    {
+                        Volatile.Write(ref _defaultBackgroundOverrideArgb, unchecked((int)argb));
+                        changed = true;
+                    }
+                }
+                code++;
+            }
+            if (changed) NotifyPaletteChanged();
         }
-        if (code == 12 || !TryParseColorSpec(payload, out uint argb)) return;
-        if (code == 10)
-        {
-            if (DefaultForegroundOverrideArgb == argb) return;
-            Volatile.Write(ref _defaultForegroundOverrideArgb, unchecked((int)argb));
-        }
-        else
-        {
-            if (DefaultBackgroundOverrideArgb == argb) return;
-            Volatile.Write(ref _defaultBackgroundOverrideArgb, unchecked((int)argb));
-        }
-        NotifyPaletteChanged();
     }
 
     private void ClearDynamicColorOverride(int code)
@@ -119,28 +200,25 @@ public partial class TerminalAdapter
 
     private void ResetPaletteForRis()
     {
-        lock (_paletteSync) ResetPaletteForRisLocked();
+        lock (_paletteSync)
+        {
+            bool paletteChanged = Volatile.Read(ref _palette).ResetAll();
+            bool changed = ResetAllSpecialColors();
+            changed |= DefaultForegroundOverrideArgb.HasValue || DefaultBackgroundOverrideArgb.HasValue;
+            Volatile.Write(ref _defaultForegroundOverrideArgb, 0);
+            Volatile.Write(ref _defaultBackgroundOverrideArgb, 0);
+            if (paletteChanged) RemapPaletteStyles();
+            if (paletteChanged || changed) NotifyPaletteChanged();
+        }
     }
 
-    private void ResetPaletteForRisLocked()
+    private void RemapPaletteStyles()
     {
-        Span<uint> previous = stackalloc uint[16];
-        TerminalPalette palette = Volatile.Read(ref _palette);
-        palette.EffectiveAnsi16.CopyTo(previous);
-        bool changed = palette.ResetAll();
-        changed |= DefaultForegroundOverrideArgb.HasValue || DefaultBackgroundOverrideArgb.HasValue;
-        Volatile.Write(ref _defaultForegroundOverrideArgb, 0);
-        Volatile.Write(ref _defaultBackgroundOverrideArgb, 0);
-        if (!changed) return;
-        RemapAnsiStyles(previous);
-        NotifyPaletteChanged();
-    }
-
-    private void RemapAnsiStyles(ReadOnlySpan<uint> previous)
-    {
-        Span<uint> current = stackalloc uint[16];
-        Volatile.Read(ref _palette).EffectiveAnsi16.CopyTo(current);
-        _buffer.StyleSet.RemapAnsiPalette(previous, current);
+        ReadOnlySpan<uint> colors = Volatile.Read(ref _palette).EffectiveColors;
+        _buffer.StyleSet.RemapPalette(colors);
+        _currentAttributes.RemapPalette(colors);
+        _savedMainAttributes.RemapPalette(colors);
+        _savedAlternateAttributes.RemapPalette(colors);
     }
 
     private void NotifyPaletteChanged()
@@ -183,56 +261,16 @@ public partial class TerminalAdapter
 
     private static void WriteRgbComponent(byte value, Span<char> output)
     {
-        const string digits = "0123456789ABCDEF";
+        const string digits = "0123456789abcdef";
         char high = digits[value >> 4], low = digits[value & 0xF];
         output[0] = high; output[1] = low; output[2] = high; output[3] = low;
     }
 
-    private static bool TryParsePaletteIndex(ReadOnlySpan<char> field, out int index)
-    {
-        index = 0;
-        if (field.IsEmpty || field.Length > 3) return false;
-        foreach (char c in field)
-        {
-            if (c is < '0' or > '9') return false;
-            index = index * 10 + c - '0';
-        }
-        return index < 256;
-    }
-
-    private static bool TryParseColorSpec(ReadOnlySpan<char> spec, out uint argb)
-    {
-        argb = 0;
-        if (spec.StartsWith("rgb:", StringComparison.OrdinalIgnoreCase))
-        {
-            ReadOnlySpan<char> body = spec[4..];
-            int first = body.IndexOf('/');
-            if (first <= 0) return false;
-            int offset = body[(first + 1)..].IndexOf('/');
-            if (offset <= 0) return false;
-            int second = first + 1 + offset;
-            if (body[(second + 1)..].IndexOf('/') >= 0 ||
-                !TryParseHexComponent(body[..first], out byte r) ||
-                !TryParseHexComponent(body.Slice(first + 1, second - first - 1), out byte g) ||
-                !TryParseHexComponent(body[(second + 1)..], out byte b)) return false;
-            argb = 0xFF000000u | ((uint)r << 16) | ((uint)g << 8) | b;
-            return true;
-        }
-        ReadOnlySpan<char> hex = spec;
-        if (!hex.IsEmpty && hex[0] == '#') hex = hex[1..];
-        if (hex.Length is not (3 or 6)) return false;
-        int stride = hex.Length / 3;
-        if (!TryParseHexComponent(hex[..stride], out byte red) ||
-            !TryParseHexComponent(hex.Slice(stride, stride), out byte green) ||
-            !TryParseHexComponent(hex[(stride * 2)..], out byte blue)) return false;
-        argb = 0xFF000000u | ((uint)red << 16) | ((uint)green << 8) | blue;
-        return true;
-    }
 
     private static bool TryParseHexComponent(ReadOnlySpan<char> input, out byte value)
     {
         value = 0;
-        if (input.IsEmpty || input.Length > 4) return false;
+        if (input.IsEmpty || input.Length > 2) return false;
         uint parsed = 0;
         foreach (char c in input)
         {
@@ -246,11 +284,20 @@ public partial class TerminalAdapter
             if (nibble < 0) return false;
             parsed = (parsed << 4) | (uint)nibble;
         }
-        uint scaled = input.Length switch { 1 => parsed * 17, 2 => parsed, 3 => parsed >> 4, _ => parsed >> 8 };
+        uint scaled = input.Length == 1 ? parsed * 17 : parsed;
         value = (byte)scaled;
         return true;
     }
 
-    private static uint ParseHexDefault(string color) =>
-        TryParseColorSpec(color.AsSpan(), out uint value) ? value : 0xFFFFFFFFu;
+    private static uint ParseHexDefault(string color)
+    {
+        ReadOnlySpan<char> hex = color.AsSpan();
+        if (!hex.IsEmpty && hex[0] == '#') hex = hex[1..];
+        if (hex.Length is not (3 or 6)) return 0xFFFFFFFFu;
+        int stride = hex.Length / 3;
+        if (!TryParseHexComponent(hex[..stride], out byte red) ||
+            !TryParseHexComponent(hex.Slice(stride, stride), out byte green) ||
+            !TryParseHexComponent(hex[(stride * 2)..], out byte blue)) return 0xFFFFFFFFu;
+        return 0xFF000000u | ((uint)red << 16) | ((uint)green << 8) | blue;
+    }
 }

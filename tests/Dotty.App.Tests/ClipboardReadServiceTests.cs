@@ -33,6 +33,9 @@ public sealed class ClipboardReadServiceTests : IDisposable
         public bool PrimarySupported;
         public string? Primary = "prim";
         public int PrimaryReads;
+        public bool CutBufferSupported;
+        public string? CutBuffer;
+        public ClipboardSelection ConfiguredSelection { get; set; } = ClipboardSelection.Clipboard;
         public readonly List<ClipboardSelection> HookSelections = new();
         public int ClipboardReads;
         public int HookCalls;
@@ -68,6 +71,7 @@ public sealed class ClipboardReadServiceTests : IDisposable
         }
 
         public bool SupportsPrimarySelection => PrimarySupported;
+        public bool SupportsCutBuffer0 => CutBufferSupported;
 
         public string? ReadPrimary()
         {
@@ -80,6 +84,7 @@ public sealed class ClipboardReadServiceTests : IDisposable
             ClipboardReads++;
             return Clipboard;
         }
+        public string? ReadCutBuffer0() => CutBuffer;
 
         public void WriteReply(TerminalSession session, byte[] reply) => Replies.Add((session, reply));
 
@@ -196,7 +201,7 @@ public sealed class ClipboardReadServiceTests : IDisposable
         ContextMenuModel prompt = Assert.Single(_env.Prompts);
         Assert.Equal("Tab \"build\" wants to read the clipboard", prompt.Items[0].Label);
         Assert.Equal("Deny", prompt.Items[prompt.HoveredIndex].Label);
-        Assert.All(prompt.Items, item => Assert.False(item.Label.Any(c => c < 0x20 || c == 0x7F)));
+        Assert.All(prompt.Items, item => Assert.DoesNotContain(item.Label, c => c < 0x20 || c == 0x7F));
         Assert.Contains(prompt.Items, item => item.Label == "line one\\x1B]0;x\\x07");
         Assert.Contains(prompt.Items, item => item.Label == "line two");
     }
@@ -515,6 +520,69 @@ public sealed class ClipboardReadServiceTests : IDisposable
         Assert.Equal(0, _env.ClipboardReads);
         Assert.Equal(1, _env.PrimaryReads);
         Assert.Equal(ClipboardSelection.Primary, Assert.Single(_env.HookSelections));
+    }
+
+    [Fact]
+    public void S0Request_UsesConfiguredSystemSelectionAndPreservesReplySelector()
+    {
+        _config.Osc52Read = "allow";
+        _env.PrimarySupported = true;
+        _env.ConfiguredSelection = ClipboardSelection.Primary;
+        TerminalTab tab = AddTab();
+
+        _service.OnRequested(
+            tab.Session,
+            new ClipboardReadRequest(
+                ClipboardSelection.Select | ClipboardSelection.CutBuffer0,
+                "s0"));
+        _service.Drain();
+
+        Assert.Equal(
+            Esc + "]52;s0;" + Convert.ToBase64String(Encoding.UTF8.GetBytes("prim")) + St,
+            Text(Assert.Single(_env.Replies).Reply));
+        Assert.Equal(1, _env.PrimaryReads);
+        Assert.Equal(0, _env.ClipboardReads);
+    }
+
+    [Fact]
+    public void S0Request_UsesCutBuffer0WhenConfiguredSelectionIsUnavailable()
+    {
+        _config.Osc52Read = "allow";
+        _env.PrimarySupported = true;
+        _env.ConfiguredSelection = ClipboardSelection.Primary;
+        _env.Primary = null;
+        _env.CutBufferSupported = true;
+        _env.CutBuffer = "cutbuffer";
+        TerminalTab tab = AddTab();
+
+        _service.OnRequested(tab.Session,
+            new ClipboardReadRequest(ClipboardSelection.Select | ClipboardSelection.CutBuffer0, "s0"));
+        _service.Drain();
+
+        Assert.Equal(
+            Esc + "]52;s0;" + Convert.ToBase64String(Encoding.UTF8.GetBytes("cutbuffer")) + St,
+            Text(Assert.Single(_env.Replies).Reply));
+    }
+    [Fact]
+    public void CutBuffer0Request_UsesOnlyCutBufferAndPreservesZeroSelector()
+    {
+        _config.Osc52Read = "allow";
+        _env.PrimarySupported = true;
+        _env.CutBufferSupported = true;
+        _env.Primary = "primary must not be read";
+        _env.Clipboard = "clipboard must not be read";
+        _env.CutBuffer = "cutbuffer";
+        TerminalTab tab = AddTab();
+
+        _service.OnRequested(tab.Session, new ClipboardReadRequest(ClipboardSelection.CutBuffer0, "0"));
+        _service.Drain();
+
+        Assert.Equal(
+            Esc + "]52;0;" + Convert.ToBase64String(Encoding.UTF8.GetBytes("cutbuffer")) + St,
+            Text(Assert.Single(_env.Replies).Reply));
+        Assert.Equal(0, _env.PrimaryReads);
+        Assert.Equal(0, _env.ClipboardReads);
+        Assert.Equal(new[] { ClipboardSelection.CutBuffer0 }, _env.HookSelections);
     }
 
     [Fact]

@@ -122,7 +122,7 @@ public sealed class KittyLimitsTests
         Add(store, 1, now: 100);
         var second = Add(store, 2, now: 1);          // older clock than the first: still the survivor
 
-        Assert.Equal(1, store.Count);
+        Assert.Single(store.Images);
         Assert.Same(second, store.FindByClientId(2));
         Assert.Null(store.FindByClientId(1));
     }
@@ -135,7 +135,7 @@ public sealed class KittyLimitsTests
             Add(store, id, now: id);
         store.SetMaxImages(1);
 
-        Assert.Equal(1, store.Count);
+        Assert.Single(store.Images);
         Assert.NotNull(store.FindByClientId(50));
         store.ValidateInvariants();
         Assert.Throws<ArgumentOutOfRangeException>(() => store.SetMaxImages(0));
@@ -441,7 +441,7 @@ public sealed class KittyLimitsTests
                 Err("i=1", "EFBIG:Image too large"),
                 Err("i=1", "EFBIG:Image too large"),
             }, rig.Replies);
-            Assert.Equal(1, rig.Store.FindByClientId(1)!.Frames.Count);
+            Assert.Single(rig.Store.FindByClientId(1)!.Frames);
             Assert.Equal(0, baseline.PendingDelta);
         }
         baseline.AssertRestored();

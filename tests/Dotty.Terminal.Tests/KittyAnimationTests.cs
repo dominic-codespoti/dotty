@@ -1090,7 +1090,7 @@ public sealed class KittyAnimationTests
         rig.Apc("a=d,d=f,I=8,r=1");
 
         var image = rig.Store.FindByNumber(8)!;
-        Assert.Equal(1, image.Frames.Count);
+        Assert.Single(image.Frames);
         Assert.Equal(Col(1), image.Root.AsSpan().ToArray());
     }
 

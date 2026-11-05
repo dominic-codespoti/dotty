@@ -17,14 +17,6 @@ on:
         description: 'Add skip entries for tests that hung or crashed during capture'
         required: false
         default: 'false'
-      os:
-        description: 'Runner (macOS is for comparison only and is never gated)'
-        required: false
-        default: 'ubuntu-latest'
-        type: choice
-        options:
-          - ubuntu-latest
-          - macos-15
 
 env:
   DOTNET_VERSION: '11.0.x'
@@ -35,8 +27,8 @@ permissions:
 
 jobs:
   capture:
-    name: Capture esctest baseline (${{ inputs.os }})
-    runs-on: ${{ inputs.os }}
+    name: Capture esctest baseline (Linux)
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: write
@@ -52,14 +44,18 @@ jobs:
       - name: Python version
         run: python3 --version
 
+      - name: Install GUI conformance prerequisites
+        run: sudo apt-get update && sudo apt-get install -y xvfb openbox xauth x11-utils xdotool cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
+
       - name: Build native pty-helper
         run: make -C src/Dotty.NativePty
 
-      - name: Build conformance host
+      - name: Build conformance host and Dotty GUI
         run: |
           dotnet restore tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj
           dotnet build tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj -c Release --no-restore
-
+          dotnet restore src/Dotty/Dotty.csproj
+          dotnet build src/Dotty/Dotty.csproj -c Release --no-restore
       - name: Capture expectations
         shell: bash
         env:
@@ -89,7 +85,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Commit expectations back
-        if: inputs.commit == 'true' && inputs.os == 'ubuntu-latest'
+        if: inputs.commit == 'true'
         shell: bash
         env:
           TARGET_REF: ${{ github.ref_name }}

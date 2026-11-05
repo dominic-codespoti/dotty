@@ -7,7 +7,7 @@ using Dotty.Runtime.Sessions;
 namespace Dotty.Runtime.Clipboard;
 
 /// <summary>One queued OSC 52 read request. <see cref="CreatedMs"/> is on the queue's injected clock.</summary>
-public readonly record struct PendingClipboardRead(TerminalSession Session, ClipboardSelection Selection, long CreatedMs);
+public readonly record struct PendingClipboardRead(TerminalSession Session, ClipboardSelection Selection, long CreatedMs, string ReplySelector = "");
 
 /// <summary>
 /// Bounded, expiring queue of OSC 52 read requests awaiting the host's main thread.
@@ -42,7 +42,7 @@ public sealed class ClipboardReadQueue
     /// Queues a request. Returns false (request dropped) when the session already has one pending or the queue
     /// is full after expired entries are pruned.
     /// </summary>
-    public bool TryEnqueue(TerminalSession session, ClipboardSelection selection)
+    public bool TryEnqueue(TerminalSession session, ClipboardSelection selection, string replySelector = "")
     {
         ArgumentNullException.ThrowIfNull(session);
 
@@ -58,7 +58,7 @@ public sealed class ClipboardReadQueue
                     return false;
             }
 
-            _items.Add(new PendingClipboardRead(session, selection, now));
+            _items.Add(new PendingClipboardRead(session, selection, now, replySelector));
             Volatile.Write(ref _count, _items.Count);
             return true;
         }

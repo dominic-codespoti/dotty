@@ -278,7 +278,7 @@ public static class ConfigOptionCatalog
         Opt("window.startFullscreen", "window.start_fullscreen", "boolean", null, c => c.Window.StartFullscreen,
             "Enter fullscreen when the window is first shown; wins over startMaximized. Read at startup."),
         Opt("window.floating", "window.floating", "boolean", null, c => c.Window.Floating,
-            "Keep the window above other windows (always on top)."),
+            "Keep the window above other windows (always on top); unsupported on Wayland, where the compositor controls stacking."),
         Opt("window.padding.left", "window.padding.left", "number", null, c => c.Window.Padding.Left,
             "Left padding around the terminal content."),
         Opt("window.padding.top", "window.padding.top", "number", null, c => c.Window.Padding.Top,
@@ -424,6 +424,10 @@ public static class ConfigOptionCatalog
             "Maximum raw history ring bytes per session, counted as (lines + rows) * columns * 12; 0 means no byte cap. Non-zero values below 1048576 and negative values fall back to the default. The first of this and limitLines to be reached applies.",
             "Applies to sessions created after the change; existing tabs keep their capacity."),
 
+        Opt("printing.outputFile", "printing.output_file", "string", null, c => c.Printing.OutputFile,
+            "Append printed terminal text to this file. Null or empty disables printing. CSI 0 i prints the screen or scrolling region according to DECPEX, optionally followed by a form feed according to DECPFF. No external command is executed.",
+            "Applied to sessions at creation and on config reload; accepted jobs finish on their original destination."),
+
         Opt("graphics.kittyProtocol", "graphics.kitty_protocol", "boolean", null, c => c.Graphics.KittyProtocol,
             "Enable the Kitty graphics protocol (APC G): programs may transmit, place and delete inline images. When false the sequences are ignored.",
             "Applied to sessions at creation and on config reload (existing panes included)."),
@@ -449,8 +453,14 @@ public static class ConfigOptionCatalog
         Opt("vt.checksumReportEnabled", "vt.checksum_report_enabled", "boolean", null, c => c.Vt.ChecksumReportEnabled,
             "Answer DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y) rectangular-area checksum requests; off by default because the reply lets a program read back screen content. When false no reply is sent.",
             "Applied to sessions at creation and on config reload."),
+        Opt("vt.titleReportEnabled", "vt.title_report_enabled", "boolean", null, c => c.Vt.TitleReportEnabled,
+            "Answer icon-title (CSI 20 t) and window-title (CSI 21 t) report queries; off by default.",
+            "Applied to sessions at creation and on config reload."),
         Opt("vt.windowResizeAllowed", "vt.window_resize_allowed", "boolean", null, c => c.Vt.WindowResizeAllowed,
             "Let applications resize the window with CSI 8 ; rows ; cols t (and CSI Ps t with Ps >= 24). Ignored with several tabs, split panes, or a maximized, fullscreen or minimized window.",
+            "Read live; takes effect for the next request."),
+        Opt("vt.windowControlAllowed", "vt.window_control_allowed", "boolean", null, c => c.Vt.WindowControlAllowed,
+            "Let applications move, minimize and restore the native window with CSI 3 ; x ; y t, CSI 2 t and CSI 1 t. Off by default; independent of resize and title-report permissions.",
             "Read live; takes effect for the next request."),
     ];
 }

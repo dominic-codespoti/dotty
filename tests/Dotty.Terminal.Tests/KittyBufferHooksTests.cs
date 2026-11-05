@@ -364,6 +364,65 @@ public sealed class KittyBufferHooksTests
     }
 
     [Fact]
+    public void RectangleScrollMovesOnlyWhollyContainedPlacementsAndReturnsAffectedCount()
+    {
+        using var t = new Rig();
+        uint inside = t.Put(2, 2, cols: 2);
+        uint outside = t.Put(2, 0);
+        uint straddlesLeft = t.Put(2, 1, cols: 2);
+        uint straddlesRight = t.Put(2, 6, cols: 2);
+        int changed = t.Store.OnRectangleScrolled(1, 4, 2, 6, 1, t.Buffer.Rows);
+
+        Assert.Equal(1, changed);
+        Assert.Equal(1L, t.RowOf(inside));
+        Assert.Equal(2, t.Find(inside)!.AnchorCol);
+        foreach (uint id in new[] { outside, straddlesLeft, straddlesRight })
+            Assert.Equal(2L, t.RowOf(id));
+        Assert.Equal(0L, t.Store.ViewTop);
+    }
+
+    [Fact]
+    public void RectangleScrollCropsAndDeletesPlacementsAtVerticalEdges()
+    {
+        using var t = new Rig();
+        uint cropped = t.Put(1, 2, rows: 2);
+        uint deleted = t.Put(1, 4);
+
+        Assert.Equal(2, t.Store.OnRectangleScrolled(1, 4, 2, 6, 1, t.Buffer.Rows));
+        var p = t.Find(cropped)!;
+        Assert.Equal(1L, t.RowOf(cropped));
+        Assert.Equal(1, p.EffRows);
+        Assert.Equal((20, 20), (p.SrcY, p.SrcH));
+        Assert.Null(t.RowOf(deleted));
+        Assert.Equal(0L, t.Store.ViewTop);
+    }
+
+    [Fact]
+    public void FullWidthRegionScrollStillMovesHorizontallyOverhangingPlacements()
+    {
+        using var t = new Rig();
+        uint overhanging = t.Put(2, 9, cols: 2);
+
+        Assert.Equal(1, t.Store.OnRegionScrolled(1, 4, 1, t.Buffer.Rows));
+        Assert.Equal(1L, t.RowOf(overhanging));
+    }
+
+    [Fact]
+    public void HorizontalAndVerticalMarginScrollMovesOnlyContainedImagePlacements()
+    {
+        using var t = new Rig();
+        uint inside = t.Put(2, 2);
+        uint outside = t.Put(2, 0);
+
+        t.Feed(Esc + "[?69h" + Esc + "[2;7s" + Esc + "[2;5r" + Esc + "[1S");
+
+        Assert.Equal(1L, t.RowOf(inside));
+        Assert.Equal(2L, t.RowOf(outside));
+        Assert.Equal(0L, t.Store.ViewTop);
+        Assert.Equal(0, t.Buffer.ScrollbackCount);
+    }
+
+    [Fact]
     public void AScrollOfARegionTopAnchoredAtRowZeroDoesNotRotateTheRing()
     {
         using var t = new Rig();
@@ -403,25 +462,6 @@ public sealed class KittyBufferHooksTests
         Assert.Equal(0L, t.RowOf(outside));
     }
 
-    [Fact]
-    public void InsertAndDeleteLineLeaveAllPlacementsUntouched()
-    {
-        using var t = new Rig();
-        uint a = t.Put(3, 0, rows: 2);
-        uint b = t.Put(1, 2);
-        var before = t.Store.Placements.ToDictionary(p => p.Image.ClientId, p => (p.AnchorRow, p.Geometry));
-        long viewTop = t.Store.ViewTop;
-
-        t.Feed(Esc + "[2;1H" + Esc + "[2L");
-        t.Feed(Esc + "[1M");
-        t.Feed(Esc + "[2;5r" + Esc + "[2;1H" + Esc + "[3L" + Esc + "[2M");
-        foreach (uint id in new[] { a, b })
-        {
-            Assert.Equal(before[id].AnchorRow, t.Find(id)!.AnchorRow);
-            Assert.Equal(before[id].Geometry, t.Find(id)!.Geometry);
-        }
-        Assert.Equal(viewTop, t.Store.ViewTop);
-    }
 
     // --------------------------------------------------------------------------------------- erase / reset
 
@@ -602,16 +642,40 @@ public sealed class KittyBufferHooksTests
         Assert.Equal(-9L, t.RowOf(alt));
 
         t.Feed(Esc + "[" + mode + "l");
-        Assert.Equal((0, 0), (t.Buffer.AlternateImageStore!.Count, t.Buffer.AlternateImageStore.PlacementCount));
         using (var s = t.Capture())
         {
             var p = Assert.Single(s.Graphics!.Placements.ToArray());
             Assert.Equal((main, 2), (p.ImageId, p.ViewRow));
         }
 
-        t.Feed(Esc + "[" + mode + "h");                 // entering again starts from an empty alternate screen
-        Assert.Equal(0, t.Store.PlacementCount);
         mainStore.ValidateInvariants();
+    }
+
+    [Fact]
+    public void Mode47RestoresAlternatePlacementsButMode1047ClearsThem()
+    {
+        using var t = new Rig();
+        uint main = t.Put(2, 0);
+        t.Feed(Esc + "[?47h");
+        uint alternate = t.Put(1, 0);
+
+        t.Feed(Esc + "[?47l");
+        using (var snapshot = t.Capture())
+        {
+            var placement = Assert.Single(snapshot.Graphics!.Placements.ToArray());
+            Assert.Equal((main, 2), (placement.ImageId, placement.ViewRow));
+        }
+
+        t.Feed(Esc + "[?47h");
+        using (var snapshot = t.Capture())
+        {
+            var placement = Assert.Single(snapshot.Graphics!.Placements.ToArray());
+            Assert.Equal((alternate, 1), (placement.ImageId, placement.ViewRow));
+        }
+
+        t.Feed(Esc + "[?1047l" + Esc + "[?47h");
+        using var cleared = t.Capture();
+        Assert.Null(cleared.Graphics);
     }
 
     [Fact]

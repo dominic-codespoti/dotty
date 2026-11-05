@@ -136,6 +136,24 @@ public sealed class ChecksumReportTests
     }
 
     [Fact]
+    public void OriginModeMakesBothAxesRelativeAndClipsToTheMarginRectangle()
+    {
+        var (adapter, parser, replies) = Setup(rows: 6, columns: 10);
+        using (adapter)
+        {
+            Feed(parser, "\u001b[2;3HAB\u001b[2;4r\u001b[?69h\u001b[3;6s\u001b[?6h");
+            Feed(parser, "\u001b[7;1;1;1;1;2*y");
+            Feed(parser, "\u001b[8;1;1;5;1;5*y");
+            Feed(parser, "\u001b[9;1;1;1;99;99*y");
+            Feed(parser, "\u001b[?6l\u001b[10;1;2;3;2;4*y");
+
+            Assert.Equal(
+                new[] { Reply("7", "0083"), Reply("8", "0000"), Reply("9", "01C3"), Reply("10", "0083") },
+                replies);
+        }
+    }
+
+    [Fact]
     public void IdIsEchoedAndSaturatesWithoutWrapping()
     {
         var (_, parser, replies) = Setup();

@@ -29,6 +29,12 @@ internal static class ReflowCanonicalDump
     internal static object? Field(TerminalBuffer buffer, string name) =>
         typeof(TerminalBuffer).GetField(name, NonPublicInstance)?.GetValue(buffer);
 
+    private static object? SavedCursor(TerminalBuffer buffer, string name)
+    {
+        object? saved = Field(buffer, name);
+        return saved?.GetType().GetProperty("Cursor")?.GetValue(saved);
+    }
+
     internal static string Dump(TerminalBuffer buffer)
     {
         var sb = new StringBuilder(4096);
@@ -47,10 +53,10 @@ internal static class ReflowCanonicalDump
             .Append(" wrapPending=").Append(wrapPending)
             .Append(" visible=").Append(buffer.CursorVisible ? 1 : 0)
             .Append('\n');
-        sb.Append("savedCursor has=").Append(Field(buffer, "_hasSavedCursor"))
-            .Append(' ').Append(Field(buffer, "_savedCursorState")).Append('\n');
+        sb.Append("mainSavedCursor has=").Append(Field(buffer, "_hasMainSavedCursor"))
+            .Append(' ').Append(SavedCursor(buffer, "_mainSavedCursor")).Append('\n');
         sb.Append("alternateSavedCursor has=").Append(Field(buffer, "_hasAlternateSavedCursor"))
-            .Append(' ').Append(Field(buffer, "_alternateSavedCursorState")).Append('\n');
+            .Append(' ').Append(SavedCursor(buffer, "_alternateSavedCursor")).Append('\n');
 
         foreach (var mark in buffer.GetPromptMarks())
         {

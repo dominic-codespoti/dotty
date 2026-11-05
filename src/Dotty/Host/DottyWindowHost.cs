@@ -690,6 +690,7 @@ internal static partial class DottyWindowHost
             // Split panes are created outside the six ApplyConfigToAdapter sites; give them the OSC 8 ingest switch,
             // the vt switches and the Kitty graphics settings on first sight.
             HyperlinkIngestConfig.Apply(session.Adapter, UserConfigService.Current.Hyperlinks);
+            session.Adapter.ConfigurePrinterOutput(UserConfigService.Current.Printing.OutputFile);
             VtAdapterConfig.Apply(session.Adapter, UserConfigService.Current.Vt);
             SilkConfig.ApplyGraphicsToAdapter(session.Adapter);
 
@@ -718,6 +719,7 @@ internal static partial class DottyWindowHost
         {
             var session = _staleSessionScratch[i];
             session.ClipboardWriteRequested -= _clipboardSubscriptions[session];
+            session.Adapter.DisposePrinterOutput();
             _clipboardSubscriptions.Remove(session);
             _renderCallbackCache.Remove(session);
         }
@@ -731,6 +733,7 @@ internal static partial class DottyWindowHost
         for (int i = 0; i < _staleSessionScratch.Count; i++)
         {
             var session = _staleSessionScratch[i];
+            session.Adapter.DisposePrinterOutput();
             session.ClipboardReadRequested -= _clipboardReadSubscriptions[session];
             _clipboardReadSubscriptions.Remove(session);
             _clipboardReads.RemoveSession(session);
@@ -745,12 +748,30 @@ internal static partial class DottyWindowHost
 
     private static void EnqueueClipboardWrite(TerminalSession session, Dotty.Abstractions.Clipboard.ClipboardWriteRequest request)
     {
-        // Primary is honored only when it is the system's (X11); elsewhere primary-only writes are dropped so they
-        // never clobber the clipboard.
-        var selection = request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
-        if (_primary is { IsSystemSelection: true })
-            selection |= request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary;
-        if (selection == Dotty.Abstractions.Clipboard.ClipboardSelection.None)
+        var selection = request.Selection &
+            (Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard |
+             Dotty.Abstractions.Clipboard.ClipboardSelection.Primary |
+             Dotty.Abstractions.Clipboard.ClipboardSelection.CutBuffer0);
+        if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Select) != 0)
+        {
+            var configured = MouseOptions.ParseCopyOnSelect(UserConfigService.Current.Mouse.CopyOnSelect);
+            if (configured is CopyOnSelectMode.Clipboard or CopyOnSelectMode.Both)
+                selection |= Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+            if (configured is CopyOnSelectMode.Primary or CopyOnSelectMode.Both ||
+                configured == CopyOnSelectMode.None && _primary is { IsSystemSelection: true })
+                selection |= _primary is { IsSystemSelection: true }
+                    ? Dotty.Abstractions.Clipboard.ClipboardSelection.Primary
+                    : Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+            if (selection == Dotty.Abstractions.Clipboard.ClipboardSelection.None)
+                selection |= Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+        }
+        if ((selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary) != 0 &&
+            _primary is not { IsSystemSelection: true })
+            selection &= ~Dotty.Abstractions.Clipboard.ClipboardSelection.Primary;
+        if ((selection & (Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard |
+                          Dotty.Abstractions.Clipboard.ClipboardSelection.Primary |
+                          Dotty.Abstractions.Clipboard.ClipboardSelection.CutBuffer0)) ==
+            Dotty.Abstractions.Clipboard.ClipboardSelection.None)
             return;
         if (!UserConfigService.Current.Clipboard.AllowOsc52Write)
             return;
@@ -1168,7 +1189,10 @@ internal static partial class DottyWindowHost
         _activeTheme = SilkConfig.LoadActiveTheme();
         foreach (var tab in _tabManager.Tabs)
             foreach (var pane in tab.PaneTree.Leaves)
+            {
+                pane.Session.Adapter.ConfigurePrinterOutput(config.Printing.OutputFile);
                 SilkConfig.ApplyConfigToAdapter(pane.Session.Adapter, _activeTheme);
+            }
         (_themeForeground, _themeBackground) = SilkConfig.InitializeTheme(theme: _activeTheme);
         _themeSelectionColor = SilkConfig.ResolveSelectionColor(_activeTheme);
         ApplyLiveWindowOptions(config);
@@ -1677,8 +1701,12 @@ internal static partial class DottyWindowHost
 
             if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard) != 0)
                 _clipboard?.SetText(request.Text);
-            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary) != 0 && _primary is { IsSystemSelection: true } primary)
+            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.Primary) != 0 &&
+                _primary is { IsSystemSelection: true } primary)
                 primary.Set(request.Text);
+            if ((request.Selection & Dotty.Abstractions.Clipboard.ClipboardSelection.CutBuffer0) != 0 &&
+                _primary is { SupportsCutBuffer0: true } cutBuffer)
+                cutBuffer.SetCutBuffer0(request.Text);
         }
 
         _clipboardReads.Drain();
@@ -2503,7 +2531,10 @@ internal static partial class DottyWindowHost
                 UnsubscribePaneTree(tabs[i]);
         }
         foreach (var pair in _clipboardSubscriptions)
+        {
             pair.Key.ClipboardWriteRequested -= pair.Value;
+            pair.Key.Adapter.DisposePrinterOutput();
+        }
         _clipboardSubscriptions.Clear();
         foreach (var pair in _clipboardReadSubscriptions)
             pair.Key.ClipboardReadRequested -= pair.Value;
@@ -2588,8 +2619,30 @@ internal static partial class DottyWindowHost
                 selection == Dotty.Abstractions.Clipboard.ClipboardSelection.Primary ? "primary" : "clipboard");
 
         public bool SupportsPrimarySelection => _primary is { IsSystemSelection: true };
+        public Dotty.Abstractions.Clipboard.ClipboardSelection ConfiguredSelection
+        {
+            get
+            {
+                CopyOnSelectMode mode = MouseOptions.ParseCopyOnSelect(UserConfigService.Current.Mouse.CopyOnSelect);
+                var selection = Dotty.Abstractions.Clipboard.ClipboardSelection.None;
+                if (mode is CopyOnSelectMode.Clipboard or CopyOnSelectMode.Both)
+                    selection |= Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+                if (mode is CopyOnSelectMode.Primary or CopyOnSelectMode.Both ||
+                    mode == CopyOnSelectMode.None && _primary is { IsSystemSelection: true })
+                    selection |= _primary is { IsSystemSelection: true }
+                        ? Dotty.Abstractions.Clipboard.ClipboardSelection.Primary
+                        : Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+                if (selection == Dotty.Abstractions.Clipboard.ClipboardSelection.None)
+                    selection = Dotty.Abstractions.Clipboard.ClipboardSelection.Clipboard;
+                return selection;
+            }
+        }
 
         public string? ReadPrimary() => _primary is { IsSystemSelection: true } primary ? primary.Get() : null;
+        public bool SupportsCutBuffer0 => _primary is { SupportsCutBuffer0: true };
+
+        public string? ReadCutBuffer0() =>
+            _primary is { SupportsCutBuffer0: true } primary ? primary.GetCutBuffer0() : null;
 
         public string? ReadClipboard() => _clipboard?.GetText();
 
@@ -2799,7 +2852,7 @@ internal static partial class DottyWindowHost
         }
 
         public void WriteInput(TerminalTab activeTab, ReadOnlySpan<byte> bytes) =>
-            activeTab.Session.WriteInput(bytes);
+            activeTab.Session.WriteUserInput(bytes);
 
         private HyperlinkActivator? _hyperlinks;
 

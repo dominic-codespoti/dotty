@@ -168,7 +168,7 @@ public sealed class HyperlinkActivatorTests
         var h = new Harness();
         var activation = h.Activator.Activate("https://example.com/x", HyperlinkSource.Detected, null);
 
-        var result = await h.Activator.OpenApprovedAsync(activation.Target!);
+        var result = await h.Activator.OpenApprovedAsync(activation.Target!, TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Same(activation.Target, Assert.Single(h.Opener.Opened));

@@ -166,11 +166,14 @@ public sealed class MouseOptionsTests
     {
         var primary = new InProcessPrimarySelection();
         Assert.False(primary.IsSystemSelection);
+        Assert.False(primary.SupportsCutBuffer0);
         Assert.Null(primary.Get());
+        Assert.Null(primary.GetCutBuffer0());
 
         primary.Set("one");
         primary.Set("two");
         Assert.Equal("two", primary.Get());
+        Assert.False(primary.SetCutBuffer0("unsupported"));
     }
 
     [Fact]

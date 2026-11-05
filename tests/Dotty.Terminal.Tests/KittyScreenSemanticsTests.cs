@@ -212,6 +212,27 @@ public sealed class KittyScreenSemanticsTests
     }
 
     [Fact]
+    public void ParsedColumnEditsStartAtCursorAndLeaveImagesLeftOfItAnchored()
+    {
+        using var t = new Term(6, 10);
+        t.Feed(Esc + "[?69h" + Esc + "[2;10s");
+        t.Feed(Esc + "[4;2H");
+        t.Apc("a=T,i=1,p=1,s=1,v=1,f=24,c=1,r=1,C=1", OnePixel);
+        t.Feed(Esc + "[4;6H");
+        t.Apc("a=T,i=2,p=1,s=1,v=1,f=24,c=1,r=1,C=1", OnePixel);
+        t.Feed(Esc + "[4;3H\u001b[1'}");
+
+        var left = t.Store.FindPlacement(t.Store.FindByClientId(1)!, 1)!;
+        var right = t.Store.FindPlacement(t.Store.FindByClientId(2)!, 1)!;
+        Assert.Equal(1, left.AnchorCol);
+        Assert.Equal(6, right.AnchorCol);
+
+        t.Feed(Esc + "[1'~");
+        Assert.Equal(1, left.AnchorCol);
+        Assert.Equal(5, right.AnchorCol);
+    }
+
+    [Fact]
     public void PlacementsBumpTheBufferGenerationSoTheRendererRedraws()
     {
         using var t = new Term(6, 10);
@@ -760,6 +781,66 @@ public sealed class KittyScreenSemanticsTests
         // The lost row does not grow back; the remaining two rows move down and still fit.
         Assert.Equal(1, store.OnRegionScrolled(2, 4, -1, 10));
         Assert.Equal((3L, 2, 16, 32), (p.AnchorRow, p.EffRows, p.SrcY, p.SrcH));
+        store.ValidateInvariants();
+    }
+
+    [Fact]
+    public void ColumnEditsMoveAndCropOnlyContainedPlacementsWithoutRegrowth()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = Named(store);
+        var left = store.Place(image, "c=2,r=2,p=1", anchorRow: 3, anchorCol: 2);
+
+
+        Assert.Equal(1, store.OnColumnsScrolled(2, 7, 2, 7, 1, 10));
+        Assert.Equal((2, 1, 8, 8), (left.AnchorCol, left.EffCols, left.SrcX, left.SrcW));
+        Assert.Equal(1, store.OnColumnsScrolled(2, 7, 2, 7, -1, 10));
+        Assert.Equal((3, 1, 8, 8), (left.AnchorCol, left.EffCols, left.SrcX, left.SrcW));
+
+        store.ValidateInvariants();
+    }
+
+    [Fact]
+    public void ColumnInsertionCropsRightAndReversingDoesNotRestoreSource()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = Named(store);
+        var p = store.Place(image, "c=2,r=2,p=1", anchorRow: 3, anchorCol: 6);
+        Assert.Equal(1, store.OnColumnsScrolled(2, 7, 2, 7, -1, 10));
+        Assert.Equal((7, 1, 0, 8), (p.AnchorCol, p.EffCols, p.SrcX, p.SrcW));
+        Assert.Equal(1, store.OnColumnsScrolled(2, 7, 2, 7, 1, 10));
+        Assert.Equal((6, 1, 0, 8), (p.AnchorCol, p.EffCols, p.SrcX, p.SrcW));
+        store.ValidateInvariants();
+    }
+
+    [Fact]
+    public void ColumnEditsLeaveOutsideStraddlingAndHistoryPlacementsUntouched()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = Named(store);
+        store.OnRingRotatedUp(10, 100);
+        var history = InRegion(store, image, "c=1,r=1,p=1", 5);
+        var outside = InRegion(store, image, "c=1,r=1,p=2", 20);
+        var straddler = store.Place(image, "c=2,r=1,p=3", anchorRow: 12, anchorCol: 7);
+        var historyGeometry = history.Geometry;
+        var outsideGeometry = outside.Geometry;
+        var straddlerGeometry = straddler.Geometry;
+        Assert.Equal(0, store.OnColumnsScrolled(0, 5, 2, 7, 1, 10));
+        Assert.Equal((5L, 20L, 7), (history.AnchorRow, outside.AnchorRow, straddler.AnchorCol));
+        Assert.Equal(historyGeometry, history.Geometry);
+        Assert.Equal(outsideGeometry, outside.Geometry);
+        Assert.Equal(straddlerGeometry, straddler.Geometry);
+    }
+
+    [Fact]
+    public void ColumnDeletionRemovesFullyShiftedPlacementsButRetainsTheImage()
+    {
+        using var store = new KittyImageStore(1_000_000);
+        var image = Named(store);
+        store.Place(image, "c=2,r=1,p=1", anchorRow: 3, anchorCol: 2);
+        Assert.Equal(1, store.OnColumnsScrolled(2, 7, 2, 7, 2, 10));
+        Assert.Equal(0, store.PlacementCount);
+        Assert.False(image.IsDeleted);
         store.ValidateInvariants();
     }
 

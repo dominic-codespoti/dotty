@@ -4,18 +4,15 @@ namespace Dotty.Runtime.Diagnostics;
 
 /// <summary>
 /// Process-wide crash reporting into a local <see cref="CrashLog"/>; never networked. After
-/// <see cref="Install"/>, unhandled exceptions, unobserved task exceptions and GLFW errors (through
-/// <see cref="ReportGlfwError"/>) are written to the log. Before installation every report is a no-op,
-/// so tests and command-line actions never write a crash log. Reporting never throws.
+/// <see cref="Install"/>, unhandled exceptions and unobserved task exceptions are written to the log.
+/// Before installation every report is a no-op, so tests and command-line actions never write a
+/// crash log. GLFW diagnostics go to stderr; fatal startup exceptions still use <see cref="ReportFatal"/>.
+/// Reporting never throws.
 /// </summary>
 public static class CrashReporter
 {
-    /// <summary>GLFW errors logged per process; later ones are counted but not written.</summary>
-    public const int MaxGlfwErrors = 16;
-
     private static readonly object Gate = new();
     private static CrashLog? _log;
-    private static int _glfwErrors;
 
     /// <summary>The log being written, or null before <see cref="Install"/>.</summary>
     public static CrashLog? Log => Volatile.Read(ref _log);
@@ -53,23 +50,6 @@ public static class CrashReporter
         {
             return null;
         }
-    }
-
-    /// <summary>
-    /// Logs a GLFW error (called from the native error callback, possibly on any thread). Only the first
-    /// <see cref="MaxGlfwErrors"/> are written; the last written entry says that further errors are dropped.
-    /// </summary>
-    public static void ReportGlfwError(string code, string? description)
-    {
-        if (Log is null)
-            return;
-        int count = Interlocked.Increment(ref _glfwErrors);
-        if (count > MaxGlfwErrors)
-            return;
-        string details = $"GLFW error {code}: {description ?? "(no description)"}";
-        if (count == MaxGlfwErrors)
-            details += $"\nThis is GLFW error {MaxGlfwErrors}; later GLFW errors in this process are not logged.";
-        Report("GLFW error callback", details);
     }
 
     /// <summary>

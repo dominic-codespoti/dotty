@@ -278,15 +278,17 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
             _lastPhysicalPressConsumed = true;
             return;
         }
-
-        // A Compose-role Alt (AltGr, Option) is not a shortcut modifier: the press runs through bindings with
-        // Alt clear and the character the layout composes arrives as text (decision K1).
         var activeTab = _host.ActiveTab;
         if (activeTab == null)
         {
             _lastPhysicalPressConsumed = true;
             return;
         }
+
+
+        // A Compose-role Alt (AltGr, Option) is not a shortcut modifier: the press runs through bindings with
+        // Alt clear and the character the layout composes arrives as text (decision K1).
+        var adapter = activeTab.Session.Adapter;
         var searchState = EnsureState(activeTab);
 
         // While the overlay is open nothing reaches the application: the overlay's own keys come first, then
@@ -299,7 +301,24 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
             return;
         }
 
+        if (adapter.FontShiftModeEnabled && _host.Shift && !_host.Alt && !_host.Super &&
+            (key == Key.KeypadAdd || key == Key.KeypadSubtract))
+        {
+            if (key == Key.KeypadAdd && !_host.Ctrl)
+                _host.ZoomIn();
+            else
+                _host.ZoomOut();
+            _lastPhysicalPressConsumed = true;
+            return;
+        }
+
         if (TryRunBinding(key, primaryCodepoint))
+        {
+            _lastPhysicalPressConsumed = true;
+            return;
+        }
+
+        if (adapter.KeyboardActionModeLocked)
         {
             _lastPhysicalPressConsumed = true;
             return;
@@ -324,7 +343,6 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
                 activePane.ScrollToBottom();
         }
 
-        var adapter = activeTab.Session.Adapter;
         if (adapter.KittyKeyboardFlags != 0)
             return;
         if (DefersLegacyMetaChord(primaryCodepoint))
@@ -423,6 +441,8 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
         }
 
         var adapter = activeTab.Session.Adapter;
+        if (adapter.KeyboardActionModeLocked)
+            return;
         int kittyFlags = adapter.KittyKeyboardFlags;
         if ((kittyFlags & (8 | 16)) != (8 | 16))
         {
@@ -465,7 +485,8 @@ public sealed partial class TerminalKeyboardDispatcher : IDisposable
                 RefreshSearch(activeTab, searchState, resetActiveMatch: true);
             return;
         }
-
+        if (activeTab.Session.Adapter.KeyboardActionModeLocked)
+            return;
         var activePane = activeTab.ActivePane;
         if (activePane.ScrollOffset > 0)
             activePane.ScrollToBottom();

@@ -396,4 +396,43 @@ public sealed class KeyPipelineHarnessTests
         for (int i = 0; i < lines; i++)
             buffer.LineFeed();
     }
+    [Fact]
+    public void KamLocksTerminalTextButKeepsGlobalBindingsAvailable()
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11);
+        harness.Tab.Session.Adapter.OnSetAnsiMode(2, true);
+
+        harness.Tap(Key.Up);
+        harness.Type(Key.A);
+        Assert.Equal(string.Empty, harness.Output);
+
+        harness.Chord(Key.C, Key.ControlLeft, Key.ShiftLeft);
+        Assert.Equal(1, harness.CopyCount);
+    }
+
+    [Fact]
+    public void XtermMode35GatesShiftKeypadFontActions()
+    {
+        using var harness = new KeyPipelineHarness(KeyboardLayoutFixtures.Qwerty, KeyPlatform.X11);
+        Assert.True(harness.Tab.Session.Adapter.FontShiftModeEnabled);
+        harness.Feed("\x1b[?35l");
+        Assert.False(harness.Tab.Session.Adapter.FontShiftModeEnabled);
+        harness.Chord(Key.KeypadAdd, Key.ShiftLeft);
+        Assert.Equal(0, harness.ZoomInCount);
+        Assert.Equal(0, harness.ZoomOutCount);
+        Assert.NotEmpty(harness.Output);
+        harness.ClearOutput();
+
+
+        harness.Feed("\x1b[?35h");
+        Assert.True(harness.Tab.Session.Adapter.FontShiftModeEnabled);
+        harness.Chord(Key.KeypadAdd, Key.ShiftLeft);
+        Assert.Equal(1, harness.ZoomInCount);
+        Assert.Equal(string.Empty, harness.Output);
+
+        harness.Chord(Key.KeypadAdd, Key.ShiftLeft, Key.ControlLeft);
+        Assert.Equal(1, harness.ZoomOutCount);
+        harness.Chord(Key.KeypadSubtract, Key.ShiftLeft);
+        Assert.Equal(2, harness.ZoomOutCount);
+    }
 }

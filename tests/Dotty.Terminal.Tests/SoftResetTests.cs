@@ -218,7 +218,40 @@ public sealed class SoftResetTests
         string once = State(adapter);
         Feed(parser, Esc + "[!p");
 
+
         Assert.Equal(once, State(adapter));
+    }
+    [Fact]
+    public void ResetBoundariesKeepAndClearInputAndBehavioralModesAsXtermDoes()
+    {
+        var (adapter, parser, replies) = Create();
+        Feed(parser, $"{Esc}[2h{Esc}[12l{Esc}[?4h{Esc}[?18h{Esc}[?19h{Esc}[?35l{Esc}[?42h{Esc}[2*x{Esc}(0{Esc}[!p");
+
+        Assert.False(adapter.KeyboardActionModeLocked);
+        Assert.True(adapter.LocalEchoEnabled);
+        Assert.True(adapter.SmoothScrollEnabled);
+        Assert.True(adapter.PrintFormFeedEnabled);
+        Assert.True(adapter.PrintExtentFullPage);
+        Assert.False(adapter.FontShiftModeEnabled);
+        Assert.True(adapter.NationalReplacementEnabled);
+        adapter.OnRequestStatusString("*x"u8);
+        Assert.Equal("\x1bP1$r2*x\x1b\\", Assert.Single(replies));
+        replies.Clear();
+        Feed(parser, "q");
+        Assert.Equal("q", adapter.Buffer.GetRowText(0)[0].ToString());
+
+        Feed(parser, $"{Esc}[2h{Esc}[12h{Esc}[?18h{Esc}[?19h{Esc}[?4h{Esc}[?42h{Esc}[2*x{Esc}(0{Esc}c");
+        Assert.False(adapter.KeyboardActionModeLocked);
+        Assert.False(adapter.LocalEchoEnabled);
+        Assert.False(adapter.SmoothScrollEnabled);
+        Assert.True(adapter.PrintFormFeedEnabled);
+        Assert.True(adapter.PrintExtentFullPage);
+        Assert.False(adapter.FontShiftModeEnabled);
+        Assert.False(adapter.NationalReplacementEnabled);
+        adapter.OnRequestStatusString("*x"u8);
+        Assert.Equal("\x1bP1$r0*x\x1b\\", Assert.Single(replies));
+        Feed(parser, "q");
+        Assert.Equal("q", adapter.Buffer.GetRowText(0)[0].ToString());
     }
 
     [Fact]

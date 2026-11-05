@@ -559,7 +559,7 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
         int barRows)
     {
         float x = cell.Row >= barRows ? paddingLeft + cell.Col * cellW : cell.Col * cellW;
-        float y = cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH;
+        float y = (cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH) + cell.PixelOffsetY;
         int offset = outputIndex * FloatsPerInstance;
         staging[offset] = x;
         staging[offset + 1] = y;
@@ -567,10 +567,10 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
         staging[offset + 3] = cell.GlyphY;
         staging[offset + 4] = cell.GlyphW;
         staging[offset + 5] = cell.GlyphH;
-        staging[offset + 6] = 0f;
+        staging[offset + 6] = cell.ClipTop;
         staging[offset + 7] = cell.OffY;
         staging[offset + 8] = cell.OffX;
-        staging[offset + 9] = 0f;
+        staging[offset + 9] = cell.ClipBottom;
         staging[offset + 10] = cell.FgR / 255f;
         staging[offset + 11] = cell.FgG / 255f;
         staging[offset + 12] = cell.FgB / 255f;

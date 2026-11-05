@@ -18,7 +18,7 @@ Dotty is a modern terminal emulator composed of:
 
 ### Key Features
 
-- Hardware-accelerated OpenGL rendering with SkiaSharp glyph rasterization (one grapheme per cell; no OpenType shaping or ligatures yet)
+- Hardware-accelerated OpenGL rendering with SkiaSharp glyph rasterization, HarfBuzz grapheme shaping, and configurable programming ligatures (`font.ligatures`: `never`, `cursor`, or `always`)
 - Multiple tabs, split panes, per-tab search, and configurable keyboard shortcuts
 - Custom JSON themes and Lua startup configuration, tab titles, and status text
 - Native PTY support on Linux, macOS, and Windows
@@ -32,8 +32,8 @@ Dotty is a modern terminal emulator composed of:
 - Confirmation prompts for risky pastes and risky or blocked links (OSC 8 and detected URLs), with a hard scheme blocklist and `hyperlinks` policy
 - Opt-in [OSC 7/133 shell integration](docs/ShellIntegration.md): live directories, prompt navigation, and command-output copy, optionally injected automatically (`shellIntegration: "detect"`)
 - Mouse options (`mouse.copyOnSelect`, `mouse.middleClickAction`) with the X11 PRIMARY selection on X11 and an in-process fallback elsewhere, and opt-in VT switches (`vt.windowResizeAllowed`, `vt.checksumReportEnabled`); see [configuration](docs/Configuration.md#mouse)
-- [Kitty graphics protocol](docs/KittyGraphics.md) (inline images, Unicode placeholders, animation): implemented but **off by default** (`graphics.kittyProtocol`) and never run, because it was written without a compiler; it stays off until it passes the manual smoke checklist on real displays
-- [esctest2 conformance run](docs/Conformance.md) on Linux CI (reporting only until a baseline is captured)
+- [Kitty graphics protocol](docs/KittyGraphics.md): inline images, Unicode placeholders, and animation support, **off by default** (`graphics.kittyProtocol`). Basic image display, scrolling, deletion, placeholders, and animation are implemented; runtime verification and platform/protocol coverage remain limited as described in the [feature notes](docs/KittyGraphics.md#runtime-verification).
+- [esctest2 conformance run](docs/Conformance.md) on Linux CI, reporting all outcomes; its regression gate remains unarmed until a reviewed baseline is captured.
 - [Performance regression snapshots](docs/Performance.md) and [native desktop verification lanes](docs/NativeDesktopAndIme.md)
 
 ## Install

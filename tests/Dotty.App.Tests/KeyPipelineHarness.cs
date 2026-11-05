@@ -59,8 +59,8 @@ internal sealed class KeyPipelineHarness : IDisposable
         Layout = layout;
         Platform = platform;
         Controller = new TerminalKeyboardController(
-            keyEventReceived: (key, scancode, primary, type, text) => Dispatcher.HandleKeyEvent(key, scancode, primary, type, text),
-            textReceived: text => Dispatcher.HandleCommittedText(text),
+            keyEventReceived: ForwardKeyEvent,
+            textReceived: ForwardCommittedText,
             primaryCodepointProvider: (key, _) => layout.PrimaryCodepoint(key));
         _host = new HarnessHost(Controller.Modifiers)
         {
@@ -69,6 +69,11 @@ internal sealed class KeyPipelineHarness : IDisposable
         Dispatcher = new TerminalKeyboardDispatcher(_host);
     }
 
+    private void ForwardKeyEvent(Key key, int scancode, int primaryCodepoint, TerminalKeyEventType eventType, ReadOnlySpan<char> associatedText) =>
+        Dispatcher.HandleKeyEvent(key, scancode, primaryCodepoint, eventType, associatedText);
+
+    private void ForwardCommittedText(ReadOnlySpan<char> text) => Dispatcher.HandleCommittedText(text);
+
     public LayoutFixture Layout { get; }
     public KeyPlatform Platform { get; }
     public TerminalKeyboardController Controller { get; }
@@ -76,6 +81,9 @@ internal sealed class KeyPipelineHarness : IDisposable
     public TerminalTab Tab => _host.ActiveTab!;
     public LeafPane Pane => Tab.ActivePane;
     public int CopyCount => _host.CopyCount;
+    public int ZoomInCount => _host.ZoomInCount;
+    public int ZoomOutCount => _host.ZoomOutCount;
+
 
     /// <summary>Num Lock toggle state reported in the native modifier bits.</summary>
     public bool NumLock { get; set; }
@@ -278,12 +286,14 @@ internal sealed class KeyPipelineHarness : IDisposable
         public bool KeypadNavigation => _modifiers.KeypadNavigation;
         public List<byte> InputBytes { get; } = new();
         public int CopyCount { get; private set; }
+        public int ZoomInCount { get; private set; }
+        public int ZoomOutCount { get; private set; }
 
         public void CopySelection() => CopyCount++;
         public void PasteClipboard() { }
         public void ToggleFullscreen() { }
-        public void ZoomIn() { }
-        public void ZoomOut() { }
+        public void ZoomIn() => ZoomInCount++;
+        public void ZoomOut() => ZoomOutCount++;
         public void ResetZoom() { }
         public void DuplicateTab(TerminalTab activeTab) { }
         public void CloseOtherTabs(TerminalTab activeTab) { }

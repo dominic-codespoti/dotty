@@ -137,7 +137,7 @@ public class UserThemeLoaderTests : IDisposable
         Assert.Throws<FileNotFoundException>(() => loader.LoadFromFile(nonExistentFile));
     }
 
-    [Fact(Skip = "ThemeRoot deserialization issue - needs investigation")]
+    [Fact]
     public void LoadFromDirectory_SupportsThemeRootFormat()
     {
         // Arrange
@@ -171,10 +171,18 @@ public class UserThemeLoaderTests : IDisposable
         // Act
         var themes = loader.LoadFromDirectory();
 
-        // Assert
-        Assert.Single(themes);
-        Assert.Equal("RootTheme", themes[0].CanonicalName);
-        Assert.Equal("Root Theme", themes[0].DisplayName);
+        var theme = Assert.Single(themes);
+        Assert.Equal("RootTheme", theme.CanonicalName);
+        Assert.Equal("Root Theme", theme.DisplayName);
+        var colors = theme.Colors;
+        Assert.NotNull(colors);
+        Assert.Equal("#123456", colors.Background);
+        Assert.Equal("#ABCDEF", colors.Foreground);
+        Assert.Equal(0.95, colors.Opacity);
+        var ansi = colors.Ansi;
+        Assert.NotNull(ansi);
+        Assert.Equal("#FFFFFF", ansi[15]);
+        Assert.True(new ThemeValidator().ValidateFile(Path.Combine(_tempDirectory, "ThemeRoot.json")).IsValid);
     }
 
     [Fact]

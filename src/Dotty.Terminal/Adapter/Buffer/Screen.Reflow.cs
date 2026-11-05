@@ -619,6 +619,7 @@ public unsafe partial class Screen
                     IsContinuation = true,
                     HasHyperlink = hot.HasHyperlink,
                     HasGrapheme = hot.HasGrapheme,
+                    IsProtected = hot.IsProtected,
                 };
                 UnsafeAsRef<CellHot>(destination._cellsPtr, offset + usedColumns + 1) = continuation;
                 UnsafeAsRef<ColdCell>(destination._coldCellsPtr, offset + usedColumns + 1) = cell.Cold;

@@ -9,9 +9,9 @@ using Xunit;
 namespace Dotty.Terminal.Tests;
 
 /// <summary>
-/// ESC D (IND) and ESC E (NEL) through a real parser and adapter. IND is a line feed without a carriage return that
-/// scrolls at the bottom margin; NEL is CR + IND. Both cancel a pending wrap, respect margins and origin mode, and
-/// reach the scroll code that the Kitty graphics hooks listen to.
+/// ESC D (IND) and ESC E (NEL) through a real parser and adapter. IND preserves the column; NEL indexes before
+/// returning to column one. Both cancel a pending wrap, respect margins and origin mode, and exercise image hooks.
+///
 /// </summary>
 [Collection(nameof(GraphicsMemoryMetricsCollection))]
 public sealed class IndexAndNextLineTests
@@ -48,6 +48,24 @@ public sealed class IndexAndNextLineTests
         public void Dispose() => Adapter.Dispose();
     }
 
+
+    [Fact]
+    public void NewLineModeAppliesCarriageReturnToLfVtAndFfButNotInd()
+    {
+        using var t = new Rig();
+        t.Feed("abcd\r\u001b[?20h\n");
+        Assert.Equal((1, 0), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+        t.Feed("xy\r\u000b");
+        Assert.Equal((2, 0), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+        t.Feed("zz\r\u000c");
+        Assert.Equal((3, 0), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+
+        t.Goto(0, 4);
+        t.Feed(Esc + "D");
+        Assert.Equal((1, 4), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+        t.Feed(Esc + "E");
+        Assert.Equal((2, 0), (t.Buffer.CursorRow, t.Buffer.CursorCol));
+    }
     [Fact]
     public void IndexAtTheBottomRowScrollsTheScreenAndKeepsTheColumn()
     {

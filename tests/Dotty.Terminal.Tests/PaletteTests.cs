@@ -40,7 +40,26 @@ public sealed class PaletteTests
     {
         var (_, parser, replies) = Setup();
         Feed(parser, "\u001b]4;1;#00ff00\u0007\u001b]4;1;?\u0007");
-        Assert.Equal("\u001b]4;1;rgb:0000/FFFF/0000\u001b\\", Assert.Single(replies));
+        Assert.Equal("\u001b]4;1;rgb:0000/ffff/0000\u001b\\", Assert.Single(replies));
+    }
+
+    [Fact]
+    public void MultipleOscColorQueriesKeepFollowingWindowReportReadable()
+    {
+        var (adapter, parser, replies) = Setup();
+        adapter.SetDefaultColors("#ABCDEF", "#10203F");
+        Feed(parser, "\x1b]4;0;rgb:f0f0/f0f0/f0f0;1;rgb:f0f0/0000/0000\x1b\\");
+        Feed(parser, "\x1b]4;0;?;1;?\x1b\\\x1b[18t\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\");
+
+        Assert.Equal(new[]
+        {
+            "\x1b]4;0;rgb:f0f0/f0f0/f0f0\x1b\\",
+            "\x1b]4;1;rgb:f0f0/0000/0000\x1b\\",
+            "\x1b[8;2;8t",
+            "\x1b]10;rgb:abab/cdcd/efef\x1b\\",
+            "\x1b]11;rgb:1010/2020/3f3f\x1b\\",
+            "\x1b]12;rgb:ffff/ffff/ffff\x1b\\",
+        }, replies);
     }
 
     [Fact]
@@ -84,12 +103,12 @@ public sealed class PaletteTests
         Feed(parser, "\u001b]104;2;bad;;\u0007");
         Feed(parser, "\u001b]4;2;?;1;?;200;?\u0007");
         Assert.Equal(3, replies.Count);
-        Assert.Equal("\u001b]4;2;rgb:0000/AAAA/0000\u001b\\", replies[0]);
-        Assert.Equal("\u001b]4;1;rgb:0000/FFFF/0000\u001b\\", replies[1]);
+        Assert.Equal("\u001b]4;2;rgb:0000/aaaa/0000\u001b\\", replies[0]);
+        Assert.Equal("\u001b]4;1;rgb:0000/ffff/0000\u001b\\", replies[1]);
         Assert.Equal("\u001b]4;200;rgb:1212/3434/5656\u001b\\", replies[2]);
         Feed(parser, "\u001b]104\u0007\u001b]4;1;?;200;?\u0007");
-        Assert.Equal("\u001b]4;1;rgb:AAAA/0000/0000\u001b\\", replies[3]);
-        Assert.Equal("\u001b]4;200;rgb:FFFF/0000/D7D7\u001b\\", replies[4]);
+        Assert.Equal("\u001b]4;1;rgb:aaaa/0000/0000\u001b\\", replies[3]);
+        Assert.Equal("\u001b]4;200;rgb:ffff/0000/d7d7\u001b\\", replies[4]);
     }
 
     [Fact]

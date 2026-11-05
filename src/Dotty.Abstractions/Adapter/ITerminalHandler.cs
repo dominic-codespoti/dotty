@@ -12,6 +12,7 @@ namespace Dotty.Abstractions.Adapter
     public interface ITerminalHandler
     {
         object? Buffer { get; }
+        bool NationalReplacementEnabled { get; }
         event Action<string>? RenderRequested;
         event Action<Dotty.Abstractions.Clipboard.ClipboardWriteRequest>? ClipboardWriteRequested;
         event Action<string>? TitleChanged;
@@ -22,7 +23,22 @@ namespace Dotty.Abstractions.Adapter
 
         void OnPrint(ReadOnlySpan<char> text);
         void OnEraseDisplay(int mode);
+        void OnSelectiveEraseDisplay(int mode);
         void OnClearScrollback();
+        void OnSetConformanceLevel(int level, int controls);
+        void OnSetAnsiMode(int mode, bool enabled);
+        void OnSetColumnMode(int mode, bool enabled);
+        void OnSetMoreFix(bool enabled);
+        void OnSetNationalReplacementMode(bool enabled);
+        void OnSetFontShiftMode(bool enabled);
+        void OnSetSmoothScroll(bool enabled);
+        void OnSetPrinterMode(int mode, bool enabled);
+        void OnPrintScreen();
+        void OnSetScreenLines(int lines);
+        void OnSavePrivateMode(int mode);
+        void OnRestorePrivateMode(int mode);
+        void OnSetTitle(int code, ReadOnlySpan<byte> payload);
+        void OnSetTitleModes(ReadOnlySpan<int> modes, bool enabled);
         void OnSetGraphicsRendition(ReadOnlySpan<char> parameters);
         void OnBell();
         void OnOperatingSystemCommand(int code, ReadOnlySpan<char> payload);
@@ -32,20 +48,32 @@ namespace Dotty.Abstractions.Adapter
         void OnCursorForward(int n);
         void OnCursorBack(int n);
         void OnEraseLine(int mode);
+        void OnSelectiveEraseLine(int mode);
+        void OnSetIsoProtection(bool active);
+        void OnSetDecProtection(int mode);
         void OnCarriageReturn();
         void OnLineFeed();
         void OnIndex() { }                        // IND - ESC D: line feed without carriage return
-        void OnNextLine() { }                     // NEL - ESC E: carriage return + index
+        void OnNextLine() { }                     // NEL - ESC E: index then carriage return
         void OnSetScrollRegion(int top1Based, int bottom1Based);
         void OnSetOriginMode(bool enabled);
         void OnSetAlternateScreen(bool enabled); // DECSET/DECRST 1049: save/restore the cursor around the switch
-        // DECSET/DECRST 47 and 1047: switch screens only, no cursor save/restore (as in xterm).
-        void OnSwitchAlternateScreen(bool enabled) { }
+        // 47 retains alternate contents; 1047 clears them before returning to the main screen.
+        void OnSwitchAlternateScreen(int mode, bool enabled);
         void OnSetCursorVisibility(bool visible);
         void OnSaveCursor();
         void OnRestoreCursor();
         void OnInsertChars(int n);
         void OnDeleteChars(int n);
+        void OnInsertColumns(int n);
+        void OnDeleteColumns(int n);
+        void OnBackIndex();
+        void OnForwardIndex();
+        void OnCopyRectangle(int top, int left, int bottom, int right, int sourcePage, int destinationTop, int destinationLeft, int destinationPage);
+        void OnFillRectangle(uint rune, int top, int left, int bottom, int right);
+        void OnEraseRectangle(int top, int left, int bottom, int right, bool selective);
+        void OnSetAttributeChangeExtent(int mode);
+        void OnChangeRectangleAttributes(int top, int left, int bottom, int right, ReadOnlySpan<int> parameters, bool reverse);
         void OnEraseCharacters(int n);
         void OnInsertLines(int n);
         void OnDeleteLines(int n);
@@ -64,6 +92,12 @@ namespace Dotty.Abstractions.Adapter
         void OnCursorNextLine(int n);             // CNL - CSI n E
         void OnCursorPreviousLine(int n);         // CPL - CSI n F
 
+        void OnHorizontalPositionRelative(int n); // HPR - CSI n a
+        void OnVerticalPositionRelative(int n);   // VPR - CSI n e
+        void OnSetLeftRightMarginMode(bool enabled); // DECLRMM - DEC mode 69
+        void OnSaveCursorOrSetMargins(int left, int right); // CSI Pl;Pr s
+        void OnSetReverseWrapMode(int mode, bool enabled);
+        void OnScreenAlignmentTest(); // DECALN - ESC # 8
         // Explicit scroll commands
         void OnScrollUp(int n);   // SU - CSI n S
         void OnScrollDown(int n); // SD - CSI n T
@@ -75,7 +109,7 @@ namespace Dotty.Abstractions.Adapter
         void OnRepeatCharacter(int n); // REP - CSI n b
 
         // Horizontal tab
-        void OnTab();     // HT - move to next tab stop
+        void OnTab(int n);  // HT / CHT - horizontal tabulation
         void OnBackTab(int n); // CBT - CSI n Z - move back n tab stops
 
         // Cursor shape
@@ -84,14 +118,17 @@ namespace Dotty.Abstractions.Adapter
         void OnSetKeypadApplicationMode(bool enabled); // DECKPAM / DECKPNM - ESC = / ESC >
 
         // Device attributes
-        void OnSendDeviceAttributes(int daType); // DA - CSI c / CSI > c
-        // DA3 (CSI = c) is intentionally silent; no reply is sent.
+        void OnSendDeviceAttributes(int daType); // DA1: ESC Z / CSI c; DA2: CSI > c; DA3: CSI = c
+        // The parser invokes this only for syntactically valid DA requests; unsupported DA3 remains silent.
 
         // XTVERSION (CSI > q / CSI > 0 q): report the terminal name and version.
         void OnRequestTerminalVersion() { }
 
         // Mode status (DECRQM - CSI ? Ps $ p / CSI Ps $ p)
         void OnRequestMode(int mode, bool isPrivate) { } // Default no-op for external implementors.
+
+        // DECRQSS (DCS $ q Pt ST): report the actual current value of a supported setting.
+        void OnRequestStatusString(ReadOnlySpan<byte> request);
 
         // Capability query (XTGETTCAP - DCS + q hex ST)
         void OnQueryCapability(string requestHex) { }
@@ -137,8 +174,8 @@ namespace Dotty.Abstractions.Adapter
         // DECSTR soft terminal reset (CSI ! p)
         void OnSoftReset() { }
 
-        // Private device status report (CSI ? Ps n, Ps != 6; Ps == 6 is OnCursorPositionReport)
-        void OnPrivateDeviceStatusReport(int code) { }
+        // Private device status report; identifier is used by macro-checksum request 63.
+        void OnPrivateDeviceStatusReport(int code, int identifier);
 
         // DECBKM (CSI ? 67 h/l): true = Backspace sends BS (0x08), false = DEL (0x7F)
         void OnSetBackarrowKeyMode(bool sendsBackspace) { }

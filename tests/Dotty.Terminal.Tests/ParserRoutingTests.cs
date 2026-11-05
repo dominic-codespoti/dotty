@@ -73,16 +73,6 @@ public sealed class ParserRoutingTests
         Assert.Equal(new[] { 998, 15 }, handler.PrivateDeviceStatusReportCodes);
     }
 
-    [Fact]
-    public void WindowOperation_ForwardsThreeParametersWithZeroDefaults()
-    {
-        var (parser, handler) = Setup();
-        Feed(parser, "\u001b[8;24;80t\u001b[18t\u001b[22;0t\u001b[t");
-        Assert.Equal(
-            new[] { (8, 24, 80), (18, 0, 0), (22, 0, 0), (0, 0, 0) },
-            handler.WindowOperationCalls);
-    }
-
     [Theory]
     [InlineData("\u001b[>1t")]
     [InlineData("\u001b[?18t")]

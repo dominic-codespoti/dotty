@@ -289,7 +289,7 @@ public sealed partial class TerminalKeyboardDispatcher
         int length = _inputEncoder.EncodeKeyEvent(terminalKey, eventModifiers, primaryCodepoint, eventType,
             reportedText, _keyEventScratch, kittyFlags, adapter.KeypadApplicationMode,
             adapter.ApplicationCursorKeysEnabled, shiftedCodepoint, baseCodepoint,
-            adapter.BackarrowSendsBackspace);
+            adapter.BackarrowSendsBackspace, adapter.NewLineMode);
         if (length == 0)
             return false;
         _host.WriteInput(tab, _keyEventScratch.AsSpan(0, length));
@@ -364,6 +364,12 @@ public sealed partial class TerminalKeyboardDispatcher
         bool super = (modifiers & TerminalKeyModifiers.Meta) != 0;
         var adapter = tab.Session.Adapter;
         bool keypadNavigation = _host.KeypadNavigation && SilkKeyMapper.IsNumLockKeypadKey(key);
+        if (adapter.NewLineMode && !ctrl && !shift && !alt && !super &&
+            (key == Key.Enter || key == Key.KeypadEnter && !adapter.KeypadApplicationMode))
+        {
+            _host.WriteInput(tab, "\r\n"u8);
+            return true;
+        }
         // Keypad keys in application keypad mode or at their navigation level (Num Lock off) are encoded from the
         // key even though GLFW names them; otherwise the keypad types the layout's character (plan-12 D8).
         bool keypadEncoded = key is >= Key.Keypad0 and <= Key.KeypadEqual &&

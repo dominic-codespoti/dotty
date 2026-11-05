@@ -24,6 +24,9 @@ public readonly record struct TextAttributeOptions(
     float FaintOpacity, bool BlinkVisible, int BaselineShift = 0, CellSpriteMetrics Sprites = default,
     bool BuiltinGlyphs = false)
 {
+    /// <summary>Per-pane xterm special attribute colors and mode bits.</summary>
+    public SpecialColorSettings SpecialColors { get; init; }
+
     /// <summary>Default of <c>font.faintOpacity</c>.</summary>
     public const float DefaultFaintOpacity = 0.5f;
 

@@ -106,17 +106,18 @@ public class GraphemeStorageTests
     }
 
     [Fact]
-    public void GraphemeStore_ConcurrentReadersSeeCompleteEntries()
+    public async System.Threading.Tasks.Task GraphemeStore_ConcurrentReadersSeeCompleteEntries()
     {
         var store = new GraphemeStore();
         var failures = new System.Collections.Concurrent.ConcurrentQueue<string>();
         using var done = new System.Threading.CancellationTokenSource();
+        System.Threading.CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         var readers = new System.Threading.Tasks.Task[3];
         for (int r = 0; r < readers.Length; r++)
         {
             readers[r] = System.Threading.Tasks.Task.Run(() =>
             {
-                while (!done.IsCancellationRequested)
+                while (!done.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
                 {
                     int count = store.Count;
                     for (int i = 1; i <= count; i++)
@@ -124,12 +125,18 @@ public class GraphemeStorageTests
                         if (store.Get(i) != "g" + i) failures.Enqueue("entry " + i);
                     }
                 }
-            });
+            }, cancellationToken);
         }
 
-        for (int i = 1; i <= 5000; i++) Assert.Equal((short)i, store.Store("g" + i));
-        done.Cancel();
-        System.Threading.Tasks.Task.WaitAll(readers);
+        try
+        {
+            for (int i = 1; i <= 5000; i++) Assert.Equal((short)i, store.Store("g" + i));
+        }
+        finally
+        {
+            done.Cancel();
+            await System.Threading.Tasks.Task.WhenAll(readers);
+        }
 
         Assert.Empty(failures);
     }

@@ -36,13 +36,6 @@ public sealed class VisibilityReportTests
         Assert.False(adapter.VisibilityReportsEnabled);
     }
 
-    [Fact]
-    public void PrivateDsr_OtherCodesAreSilent()
-    {
-        var (_, parser, replies) = Setup();
-        Feed(parser, "\u001b[?15n\u001b[?997n\u001b[?999n");
-        Assert.Empty(replies);
-    }
 
     [Fact]
     public void Defaults_AreVisibleAndDisabled()

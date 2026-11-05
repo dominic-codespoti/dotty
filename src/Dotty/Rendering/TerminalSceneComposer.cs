@@ -164,6 +164,12 @@ public sealed class TerminalSceneComposer : IDisposable
 
     private readonly LigatureRenderer _ligatures = new(new LigatureShaper(), ownsShaper: true);
 
+    private byte[] _searchCoverage = Array.Empty<byte>();
+    private byte[] _previousSearchCoverage = Array.Empty<byte>();
+    private bool _hadSearchCoverage;
+    private int _previousSearchRows;
+    private int _previousSearchColumns;
+    private LeafPane? _previousSearchLeaf;
     private LeafRowCache[] _leafRowCaches = Array.Empty<LeafRowCache>();
     private bool _hasRowCacheConfiguration;
     private IColorScheme? _cachedRowCacheTheme;
@@ -448,21 +454,196 @@ public sealed class TerminalSceneComposer : IDisposable
                 int startInstanceIndex = instanceCount;
                 int paneRows = leafSnapshot.Rows;
                 int paneColumns = leafSnapshot.Columns;
-                EnsureScratchCapacity(instanceCount + checked(QuadFrameBuilder.InstanceBudget(paneRows, paneColumns) + 1024));
+                if (ReferenceEquals(leaf, activePane))
+                {
+                    if (searchOverlay.Matches is { Count: > 0 } searchMatches)
+                    {
+                        int coverageLength = checked(paneRows * paneColumns);
+                        if (_searchCoverage.Length < coverageLength)
+                            _searchCoverage = new byte[coverageLength];
+                        Span<byte> coverage = _searchCoverage.AsSpan(0, coverageLength);
+                        coverage.Clear();
+                        for (int i = 0; i < searchMatches.Count; i++)
+                        {
+                            var match = searchMatches[i];
+                            long visibleRow = (long)match.Row + scrollOffset;
+                            if (visibleRow < 0 || visibleRow >= paneRows)
+                                continue;
+                            int first = Math.Max(0, match.StartCol);
+                            int end = Math.Min(paneColumns, match.EndCol);
+                            if (first < end)
+                                coverage.Slice(checked((int)visibleRow * paneColumns + first), end - first)
+                                    .Fill(match.IsActive ? (byte)2 : (byte)1);
+                        }
+
+                        bool changed = !_hadSearchCoverage || !ReferenceEquals(_previousSearchLeaf, leaf)
+                            || _previousSearchRows != paneRows || _previousSearchColumns != paneColumns
+                            || !_previousSearchCoverage.AsSpan(0, Math.Min(_previousSearchCoverage.Length, coverageLength))
+                                .SequenceEqual(coverage);
+                        if (changed)
+                        {
+                            if (_previousSearchCoverage.Length < coverageLength)
+                                _previousSearchCoverage = new byte[coverageLength];
+                            coverage.CopyTo(_previousSearchCoverage);
+                            _previousSearchRows = paneRows;
+                            _previousSearchColumns = paneColumns;
+                            _previousSearchLeaf = leaf;
+                            _hadSearchCoverage = true;
+                            for (int i = 0; i < _leafRowCaches.Length; i++)
+                                _leafRowCaches[i]?.Cache.InvalidateAll();
+                        }
+                        _ligatures.SetSearchCoverage(_searchCoverage, paneRows, paneColumns);
+                    }
+                    else
+                    {
+                        if (_hadSearchCoverage)
+                        {
+                            _hadSearchCoverage = false;
+                            for (int i = 0; i < _leafRowCaches.Length; i++)
+                                _leafRowCaches[i]?.Cache.InvalidateAll();
+                        }
+                        _ligatures.SetSearchCoverage(null, 0, 0);
+                    }
+                }
+                else
+                {
+                    _ligatures.SetSearchCoverage(null, 0, 0);
+                }
+
+                var smoothAdapter = leaf.Session.Adapter;
+                bool smoothTransition = scrollOffset == 0 && paneRows > 0 && paneColumns > 0
+                    && smoothAdapter.SmoothScrollEnabled
+                    && smoothAdapter.SmoothScrollOutgoingSnapshot is not null;
+                int rowInstanceBudget = checked(QuadFrameBuilder.InstanceBudget(paneRows, paneColumns));
+                EnsureScratchCapacity(instanceCount + checked(rowInstanceBudget * (smoothTransition ? 2 : 1) + 1024));
                 var leafForeground = _leafColors[leafIndex].Foreground;
                 var leafBackground = _leafColors[leafIndex].Background;
-                int written = AppendCachedLeafRows(
-                    leafIndex, leaf, leafSnapshot, _frameScratch.AsSpan(startInstanceIndex),
-                    paneRows, paneColumns, leafForeground, leafBackground);
                 int startColumnOffset = (int)Math.Round(leaf.Bounds.X / cellWidth);
                 int startRowOffset = (int)Math.Round(leaf.Bounds.Y / cellHeight) + barRows;
-                for (int i = 0; i < written; i++)
+                int smoothOutgoingCount = 0;
+                int smoothDirection = 0;
+                int smoothLines = 0;
+                int smoothTop = 0;
+                int smoothBottom = -1;
+                float smoothProgress = 1f;
+                if (smoothTransition)
                 {
-                    ref var instance = ref _frameScratch[startInstanceIndex + i];
-                    instance.Col += (ushort)startColumnOffset;
-                    instance.Row += (ushort)startRowOffset;
+                    lock (smoothAdapter.SmoothScrollSyncRoot)
+                    {
+                        RenderSnapshot? outgoing = smoothAdapter.SmoothScrollOutgoingSnapshot;
+                        if (outgoing is not null && smoothAdapter.SmoothScrollEnabled
+                            && outgoing.Rows == paneRows && outgoing.Columns == paneColumns)
+                        {
+                            smoothDirection = smoothAdapter.SmoothScrollDirection;
+                            smoothLines = smoothAdapter.SmoothScrollLines;
+                            smoothTop = Math.Clamp(smoothAdapter.SmoothScrollTop, 0, paneRows - 1);
+                            smoothBottom = Math.Clamp(smoothAdapter.SmoothScrollBottom, smoothTop, paneRows - 1);
+                            smoothProgress = smoothAdapter.SmoothScrollProgress;
+                            if (!smoothAdapter.SmoothScrollActive && smoothProgress >= 1f)
+                            {
+                                // At completion the incoming snapshot is already settled. Drawing the old snapshot
+                                // at its final aligned position would alpha-blend every glyph a second time; there may
+                                // not be a later invalidation to replace that frame.
+                                smoothAdapter.CompleteSmoothScrollComposition();
+                                smoothTransition = false;
+                            }
+                            else
+                            {
+                                int distanceRows = Math.Min(smoothLines, smoothBottom - smoothTop + 1);
+                                float travel = distanceRows * cellHeight;
+                                float remaining = (1f - smoothProgress) * travel;
+                                float regionTop = (float)(padTop + (startRowOffset + smoothTop) * cellHeight);
+                                float regionBottom = (float)(padTop + (startRowOffset + smoothBottom + 1) * cellHeight);
+                                float outgoingClipTop = smoothDirection < 0 ? regionTop : regionBottom - remaining;
+                                float outgoingClipBottom = smoothDirection < 0 ? regionTop + remaining : regionBottom;
+                                var smoothTextOptions = _textOptions with { SpecialColors = smoothAdapter.SpecialColors };
+                                int firstOutgoingRow = smoothDirection < 0
+                                    ? smoothTop
+                                    : Math.Max(smoothTop, smoothBottom - distanceRows + 1);
+                                int lastOutgoingRow = smoothDirection < 0
+                                    ? Math.Min(smoothBottom, smoothTop + distanceRows - 1)
+                                    : smoothBottom;
+                                for (int row = firstOutgoingRow; row <= lastOutgoingRow && row < outgoing.Rows; row++)
+                                {
+                                    int count = QuadFrameBuilder.BuildRow(
+                                        outgoing, row, _atlas, _typeface, _fontSize,
+                                        _frameScratch.AsSpan(instanceCount + smoothOutgoingCount),
+                                        _dirtyAtlasRows, paneColumns, leafForeground, leafBackground,
+                                        in smoothTextOptions, out _);
+                                    float offsetY = smoothDirection * smoothProgress * travel;
+                                    for (int i = 0; i < count; i++)
+                                    {
+                                        ref var instance = ref _frameScratch[instanceCount + smoothOutgoingCount + i];
+                                        instance.Col += (ushort)startColumnOffset;
+                                        instance.Row += (ushort)(row + startRowOffset);
+                                        instance.PixelOffsetY = offsetY;
+                                        instance.ClipTop = outgoingClipTop;
+                                        instance.ClipBottom = outgoingClipBottom;
+                                    }
+                                    smoothOutgoingCount += count;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            smoothTransition = false;
+                        }
+                    }
                 }
-                instanceCount += written;
+
+                int currentInstanceStartIndex = instanceCount + smoothOutgoingCount;
+                int written = AppendCachedLeafRows(
+                    leafIndex, leaf, leafSnapshot, _frameScratch.AsSpan(currentInstanceStartIndex),
+                    paneRows, paneColumns, leafForeground, leafBackground, smoothAdapter.SpecialColors);
+                float smoothIncomingOffset = 0f;
+                float smoothClipTop = 0f;
+                float smoothClipBottom = 0f;
+                if (smoothTransition)
+                {
+                    int distanceRows = Math.Min(smoothLines, smoothBottom - smoothTop + 1);
+                    float travel = distanceRows * cellHeight;
+                    float remaining = (1f - smoothProgress) * travel;
+                    float regionTop = (float)(padTop + (startRowOffset + smoothTop) * cellHeight);
+                    float regionBottom = (float)(padTop + (startRowOffset + smoothBottom + 1) * cellHeight);
+                    smoothIncomingOffset = -smoothDirection * remaining;
+                    smoothClipTop = smoothDirection < 0 ? regionTop + remaining : regionTop;
+                    smoothClipBottom = smoothDirection < 0 ? regionBottom : regionBottom - remaining;
+                }
+                if (!smoothTransition)
+                {
+                    for (int i = 0; i < written; i++)
+                    {
+                        ref var instance = ref _frameScratch[currentInstanceStartIndex + i];
+                        instance.Col += (ushort)startColumnOffset;
+                        instance.Row += (ushort)startRowOffset;
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < written; i++)
+                    {
+                        ref var instance = ref _frameScratch[currentInstanceStartIndex + i];
+                        instance.Col += (ushort)startColumnOffset;
+                        instance.Row += (ushort)startRowOffset;
+                        if (instance.Row >= startRowOffset + smoothTop && instance.Row <= startRowOffset + smoothBottom)
+                        {
+                            instance.PixelOffsetY = smoothIncomingOffset;
+                            instance.ClipTop = smoothClipTop;
+                            instance.ClipBottom = smoothClipBottom;
+                        }
+                    }
+                }
+                instanceCount += smoothOutgoingCount + written;
+                if (!smoothTransition && smoothAdapter.SmoothScrollEnabled
+                    && !smoothAdapter.SmoothScrollActive
+                    && smoothAdapter.SmoothScrollOutgoingSnapshot is { } skippedOutgoing)
+                {
+                    lock (smoothAdapter.SmoothScrollSyncRoot)
+                    {
+                        if (ReferenceEquals(smoothAdapter.SmoothScrollOutgoingSnapshot, skippedOutgoing))
+                            smoothAdapter.CompleteSmoothScrollComposition();
+                    }
+                }
 
                 if (leafSnapshot.Graphics is { } graphics)
                 {
@@ -511,7 +692,7 @@ public sealed class TerminalSceneComposer : IDisposable
                     if (_selectionCoverage.Length < coverageLength)
                         _selectionCoverage = new bool[Math.Max(coverageLength, _selectionCoverage.Length * 2)];
                     instanceCount += SelectionQuadBuilder.Apply(
-                        _frameScratch.AsSpan(startInstanceIndex),
+                        _frameScratch.AsSpan(currentInstanceStartIndex),
                         written,
                         range,
                         blockSelection,
@@ -574,7 +755,7 @@ public sealed class TerminalSceneComposer : IDisposable
                     if (cursorPlan.RecolorsText)
                     {
                         var textMode = CursorGeometry.ParseTextMode(cursorConfig.Text);
-                        for (int i = startInstanceIndex; i < instanceCount; i++)
+                        for (int i = currentInstanceStartIndex; i < instanceCount; i++)
                         {
                             ref var instance = ref _frameScratch[i];
                             if (instance.Row != cursorRow || instance.Col != cursorColumn
@@ -624,8 +805,8 @@ public sealed class TerminalSceneComposer : IDisposable
                                 _frameScratch.AsSpan(instanceCount), _atlas, _typeface, _fontSize,
                                 in _spriteMetrics, _dirtyAtlasRows, out PreeditLayoutResult preeditLayout);
                             // Drop the pane cells under the opaque preedit, then move the preedit down behind the kept cells.
-                            int kept = startInstanceIndex + _preeditQuadBuilder.RemoveCovered(
-                                _frameScratch.AsSpan(startInstanceIndex, instanceCount - startInstanceIndex));
+                            int kept = currentInstanceStartIndex + _preeditQuadBuilder.RemoveCovered(
+                                _frameScratch.AsSpan(currentInstanceStartIndex, instanceCount - currentInstanceStartIndex));
                             _frameScratch.AsSpan(instanceCount, preeditCount).CopyTo(_frameScratch.AsSpan(kept));
                             instanceCount = kept + preeditCount;
                             float caretLeft = padLeft + preeditLayout.CaretColumn * scaledCellWidth;
@@ -660,6 +841,34 @@ public sealed class TerminalSceneComposer : IDisposable
 
                     if (highlightCapacity > 0)
                     {
+                        Span<byte> coverage = _searchCoverage.AsSpan(0, checked(paneRows * paneColumns));
+
+                        // The row cache contains unmodified glyph instances. Recolour only this frame's copy,
+                        // leaving cached rows untouched when search closes or its matches change.
+                        for (int i = currentInstanceStartIndex; i < currentInstanceStartIndex + written; i++)
+                        {
+                            ref var instance = ref _frameScratch[i];
+                            if ((instance.Flags & (CellFlags.Decoration | CellFlags.ColorGlyph)) != 0)
+                                continue;
+                            int row = instance.Row - startRowOffset;
+                            int column = instance.Col - startColumnOffset;
+                            if ((uint)row >= (uint)paneRows || (uint)column >= (uint)paneColumns)
+                                continue;
+                            int cellIndex = row * paneColumns + column;
+                            byte color = coverage[cellIndex];
+                            if ((instance.Flags & CellFlags.WideCell) != 0 && column + 1 < paneColumns
+                                && coverage[cellIndex + 1] > color)
+                                color = coverage[cellIndex + 1];
+                            if (color == 0)
+                                continue;
+                            var foreground = color == 2
+                                ? SearchQuadBuilder.ActiveMatchForeground
+                                : SearchQuadBuilder.MatchForeground;
+                            instance.FgR = foreground.R;
+                            instance.FgG = foreground.G;
+                            instance.FgB = foreground.B;
+                        }
+
                         EnsureScratchCapacity(checked(instanceCount + checked((int)highlightCapacity)));
                         int highlightQuads = SearchQuadBuilder.BuildHighlightQuads(
                             matches,
@@ -1003,7 +1212,8 @@ public sealed class TerminalSceneComposer : IDisposable
         int rows,
         int columns,
         SgrColorArgb foreground,
-        SgrColorArgb background)
+        SgrColorArgb background,
+        SpecialColorSettings specialColors)
     {
         var slot = _leafRowCaches[leafIndex];
         if (!ReferenceEquals(slot.Owner, leaf))
@@ -1021,7 +1231,8 @@ public sealed class TerminalSceneComposer : IDisposable
 
         var cache = slot.Cache;
         cache.EnsureGeometry(rows, columns, 0f, 0f);
-        cache.ApplyTextOptions(in _textOptions);
+        var textOptions = _textOptions with { SpecialColors = specialColors };
+        cache.ApplyTextOptions(in textOptions);
         cache.BeginFrame();
 
         for (int row = 0; row < rows; row++)
@@ -1069,7 +1280,7 @@ public sealed class TerminalSceneComposer : IDisposable
                 int count = QuadFrameBuilder.BuildRow(
                     snapshot, row, _atlas, _typeface, _fontSize,
                     entry.Instances.AsSpan(), _dirtyAtlasRows, columns, foreground, background,
-                    in _textOptions, out bool hasBlinkingText);
+                    in textOptions, out bool hasBlinkingText);
                 entry.HasBlinkingText = hasBlinkingText;
                 hot.CopyTo(entry.SourceCells);
                 cold.CopyTo(entry.SourceColdCells);

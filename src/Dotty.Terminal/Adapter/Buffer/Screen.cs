@@ -590,6 +590,105 @@ public unsafe partial class Screen : IDisposable
         return col;
     }
 
+    /// <summary>
+    /// Scrolls an inclusive rectangular cell region without changing the ring head or scrollback.
+    /// </summary>
+    internal int ScrollRectangle(int top, int bottom, int left, int right, int delta)
+    {
+        if (top < 0) top = 0;
+        if (bottom >= Rows) bottom = Rows - 1;
+        if (left < 0) left = 0;
+        if (right >= Columns) right = Columns - 1;
+        if (top > bottom || left > right || delta == 0)
+            return 0;
+
+        int height = bottom - top + 1;
+        int count = (int)Math.Min(delta < 0 ? -(long)delta : delta, height);
+        bool up = delta > 0;
+
+        for (int row = top; row <= bottom; row++)
+        {
+            int offset = GetPhysicalRow(row) * Columns;
+            if (GlyphStart(offset, left) < left)
+                ClearColumns(row, left, left + 1);
+            if (right + 1 < Columns && GlyphStart(offset, right + 1) <= right)
+                ClearColumns(row, right, right + 1);
+        }
+
+        int width = right - left + 1;
+        if (count < height)
+        {
+            if (up)
+            {
+                for (int row = top; row <= bottom - count; row++)
+                    CopyRectangleSpan(GetPhysicalRow(row), GetPhysicalRow(row + count), left, width);
+                for (int row = bottom - count + 1; row <= bottom; row++)
+                    ClearRectangleSpan(GetPhysicalRow(row), left, width);
+            }
+            else
+            {
+                for (int row = bottom; row >= top + count; row--)
+                    CopyRectangleSpan(GetPhysicalRow(row), GetPhysicalRow(row - count), left, width);
+                for (int row = top; row < top + count; row++)
+                    ClearRectangleSpan(GetPhysicalRow(row), left, width);
+            }
+        }
+        else
+        {
+            for (int row = top; row <= bottom; row++)
+                ClearRectangleSpan(GetPhysicalRow(row), left, width);
+        }
+
+        for (int row = top; row <= bottom; row++)
+        {
+            int physical = GetPhysicalRow(row);
+            RecalculateRowMaxCol(row);
+            RecalculateRowEndCol(row);
+            if (_rowColdFlags[physical])
+            {
+                bool hasCold = false;
+                int offset = physical * Columns;
+                for (int col = 0; col < Columns; col++)
+                {
+                    ref var coldCell = ref UnsafeAsRef<ColdCell>(_coldCellsPtr, offset + col);
+                    if (coldCell.HyperlinkId != 0 || coldCell.GraphemeIndex != -1)
+                    {
+                        hasCold = true;
+                        break;
+                    }
+                }
+                _rowColdFlags[physical] = hasCold;
+            }
+            RowContinuesPrevious[physical] = false;
+        }
+        ClearRowContinuation(bottom + 1);
+        return count;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CopyRectangleSpan(int destinationRow, int sourceRow, int left, int width)
+    {
+        int destination = destinationRow * Columns + left;
+        int source = sourceRow * Columns + left;
+        new ReadOnlySpan<CellHot>((void*)(_cellsPtr + (nint)source * Unsafe.SizeOf<CellHot>()), width)
+            .CopyTo(new Span<CellHot>((void*)(_cellsPtr + (nint)destination * Unsafe.SizeOf<CellHot>()), width));
+        if (_rowColdFlags[sourceRow] || _rowColdFlags[destinationRow])
+        {
+            new ReadOnlySpan<ColdCell>((void*)(_coldCellsPtr + (nint)source * Unsafe.SizeOf<ColdCell>()), width)
+                .CopyTo(new Span<ColdCell>((void*)(_coldCellsPtr + (nint)destination * Unsafe.SizeOf<ColdCell>()), width));
+            _rowColdFlags[destinationRow] |= _rowColdFlags[sourceRow];
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ClearRectangleSpan(int physicalRow, int left, int width)
+    {
+        int offset = physicalRow * Columns + left;
+        new Span<CellHot>((void*)(_cellsPtr + (nint)offset * Unsafe.SizeOf<CellHot>()), width).Clear();
+        if (_rowColdFlags[physicalRow])
+            new Span<ColdCell>((void*)(_coldCellsPtr + (nint)offset * Unsafe.SizeOf<ColdCell>()), width).Clear();
+    }
+
     public int ScrollUpRegion(int top, int bottom, int lines)
     {
         if (lines <= 0) return 0;

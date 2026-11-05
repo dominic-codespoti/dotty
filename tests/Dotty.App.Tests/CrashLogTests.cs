@@ -115,11 +115,4 @@ public sealed class CrashLogTests : IDisposable
         Assert.Single(Directory.GetFiles(_directory));
     }
 
-    [Fact]
-    public void ReportingBeforeInstallWritesNothing()
-    {
-        Assert.Null(CrashReporter.Log);
-        Assert.Null(CrashReporter.Report("test", "details"));
-        CrashReporter.ReportGlfwError("10008", "test");
-    }
 }

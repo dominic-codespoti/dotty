@@ -191,10 +191,10 @@ internal sealed class BufferTextWriter
         WriteAsciiRunBulk(text, styleId, hyperlinkId);
     }
 
-    private static void ApplyCellTemplate(ref CellHot cell, ushort styleId)
+    private void ApplyCellTemplate(ref CellHot cell, ushort styleId)
     {
         cell.StyleId = styleId;
-        cell.PackedFlags = 0;
+        cell.PackedFlags = _ctx.IsProtectionActive ? (byte)0x10 : (byte)0;
     }
 
     private unsafe void WriteAsciiRunBulk(ReadOnlySpan<char> run, ushort styleId, ushort hyperlinkId)
@@ -215,15 +215,18 @@ internal sealed class BufferTextWriter
             {
                 consumedWrap = _ctx.WrapToNextLine();
                 row = _cursor.Row;
-                col = 0;
+                col = _cursor.Col;
             }
 
             if (col < 0 || col >= cols) return;
 
-            int spaceOnRow = cols - col;
+            int rightCol = _ctx.GetWriteRightMargin(col);
+            int spaceOnRow = rightCol - col + 1;
             int chunkLen = Math.Min(remaining, spaceOnRow);
 
             var buf = _ctx.ActiveBuffer;
+            if (_ctx.InsertMode)
+                buf.InsertColumns(row, col, rightCol, chunkLen);
             int rowMapIdx = buf.GetPhysicalRow(row);
             int baseIdx = rowMapIdx * cols + col;
             int endCol = col + chunkLen - 1;
@@ -240,7 +243,7 @@ internal sealed class BufferTextWriter
             }
 
             int i = 0;
-            uint styleUint = styleId; // StyleId in low 16 bits, PackedFlags=0 in byte 2, _pad=0 in byte 3
+            uint styleUint = (uint)(styleId | (_ctx.IsProtectionActive ? 0x100000 : 0)); // PackedFlags occupies byte 2.
 
             // AVX2: process 4 cells per vector store (32 bytes = 4 × 8-byte CellHot)
             if (Avx2.IsSupported)
@@ -295,7 +298,8 @@ internal sealed class BufferTextWriter
             // this ASCII overwrite, clear its trailing continuation cells so stale
             // fragments do not survive at the right edge of the rewritten run.
             int trailingCol = endCol + 1;
-            while (trailingCol < cols)
+            int trailingLimit = _ctx.InsertMode ? rightCol + 1 : cols;
+            while (trailingCol < trailingLimit)
             {
                 ref var trailing = ref buf.GetCellRef(row, trailingCol);
                 if (!trailing.IsContinuation)
@@ -331,21 +335,18 @@ internal sealed class BufferTextWriter
 
             if (remaining > 0)
             {
-                _cursor.Set(row, cols - 1, _ctx.Rows, cols);
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
+                _cursor.SetWrapPending(_ctx._autoWrap);
+            }
+            else if (_ctx._autoWrap && endCol >= rightCol)
+            {
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
             {
-                if (_ctx._autoWrap && endCol >= cols - 1)
-                {
-                    _cursor.Set(row, cols - 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(true);
-                }
-                else
-                {
-                    _cursor.Set(row, endCol + 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(false);
-                }
+                _cursor.Set(row, Math.Min(endCol + 1, rightCol), _ctx.Rows, cols);
+                _cursor.SetWrapPending(false);
             }
         }
     }
@@ -371,15 +372,18 @@ internal sealed class BufferTextWriter
             {
                 consumedWrap = _ctx.WrapToNextLine();
                 row = _cursor.Row;
-                col = 0;
+                col = _cursor.Col;
             }
 
             if (col < 0 || col >= cols) return;
 
-            int spaceOnRow = cols - col;
+            int rightCol = _ctx.GetWriteRightMargin(col);
+            int spaceOnRow = rightCol - col + 1;
             int chunkLen = Math.Min(remaining, spaceOnRow);
 
             var buf = _ctx.ActiveBuffer;
+            if (_ctx.InsertMode)
+                buf.InsertColumns(row, col, rightCol, chunkLen);
             int rowMapIdx = buf.GetPhysicalRow(row);
             int baseIdx = rowMapIdx * cols + col;
             int endCol = col + chunkLen - 1;
@@ -396,7 +400,7 @@ internal sealed class BufferTextWriter
             }
 
             int i = 0;
-            uint styleUint = styleId;
+            uint styleUint = (uint)(styleId | (_ctx.IsProtectionActive ? 0x100000 : 0));
 
             // AVX2: process 4 cells per vector store
             if (Avx2.IsSupported)
@@ -449,7 +453,8 @@ internal sealed class BufferTextWriter
 
             // Clear trailing continuation cells from previous content
             int trailingCol = endCol + 1;
-            while (trailingCol < cols)
+            int trailingLimit = _ctx.InsertMode ? rightCol + 1 : cols;
+            while (trailingCol < trailingLimit)
             {
                 ref var trailing = ref buf.GetCellRef(row, trailingCol);
                 if (!trailing.IsContinuation)
@@ -485,21 +490,18 @@ internal sealed class BufferTextWriter
 
             if (remaining > 0)
             {
-                _cursor.Set(row, cols - 1, _ctx.Rows, cols);
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
+                _cursor.SetWrapPending(_ctx._autoWrap);
+            }
+            else if (_ctx._autoWrap && endCol >= rightCol)
+            {
+                _cursor.Set(row, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
             {
-                if (_ctx._autoWrap && endCol >= cols - 1)
-                {
-                    _cursor.Set(row, cols - 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(true);
-                }
-                else
-                {
-                    _cursor.Set(row, endCol + 1, _ctx.Rows, cols);
-                    _cursor.SetWrapPending(false);
-                }
+                _cursor.Set(row, Math.Min(endCol + 1, rightCol), _ctx.Rows, cols);
+                _cursor.SetWrapPending(false);
             }
         }
     }
@@ -533,15 +535,17 @@ internal sealed class BufferTextWriter
         }
         else
         {
-            int cols = _ctx.Columns;
             startCol = _cursor.Col;
-            if (startCol > cols - 1) startCol = Math.Max(0, cols - 1);
-            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, cols);
+            int clampRight = _ctx.GetWriteRightMargin(startCol);
+            if (startCol > clampRight) startCol = clampRight;
+            _cursor.Set(_cursor.Row, startCol, _ctx.Rows, _ctx.Columns);
         }
 
         var buf = _ctx.ActiveBuffer;
         int currentRow = _cursor.Row;
 
+        if (_ctx.InsertMode)
+            buf.InsertColumns(currentRow, startCol, _ctx.GetWriteRightMargin(startCol), 1);
         ref var cell = ref buf.GetCellRef(currentRow, startCol);
 
         if (cell.IsContinuation || cell.Width > 1)
@@ -569,12 +573,13 @@ internal sealed class BufferTextWriter
         if (consumedWrap)
             buf.SetRowContinuation(currentRow, true);
 
+        int cols = _ctx.Columns;
+        int rightCol = _ctx.GetWriteRightMargin(startCol);
         if (autoWrap)
         {
-            int cols = _ctx.Columns;
-            if (startCol >= cols - 1)
+            if (startCol >= rightCol)
             {
-                _cursor.Set(currentRow, Math.Min(cols - 1, startCol), _ctx.Rows, cols);
+                _cursor.Set(currentRow, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
@@ -585,8 +590,7 @@ internal sealed class BufferTextWriter
         }
         else
         {
-            int cols = _ctx.Columns;
-            _cursor.Set(currentRow, Math.Min(startCol + 1, cols - 1), _ctx.Rows, cols);
+            _cursor.Set(currentRow, Math.Min(startCol + 1, rightCol), _ctx.Rows, cols);
             _cursor.SetWrapPending(false);
         }
         RequestMarkRowDirty(currentRow);
@@ -604,14 +608,14 @@ internal sealed class BufferTextWriter
             width = 1;
         }
 
-        PlaceCluster(grapheme, placeholder, width, styleId, hyperlinkId);
+        PlaceCluster(grapheme, placeholder, width, styleId, hyperlinkId, _ctx.IsProtectionActive);
     }
 
     /// <summary>
     /// Writes one cluster of <paramref name="width"/> cells at the cursor (wrapping first when autowrap is on and
     /// it does not fit) and advances the cursor past it.
     /// </summary>
-    private void PlaceCluster(string grapheme, bool placeholder, int width, ushort styleId, ushort hyperlinkId)
+    private void PlaceCluster(string grapheme, bool placeholder, int width, ushort styleId, ushort hyperlinkId, bool protectedGlyph, bool applyInsert = true)
     {
         int columns = _ctx.Columns;
         if (width > columns) width = columns;
@@ -624,19 +628,21 @@ internal sealed class BufferTextWriter
             {
                 consumedWrap = _ctx.WrapToNextLine();
             }
-            if (_cursor.Col > columns - width)
+            int wrapRight = _ctx.GetWriteRightMargin(_cursor.Col);
+            if (_cursor.Col + width - 1 > wrapRight)
             {
-                // A wide cluster that does not fit before the right edge leaves the last column blank and moves to
-                // the next line; LineFeed scrolls at the bottom of the scroll region.
-                _ctx.LineFeed();
-                _ctx.CarriageReturn();
+                // This advance skips a glyph that cannot fit; unlike consuming wrap-pending, it does not make
+                // the destination row a continuation of the preceding row.
+                _ctx.WrapToNextLine();
             }
             startCol = _cursor.Col;
         }
         else
         {
             startCol = _cursor.Col;
-            if (startCol > columns - width) startCol = Math.Max(0, columns - width);
+            int clampRight = _ctx.GetWriteRightMargin(startCol);
+            if (startCol + width - 1 > clampRight)
+                startCol = Math.Max(0, clampRight - width + 1);
             _cursor.Set(_cursor.Row, startCol, _ctx.Rows, columns);
         }
 
@@ -644,6 +650,8 @@ internal sealed class BufferTextWriter
         int currentRow = _cursor.Row;
         // Overwriting cells never changes whether this row soft-wraps from the previous one, but clearing does.
         bool continuesPrevious = consumedWrap || buf.GetRowContinuesPrevious(currentRow);
+        if (_ctx.InsertMode && applyInsert)
+            buf.InsertColumns(currentRow, startCol, _ctx.GetWriteRightMargin(startCol), width);
         // Clear every covered cell, so a wide glyph partly overwritten here is removed whole.
         buf.ClearColumns(currentRow, startCol, startCol + width);
 
@@ -656,6 +664,7 @@ internal sealed class BufferTextWriter
         cell.StyleId = styleId;
         cell.Width = (byte)Math.Clamp(width, 1, 2);
         cell.IsContinuation = false;
+        cell.IsProtected = protectedGlyph;
         cell.HasHyperlink = hyperlinkId != 0;
         cell.HasGrapheme = !placeholder && grapheme.Length > 1;
 
@@ -679,6 +688,7 @@ internal sealed class BufferTextWriter
             ref var cont = ref buf.GetCellRef(_cursor.Row, startCol + i);
             cont.Reset();
             cont.IsContinuation = true;
+            cont.IsProtected = protectedGlyph;
             cont.StyleId = styleId;
             // The cell may have held a placeholder code (or other cold data); a continuation never keeps it.
             buf.GetColdCellRef(_cursor.Row, startCol + i).Reset();
@@ -694,13 +704,14 @@ internal sealed class BufferTextWriter
         if (continuesPrevious)
             buf.SetRowContinuation(currentRow, true);
 
+        int cols = _ctx.Columns;
+        int endCol = startCol + width - 1;
+        int rightCol = _ctx.GetWriteRightMargin(startCol);
         if (autoWrap)
         {
-            int cols = _ctx.Columns;
-            int endCol = startCol + width - 1;
-            if (endCol >= cols - 1)
+            if (endCol >= rightCol)
             {
-                _cursor.Set(_cursor.Row, Math.Min(cols - 1, endCol), _ctx.Rows, cols);
+                _cursor.Set(_cursor.Row, rightCol, _ctx.Rows, cols);
                 _cursor.SetWrapPending(true);
             }
             else
@@ -711,8 +722,7 @@ internal sealed class BufferTextWriter
         }
         else
         {
-            int cols = _ctx.Columns;
-            _cursor.Set(_cursor.Row, Math.Min(_cursor.Col + width, cols - 1), _ctx.Rows, cols);
+            _cursor.Set(_cursor.Row, Math.Min(endCol + 1, rightCol), _ctx.Rows, cols);
             _cursor.SetWrapPending(false);
         }
         RequestMarkRowDirty(currentRow);
@@ -766,18 +776,20 @@ internal sealed class BufferTextWriter
 
         int oldWidth = cell.Width;
         int newWidth = Math.Clamp(UnicodeWidth.GetWidth(joined), 1, 2);
-        bool fits = newWidth <= columns && (_ctx._autoWrap || col + newWidth <= columns);
+        bool fits = newWidth <= columns && (_ctx._autoWrap || col + newWidth - 1 <= _ctx.GetWriteRightMargin(col));
         if (newWidth != oldWidth && (newWidth < oldWidth || fits))
         {
+            bool protectedGlyph = cell.IsProtected;
             ushort styleId = cell.StyleId;
-            // Rewrite the cluster in place: clear its cells, put the cursor back on it and print it at its new width.
             bool continuesPrevious = buf.GetRowContinuesPrevious(row);
+            if (newWidth > oldWidth && _ctx.InsertMode)
+                buf.InsertColumns(row, col + oldWidth, _ctx.GetWriteRightMargin(col), newWidth - oldWidth);
             buf.ClearColumns(row, col, col + oldWidth);
             if (continuesPrevious) buf.SetRowContinuation(row, true);
             RequestMarkRowDirty(row);
             _cursor.Set(row, col, _ctx.Rows, columns);
             _cursor.SetWrapPending(false);
-            PlaceCluster(GetCachedString(joined), placeholder: false, newWidth, styleId, cold.HyperlinkId);
+            PlaceCluster(GetCachedString(joined), placeholder: false, newWidth, styleId, cold.HyperlinkId, protectedGlyph, applyInsert: false);
             return true;
         }
 

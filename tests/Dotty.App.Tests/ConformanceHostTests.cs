@@ -30,6 +30,7 @@ public sealed class ConformanceHostTests
         Assert.Equal(new[] { "python3", "esctest.py" }, options.Command);
         Assert.False(options.EnableChecksumReports);
         Assert.False(options.EnableWindowResize);
+        Assert.False(options.EnableTitleReports);
     }
 
     [Fact]
@@ -38,7 +39,7 @@ public sealed class ConformanceHostTests
         HostOptions options = HostOptionsParser.Parse(
             ["--rows", "40", "--columns", "100", "--timeout-seconds", "30", "--working-directory", "/tmp",
              "--transcript", "t.log", "--env", "A=1", "--env", "B=x=y", "--checksum-reports", "--window-resize",
-             "--", "prog", "--rows", "--", "x"],
+             "--title-reports", "--", "prog", "--rows", "--", "x"],
             _ => null);
 
         Assert.Equal(40, options.Rows);
@@ -51,17 +52,35 @@ public sealed class ConformanceHostTests
         Assert.Equal(new[] { "prog", "--rows", "--", "x" }, options.Command);
         Assert.True(options.EnableChecksumReports);
         Assert.True(options.EnableWindowResize);
+        Assert.True(options.EnableTitleReports);
     }
+
+
 
     [Fact]
     public void Parse_CoreSwitchesCanComeFromEnvironment()
     {
         HostOptions options = HostOptionsParser.Parse(
             ["--", "prog"],
-            name => name is HostOptionsParser.ChecksumEnvironmentVariable or HostOptionsParser.ResizeEnvironmentVariable ? "1" : null);
+            name => name is HostOptionsParser.ChecksumEnvironmentVariable
+                or HostOptionsParser.ResizeEnvironmentVariable
+                or HostOptionsParser.TitleReportsEnvironmentVariable ? "1" : null);
 
         Assert.True(options.EnableChecksumReports);
         Assert.True(options.EnableWindowResize);
+        Assert.True(options.EnableTitleReports);
+    }
+
+    [Fact]
+    public void Parse_TitleReportFlagEnablesIndependentOfFalseEnvironmentValue()
+    {
+        HostOptions options = HostOptionsParser.Parse(
+            ["--title-reports", "--", "prog"],
+            name => name == HostOptionsParser.TitleReportsEnvironmentVariable ? "0" : null);
+
+        Assert.True(options.EnableTitleReports);
+        Assert.False(options.EnableChecksumReports);
+        Assert.False(options.EnableWindowResize);
     }
 
     public static TheoryData<string[]> InvalidArguments => new()
@@ -116,6 +135,19 @@ public sealed class ConformanceHostTests
             "case \"$r\" in *'1!~0041'*) exit 0;; *) exit 3;; esac";
 
         int code = Run(["--timeout-seconds", "20", "--checksum-reports", "--", "/bin/sh", "-c", script]);
+
+        Assert.Equal(0, code);
+    }
+
+    [UnixOnlyFact]
+    public void Run_WithTitleReports_PreservesLatin1TitleBytesThroughPty()
+    {
+        const string script =
+            "stty raw -echo; printf '\\033[>2;3T\\033]2;Tit\\351le\\007\\033[21t'; " +
+            "expected=$(printf '\\033]lTit\\351le\\033\\\\'); r=$(dd bs=1 count=11 2>/dev/null); " +
+            "test \"$r\" = \"$expected\"";
+
+        int code = Run(["--timeout-seconds", "20", "--title-reports", "--", "/bin/sh", "-c", script]);
 
         Assert.Equal(0, code);
     }
@@ -201,6 +233,24 @@ public sealed class ConformanceHostTests
     }
 
     [Fact]
+    public void ApplyCoreSwitches_TitleReportsAreDeniedByDefaultAndAllowedIndependently()
+    {
+        (TerminalAdapter deniedAdapter, BasicAnsiParser deniedParser, List<string> deniedReplies) = CoreHarness([]);
+        Assert.False(deniedAdapter.TitleReportEnabled);
+        Assert.False(deniedAdapter.ChecksumReportEnabled);
+        Feed(deniedParser, "\u001b]2;Window title\u0007\u001b[21t\u001b[18t");
+        Assert.Equal(new[] { "\u001b[8;25;80t" }, deniedReplies);
+
+        (TerminalAdapter allowedAdapter, BasicAnsiParser allowedParser, List<string> allowedReplies) =
+            CoreHarness(["--title-reports"]);
+        Assert.True(allowedAdapter.TitleReportEnabled);
+        Assert.False(allowedAdapter.ChecksumReportEnabled);
+        Feed(allowedParser, "\u001b]2;Window title\u0007\u001b[21t\u001b[18t");
+        Assert.Equal(new[] { "\u001b]lWindow title\u001b\\", "\u001b[8;25;80t" }, allowedReplies);
+    }
+
+
+    [Fact]
     public void ApplyCoreSwitches_PixelReportsUseTheFixedCellSizeAndTrackTheGrid()
     {
         (_, BasicAnsiParser parser, List<string> replies) = CoreHarness(["--window-resize"]);
@@ -240,6 +290,7 @@ public sealed class ConformanceHostTests
         var parser = new BasicAnsiParser { Handler = adapter };
         var replies = new List<string>();
         adapter.ReplyRequested += reply => replies.Add(reply.ToString());
+        adapter.RawReplyBytesRequested += reply => replies.Add(Encoding.Latin1.GetString(reply.Span));
         return (adapter, parser, replies);
     }
 

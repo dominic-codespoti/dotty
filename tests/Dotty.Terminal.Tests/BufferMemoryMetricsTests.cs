@@ -110,8 +110,6 @@ public sealed class BufferMemoryMetricsTests
         buffer.EraseDisplay(2);
 
         Assert.Equal(24L * 80 * CellBytes, BufferMemoryMetrics.GetSnapshot().LiveArenaCommittedBoundBytes - baseline.LiveArenaCommittedBoundBytes);
-        // ED 2 blanks the ring but keeps the scrolled-line count.
-        Assert.Equal(1000, buffer.ScrollbackCount);
     }
 
     [Fact]

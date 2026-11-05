@@ -56,7 +56,7 @@ public partial class TerminalBuffer
 //                                                       (also on the alternate screen, where the event is not
 //                                                       raised): placements wholly in the history go, visible stay
 //   Cleared         EraseDisplay(2) (ED 2), main        OnHistoryInvalidated(Cleared, long.MaxValue) on the ACTIVE
-//                                                       store (also alternate): Screen.Clear wipes history + visible
+//                                                       store (also alternate): history and placements go; ISO-protected text may survive
 //   Reset           FullReset (RIS)                     ClearImageStores: every image and placement of BOTH
 //                                                       screens (limits stay in ScreenManager)
 //   Reset           ClearScreen                         OnHistoryInvalidated(Reset): all placements of BOTH stores

@@ -192,7 +192,7 @@ public sealed class KittyFrameLoadTests
                 Err("i=1", mismatch),
                 Err("i=1", "EILSEQ:Failed to inflate image data"),
             }, rig.Replies);
-            Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+            Assert.Single(AnimKit.Img(rig, 1).Frames);
             Assert.Equal(16, rig.Store.UsedBytes);
         }
         baseline.AssertRestored();
@@ -249,7 +249,7 @@ public sealed class KittyFrameLoadTests
             rig.Apc("a=f,i=1,f=100", B64(TestPng.Build(w, h, AnimKit.Rep(Blue, w * h))));
 
             Assert.Equal(new[] { Err("i=1", "EINVAL:Rectangle out of bounds") }, rig.Replies);
-            Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+            Assert.Single(AnimKit.Img(rig, 1).Frames);
             Assert.Equal(16, rig.Store.UsedBytes);
             rig.Store.ValidateInvariants();
         }
@@ -269,7 +269,7 @@ public sealed class KittyFrameLoadTests
 
             Assert.Equal(new[] { Err("i=1", message) }, rig.Replies);
             Assert.Equal(1, rig.Decoder.Calls);
-            Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+            Assert.Single(AnimKit.Img(rig, 1).Frames);
             Assert.Equal(16, rig.Store.UsedBytes);
         }
         baseline.AssertRestored();
@@ -285,7 +285,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("a=f,i=1,f=100", B64(TestPng.Build(1, 1, Blue)));
 
         Assert.Equal(new[] { Err("i=1", "EINVAL:Unknown image format") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
     }
 
     [Fact]
@@ -297,7 +297,7 @@ public sealed class KittyFrameLoadTests
             rig.Apc("a=f,i=1,s=1,v=1,f=32", B64(1, 2, 3, 4, 5)); // 5 bytes for a 1x1 RGBA frame
 
             Assert.Equal(new[] { Err("i=1", "EFBIG:Payload too large") }, rig.Replies);
-            Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+            Assert.Single(AnimKit.Img(rig, 1).Frames);
             Assert.Equal(16, rig.Store.UsedBytes);
         }
         baseline.AssertRestored();
@@ -340,7 +340,7 @@ public sealed class KittyFrameLoadTests
         AnimKit.LoadFrame(rig, 1, 1, 1, new byte[] { 10, 20, 30, 255 }, ",r=1,x=1,y=0");
 
         Assert.Equal(new[] { Ok("i=1") }, rig.Replies);
-        Assert.Equal(1, image.Frames.Count);
+        Assert.Single(image.Frames);
         Assert.Equal(ImagePixelFormat.Rgba8Premultiplied, image.Root.Format);
         Assert.Equal(new byte[] { 1, 2, 3, 255, 10, 20, 30, 255 }, image.Root.AsSpan().ToArray());
         Assert.NotEqual(serial, image.Root.Serial);
@@ -406,7 +406,7 @@ public sealed class KittyFrameLoadTests
         AnimKit.LoadFrame(rig, 1, 1, 1, AnimKit.Clear, ",r=1,z=5");
 
         Assert.Equal(5, image.Frames[0].GapMs);
-        Assert.Equal(1, image.Frames.Count);
+        Assert.Single(image.Frames);
     }
 
     [Fact]
@@ -471,7 +471,7 @@ public sealed class KittyFrameLoadTests
         AnimKit.LoadFrame(rig, 9, 1, 1, AnimKit.Clear);
 
         Assert.Equal(new[] { Err("i=9", "ENOENT:Image not found") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
     }
 
     [Theory]
@@ -485,7 +485,7 @@ public sealed class KittyFrameLoadTests
         AnimKit.LoadFrame(rig, 1, 1, 1, AnimKit.Clear, keys);
 
         Assert.Equal(new[] { Err("i=1", "ENOENT:Frame not found") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
         Assert.Equal(16, rig.Store.UsedBytes);
         rig.Store.ValidateInvariants();
     }
@@ -503,7 +503,7 @@ public sealed class KittyFrameLoadTests
         AnimKit.LoadFrame(rig, 1, w, h, AnimKit.Rep(Blue, w * h), keys);
 
         Assert.Equal(new[] { Err("i=1", "EINVAL:Rectangle out of bounds") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
         Assert.Equal(16, rig.Store.UsedBytes);
         rig.Store.ValidateInvariants();
     }
@@ -533,7 +533,7 @@ public sealed class KittyFrameLoadTests
             Err("i=1", "EINVAL:Invalid key value"),
             Err("i=1", "EINVAL:Invalid base64 data"),
         }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
         Assert.Equal(16, rig.Store.UsedBytes);
     }
 
@@ -690,7 +690,7 @@ public sealed class KittyFrameLoadTests
 
         Assert.Empty(rig.Replies);
         Assert.False(rig.Controller.HasOpenTransfer);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
     }
 
     [Fact]
@@ -703,7 +703,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("a=f,m=0", b64.Substring(8));
 
         Assert.Empty(rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
         Assert.False(rig.Controller.HasOpenTransfer);
     }
 
@@ -730,7 +730,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("a=f,m=0", b64.Substring(8));
 
         Assert.Equal(new[] { Ok("i=2") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
         Assert.NotNull(rig.Store.FindByClientId(2));
     }
 
@@ -744,7 +744,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("m=0", b64.Substring(8));
 
         Assert.Equal(new[] { Err("i=1", "EINVAL:Invalid base64 data") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
         Assert.False(rig.Controller.HasOpenTransfer);
     }
 
@@ -757,7 +757,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("m=0");
 
         Assert.Equal(new[] { Err("i=1", "ENODATA:Insufficient image data") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
     }
 
     [Fact]
@@ -767,7 +767,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("a=f,m=0", "AAAA");
 
         Assert.Empty(rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
     }
 
     [Fact]
@@ -808,7 +808,7 @@ public sealed class KittyFrameLoadTests
 
         Assert.Equal(new[] { Err("i=1", "EINVAL:Unknown image format") }, rig.Replies);
         Assert.False(rig.Controller.HasOpenTransfer);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
     }
 
     [Theory]
@@ -895,7 +895,7 @@ public sealed class KittyFrameLoadTests
             FinishTwoPixelLoad(rig);
 
             Assert.Equal(new[] { Err("i=1", "EINVAL:Rectangle out of bounds") }, rig.Replies);
-            Assert.Equal(1, fresh!.Frames.Count);
+            Assert.Single(fresh!.Frames);
             Assert.Equal(4, rig.Store.UsedBytes);
             rig.Store.ValidateInvariants();
         }
@@ -916,7 +916,7 @@ public sealed class KittyFrameLoadTests
             FinishTwoPixelLoad(rig);
 
             Assert.Equal(new[] { Err("i=1", "ENOENT:Frame not found") }, rig.Replies);
-            Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+            Assert.Single(AnimKit.Img(rig, 1).Frames);
             Assert.Equal(16, rig.Store.UsedBytes);
             rig.Store.ValidateInvariants();
         }
@@ -957,7 +957,7 @@ public sealed class KittyFrameLoadTests
             rig.Host.AlternateActive = false;
 
             Assert.Equal(new[] { Err("i=1", "ENOENT:Image not found") }, rig.Replies);
-            Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+            Assert.Single(AnimKit.Img(rig, 1).Frames);
             Assert.Equal(0, rig.Host.AltStore.Count);
         }
         baseline.AssertRestored();
@@ -1047,7 +1047,7 @@ public sealed class KittyFrameLoadTests
             rig.Apc("a=f,i=1,s=1,v=1,f=32,t=f", B64(Encoding.ASCII.GetBytes("/tmp/missing.rgba")));
 
             Assert.Equal(new[] { Err("i=1", "EBADF:Failed to read image file") }, rig.Replies);
-            Assert.Equal(1, rig.Store.FindByClientId(1)!.Frames.Count);
+            Assert.Single(rig.Store.FindByClientId(1)!.Frames);
             Assert.Equal(4, rig.Store.UsedBytes);
             Assert.False(rig.Controller.HasOpenTransfer);
         }
@@ -1080,7 +1080,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("a=f,I=7,s=1,v=1,f=32", B64(Blue));
 
         Assert.Equal(new[] { Ok("i=2147483649,I=7") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 2147483648u).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 2147483648u).Frames);
         Assert.Equal(2, AnimKit.Img(rig, 2147483649u).Frames.Count);
     }
 
@@ -1115,7 +1115,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("a=f,i=1,I=2,s=1,v=1,f=32", B64(Blue));
 
         Assert.Equal(new[] { Err("i=1,I=2", "EINVAL:Cannot specify both image id and image number") }, rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
     }
 
     [Fact]
@@ -1125,7 +1125,7 @@ public sealed class KittyFrameLoadTests
         rig.Apc("a=f,s=1,v=1,f=32", B64(Blue));
 
         Assert.Empty(rig.Replies);
-        Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+        Assert.Single(AnimKit.Img(rig, 1).Frames);
         Assert.False(rig.Controller.HasOpenTransfer);
     }
 
@@ -1188,10 +1188,10 @@ public sealed class KittyFrameLoadTests
             var fresh = AnimKit.Img(rig, 1);
             Assert.NotSame(old, fresh);
             Assert.True(old.IsDeleted);
-            Assert.Equal(1, fresh.Frames.Count);
+            Assert.Single(fresh.Frames);
             Assert.Equal(0, fresh.CurrentFrameIndex);
             Assert.Equal(4, rig.Store.UsedBytes);
-            Assert.Equal(1, rig.Store.Count);
+            Assert.Single(rig.Store.Images);
             rig.Store.ValidateInvariants();
         }
         baseline.AssertRestored();

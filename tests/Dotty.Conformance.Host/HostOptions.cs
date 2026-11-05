@@ -9,9 +9,9 @@ namespace Dotty.Conformance.Host;
 /// <param name="WorkingDirectory">Child working directory; null = current directory.</param>
 /// <param name="TranscriptPath">Optional byte transcript of the conversation; null = off.</param>
 /// <param name="Environment">Extra child environment variables (--env K=V, repeatable).</param>
-/// <param name="Command">argv after "--"; Command[0] is looked up on PATH by the PTY helper.</param>
 /// <param name="EnableChecksumReports">Request the DECRQCRA (checksum report) core switch; applied by <see cref="ConformanceHost.ApplyCoreSwitches"/>.</param>
 /// <param name="EnableWindowResize">Request the CSI 8 t window-resize core switch; applied by <see cref="ConformanceHost.ApplyCoreSwitches"/>.</param>
+/// <param name="EnableTitleReports">Request opt-in title-report replies.</param>
 public sealed record HostOptions(
     int Rows,
     int Columns,
@@ -21,7 +21,8 @@ public sealed record HostOptions(
     IReadOnlyDictionary<string, string> Environment,
     IReadOnlyList<string> Command,
     bool EnableChecksumReports = false,
-    bool EnableWindowResize = false)
+    bool EnableWindowResize = false,
+    bool EnableTitleReports = false)
 {
     public const int DefaultRows = 25;
     public const int DefaultColumns = 80;
@@ -32,6 +33,8 @@ public static class HostOptionsParser
 {
     /// <summary>Environment variable that enables the checksum core switch (1/true/yes/on).</summary>
     public const string ChecksumEnvironmentVariable = "DOTTY_CONFORMANCE_CHECKSUM";
+    /// <summary>Environment variable that enables title-report replies (1/true/yes/on).</summary>
+    public const string TitleReportsEnvironmentVariable = "DOTTY_CONFORMANCE_TITLE_REPORTS";
 
     /// <summary>Environment variable that enables the window-resize core switch (1/true/yes/on).</summary>
     public const string ResizeEnvironmentVariable = "DOTTY_CONFORMANCE_RESIZE";
@@ -55,6 +58,7 @@ public static class HostOptionsParser
           --env KEY=VALUE          extra child environment variable (repeatable)
           --checksum-reports       enable the DECRQCRA core switch (or DOTTY_CONFORMANCE_CHECKSUM=1)
           --window-resize          enable the CSI 8 t core switch (or DOTTY_CONFORMANCE_RESIZE=1)
+          --title-reports          enable title-report replies (or DOTTY_CONFORMANCE_TITLE_REPORTS=1)
           -h, --help               print this help and exit 0
           --version                print the host version and exit 0
 
@@ -78,6 +82,7 @@ public static class HostOptionsParser
         List<string>? command = null;
         bool checksum = IsTruthy(getEnvironmentVariable(ChecksumEnvironmentVariable));
         bool resize = IsTruthy(getEnvironmentVariable(ResizeEnvironmentVariable));
+        bool titleReports = IsTruthy(getEnvironmentVariable(TitleReportsEnvironmentVariable));
 
         for (int i = 0; i < args.Count; i++)
         {
@@ -127,6 +132,9 @@ public static class HostOptionsParser
                 case "--window-resize":
                     resize = true;
                     break;
+                case "--title-reports":
+                    titleReports = true;
+                    break;
                 default:
                     throw new ArgumentException($"Unknown option '{arg}'.");
             }
@@ -138,7 +146,7 @@ public static class HostOptionsParser
             throw new ArgumentException("The command after '--' is empty.");
 
         return new HostOptions(rows, columns, timeout, workingDirectory, transcript, environment, command,
-            checksum, resize);
+            checksum, resize, titleReports);
     }
 
     private static string RequireValue(IReadOnlyList<string> args, ref int index)

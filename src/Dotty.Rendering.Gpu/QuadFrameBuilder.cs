@@ -163,6 +163,8 @@ public static class QuadFrameBuilder
 
         var defFg = defaultFg;
         var defBg = defaultBg;
+        var specialColors = textOptions.SpecialColors;
+        byte specialColorModes = specialColors.Modes;
         var cellHotSpan = source.GetRowCells(row);
         var coldSpan = source.GetRowColdCells(row);
         int rowLength = Math.Min(cols, cellHotSpan.Length);
@@ -187,6 +189,8 @@ public static class QuadFrameBuilder
                 {
                     var emptyFg = !emptyStyle.Foreground.IsEmpty ? emptyStyle.Foreground : defFg;
                     var emptyBg = !emptyStyle.Background.IsEmpty ? emptyStyle.Background : defBg;
+                    if (specialColorModes != 0)
+                        ApplySpecialColors(in emptyStyle, in specialColors, specialColorModes, ref emptyFg, ref emptyBg);
                     byte emptyFlags = 0;
                     if (emptyStyle.Inverse)
                     {
@@ -228,9 +232,11 @@ public static class QuadFrameBuilder
             ref readonly var style = ref source.GetStyle(hot.StyleId);
             var effectiveFg = !style.Foreground.IsEmpty ? style.Foreground : defFg;
             var effectiveBg = !style.Background.IsEmpty ? style.Background : defBg;
+            if (specialColorModes != 0)
+                ApplySpecialColors(in style, in specialColors, specialColorModes, ref effectiveFg, ref effectiveBg);
             if (style.Inverse)
                 (effectiveFg, effectiveBg) = (effectiveBg, effectiveFg);
-            // Faint mixes the visible text colour toward the visible background (after inverse); decorations follow it.
+            // Faint mixes the visible text colour toward the visible background (after inverse and color attributes).
             if (style.Faint)
                 effectiveFg = TextAttributeOptions.MixFaint(effectiveFg, effectiveBg, textOptions.FaintOpacity);
             // Minimum contrast floors the colour that is finally visible, so it sees inverse and faint already applied.
@@ -356,6 +362,44 @@ public static class QuadFrameBuilder
 
         return written;
     }
+    private static void ApplySpecialColors(
+        in CellAttributes style,
+        in SpecialColorSettings colors,
+        byte modes,
+        ref SgrColorArgb foreground,
+        ref SgrColorArgb background)
+    {
+        bool overrideExplicit = colors.OverrideExplicitColors;
+        if ((style.Foreground.IsEmpty || overrideExplicit)
+            && TryGetSpecialForeground(in style, in colors, modes, out uint specialForeground))
+            foreground = new SgrColorArgb(specialForeground);
+        if (style.Inverse && (style.Background.IsEmpty || overrideExplicit) && (modes & 8) != 0)
+            background = new SgrColorArgb(colors.Reverse);
+    }
+
+    private static bool TryGetSpecialForeground(
+        in CellAttributes style,
+        in SpecialColorSettings colors,
+        byte modes,
+        out uint foreground)
+    {
+        // xterm MapToColorMode priority: blink, bold, underline, then italic.
+        if ((modes & 4) != 0 && style.SlowBlink)
+            foreground = colors.Blink;
+        else if ((modes & 1) != 0 && style.Bold)
+            foreground = colors.Bold;
+        else if ((modes & 2) != 0 && style.Underline)
+            foreground = colors.Underline;
+        else if ((modes & 16) != 0 && style.Italic)
+            foreground = colors.Italic;
+        else
+        {
+            foreground = 0;
+            return false;
+        }
+        return true;
+    }
+
 
     private static bool HasDecoration(in CellAttributes style) =>
         style.Underline || style.Strikethrough || style.Overline;

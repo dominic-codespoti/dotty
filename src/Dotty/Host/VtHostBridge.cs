@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using Dotty.Runtime.Config;
 using Dotty.Runtime.Hosting;
@@ -36,6 +37,7 @@ internal static class VtHostBridge
     private readonly record struct Metrics(int CellWidth, int CellHeight, int PositionX, int PositionY, int ScreenWidth, int ScreenHeight);
 
     private static readonly VtResizeRequestQueue ResizeRequests = new();
+    private static readonly ConcurrentQueue<(TerminalAdapter Adapter, int Operation, int Arg1, int Arg2)> NativeWindowRequests = new();
     private static readonly HashSet<TerminalAdapter> Subscribed = new();
     private static readonly HashSet<TerminalAdapter> Scratch = new();
     private static readonly HashSet<TerminalAdapter> Stale = new();
@@ -50,6 +52,10 @@ internal static class VtHostBridge
     private static bool _metricsValid;
     private static long _lastSlowPollTimestampMs = long.MinValue;
     private static int _positionX, _positionY, _screenWidth, _screenHeight;
+    private static TerminalAdapter? _pendingPositionReport;
+    private static TerminalAdapter? _lastMovedAdapter;
+    private static int _lastMoveX, _lastMoveY;
+    private static long _lastMoveTimestampMs;
 
     /// <summary>Starts bridging for this window. Call once after the window and tab manager exist.</summary>
     public static void Attach(IWindow window, TerminalTabManager tabs, Func<VtHostLayout> layout, Action<int, int> setClientSize)
@@ -71,10 +77,16 @@ internal static class VtHostBridge
     public static void Detach()
     {
         foreach (var adapter in Subscribed)
+        {
             adapter.WindowResizeRequested -= OnResizeRequested;
+            adapter.NativeWindowOperationRequested -= OnNativeWindowOperationRequested;
+        }
         Subscribed.Clear();
         Scratch.Clear();
         ResizeRequests.Clear();
+        while (NativeWindowRequests.TryDequeue(out _)) { }
+        _pendingPositionReport = null;
+        _lastMovedAdapter = null;
         _window = null;
         _nativeHandle = 0;
         _tabs = null;
@@ -104,6 +116,7 @@ internal static class VtHostBridge
                 if (Subscribed.Add(adapter))
                 {
                     adapter.WindowResizeRequested += OnResizeRequested;
+                    adapter.NativeWindowOperationRequested += OnNativeWindowOperationRequested;
                     if (_metricsValid)
                         PushMetrics(adapter, _metrics);
                 }
@@ -120,11 +133,21 @@ internal static class VtHostBridge
         foreach (var adapter in Stale)
         {
             adapter.WindowResizeRequested -= OnResizeRequested;
+            adapter.NativeWindowOperationRequested -= OnNativeWindowOperationRequested;
             Subscribed.Remove(adapter);
         }
         Stale.Clear();
 
         VtHostPolicy.ApplyVisibility(tabs, _iconified);
+        var active = tabs.ActiveTab;
+        foreach (var tab in all)
+        {
+            if (ReferenceEquals(tab, active))
+                continue;
+            var leaves = tab.PaneTree.Leaves;
+            for (int leafIndex = 0; leafIndex < leaves.Count; leafIndex++)
+                leaves[leafIndex].Session.Adapter.ResetSmoothScrollAnimation();
+        }
     }
 
     /// <summary>Per-frame work on the UI thread: visibility edge, metrics push, queued resize.</summary>
@@ -141,8 +164,19 @@ internal static class VtHostBridge
             VtHostPolicy.ApplyVisibility(_tabs, iconified);
         }
 
+        DrainNativeWindowRequest(window, nowMs);
         PollMetrics(window, nowMs);
         DrainResizeRequest(window);
+        var active = _tabs.ActiveTab;
+        if (!iconified && active is not null)
+        {
+            var leaves = active.PaneTree.Leaves;
+            for (int index = 0; index < leaves.Count; index++)
+            {
+                if (leaves[index].Session.Adapter.AdvanceSmoothScrollFrame(nowMs))
+                    WindowPresentationGate.Invalidate(WindowFrameReason.Content);
+            }
+        }
     }
 
     // Runs on the parser thread, possibly under the buffer lock: only enqueue.
@@ -151,6 +185,86 @@ internal static class VtHostBridge
         ResizeRequests.Post(rows, cols);
         HostWake.Request();
     }
+    private static void OnNativeWindowOperationRequested(TerminalAdapter adapter, int operation, int arg1, int arg2)
+    {
+        NativeWindowRequests.Enqueue((adapter, operation, arg1, arg2));
+        HostWake.Request();
+    }
+
+    private static void DrainNativeWindowRequest(IWindow window, long nowMs)
+    {
+        if (_pendingPositionReport is { } pendingReport)
+        {
+            bool timedOut = nowMs - _lastMoveTimestampMs >= 1000;
+            if (!NativeGlfwMetadata.TryGetWindowPosition(_nativeHandle, out int actualX, out int actualY))
+            {
+                if (timedOut)
+                {
+                    _pendingPositionReport = null;
+                    _lastMovedAdapter = null;
+                }
+                return;
+            }
+            bool reachedTarget = ReferenceEquals(_lastMovedAdapter, pendingReport) &&
+                actualX == _lastMoveX && actualY == _lastMoveY;
+            if (!reachedTarget && !timedOut)
+            {
+                return;
+            }
+
+            pendingReport.SetWindowPosition(actualX, actualY);
+            pendingReport.ReportWindowPosition();
+            _pendingPositionReport = null;
+            _lastMovedAdapter = null;
+            return;
+        }
+
+        if (!NativeWindowRequests.TryDequeue(out var request))
+            return;
+        if (request.Operation == 11)
+        {
+            request.Adapter.ReportWindowState(IsIconified(window));
+            return;
+        }
+
+        if (request.Operation == 13)
+        {
+            if (!NativeGlfwMetadata.TryGetWindowPosition(_nativeHandle, out int x, out int y))
+                return;
+            bool movePending = ReferenceEquals(_lastMovedAdapter, request.Adapter) &&
+                (x != _lastMoveX || y != _lastMoveY);
+            if (movePending)
+            {
+                _pendingPositionReport = request.Adapter;
+                return;
+            }
+            request.Adapter.SetWindowPosition(x, y);
+            request.Adapter.ReportWindowPosition();
+            return;
+        }
+
+        if (!UserConfigService.Current.Vt.WindowControlAllowed)
+            return;
+
+        switch (request.Operation)
+        {
+            case 1:
+                if (window.WindowState == WindowState.Minimized)
+                    window.WindowState = WindowState.Normal;
+                break;
+            case 2:
+                window.WindowState = WindowState.Minimized;
+                break;
+            case 3:
+                window.Position = new global::Silk.NET.Maths.Vector2D<int>(request.Arg1, request.Arg2);
+                _lastMovedAdapter = request.Adapter;
+                _lastMoveX = request.Arg1;
+                _lastMoveY = request.Arg2;
+                _lastMoveTimestampMs = nowMs;
+                break;
+        }
+    }
+
 
     private static bool IsIconified(IWindow window)
     {

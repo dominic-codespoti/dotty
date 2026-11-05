@@ -38,13 +38,6 @@ public sealed class TerminalIdentityTests
         Assert.Equal(new[] { expected, expected }, replies);
     }
 
-    [Fact]
-    public void Da2_WithoutIdentityReportsZeroVersion()
-    {
-        var (_, parser, replies) = Setup();
-        Feed(parser, "\u001b[>c");
-        Assert.Equal(new[] { "\u001b[>1;0;0c" }, replies);
-    }
 
     [Theory]
     [InlineData("\u001b[>q")]

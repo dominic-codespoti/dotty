@@ -33,15 +33,19 @@ public static class ConformanceHost
     /// Applies the core switches the conformance run needs to the adapter before the child starts.
     /// <list type="bullet">
     /// <item><description><see cref="HostOptions.EnableChecksumReports"/> sets
-    /// <see cref="TerminalAdapter.ChecksumReportEnabled"/> (DECRQCRA replies are off in the product).</description></item>
+    /// <see cref="TerminalAdapter.ChecksumReportEnabled"/>.</description></item>
+    /// <item><description><see cref="HostOptions.EnableTitleReports"/> sets
+    /// <see cref="TerminalAdapter.TitleReportEnabled"/> independently and permits title-report replies.</description></item>
     /// <item><description><see cref="HostOptions.EnableWindowResize"/> honors <c>CSI 8 ; rows ; cols t</c> /
-    /// <c>CSI Ps t</c> (Ps &gt;= 24) by calling <paramref name="resizeGrid"/> synchronously on the parser
+    /// <c>CSI Ps t</c> (Ps &gt;= 24) and mode-40-authorized DECCOLM by calling <paramref name="resizeGrid"/> on the parser
     /// thread, so a following <c>CSI 18 t</c> in the same byte stream already sees the new grid; a requested 0
     /// keeps that dimension. Without the flag requests are ignored, like a product window that disallows them.</description></item>
     /// <item><description>The cell size is pinned to <see cref="CellPixelWidth"/> x <see cref="CellPixelHeight"/>
     /// (the adapter default, set explicitly so the conformance contract does not drift). No text-area pixel
     /// override is installed: without one the adapter derives <c>CSI 14 t</c> from the live grid, so it stays
     /// consistent with <c>CSI 18 t</c> after any resize, including ones this host did not make.</description></item>
+    /// <item><description>The headless theme is explicitly black on white. Dynamic-color resets restore
+    /// these defaults rather than a previous OSC override; product window themes are unaffected.</description></item>
     /// </list>
     /// </summary>
     /// <param name="resizeGrid">
@@ -54,7 +58,9 @@ public static class ConformanceHost
         ArgumentNullException.ThrowIfNull(options);
 
         adapter.SetCellPixelSize(CellPixelWidth, CellPixelHeight);
+        adapter.SetDefaultColors("#000000", "#FFFFFF");
         adapter.ChecksumReportEnabled = options.EnableChecksumReports;
+        adapter.TitleReportEnabled = options.EnableTitleReports;
 
         if (!options.EnableWindowResize)
             return;
@@ -90,6 +96,7 @@ public static class ConformanceHost
         {
             session.RawInputReceived += bytes => transcript.FromChild(bytes);
             adapter.ReplyRequested += reply => transcript.ToChild(reply);
+            adapter.RawReplyBytesRequested += reply => transcript.ToChild(reply.Span);
         }
 
         var exited = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);

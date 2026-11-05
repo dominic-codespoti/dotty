@@ -12,7 +12,7 @@ public partial class TerminalAdapter
     public void OnSoftReset()
     {
         ResetTerminalModesCore();
-        ResetAnsiPaletteOnly();
+        ResetPaletteOverrides();
         RequestRender();
     }
 
@@ -22,26 +22,26 @@ public partial class TerminalAdapter
     /// </summary>
     private void ResetTerminalModesCore()
     {
+        ResetSmoothScrollAnimation();
         _buffer.SoftReset();
+        ResetColumnModes();
         _currentAttributes = CellAttributes.Default;
-        _savedAttributes = CellAttributes.Default;
-        _hasSavedAttributes = true;
+        SaveAttributesForActiveScreen();
+        KeyboardActionModeLocked = false;
         ApplicationCursorKeysEnabled = false;
         KeypadApplicationMode = false;
         ModifyOtherKeysLevel = 0;
         CursorShape = 0;
     }
 
-    private void ResetAnsiPaletteOnly()
+    private void ResetPaletteOverrides()
     {
         lock (_paletteSync)
         {
-            Span<uint> previous = stackalloc uint[16];
-            TerminalPalette palette = Volatile.Read(ref _palette);
-            palette.EffectiveAnsi16.CopyTo(previous);
-            if (!palette.ResetAll()) return;
-            RemapAnsiStyles(previous);
-            NotifyPaletteChanged();
+            bool paletteChanged = Volatile.Read(ref _palette).ResetAll();
+            bool specialChanged = ResetAllSpecialColors();
+            if (paletteChanged) RemapPaletteStyles();
+            if (paletteChanged || specialChanged) NotifyPaletteChanged();
         }
     }
 }

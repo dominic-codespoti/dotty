@@ -35,10 +35,12 @@ public sealed class ModeReportTests
     // Default state of every mode that is tracked (set/reset) on a fresh adapter.
     public static TheoryData<int, int> TrackedDefaults => new()
     {
-        { 5, 2 }, { 1, 2 }, { 6, 2 }, { 7, 1 }, { 25, 1 }, { 47, 2 }, { 66, 2 }, { 67, 2 },
+        { 4, 2 }, { 5, 2 }, { 1, 2 }, { 6, 2 }, { 7, 1 }, { 18, 2 }, { 19, 2 }, { 25, 1 },
+        { 35, 1 }, { 42, 2 }, { 47, 2 }, { 66, 2 }, { 67, 2 },
         { 1000, 2 }, { 1002, 2 }, { 1003, 2 }, { 1004, 2 }, { 1005, 2 }, { 1006, 2 }, { 1015, 2 },
         { 1047, 2 }, { 1049, 2 }, { 2004, 2 }, { 2026, 2 }, { 2033, 2 },
         { 9, 2 }, { 1007, 1 }, { 1016, 2 },
+        { 45, 2 }, { 69, 2 }, { 1045, 2 },
     };
 
     [Theory]
@@ -53,6 +55,22 @@ public sealed class ModeReportTests
 
         Feed(parser, $"{Esc}[?{mode}l");
         Assert.Equal(Private(mode, 2), Query(parser, replies, $"{Esc}[?{mode}$p"));
+    }
+
+    [Theory]
+    [InlineData("[!p")]
+    [InlineData("c")]
+    public void ResetClearsReverseWrapModesAndTheirCursorEffects(string reset)
+    {
+        var (adapter, parser, replies) = Setup();
+        using (adapter)
+        {
+            Feed(parser, $"{Esc}[?45h{Esc}[?1045h{Esc}{reset}{Esc}[3;1H{Esc}[D");
+
+            Assert.Equal((2, 0), (adapter.Buffer.CursorRow, adapter.Buffer.CursorCol));
+            Assert.Equal(Private(45, 2), Query(parser, replies, $"{Esc}[?45$p"));
+            Assert.Equal(Private(1045, 2), Query(parser, replies, $"{Esc}[?1045$p"));
+        }
     }
 
     [Fact]
@@ -98,28 +116,19 @@ public sealed class ModeReportTests
 
     [Theory]
     [InlineData(2, 3)]
-    [InlineData(3, 4)]
-    [InlineData(4, 4)]
     [InlineData(8, 4)]
     [InlineData(11, 4)]
     [InlineData(12, 4)]
     [InlineData(16, 4)]
-    [InlineData(18, 4)]
-    [InlineData(19, 4)]
-    [InlineData(40, 4)]
-    [InlineData(42, 4)]
-    [InlineData(45, 4)]
     [InlineData(53, 4)]
     [InlineData(59, 4)]
     [InlineData(60, 4)]
     [InlineData(61, 4)]
     [InlineData(64, 4)]
     [InlineData(68, 4)]
-    [InlineData(69, 4)]
     [InlineData(73, 4)]
     [InlineData(80, 4)]
     [InlineData(81, 4)]
-    [InlineData(95, 4)]
     [InlineData(1048, 4)]
     [InlineData(2027, 3)]
     [InlineData(0, 0)]
@@ -142,17 +151,13 @@ public sealed class ModeReportTests
 
     [Theory]
     [InlineData(1, 4)]
-    [InlineData(2, 4)]
-    [InlineData(3, 4)]
-    [InlineData(4, 4)]
-    [InlineData(5, 4)]
+    [InlineData(2, 2)]
     [InlineData(6, 0)]
     [InlineData(7, 4)]
-    [InlineData(8, 0)]
+    [InlineData(12, 1)]
     [InlineData(9, 0)]
     [InlineData(10, 4)]
     [InlineData(11, 4)]
-    [InlineData(12, 3)]
     [InlineData(13, 4)]
     [InlineData(14, 4)]
     [InlineData(15, 4)]
@@ -160,7 +165,6 @@ public sealed class ModeReportTests
     [InlineData(17, 4)]
     [InlineData(18, 4)]
     [InlineData(19, 4)]
-    [InlineData(20, 4)]
     [InlineData(21, 0)]
     [InlineData(25, 0)]
     [InlineData(2004, 0)]
@@ -169,16 +173,24 @@ public sealed class ModeReportTests
         var (_, parser, replies) = Setup();
         Assert.Equal($"{Esc}[{mode};{state}$y", Query(parser, replies, $"{Esc}[{mode}$p"));
     }
-
     [Fact]
-    public void AnsiMode_SetResetDoNotChangeReply()
+    public void KamAndSrmReportTheirLiveSetAndResetState()
     {
-        var (_, parser, replies) = Setup();
-        Feed(parser, $"{Esc}[4h");
-        Assert.Equal($"{Esc}[4;4$y", Query(parser, replies, $"{Esc}[4$p"));
-        Feed(parser, $"{Esc}[12l");
-        Assert.Equal($"{Esc}[12;3$y", Query(parser, replies, $"{Esc}[12$p"));
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, $"{Esc}[2h{Esc}[12l");
+        Assert.True(adapter.KeyboardActionModeLocked);
+        Assert.True(adapter.LocalEchoEnabled);
+        Assert.Equal($"{Esc}[2;1$y", Query(parser, replies, $"{Esc}[2$p"));
+        Assert.Equal($"{Esc}[12;2$y", Query(parser, replies, $"{Esc}[12$p"));
+
+        Feed(parser, $"{Esc}[2l{Esc}[12h");
+        Assert.False(adapter.KeyboardActionModeLocked);
+        Assert.False(adapter.LocalEchoEnabled);
+        Assert.Equal($"{Esc}[2;2$y", Query(parser, replies, $"{Esc}[2$p"));
+        Assert.Equal($"{Esc}[12;1$y", Query(parser, replies, $"{Esc}[12$p"));
     }
+
+
 
     [Fact]
     public void AnsiAndPrivateSpacesAreIndependent()
@@ -301,7 +313,7 @@ public sealed class ModeReportTests
         replies.Clear();
         foreach (char c in $"{Esc}[12$p")
             Feed(parser, c.ToString());
-        Assert.Equal(new[] { $"{Esc}[12;3$y" }, replies);
+        Assert.Equal(new[] { $"{Esc}[12;1$y" }, replies);
     }
 
     [Theory]

@@ -129,23 +129,22 @@ internal sealed class ScreenManager : IDisposable
         _alt?.Clear();
     }
 
-    public void SetAlternate(bool enable)
+    public void SetAlternate(bool enable, bool clearOnEnter, bool clearOnExit)
     {
         if (enable == _usingAlt)
-        {
             return;
-        }
 
         if (enable)
         {
             _savedMain = _main;
             _usingAlt = true;
             if (_alt is null)
-            {
                 _alt = new Screen(_savedMain.Rows, _savedMain.Columns, _savedMain.ScrollbackCapacity);
+            if (clearOnEnter)
+            {
+                _alt.Clear();
+                _altImages?.Clear();
             }
-            _alt.Clear();
-            _altImages?.Clear();
         }
         else
         {
@@ -155,12 +154,11 @@ internal sealed class ScreenManager : IDisposable
                 _savedMain = null;
             }
             _usingAlt = false;
-
-            // Hand the alternate screen's pages back right away (they are O(dirty), and zero afterwards) so a
-            // full-screen app that scrolled does not keep its ring resident, and a later resize does not
-            // reflow stale alternate content. Re-entry clears it again, which is then nearly free.
-            _alt?.Clear();
-            _altImages?.Clear();
+            if (clearOnExit)
+            {
+                _alt?.Clear();
+                _altImages?.Clear();
+            }
         }
     }
 

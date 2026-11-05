@@ -36,6 +36,14 @@ internal sealed class TranscriptWriter : IDisposable
             Append(sb, c);
         Write('R', sb);
     }
+    public void ToChild(ReadOnlySpan<byte> reply)
+    {
+        var sb = new StringBuilder(reply.Length + 16);
+        foreach (byte value in reply)
+            Append(sb, value);
+        Write('R', sb);
+    }
+
 
     private static void Append(StringBuilder sb, int value)
     {

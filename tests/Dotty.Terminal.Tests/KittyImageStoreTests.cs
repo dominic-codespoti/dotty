@@ -74,7 +74,7 @@ public sealed class KittyImageStoreTests
         Assert.True(old.IsDeleted);
         Assert.False(replacement.IsDeleted);
         Assert.Same(replacement, store.FindByClientId(5));
-        Assert.Equal(1, store.Count);
+        Assert.Single(store.Images);
         Assert.Equal(80, store.UsedBytes);
         Assert.Equal(80, baseline.LiveBytesDelta);
         store.ValidateInvariants();
@@ -282,7 +282,7 @@ public sealed class KittyImageStoreTests
         using var store = new KittyImageStore(300);
         Add(store, 100, clientId: 1);
         store.SetStorageLimit(5000);
-        Assert.Equal(1, store.Count);
+        Assert.Single(store.Images);
         Assert.Equal(5000, store.StorageLimitBytes);
     }
 
@@ -382,7 +382,7 @@ public sealed class KittyImageStoreTests
     {
         using var store = new KittyImageStore(10_000);
         var image = Add(store, 400, clientId: 1);
-        Assert.Equal(1, image.Frames.Count);
+        Assert.Single(image.Frames);
         Assert.Same(image.Frames[0].Canvas, image.Root);
         Assert.Equal(400, image.ByteLength);
     }

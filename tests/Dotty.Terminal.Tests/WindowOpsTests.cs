@@ -7,7 +7,7 @@ using Xunit;
 
 namespace Dotty.Terminal.Tests;
 
-/// <summary>CSI Ps ; Ps ; Ps t: window reports, the silent 20/21 and the resize request event.</summary>
+/// <summary>CSI Ps ; Ps ; Ps t: window reports, opt-in title reports and resize requests.</summary>
 public sealed class WindowOpsTests
 {
     private static (TerminalAdapter Adapter, BasicAnsiParser Parser, List<string> Replies, List<(int Rows, int Cols)> Resizes) Setup()
@@ -89,6 +89,7 @@ public sealed class WindowOpsTests
         Feed(parser, "\u001b[13;2t");
         Assert.Equal(new[] { "\u001b[3;0;0t", "\u001b[3;40;60t", "\u001b[3;-8;0t" }, replies);
     }
+
 
     [Fact]
     public void NonPositiveHostSizes_AreClamped()

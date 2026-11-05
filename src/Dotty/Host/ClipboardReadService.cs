@@ -31,14 +31,22 @@ internal interface IClipboardReadEnvironment
     /// <summary>Runs the Lua <c>clipboard_read</c> hook for <paramref name="selection"/>; false vetoes the request. Main thread.</summary>
     bool AllowRead(LeafPane pane, TerminalTab tab, ClipboardSelection selection);
 
-    /// <summary>True only when the PRIMARY selection is the operating system's (X11); primary requests are dropped otherwise.</summary>
+    /// <summary>True only when PRIMARY is backed by the real operating-system selection.</summary>
     bool SupportsPrimarySelection { get; }
+
+    /// <summary>Configured destination for xterm's SELECT selector (CLIPBOARD and/or native PRIMARY).</summary>
+    ClipboardSelection ConfiguredSelection { get; }
 
     /// <summary>Reads the PRIMARY selection. Null means unavailable/none; an empty string is a genuinely empty selection. Main thread.</summary>
     string? ReadPrimary();
 
     /// <summary>Reads the system clipboard. Null means unavailable/busy; an empty string is a genuinely empty clipboard.</summary>
     string? ReadClipboard();
+    /// <summary>Whether X11 CUT_BUFFER0 is available as an OSC 52 s0 source.</summary>
+    bool SupportsCutBuffer0 { get; }
+
+    /// <summary>Reads real X11 CUT_BUFFER0 content.</summary>
+    string? ReadCutBuffer0();
 
     /// <summary>Sends reply bytes to the session's application.</summary>
     void WriteReply(TerminalSession session, byte[] reply);
@@ -57,6 +65,7 @@ internal interface IClipboardReadEnvironment
 /// </summary>
 internal sealed class ClipboardReadService
 {
+
     private readonly IClipboardReadEnvironment _environment;
     private readonly Func<ClipboardUserConfig> _config;
     private readonly ClipboardReadQueue _queue;
@@ -87,15 +96,30 @@ internal sealed class ClipboardReadService
             selection = ClipboardSelection.Clipboard;
         else if ((request.Selection & ClipboardSelection.Primary) != 0 && _environment.SupportsPrimarySelection)
             selection = ClipboardSelection.Primary;
+        else if ((request.Selection & ClipboardSelection.Select) != 0)
+        {
+            selection = _environment.ConfiguredSelection;
+            if ((selection & ClipboardSelection.Clipboard) != 0)
+                selection = ClipboardSelection.Clipboard;
+            else if ((selection & ClipboardSelection.Primary) != 0 && _environment.SupportsPrimarySelection)
+                selection = ClipboardSelection.Primary;
+            else
+                return;
+        }
+        else if ((request.Selection & ClipboardSelection.CutBuffer0) != 0)
+            selection = ClipboardSelection.CutBuffer0;
         else
             return;
-        if (ClipboardReadModes.Parse(_config().Osc52Read) == ClipboardReadMode.Deny)
+        ClipboardReadMode requestedMode = ClipboardReadModes.Parse(_config().Osc52Read);
+        if (requestedMode == ClipboardReadMode.Deny)
             return;
         if (!_environment.IsAvailable)
             return;
 
-        if (_queue.TryEnqueue(session, selection))
+        bool enqueued = _queue.TryEnqueue(session, selection | (request.Selection & ClipboardSelection.CutBuffer0), request.ReplySelector ?? string.Empty);
+        if (enqueued)
             _environment.Wake();
+
     }
 
     /// <summary>
@@ -143,15 +167,28 @@ internal sealed class ClipboardReadService
         TerminalSession session = pending.Session;
         if (!_environment.TryResolveOwner(session, out TerminalTab tab, out LeafPane pane))
             return;
-        ClipboardSelection selection = pending.Selection;
+        bool cutBufferOnly =
+            (pending.Selection & ClipboardSelection.CutBuffer0) != 0 &&
+            (pending.Selection & (ClipboardSelection.Clipboard | ClipboardSelection.Primary)) == 0;
+        ClipboardSelection selection = cutBufferOnly
+            ? ClipboardSelection.CutBuffer0
+            : pending.Selection & (ClipboardSelection.Clipboard | ClipboardSelection.Primary);
         bool primary = selection == ClipboardSelection.Primary;
         if (primary && !_environment.SupportsPrimarySelection)
             return;
-        if (!_environment.AllowRead(pane, tab, selection))
+        if (cutBufferOnly && !_environment.SupportsCutBuffer0)
+            return;
+        bool allowed = _environment.AllowRead(pane, tab, selection);
+        if (!allowed)
             return;
 
-        // Snapshot once: the text the user is shown is exactly the text that is sent.
-        string? text = primary ? _environment.ReadPrimary() : _environment.ReadClipboard();
+        string? text = cutBufferOnly ? null : primary ? _environment.ReadPrimary() : _environment.ReadClipboard();
+        if (text is null &&
+            (pending.Selection & ClipboardSelection.CutBuffer0) != 0 &&
+            _environment.SupportsCutBuffer0)
+        {
+            text = _environment.ReadCutBuffer0();
+        }
         if (text is null)
             return;
         // UTF-8 needs at least one byte per UTF-16 unit, so an oversize unit count rules the clipboard out cheaply.
@@ -159,7 +196,11 @@ internal sealed class ClipboardReadService
             return;
 
         byte[] utf8 = Encoding.UTF8.GetBytes(text);
-        if (!Osc52Reply.TryEncode(selection, utf8, out byte[] reply))
+        ReadOnlySpan<char> replySelector = string.IsNullOrEmpty(pending.ReplySelector) ? default : pending.ReplySelector.AsSpan();
+        bool encoded = replySelector.IsEmpty
+            ? Osc52Reply.TryEncode(selection, utf8, out byte[] reply)
+            : Osc52Reply.TryEncode(replySelector, utf8, out reply);
+        if (!encoded)
             return;
 
         if (mode == ClipboardReadMode.Allow)

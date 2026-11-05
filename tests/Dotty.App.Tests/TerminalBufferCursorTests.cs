@@ -100,21 +100,86 @@ public class TerminalBufferCursorTests
         Assert.Equal(2, buffer.CursorCol);
     }
 
+
     [Fact]
-    public void AlternateScreen_RestoresCursorSeparatelyFromDecSaveCursor()
+    public void Mode47_RetainsAlternateContentsAcrossExitAndReentry()
     {
-        var buffer = new TerminalBuffer(rows: 10, columns: 20);
+        var buffer = new TerminalBuffer(rows: 3, columns: 10);
+        buffer.SwitchAlternateScreen(47, true);
+        buffer.WriteText("kept".AsSpan(), CellAttributes.Default);
+        buffer.SwitchAlternateScreen(47, false);
+        buffer.SwitchAlternateScreen(47, true);
+        Assert.StartsWith("kept", buffer.GetRowText(0));
+    }
 
-        buffer.SetCursor(1, 2);
-        buffer.SetAlternateScreen(true);
-        buffer.SetCursor(5, 6);
+    [Fact]
+    public void Mode1047_ClearsAlternateBeforeReturningToMain()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 10);
+        buffer.SwitchAlternateScreen(1047, true);
+        buffer.WriteText("discard".AsSpan(), CellAttributes.Default);
+        buffer.SwitchAlternateScreen(1047, false);
+        buffer.SwitchAlternateScreen(1047, true);
+        Assert.Equal(string.Empty, buffer.GetRowText(0).TrimEnd());
+    }
+
+    [Fact]
+    public void SavedCursor_RestoresOriginAndProtectionRepeatedly()
+    {
+        var buffer = new TerminalBuffer(rows: 5, columns: 10);
+        buffer.SetOriginMode(false);
+        buffer.SetCursor(2, 3);
+        buffer.SetIsoProtection(true);
         buffer.SaveCursor();
-        buffer.SetCursor(8, 9);
-        buffer.RestoreCursor();
-        buffer.SetAlternateScreen(false);
+        buffer.SetOriginMode(true);
+        buffer.SetIsoProtection(false);
+        buffer.SetCursor(4, 8);
 
-        Assert.Equal(1, buffer.CursorRow);
-        Assert.Equal(2, buffer.CursorCol);
+        buffer.RestoreCursor();
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal(3, buffer.CursorCol);
+        Assert.False(buffer.OriginMode);
+        Assert.True(buffer.IsProtectionActive);
+        buffer.SetOriginMode(true);
+        buffer.RestoreCursor();
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.False(buffer.OriginMode);
+    }
+
+    [Fact]
+    public void SavedCursorSlots_AreIndependentPerScreen()
+    {
+        var buffer = new TerminalBuffer(rows: 5, columns: 10);
+        buffer.SetCursor(1, 2);
+        buffer.SaveCursor();
+        buffer.SwitchAlternateScreen(47, true);
+        buffer.SetCursor(3, 4);
+        buffer.SaveCursor();
+        buffer.SwitchAlternateScreen(47, false);
+        buffer.SetCursor(4, 5);
+        buffer.RestoreCursor();
+        Assert.Equal((1, 2), (buffer.CursorRow, buffer.CursorCol));
+        buffer.SwitchAlternateScreen(47, true);
+        buffer.SetCursor(0, 0);
+        buffer.RestoreCursor();
+        Assert.Equal((3, 4), (buffer.CursorRow, buffer.CursorCol));
+    }
+    [Fact]
+    public void SavedMainCursor_ReflowsWhileAlternateScreenIsActive()
+    {
+        var buffer = new TerminalBuffer(rows: 4, columns: 8);
+        buffer.SetCursor(2, 6);
+        buffer.SaveCursor();
+        buffer.SwitchAlternateScreen(47, true);
+        buffer.SetCursor(1, 2);
+        buffer.Resize(6, 4);
+        buffer.SwitchAlternateScreen(47, false);
+
+        buffer.SetCursor(0, 0);
+        buffer.RestoreCursor();
+        Assert.InRange(buffer.CursorRow, 0, 5);
+        Assert.InRange(buffer.CursorCol, 0, 3);
+        Assert.NotEqual((0, 0), (buffer.CursorRow, buffer.CursorCol));
     }
 
     [Fact]
@@ -350,6 +415,120 @@ public class TerminalBufferCursorTests
 
         Assert.Equal("abc", buffer.GetRowText(0).TrimEnd());
         Assert.Equal(0, buffer.ScrollbackCount);
+    }
+    [Fact]
+    public void DecomAddressesBothAxesAndPreservesTheUnaddressedAxis()
+    {
+        var buffer = new TerminalBuffer(rows: 6, columns: 10);
+        buffer.SetScrollRegion(2, 5);
+        buffer.SetLeftRightMarginMode(true);
+        buffer.SetHorizontalMargins(3, 8);
+        buffer.SetOriginMode(true);
+        buffer.SetCursor(1, 2);
+
+        buffer.SetCursorColumn(4);
+        Assert.Equal(2, buffer.CursorRow);
+        Assert.Equal(6, buffer.CursorCol);
+
+        buffer.SetCursorRow(2);
+        Assert.Equal(3, buffer.CursorRow);
+        Assert.Equal(6, buffer.CursorCol);
+
+        buffer.SetCursor(int.MaxValue, int.MaxValue);
+        Assert.Equal(4, buffer.CursorRow);
+        Assert.Equal(7, buffer.CursorCol);
+        buffer.SetCursor(int.MinValue, int.MinValue);
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(2, buffer.CursorCol);
+    }
+
+    [Fact]
+    public void RelativeAddressingUsesOriginBoundsButDirectionalMovementUsesCurrentMargins()
+    {
+        var buffer = new TerminalBuffer(rows: 6, columns: 10);
+        buffer.SetScrollRegion(2, 5);
+        buffer.SetLeftRightMarginMode(true);
+        buffer.SetHorizontalMargins(3, 8);
+        buffer.SetCursor(0, 0);
+        buffer.MoveCursorBy(1, 1);
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(1, buffer.CursorCol);
+
+        buffer.SetOriginMode(true);
+        buffer.SetCursor(int.MaxValue, int.MaxValue);
+        buffer.MoveCursorHorizontalRelative(int.MinValue);
+        Assert.Equal(2, buffer.CursorCol);
+        Assert.Equal(4, buffer.CursorRow);
+        buffer.MoveCursorVerticalRelative(int.MinValue);
+        Assert.Equal(1, buffer.CursorRow);
+        Assert.Equal(2, buffer.CursorCol);
+    }
+
+    [Fact]
+    public void MarginHomingCarriageReturnResetAndResizeKeepCursorInBounds()
+    {
+        var buffer = new TerminalBuffer(rows: 6, columns: 10);
+        buffer.SetScrollRegion(2, 5);
+        buffer.SetLeftRightMarginMode(true);
+        buffer.SetHorizontalMargins(3, 8);
+        buffer.SetOriginMode(true);
+        Assert.Equal((1, 2), (buffer.CursorRow, buffer.CursorCol));
+
+        buffer.SetCursor(2, 3);
+        buffer.CarriageReturn();
+        Assert.Equal((3, 2), (buffer.CursorRow, buffer.CursorCol));
+
+        buffer.Resize(3, 5);
+        Assert.InRange(buffer.CursorRow, 0, 2);
+        Assert.InRange(buffer.CursorCol, 0, 4);
+        var cursorAfterResize = (buffer.CursorRow, buffer.CursorCol);
+        buffer.SoftReset();
+        Assert.False(buffer.LeftRightMarginMode);
+        Assert.Equal(cursorAfterResize, (buffer.CursorRow, buffer.CursorCol));
+    }
+
+    [Fact]
+    public void ReverseWrapMode45RequiresSoftWrappedPreviousLineAndHonorsWrapPending()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 4);
+        buffer.WriteText("abcdefgh".AsSpan(), CellAttributes.Default);
+        buffer.SetReverseWrapMode(45, true);
+        buffer.MoveCursorBack(1);
+        Assert.Equal((1, 3), (buffer.CursorRow, buffer.CursorCol));
+
+        buffer.MoveCursorBack(4);
+        Assert.Equal((0, 3), (buffer.CursorRow, buffer.CursorCol));
+
+        buffer.SetCursor(2, 0);
+        buffer.MoveCursorBack(1);
+        Assert.Equal((2, 0), (buffer.CursorRow, buffer.CursorCol));
+    }
+
+    [Fact]
+    public void ExtendedReverseWrapTraversesAnyLineAndBoundsLargeCounts()
+    {
+        var buffer = new TerminalBuffer(rows: 3, columns: 4);
+        buffer.SetCursor(1, 0);
+        buffer.SetReverseWrapMode(1045, true);
+        buffer.MoveCursorBack(1);
+        Assert.Equal((0, 3), (buffer.CursorRow, buffer.CursorCol));
+
+        buffer.MoveCursorBack(12);
+        Assert.Equal((0, 3), (buffer.CursorRow, buffer.CursorCol));
+    }
+
+    [Fact]
+    public void ExtendedReverseWrapStartingRightOfMarginMovesWithoutNormalizing()
+    {
+        var buffer = new TerminalBuffer(rows: 5, columns: 16);
+        buffer.SetLeftRightMarginMode(true);
+        buffer.SetHorizontalMargins(5, 10);
+        buffer.SetCursor(3, 12);
+        buffer.SetReverseWrapMode(1045, true);
+
+        buffer.MoveCursorBack(1);
+
+        Assert.Equal((3, 11), (buffer.CursorRow, buffer.CursorCol));
     }
 }
 

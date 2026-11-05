@@ -184,6 +184,33 @@ public sealed class PlacementGeometryTests
     }
 
     [Fact]
+    public void CropLeftAndRight_TrimSourceAndRespectFractionalPixels()
+    {
+        var g = R(iw: 100, ih: 20, sx: 10, sw: 80, xo: 5, c: 4, r: 1);
+        var left = PlacementGeometry.CropLeft(g, 1);
+        Assert.Equal((20, 70), (left.SrcX, left.SrcW));
+        Assert.Equal((0, 3), (left.XOff, left.EffCols));
+        Assert.Equal(35f, left.DestW);
+
+        var right = PlacementGeometry.CropRight(g, 1);
+        Assert.Equal((10, 50), (right.SrcX, right.SrcW));
+        Assert.Equal((5, 3), (right.XOff, right.EffCols));
+        Assert.Equal(25f, right.DestW);
+    }
+
+    [Fact]
+    public void CropHorizontal_IsIrreversibleAndSaturatesSafely()
+    {
+        var g = R(iw: 100, ih: 20, c: 4, r: 1);
+        var twice = PlacementGeometry.CropLeft(PlacementGeometry.CropLeft(g, 1), 1);
+        var once = PlacementGeometry.CropLeft(g, 2);
+        Assert.Equal((once.SrcX, once.SrcW, once.EffCols, once.DestW),
+            (twice.SrcX, twice.SrcW, twice.EffCols, twice.DestW));
+        Assert.True(PlacementGeometry.CropRight(g, int.MaxValue).IsEmpty);
+        Assert.Equal(g, PlacementGeometry.CropLeft(g, 0));
+    }
+
+    [Fact]
     public void CropBottom_OnStretchedBox_IsProportional()
     {
         var g = PlacementGeometry.CropBottom(R(c: 4, r: 2), 1);   // 40px box showing half of 50px source

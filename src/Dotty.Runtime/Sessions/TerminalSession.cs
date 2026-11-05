@@ -201,6 +201,7 @@ public partial class TerminalSession : IDisposable
         Parser.Handler = Adapter;
         Adapter.RenderRequested += _ => RenderScheduled?.Invoke();
         Adapter.ReplyRequested += OnAdapterReplyRequested;
+        Adapter.RawReplyBytesRequested += OnAdapterRawReplyBytesRequested;
         Adapter.ClipboardWriteRequested += request => ClipboardWriteRequested?.Invoke(request);
         Adapter.ClipboardReadRequested += request => ClipboardReadRequested?.Invoke(request);
         Adapter.TitleChanged += title => TitleChanged?.Invoke(title);
@@ -398,6 +399,32 @@ public partial class TerminalSession : IDisposable
         if (_disposed || data.IsEmpty || _pty?.InputStream == null) return;
         QueuePtyInputWrite(data);
     }
+    /// <summary>
+    /// Routes bytes originating from user keyboard/text/paste input. Unlike <see cref="WriteInput"/>, this path
+    /// honors KAM and locally echoes the exact serialized bytes through the normal terminal parser when SRM is set.
+    /// Protocol replies and reports must continue to use <see cref="WriteInput"/> directly.
+    /// </summary>
+    public void WriteUserInput(ReadOnlySpan<byte> data)
+    {
+        if (_disposed || data.IsEmpty || _pty?.InputStream == null)
+            return;
+
+        var buffer = Adapter.Buffer;
+        bool echo;
+        lock (buffer.SyncRoot)
+        {
+            if (Adapter.KeyboardActionModeLocked)
+                return;
+            echo = Adapter.LocalEchoEnabled;
+            if (echo)
+                Parser.Feed(data);
+        }
+
+        QueuePtyInputWrite(data);
+        if (echo)
+            Adapter.FlushRender();
+    }
+
 
     public void SendFocusReport(bool focused)
     {
@@ -414,6 +441,11 @@ public partial class TerminalSession : IDisposable
     {
         if (!reply.IsEmpty)
             QueuePtyInputAsciiWrite(reply);
+    }
+    private void OnAdapterRawReplyBytesRequested(ReadOnlyMemory<byte> reply)
+    {
+        if (!reply.IsEmpty)
+            QueuePtyInputWrite(reply.Span);
     }
 
     private void QueuePtyInputWrite(ReadOnlySpan<byte> data)
@@ -995,6 +1027,7 @@ public partial class TerminalSession : IDisposable
         _ptyOutputSpaceAvailable.Set();
         _ptyOutputAvailable.Set();
         try { Adapter.ReplyRequested -= OnAdapterReplyRequested; } catch { }
+        try { Adapter.RawReplyBytesRequested -= OnAdapterRawReplyBytesRequested; } catch { }
         try { if (_pty != null) _pty.ProcessExited -= OnPtyProcessExited; } catch { }
         try { _pty?.Dispose(); } catch { }
         if (!onInputThread)

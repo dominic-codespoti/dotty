@@ -22,7 +22,8 @@ public class TerminalInputEncoder
         bool applicationCursorKeys = false,
         int shiftedCodepoint = 0,
         int baseCodepoint = 0,
-        bool backarrowSendsBackspace = false)
+        bool backarrowSendsBackspace = false,
+        bool newLineMode = false)
     {
         // Section references are to the kitty keyboard protocol specification
         // (https://sw.kovidgoyal.net/kitty/keyboard-protocol/).
@@ -49,7 +50,7 @@ public class TerminalInputEncoder
             if (!reportAllKeys && !disambiguate)
                 return eventType == TerminalKeyEventType.Release ? 0 : Encode(key, modifiers, destination,
                     keypadApplicationMode, applicationCursorKeys, modifyOtherKeysLevel: 0,
-                    backarrowSendsBackspace: backarrowSendsBackspace);
+                    backarrowSendsBackspace: backarrowSendsBackspace, newLineMode: newLineMode);
             return WriteFunctionalKey(destination, functionalNumber, functionalFinal, GetModifier(modifiers),
                 eventType, kittyFlags);
         }
@@ -61,7 +62,7 @@ public class TerminalInputEncoder
         else if (!mapped && !unknownTextEvent)
             return eventType == TerminalKeyEventType.Release ? 0 : Encode(key, modifiers, destination,
                 keypadApplicationMode, applicationCursorKeys, modifyOtherKeysLevel: 0,
-                backarrowSendsBackspace: backarrowSendsBackspace);
+                backarrowSendsBackspace: backarrowSendsBackspace, newLineMode: newLineMode);
 
         // "Disambiguate escape codes": Esc, alt/ctrl/ctrl+alt/shift+alt + key and non-text keypad keys become
         // CSI u; Enter, Tab and Backspace keep their legacy bytes unless modified (K6(a)); text keys with no
@@ -76,7 +77,7 @@ public class TerminalInputEncoder
             if (eventType == TerminalKeyEventType.Release || (textKey && keypadMapped))
                 return 0;
             return Encode(key, modifiers, destination, keypadApplicationMode, applicationCursorKeys,
-                modifyOtherKeysLevel: 0, backarrowSendsBackspace: backarrowSendsBackspace);
+                modifyOtherKeysLevel: 0, backarrowSendsBackspace: backarrowSendsBackspace, newLineMode: newLineMode);
         }
 
         // K6(c), "Disambiguate escape codes": lock modifiers are not reported for text-producing keys unless
@@ -229,11 +230,12 @@ public class TerminalInputEncoder
         bool keypadApplicationMode = false,
         bool applicationCursorKeys = false,
         int modifyOtherKeysLevel = 0,
-        bool backarrowSendsBackspace = false)
+        bool backarrowSendsBackspace = false,
+        bool newLineMode = false)
     {
         // Lock state never changes a legacy encoding (kitty spec, "Legacy functional keys").
         modifiers &= TerminalKeyModifiers.Shift | TerminalKeyModifiers.Alt | TerminalKeyModifiers.Control | TerminalKeyModifiers.Meta;
-        if (TryEncodeKeypad(key, modifiers, keypadApplicationMode, destination, out int keypadLength))
+        if (TryEncodeKeypad(key, modifiers, keypadApplicationMode, newLineMode, destination, out int keypadLength))
             return keypadLength;
         key = KeypadNavigationTarget(key);
 
@@ -256,7 +258,8 @@ public class TerminalInputEncoder
             if (alt) return WriteLiteral(destination, "\x1b\x09");
             return WriteLiteral(destination, "\x09");
         }
-        if (key == TerminalKey.Enter) return alt ? WriteLiteral(destination, "\x1b\x0d") : WriteLiteral(destination, "\x0d");
+        if (key == TerminalKey.Enter)
+            return alt ? WriteLiteral(destination, "\x1b\x0d") : newLineMode && modifiers == TerminalKeyModifiers.None ? WriteLiteral(destination, "\x0d\x0a") : WriteLiteral(destination, "\x0d");
         if (key == TerminalKey.Escape) return alt ? WriteLiteral(destination, "\x1b\x1b") : WriteLiteral(destination, "\x1b");
 
         if (TryGetLegacyEditingKey(key, out byte final, out int code))
@@ -610,6 +613,7 @@ public class TerminalInputEncoder
         TerminalKey key,
         TerminalKeyModifiers modifiers,
         bool applicationMode,
+        bool newLineMode,
         Span<byte> destination,
         out int length)
     {
@@ -654,7 +658,7 @@ public class TerminalInputEncoder
                 TerminalKey.KeypadMultiply => "*",
                 TerminalKey.KeypadSubtract => "-",
                 TerminalKey.KeypadAdd => "+",
-                TerminalKey.KeypadEnter => "\r",
+                TerminalKey.KeypadEnter => newLineMode && modifiers == TerminalKeyModifiers.None ? "\r\n" : "\r",
                 TerminalKey.KeypadEqual => "=",
                 _ => null
             };

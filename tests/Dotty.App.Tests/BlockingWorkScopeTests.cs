@@ -65,11 +65,11 @@ public sealed class BlockingWorkScopeTests
         });
         owner.Start();
 
-        Assert.True(insideScope.Wait(Generous));
+        Assert.True(insideScope.Wait(Generous, TestContext.Current.CancellationToken));
         Assert.True(OtherThreadCanEnter(buffer.SyncRoot), "lock must be free while the scope is open");
         leaveScope.Set();
 
-        Assert.True(afterScope.Wait(Generous));
+        Assert.True(afterScope.Wait(Generous, TestContext.Current.CancellationToken));
         Assert.False(OtherThreadCanEnter(buffer.SyncRoot), "lock must be re-acquired when the scope ends");
         finish.Set();
         Assert.True(owner.Join(Generous));
@@ -110,7 +110,7 @@ public sealed class BlockingWorkScopeTests
             }
         });
         holder.Start();
-        Assert.True(held.Wait(Generous));
+        Assert.True(held.Wait(Generous, TestContext.Current.CancellationToken));
 
         // This thread does not own the monitor, so it must neither release nor acquire it.
         using (buffer.EnterBlockingWork())
@@ -263,7 +263,7 @@ public sealed class BlockingWorkScopeTests
             }
         });
         owner.Start();
-        Assert.True(held.Wait(Generous));
+        Assert.True(held.Wait(Generous, TestContext.Current.CancellationToken));
 
         Assert.False(buffer.ReleaseSyncRootForBlockingWork());
         Assert.False(OtherThreadCanEnter(buffer.SyncRoot, timeoutMs: 20), "the other thread still owns the lock");

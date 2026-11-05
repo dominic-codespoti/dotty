@@ -49,6 +49,34 @@ public sealed class InstanceDeltaTests
         Assert.Equal(4, delta.Count);
     }
 
+    [Fact]
+    public void SmoothScrollAnimationChangesUploadEvenWhenCellContentIsUnchanged()
+    {
+        var delta = new InstanceDelta();
+        delta.Capture(Row(4), true);
+        delta.MarkUploaded();
+
+        var translated = Row(4);
+        translated[2].PixelOffsetY = 7.5f;
+        delta.Capture(translated, true);
+        Assert.True(delta.Dirty);
+        Assert.Equal(new[] { (2, 3) }, Ranges(delta));
+        delta.MarkUploaded();
+
+        translated = Row(4);
+        translated[2].ClipTop = 12f;
+        delta.Capture(translated, true);
+        Assert.True(delta.Dirty);
+        Assert.Equal(new[] { (2, 3) }, Ranges(delta));
+        delta.MarkUploaded();
+
+        translated = Row(4);
+        translated[2].ClipBottom = 28f;
+        delta.Capture(translated, true);
+        Assert.True(delta.Dirty);
+        Assert.Equal(new[] { (2, 3) }, Ranges(delta));
+    }
+
     public static TheoryData<string, int[], (int, int)[]> ChangedCells => new()
     {
         { "single middle", new[] { 3 }, new[] { (3, 4) } },

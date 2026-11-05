@@ -70,7 +70,6 @@ public sealed class OscFastPathTests
         yield return new object[] { "\u001b]52;c\u0007" + end };
         yield return new object[] { "\u001b]52\u0007" + end };
         yield return new object[] { "\u001b]52;q;" + B64("x") + "\u0007" + end };
-        yield return new object[] { "\u001b]52;c;!!!bad\u0007" + end };
         yield return new object[] { "\u001b]52;c;" + B64("hello")[..4] + " " + B64("hello")[4..] + "\u0007" + end };
         yield return new object[] { "\u001b]52;c;" + B64("x") + "\u0018" + end };
     }
@@ -107,7 +106,7 @@ public sealed class OscFastPathTests
         Assert.Equal(new[] { "W:1:hello", "T:END" }, Run(Bytes($"\u001b]52;c;{B64("hello")}\u0007\u001b]2;END\u0007")));
         Assert.Equal(new[] { "R:1", "T:END" }, Run(Bytes("\u001b]52;c;?\u0007\u001b]2;END\u0007")));
         Assert.Equal(new[] { "W:1:", "T:END" }, Run(Bytes("\u001b]52;c;\u0007\u001b]2;END\u0007")));
-        Assert.Equal(new[] { "T:END" }, Run(Bytes("\u001b]52;c;!!!bad\u0007\u001b]2;END\u0007")));
+        Assert.Equal(new[] { "W:1:ABC", "T:END" }, Run(Bytes("\u001b]52;c;?QUJD\u0007\u001b]2;END\u0007")));
     }
 
     [Fact]
@@ -126,14 +125,16 @@ public sealed class OscFastPathTests
     }
 
     [Fact]
-    public void Osc52_InvalidUtf8InPayloadBytes_IsDropped()
+    public void Osc52_NonAlphabetPayloadBytesAreIgnoredAndParserResynchronizes()
     {
         byte[] stream = Bytes("\u001b]52;c;QUJD");
         byte[] tail = { 0xFF, 0x07 };
-        var all = new byte[stream.Length + tail.Length];
+        byte[] following = Bytes("\u001b]2;END\u0007");
+        var all = new byte[stream.Length + tail.Length + following.Length];
         stream.CopyTo(all, 0);
         tail.CopyTo(all, stream.Length);
-        Assert.Empty(Run(all));
+        following.CopyTo(all, stream.Length + tail.Length);
+        Assert.Equal(new[] { "W:1:ABC", "T:END" }, Run(all));
     }
 
     [Fact]

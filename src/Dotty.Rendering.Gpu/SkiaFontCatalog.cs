@@ -8,6 +8,7 @@ namespace Dotty.Rendering.Gpu;
 public sealed class SkiaFontFace : IFontFace
 {
     private static readonly ConditionalWeakTable<SKTypeface, SkiaFontFace> Wrappers = new();
+    private readonly SKFont _font;
     private readonly Lazy<bool> _isColor;
 
     private SkiaFontFace(SKTypeface typeface)
@@ -16,6 +17,10 @@ public sealed class SkiaFontFace : IFontFace
         FamilyName = typeface.FamilyName ?? string.Empty;
         Weight = typeface.FontWeight;
         IsItalic = typeface.FontSlant != SKFontStyleSlant.Upright;
+        // Keep one managed SKFont with this weakly cached face for glyph probes. When this wrapper
+        // becomes unreachable, SKFont's finalizer releases its native font; do not dispose it here,
+        // because the wrapper has no deterministic lifetime and may still be in use by a caller.
+        _font = new SKFont(typeface);
         _isColor = new Lazy<bool>(() => ColorFontTables.IsColorFace(typeface));
     }
 
@@ -32,7 +37,14 @@ public sealed class SkiaFontFace : IFontFace
     public bool IsItalic { get; }
     public bool IsColor => _isColor.Value;
 
-    public bool HasGlyph(int codepoint) => Typeface.GetGlyph(codepoint) != 0;
+    public bool HasGlyph(int codepoint)
+    {
+        Span<int> codepoints = stackalloc int[1];
+        Span<ushort> glyphs = stackalloc ushort[1];
+        codepoints[0] = codepoint;
+        _font.GetGlyphs(codepoints, glyphs);
+        return glyphs[0] != 0;
+    }
 
     public override string ToString() => $"{FamilyName} {Weight}{(IsItalic ? " italic" : string.Empty)}";
 }

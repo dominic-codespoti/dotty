@@ -175,6 +175,50 @@ internal static class PlacementGeometry
         return With(g, srcY: g.SrcY, srcH: g.SrcH - shift, yOff: g.YOff,
             effRows: g.EffRows - rows, destH: (float)(g.DestH - removed));
     }
+    /// <summary>Removes columns from the left, consuming the in-cell X offset and cropping source pixels proportionally.</summary>
+    public static ResolvedGeometry CropLeft(in ResolvedGeometry g, int columns)
+    {
+        if (columns <= 0 || g.IsEmpty) return g;
+        if (columns >= g.EffCols) return Emptied(g);
+        double removed = Math.Min((double)columns * g.BasisCellW - g.XOff, g.DestW);
+        if (removed < 0) removed = 0;
+        if (removed >= g.DestW) return Emptied(g);
+        int shift = SourceShift(g.SrcW, removed, g.DestW);
+        return WithHorizontal(g, srcX: g.SrcX + shift, srcW: g.SrcW - shift, xOff: 0,
+            effCols: g.EffCols - columns, destW: (float)(g.DestW - removed));
+    }
+
+    /// <summary>Removes columns from the right, cropping source pixels below the new right cell edge.</summary>
+    public static ResolvedGeometry CropRight(in ResolvedGeometry g, int columns)
+    {
+        if (columns <= 0 || g.IsEmpty) return g;
+        if (columns >= g.EffCols) return Emptied(g);
+        double visibleRight = (double)(g.EffCols - columns) * g.BasisCellW;
+        double removed = Math.Clamp(g.XOff + (double)g.DestW - visibleRight, 0, g.DestW);
+        if (removed >= g.DestW || visibleRight <= g.XOff) return Emptied(g);
+        int shift = SourceShift(g.SrcW, removed, g.DestW);
+        return WithHorizontal(g, srcX: g.SrcX, srcW: g.SrcW - shift, xOff: g.XOff,
+            effCols: g.EffCols - columns, destW: (float)(g.DestW - removed));
+    }
+
+    private static ResolvedGeometry WithHorizontal(in ResolvedGeometry g, int srcX, int srcW, int xOff, int effCols, float destW)
+        => new()
+        {
+            SrcX = srcX,
+            SrcY = g.SrcY,
+            SrcW = srcW,
+            SrcH = g.SrcH,
+            XOff = xOff,
+            YOff = g.YOff,
+            EffCols = effCols,
+            EffRows = g.EffRows,
+            NativeSize = g.NativeSize,
+            DestW = destW,
+            DestH = g.DestH,
+            BasisCellW = g.BasisCellW,
+            BasisCellH = g.BasisCellH,
+        };
+
 
     /// <summary>
     /// Aspect-preserving fit of a <paramref name="srcW"/>×<paramref name="srcH"/> pixel image into a

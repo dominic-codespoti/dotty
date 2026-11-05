@@ -7,9 +7,9 @@ namespace Dotty.Runtime.Config;
 public sealed partial class VtUserConfig
 {
     /// <summary>
-    /// Allows applications to resize the window with <c>CSI 8 ; rows ; cols t</c> (and
-    /// <c>CSI Ps t</c>, Ps &gt;= 24). Default false. Even when enabled the host ignores the
-    /// request with several tabs, split panes, or a maximized/fullscreen/minimized window.
+    /// Allows applications to resize the window with <c>CSI 8 ; rows ; cols t</c>,
+    /// <c>CSI Ps t</c> (Ps &gt;= 24), and DECCOLM when mode 40 permits it. Default false.
+    /// Even when enabled, requests are ignored with several tabs, split panes, or a non-normal window.
     /// </summary>
     [JsonPropertyName("windowResizeAllowed")]
     public bool WindowResizeAllowed { get; set; }

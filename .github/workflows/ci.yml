@@ -316,6 +316,9 @@ jobs:
       - name: Python version
         run: python3 --version
 
+      - name: Install GUI conformance prerequisites
+        continue-on-error: ${{ steps.baseline.outputs.captured != 'true' }}
+        run: sudo apt-get update && sudo apt-get install -y xvfb openbox xauth x11-utils xdotool cmake pkg-config xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev
       - name: Build native pty-helper
         continue-on-error: ${{ steps.baseline.outputs.captured != 'true' }}
         run: make -C src/Dotty.NativePty
@@ -325,6 +328,8 @@ jobs:
         run: |
           dotnet restore tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj
           dotnet build tests/Dotty.Conformance.Host/Dotty.Conformance.Host.csproj -c Release --no-restore
+          dotnet restore src/Dotty/Dotty.csproj
+          dotnet build src/Dotty/Dotty.csproj -c Release --no-restore
 
       - name: Run esctest2
         # Shorter than the job cap so a pre-baseline hang is a tolerated step failure, not a failed (red) job.

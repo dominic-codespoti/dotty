@@ -5,11 +5,11 @@ Dotty implements the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/g
 place them at the cursor, scroll and delete them, animate them, and draw them
 through Unicode placeholders.
 
-> **Status: written without a compiler, a GPU, or a client.** The implementation
-> and every statement on this page come from reading the source. Nothing has
-> been built, run, or measured. Everything that depends on a real build, real
-> display, or a real client is marked `needs runtime verification`. No
-> performance numbers appear here on purpose.
+> **Verification scope (2026-11-05).** Linux smoke checks exercised `kitten icat`
+> PNG display and scrolling on native Wayland, and Unicode placeholders and
+> ordinary image deletion on X11. Implementation also includes animation, but
+> runtime verification of animation, remaining checklist cases, macOS, and
+> Windows is still outstanding. No graphics-specific performance claim is made.
 
 ## Enabling it (default off)
 
@@ -373,17 +373,37 @@ plausible for that much compressed data).
 ## Screen semantics
 
 - Each screen (main, alternate) has its **own** image store (ids, numbers, quota).
-  Entering **and** leaving the alternate screen clears the alternate store.
+  Mode 47 retains the alternate store across visits. Mode 1047 clears it before
+  returning to main; mode 1049 clears it on entry and exit.
 - RIS deletes every image of both screens and aborts an open transfer.
-- ED 2 deletes every placement (it clears the whole ring); CSI 3 J deletes only the
-  placements wholly in the history. Images with ids stay stored.
+- Ordinary ED 2 deletes every placement and discards history, even when visible
+  ISO-protected text survives; selective ED 2 leaves placements and history alone.
+  CSI 3 J deletes only placements wholly in history. Images with ids stay stored.
+  DECCOLM clears visible placements unless VT5 no-clear mode 95 is enabled;
+  history placements remain.
 - Placements whose rows leave the retained history are deleted.
-- A margin scroll (DECSTBM region) moves only placements wholly inside the region
-  and crops those that cross a margin (see divergences).
+- A full-width margin scroll (DECSTBM region) moves ordinary placements wholly
+  within its vertical bounds. A partial-width margin scroll also requires the
+  placement's entire horizontal extent to fit within the left/right margins.
+  Moving placements are cropped or deleted at the vertical boundary; placements
+  already outside or straddling a boundary stay anchored (see divergences).
+- IL/DL use the same vertical containment and crop/delete rules, from the cursor
+  row through the bottom margin. They never rotate image `ViewTop` or enter history;
+  a cursor outside either active margin axis leaves text and placements unchanged.
+- DECIC/DECDC move ordinary placements wholly inside the rectangle from the cursor
+  column through the right margin, across all scrolling rows. Placements left of
+  that edit start remain anchored even if inside the broader margin region.
+  DECBI/DECFI edge shifts use the full margin rectangle. These operations crop
+  the source proportionally at horizontal boundaries, delete fully displaced
+  placements and never regrow lost pixels when direction reverses. Relative
+  children follow their parent; virtual placeholders move with their cells.
+  Ordinary ICH/DCH behavior is unchanged.
 - `ESC D` (IND) and `ESC E` (NEL) are parsed (`OnIndex`/`OnNextLine`): IND is a
-  line feed without carriage return that scrolls the region at the bottom margin
-  and moves the cursor down outside it; NEL is CR then IND. Placements follow the
-  same scroll hooks as for LF.
+  line feed without carriage return that scrolls at the bottom margin only when
+  the cursor is horizontally eligible, holding there otherwise. Away from that
+  boundary it moves down toward the physical last row. NEL is IND then
+  margin-aware CR. Placements follow the same
+  scroll hooks as for LF.
 - Hidden tabs are not captured, so their animations pause; their images stay in
   the CPU store.
 
@@ -471,16 +491,20 @@ built by the adapter from host-supplied sizes. `t=s` on Windows uses named file 
 
 ## Divergences from kitty
 
-- **ED 2 / CSI 3 J.** Dotty's scrollback is part of the screen's ring, so ED 2
-  clears history and visible rows together and deletes every placement; CSI 3 J
-  deletes only placements in the history and leaves the visible ones (Dotty's
-  CSI 3 J does not clear the visible screen either), where kitty deletes all of
-  them on ED 3.
+- **ED 2 / CSI 3 J.** Ordinary ED 2 discards history and deletes every placement;
+  visible ISO-protected text can survive its text erasure. Selective ED 2 does not
+  discard history or placements. CSI 3 J deletes only placements in history and
+  leaves visible ones (and visible text), where kitty deletes all placements on ED 3.
 - **Margin scrolling.** "Only placements entirely inside the margins move, are
   cropped when they cross a margin and deleted when fully outside" is implemented
   as a sequence: placements wholly inside the region move; one that leaves the
-  region is cropped at the margin (source rectangle shrinks proportionally, the
-  cropped part never grows back) and deleted when nothing stays inside.
+  region is cropped at the crossed margin (source rectangle shrinks
+  proportionally, the cropped part never grows back) and deleted when nothing
+  stays inside. Partial-width vertical scrolling and DEC horizontal column/index
+  scrolling require initial containment on both axes; full-width vertical
+  scrolling retains vertical-only eligibility, including images overhanging the
+  screen's horizontal edges. Horizontal movement/cropping was verified in Dotty's
+  actual X11 renderer with pixel bounds and retained source colors in G08.
   Placements that already straddle a margin (including a tall image placed at the
   bottom margin) are left alone while the text under them scrolls. This is a
   reading of the behavior, `needs runtime verification` against kitty.
@@ -547,7 +571,8 @@ This is the gate for turning the default on; none of it has been run.
 9. Resize (reflow) and change font zoom and DPI while an image is shown.
 10. `clear`, `reset`, `printf '\ec'`: images disappear as documented.
 11. Alternate screen (`less`, `nvim`): the main-screen image is hidden and
-    returns; the alternate screen has no images of its own afterwards.
+    returns. Mode 1049 leaves no alternate images; mode 47 retains and redraws
+    them on the next visit, while mode 1047 clears them on exit.
 12. A large (about 60 MiB) transfer keeps the window responsive.
 13. `t=f`, `t=t`, `t=s` via `kitten icat --transfer-mode=file|memory` (Linux,
     Windows) and macOS fallback to direct.

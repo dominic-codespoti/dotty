@@ -78,7 +78,87 @@ internal sealed partial class KittyImageStore
     /// while the text under it scrolls).
     /// </summary>
     /// <returns>Placements moved, cropped or deleted.</returns>
-    public int OnRegionScrolled(int top, int bottom, int delta, int rows)
+    public int OnRegionScrolled(int top, int bottom, int delta, int rows) =>
+        OnRegionScrolledCore(top, bottom, delta, rows, 0, 0, horizontalBounds: false);
+
+    /// <summary>Scrolls only placements wholly contained in the inclusive visible row/column rectangle.</summary>
+    /// <returns>Placements moved, cropped or deleted.</returns>
+    public int OnRectangleScrolled(int top, int bottom, int left, int right, int delta, int rows)
+    {
+        if (left < 0)
+            left = 0;
+        if (left > right)
+            return 0;
+        return OnRegionScrolledCore(top, bottom, delta, rows, left, right, horizontalBounds: true);
+    }
+
+    /// <summary>
+    /// Applies a horizontal column edit to placements wholly contained by the inclusive row/column rectangle.
+    /// Positive delta moves left (delete); negative delta moves right (insert). Partially-overlapping and outside
+    /// placements remain fixed. Crops are irreversible and alter the source rectangle as well as cell geometry.
+    /// </summary>
+    /// <returns>Placements moved, cropped or deleted.</returns>
+    public int OnColumnsScrolled(int top, int bottom, int left, int right, int delta, int rows)
+    {
+        if (delta == 0 || _placements.Count == 0)
+            return 0;
+        top = Math.Max(top, 0);
+        bottom = Math.Min(bottom, rows - 1);
+        left = Math.Max(left, 0);
+        if (top > bottom || left > right)
+            return 0;
+        long regionTop = _viewTop + top;
+        long regionEnd = _viewTop + bottom + 1;
+        int affected = 0;
+        _scratch.Clear();
+        foreach (var p in _placements.Values)
+        {
+            if (p.Kind != PlacementKind.Normal || p.AnchorRow < regionTop || p.EndRow > regionEnd
+                || p.AnchorCol < left || (long)p.AnchorCol + p.EffCols > (long)right + 1)
+                continue;
+            affected++;
+            var geometry = p.Geometry;
+            long newAnchor = (long)p.AnchorCol - delta;
+            if (delta > 0)
+            {
+                long lost = left - newAnchor;
+                if (lost >= geometry.EffCols)
+                {
+                    _scratch.Add(p);
+                    continue;
+                }
+                if (lost > 0)
+                {
+                    geometry = PlacementGeometry.CropLeft(in geometry, (int)lost);
+                    newAnchor = left;
+                }
+            }
+            else
+            {
+                long over = newAnchor + geometry.EffCols - ((long)right + 1);
+                if (over >= geometry.EffCols)
+                {
+                    _scratch.Add(p);
+                    continue;
+                }
+                if (over > 0)
+                    geometry = PlacementGeometry.CropRight(in geometry, (int)over);
+            }
+            if (geometry.IsEmpty)
+            {
+                _scratch.Add(p);
+                continue;
+            }
+            p.Geometry = geometry;
+            p.AnchorCol = (int)newAnchor;
+            NoteEndRow(p.EndRow);
+        }
+        RemoveScratchPlacements();
+        return affected;
+    }
+
+    private int OnRegionScrolledCore(
+        int top, int bottom, int delta, int rows, int left, int right, bool horizontalBounds)
     {
         if (delta == 0 || _placements.Count == 0)
             return 0;
@@ -96,6 +176,9 @@ internal sealed partial class KittyImageStore
             if (p.Kind != PlacementKind.Normal)
                 continue;
             if (p.AnchorRow < regionTop || p.EndRow > regionEnd)
+                continue;
+            if (horizontalBounds &&
+                (p.AnchorCol < left || (long)p.AnchorCol + p.EffCols > (long)right + 1))
                 continue;
 
             affected++;

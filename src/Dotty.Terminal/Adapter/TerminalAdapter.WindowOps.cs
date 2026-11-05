@@ -26,12 +26,15 @@ public partial class TerminalAdapter
 
     /// <summary>
     /// Raised synchronously on the parser thread (under the buffer lock) for
-    /// <c>CSI 8 ; rows ; cols t</c> and <c>CSI Ps t</c> with Ps &gt;= 24. Arguments are
-    /// (rows, cols), each clamped to [0, 1000]; 0 means "keep the current dimension" and
-    /// the event is never raised when both are 0. Handlers must only enqueue the request;
+    /// <c>CSI 8 ; rows ; cols t</c>, <c>CSI Ps t</c> with Ps &gt;= 24, and mode-40-authorized DECCOLM.
+    /// Arguments are (rows, cols), each clamped to [0, 1000]; 0 keeps the current dimension and
+    /// the event is never raised when both are 0. GUI handlers must only enqueue the request;
     /// whether it is honoured is the host's decision (see <c>vt.windowResizeAllowed</c>).
     /// </summary>
     public event Action<int, int>? WindowResizeRequested;
+
+    /// <summary>Raised for native window operations and position queries; the host applies permissions and reports actual state.</summary>
+    public event Action<TerminalAdapter, int, int, int>? NativeWindowOperationRequested;
 
     /// <summary>
     /// Overrides the text-area pixel size reported by CSI 14 t (width, height). Without
@@ -67,16 +70,22 @@ public partial class TerminalAdapter
         switch (operation)
         {
             case 8:
-                // CSI 8 ; rows ; cols t → resize the text area to rows x cols characters.
                 RequestWindowResize(arg1, arg2);
                 break;
+            case 1:
+            case 2:
+            case 3:
+                NativeWindowOperationRequested?.Invoke(this, operation, arg1, arg2);
+                break;
+            case 11:
+                NativeWindowOperationRequested?.Invoke(this, operation, arg1, arg2);
+                break;
             case 13:
-                {
-                    // CSI 13 t → window position: CSI 3 ; x ; y t
-                    UnpackPair(Volatile.Read(ref _windowPosition), out int x, out int y);
-                    SendTwoNumberReply("\x1b[3;".AsSpan(), x, y, 't');
-                    break;
-                }
+                if (NativeWindowOperationRequested is { } positionRequest)
+                    positionRequest(this, operation, arg1, arg2);
+                else
+                    ReportWindowPosition();
+                break;
             case 14:
                 {
                     // CSI 14 t → text area size in pixels: CSI 4 ; height ; width t
@@ -108,19 +117,38 @@ public partial class TerminalAdapter
                 SendTwoNumberReply("\x1b[8;".AsSpan(), _buffer.Rows, _buffer.Columns, 't');
                 break;
             case 19:
-                // CSI 19 t → screen size in characters: CSI 9 ; rows ; cols t.
-                // Dotty reports the terminal grid; it has no notion of a larger character screen.
+                // CSI 19 t → screen size in characters; Dotty has one terminal grid.
                 SendTwoNumberReply("\x1b[9;".AsSpan(), _buffer.Rows, _buffer.Columns, 't');
+                break;
+            case 20:
+                ReplyTitle(icon: true);
+                break;
+            case 21:
+                ReplyTitle(icon: false);
+                break;
+            case 22:
+                OnPushTitle(arg1, arg2);
+                break;
+            case 23:
+                OnPopTitle(arg1, arg2);
                 break;
             default:
                 // CSI Ps t with Ps >= 24 (DECSLPP) resizes to Ps lines, columns unchanged.
-                // 20/21 (icon/window title reports) are deliberately silent: xterm disables
-                // them by default because the reply can inject text into the input stream.
                 if (operation >= 24)
                     RequestWindowResize(operation, 0);
                 break;
         }
     }
+    /// <summary>Reports the position pushed from the native window by the host.</summary>
+    public void ReportWindowPosition()
+    {
+        UnpackPair(Volatile.Read(ref _windowPosition), out int x, out int y);
+        SendTwoNumberReply("\x1b[3;".AsSpan(), x, y, 't');
+    }
+    /// <summary>Reports the host-observed native iconified state.</summary>
+    public void ReportWindowState(bool iconified) =>
+        SendNumberReply("\x1b[".AsSpan(), iconified ? 2 : 1, 't');
+
 
     private void RequestWindowResize(int rows, int cols)
     {

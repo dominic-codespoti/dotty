@@ -14,4 +14,15 @@ public sealed partial class VtUserConfig
     /// </summary>
     [JsonPropertyName("checksumReportEnabled")]
     public bool ChecksumReportEnabled { get; set; }
+
+    /// <summary>Answer icon-title (<c>CSI 20 t</c>) and window-title (<c>CSI 21 t</c>) report queries. Off by default.</summary>
+    [JsonPropertyName("titleReportEnabled")]
+    public bool TitleReportEnabled { get; set; }
+
+    /// <summary>
+    /// Allows applications to move, minimize, and restore the native window with
+    /// <c>CSI 3 ; x ; y t</c>, <c>CSI 2 t</c>, and <c>CSI 1 t</c>. Off by default.
+    /// </summary>
+    [JsonPropertyName("windowControlAllowed")]
+    public bool WindowControlAllowed { get; set; }
 }

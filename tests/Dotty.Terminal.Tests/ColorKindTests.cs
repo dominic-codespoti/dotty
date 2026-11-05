@@ -144,6 +144,20 @@ public sealed class ColorKindTests
     }
 
     [Theory]
+    [InlineData("41", 1)]
+    [InlineData("101", 9)]
+    [InlineData("48;5;200", 200)]
+    public void PaletteBackgroundsRetainIndexAndResetClearsIt(string sgr, int index)
+    {
+        var indexed = Sgr(sgr);
+
+        Assert.Equal(ColorKind.Indexed, indexed.BackgroundKind);
+        Assert.Equal(index, indexed.BackgroundIndex);
+        Assert.Equal(Palette[index], indexed.Background.Argb);
+        Assert.Equal(ColorKind.Default, Sgr("49", indexed).BackgroundKind);
+    }
+
+    [Theory]
     [InlineData("58;5;0", 0)]
     [InlineData("58;5;9", 9)]
     [InlineData("58;5;255", 255)]
@@ -268,15 +282,18 @@ public sealed class ColorKindTests
 
         Assert.Equal(ColorKind.Default, a.ForegroundKind);
         Assert.Equal(-1, a.ForegroundIndex);
+        a.RemapPalette(Palette.EffectiveColors);
+        Assert.Equal(ColorKind.Default, a.ForegroundKind);
+        Assert.Equal(-1, a.ForegroundIndex);
     }
 
     // ---- theme remap ---------------------------------------------------------------------------------------------
 
     private static (uint[] Previous, uint[] Current) Palettes()
     {
-        var previous = new uint[16];
-        var current = new uint[16];
-        for (int i = 0; i < 16; i++)
+        var previous = new uint[256];
+        var current = new uint[256];
+        for (int i = 0; i < 256; i++)
         {
             previous[i] = 0xFF000000u | (uint)(0x10 + i);
             current[i] = 0xFF000000u | (uint)(0x80 + i);
@@ -294,7 +311,7 @@ public sealed class ColorKindTests
         a.SetUnderlineColorIndexed(12, new SgrColorArgb(previous[12]));
         ushort id = styles.GetOrCreateId(a);
 
-        Assert.True(styles.RemapAnsiPalette(previous, current));
+        Assert.True(styles.RemapPalette(current));
 
         ref readonly var remapped = ref styles.GetStyle(id);
         Assert.Equal(current[3], remapped.Foreground.Argb);
@@ -313,7 +330,7 @@ public sealed class ColorKindTests
         a.SetForegroundRgb(new SgrColorArgb(0xFF445566)); // not a palette value
         ushort id = styles.GetOrCreateId(a);
 
-        Assert.False(styles.RemapAnsiPalette(previous, current));
+        Assert.False(styles.RemapPalette(current));
 
         Assert.Equal(ColorKind.Rgb, styles.GetStyle(id).ForegroundKind);
         Assert.Equal(0xFF445566u, styles.GetStyle(id).Foreground.Argb);
@@ -327,10 +344,10 @@ public sealed class ColorKindTests
         var a = Sgr("38;5;200");
         ushort id = styles.GetOrCreateId(a);
 
-        styles.RemapAnsiPalette(previous, current);
+        styles.RemapPalette(current);
 
         Assert.Equal(200, styles.GetStyle(id).ForegroundIndex);
-        Assert.Equal(a.Foreground, styles.GetStyle(id).Foreground);
+        Assert.Equal(current[200], styles.GetStyle(id).Foreground.Argb);
     }
 
     // ---- layout --------------------------------------------------------------------------------------------------
@@ -338,9 +355,8 @@ public sealed class ColorKindTests
     [Fact]
     public void CellAttributesGrowthIsBoundedToTheTagBytes()
     {
-        // 3 x uint colours + 9 one-byte attributes + ushort hyperlink id packed to 24 bytes before the tags; the four
-        // tag bytes (two flags, two indices) raise that to 28. StyleSet stores one entry per distinct style, not per
-        // cell, so this is not part of the per-cell arena arithmetic (CellHot 8 B + ColdCell 4 B, pinned in ColdCellTests).
-        Assert.True(Unsafe.SizeOf<CellAttributes>() <= 28, $"CellAttributes is {Unsafe.SizeOf<CellAttributes>()} bytes");
+        // Indexed identity is retained for all three colour channels; StyleSet stores one entry per distinct style,
+        // not per cell, so this does not affect per-cell arena arithmetic.
+        Assert.True(Unsafe.SizeOf<CellAttributes>() <= 32, $"CellAttributes is {Unsafe.SizeOf<CellAttributes>()} bytes");
     }
 }

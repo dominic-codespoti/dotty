@@ -208,6 +208,9 @@ Paint the divider gap around the active pane in the theme's accent colour while 
 \fBpanes.dividerThickness\fR (number; Lua \fBpanes.divider_thickness\fR)
 Gap between split panes in logical pixels, scaled and rounded to whole device pixels and filled with the theme's border colour; 0 removes it, values above 32 are clamped. Read every frame.
 .TP
+\fBprinting.outputFile\fR (string; Lua \fBprinting.output_file\fR)
+Append printed terminal text to this file. Null or empty disables printing. CSI 0 i prints the screen or scrolling region according to DECPEX, optionally followed by a form feed according to DECPFF. No external command is executed.
+.TP
 \fBscrollback.limitBytes\fR (integer; Lua \fBscrollback.limit_bytes\fR)
 Maximum raw history ring bytes per session, counted as (lines + rows) * columns * 12; 0 means no byte cap. Non\-zero values below 1048576 and negative values fall back to the default. The first of this and limitLines to be reached applies.
 .TP
@@ -277,6 +280,12 @@ Theme used when themeAuto is true and the OS reports a light color scheme; Light
 \fBvt.checksumReportEnabled\fR (boolean; Lua \fBvt.checksum_report_enabled\fR)
 Answer DECRQCRA (CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y) rectangular\-area checksum requests; off by default because the reply lets a program read back screen content. When false no reply is sent.
 .TP
+\fBvt.titleReportEnabled\fR (boolean; Lua \fBvt.title_report_enabled\fR)
+Answer icon\-title (CSI 20 t) and window\-title (CSI 21 t) report queries; off by default.
+.TP
+\fBvt.windowControlAllowed\fR (boolean; Lua \fBvt.window_control_allowed\fR)
+Let applications move, minimize and restore the native window with CSI 3 ; x ; y t, CSI 2 t and CSI 1 t. Off by default; independent of resize and title\-report permissions.
+.TP
 \fBvt.windowResizeAllowed\fR (boolean; Lua \fBvt.window_resize_allowed\fR)
 Let applications resize the window with CSI 8 ; rows ; cols t (and CSI Ps t with Ps >= 24). Ignored with several tabs, split panes, or a maximized, fullscreen or minimized window.
 .TP
@@ -287,7 +296,7 @@ Initial grid width in cells; 0 uses 80. Read at startup.
 Windows only: 'custom' draws the tab\-bar caption controls instead of the native title bar; other platforms always keep native decorations. One of: custom, native.
 .TP
 \fBwindow.floating\fR (boolean; Lua \fBwindow.floating\fR)
-Keep the window above other windows (always on top).
+Keep the window above other windows (always on top); unsupported on Wayland, where the compositor controls stacking.
 .TP
 \fBwindow.opacity\fR (number; Lua \fBwindow.opacity\fR)
 Default\-background opacity 0\-1, multiplied by the theme opacity; text, chrome and images stay opaque. Going from 1 to below 1 needs a restart.

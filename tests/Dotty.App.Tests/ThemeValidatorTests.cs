@@ -268,4 +268,24 @@ public class ThemeValidatorTests : IDisposable
         // Assert
         Assert.Equal(shouldBeValid, result.IsValid);
     }
+    [Fact]
+    public void ValidateJson_RejectsThemeRootWithInnerThemeMissingColors()
+    {
+        var json = """
+            {
+                "version": 1,
+                "themes": [
+                    {
+                        "canonicalName": "IncompleteTheme",
+                        "displayName": "Incomplete Theme"
+                    }
+                ]
+            }
+            """;
+
+        var result = _validator.ValidateJson(json);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("colors"));
+    }
 }

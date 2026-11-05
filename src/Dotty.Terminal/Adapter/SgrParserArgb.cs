@@ -115,7 +115,7 @@ public static class SgrParserArgb
                     hasMore = enumerator.MoveNext();
                     break;
                 case 49:
-                    attributes.Background = default;
+                    attributes.SetBackgroundRgb(default);
                     hasMore = enumerator.MoveNext();
                     break;
                 case 53:
@@ -146,12 +146,13 @@ public static class SgrParserArgb
                     }
                     break;
                 case 48:
-                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var bg, out _);
-                    if (hasMore || !bg.IsEmpty)
+                    hasMore = TryParseExtendedColor(ref enumerator, palette, out var bg, out int bgIndex);
+                    if (!bg.IsEmpty)
                     {
-                        if (!bg.IsEmpty) attributes.Background = bg;
+                        if (bgIndex >= 0) attributes.SetBackgroundIndexed(bgIndex, bg);
+                        else attributes.SetBackgroundRgb(bg);
                     }
-                    else
+                    else if (!hasMore)
                     {
                         hasMore = enumerator.MoveNext();
                     }
@@ -179,7 +180,7 @@ public static class SgrParserArgb
                     }
                     else if (SgrColorArgb.TryFromBackgroundCode(code, palette, out var bgColor))
                     {
-                        attributes.Background = bgColor;
+                        attributes.SetBackgroundIndexed(code <= 47 ? code - 40 : code - 100 + 8, bgColor);
                     }
                     hasMore = enumerator.MoveNext();
                     break;

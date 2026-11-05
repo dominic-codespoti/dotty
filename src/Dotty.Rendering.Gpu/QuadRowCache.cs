@@ -109,7 +109,7 @@ public sealed class QuadRowCache
     {
         if (!_hasTextOptions || !options.FaintOpacity.Equals(_textOptions.FaintOpacity)
             || options.BaselineShift != _textOptions.BaselineShift || options.Sprites != _textOptions.Sprites
-            || options.BuiltinGlyphs != _textOptions.BuiltinGlyphs
+            || options.BuiltinGlyphs != _textOptions.BuiltinGlyphs || options.SpecialColors != _textOptions.SpecialColors
             || !ReferenceEquals(options.Ligatures, _textOptions.Ligatures) || options.Ligatures?.ConfigStamp != _ligatureStamp)
         {
             InvalidateAll();

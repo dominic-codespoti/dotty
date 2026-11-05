@@ -10,8 +10,6 @@ public static class Osc52Reply
 {
     private const byte Esc = 0x1B;
 
-    // ESC ] 5 2 ; <selection> ;
-    private const int PrefixLength = 7;
 
     // ESC \ (string terminator)
     private const int SuffixLength = 2;
@@ -28,36 +26,44 @@ public static class Osc52Reply
     /// </summary>
     public static bool TryEncode(ClipboardSelection selection, ReadOnlySpan<byte> utf8, out byte[] reply)
     {
-        byte letter;
-        if ((selection & ClipboardSelection.Clipboard) != 0)
-            letter = (byte)'c';
-        else if ((selection & ClipboardSelection.Primary) != 0)
-            letter = (byte)'p';
-        else
+        ReadOnlySpan<char> selector =
+            (selection & ClipboardSelection.Clipboard) != 0 ? "c" :
+            (selection & ClipboardSelection.Primary) != 0 ? "p" :
+            (selection & ClipboardSelection.Select) != 0 ? "s" : default;
+        return TryEncode(selector, utf8, out reply);
+    }
+
+    public static bool TryEncode(ReadOnlySpan<char> selector, ReadOnlySpan<byte> utf8, out byte[] reply)
+    {
+        if (selector.IsEmpty || utf8.Length > MaxPayloadBytes)
         {
             reply = Array.Empty<byte>();
             return false;
         }
 
-        if (utf8.Length > MaxPayloadBytes)
-        {
-            reply = Array.Empty<byte>();
-            return false;
-        }
-
+        int prefixLength = 6 + selector.Length;
         int encodedLength = Base64.GetMaxEncodedToUtf8Length(utf8.Length);
-        byte[] buffer = new byte[PrefixLength + encodedLength + SuffixLength];
+        byte[] buffer = new byte[prefixLength + encodedLength + SuffixLength];
         buffer[0] = Esc;
         buffer[1] = (byte)']';
         buffer[2] = (byte)'5';
         buffer[3] = (byte)'2';
         buffer[4] = (byte)';';
-        buffer[5] = letter;
-        buffer[6] = (byte)';';
+        for (int index = 0; index < selector.Length; index++)
+        {
+            char value = selector[index];
+            if (value > 0x7F)
+            {
+                reply = Array.Empty<byte>();
+                return false;
+            }
+            buffer[5 + index] = (byte)value;
+        }
+        buffer[5 + selector.Length] = (byte)';';
 
         OperationStatus status = Base64.EncodeToUtf8(
             utf8,
-            buffer.AsSpan(PrefixLength, encodedLength),
+            buffer.AsSpan(prefixLength, encodedLength),
             out _,
             out int written);
         if (status != OperationStatus.Done || written != encodedLength)
@@ -66,8 +72,8 @@ public static class Osc52Reply
             return false;
         }
 
-        buffer[PrefixLength + encodedLength] = Esc;
-        buffer[PrefixLength + encodedLength + 1] = (byte)'\\';
+        buffer[prefixLength + encodedLength] = Esc;
+        buffer[prefixLength + encodedLength + 1] = (byte)'\\';
         reply = buffer;
         return true;
     }

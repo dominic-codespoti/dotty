@@ -23,6 +23,7 @@ public static class SilkGlShaders
         out vec2 vUv;
         out vec2 vColorUv;
         flat out uint vFlags;
+        flat out vec2 vClipY;
         const uint FLAG_WIDE = 2u;      // CellFlags.WideCell
 
         void main()
@@ -36,7 +37,7 @@ public static class SilkGlShaders
                 // Atlas coverage is rasterized at device-pixel positions.
                 // Snap only the destination origin; keeping the atlas-derived
                 // size unchanged preserves its 1:1 dimensions.
-                origin += vec2(aMetrics.z, aMetrics.y - aMetrics.w);
+                origin += vec2(aMetrics.z, aMetrics.y);
                 origin = floor(origin + vec2(0.5));
                 size = aAtlasPx.zw;
                 vUv = (aAtlasPx.xy + aCorner * size) / uAtlasSize;
@@ -63,6 +64,7 @@ public static class SilkGlShaders
             vFg = aFg;
             vBg = aBg;
             vFlags = aFlags;
+            vClipY = vec2(aMetrics.x, aMetrics.w);
         }
         """;
 
@@ -76,6 +78,8 @@ public static class SilkGlShaders
         in vec2 vUv;
         in vec2 vColorUv;
         flat in uint vFlags;
+        flat in vec2 vClipY;
+        uniform vec2 uFramebufferPx;
         out vec4 fragColor;
         const uint FLAG_COLOR_GLYPH = 64u;
 
@@ -120,6 +124,10 @@ public static class SilkGlShaders
 
         void main()
         {
+            if (vClipY.y > vClipY.x) {
+                float screenY = uFramebufferPx.y - gl_FragCoord.y;
+                if (screenY < vClipY.x || screenY >= vClipY.y) discard;
+            }
             if (uPass == 0) {
                 if (vBg.a <= 0.001) discard;
                 fragColor = vec4(vBg.rgb * vBg.a, vBg.a);

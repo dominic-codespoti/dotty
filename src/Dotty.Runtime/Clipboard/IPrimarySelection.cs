@@ -8,6 +8,14 @@ public interface IPrimarySelection
 {
     /// <summary>True when the buffer is the operating system's PRIMARY selection, visible to other applications.</summary>
     bool IsSystemSelection { get; }
+    /// <summary>True when the real X11 CUT_BUFFER0 is available.</summary>
+    bool SupportsCutBuffer0 { get; }
+
+    /// <summary>Reads X11 CUT_BUFFER0, or null when unsupported or unavailable.</summary>
+    string? GetCutBuffer0();
+
+    /// <summary>Writes X11 CUT_BUFFER0. False when unavailable.</summary>
+    bool SetCutBuffer0(string text);
 
     /// <summary>Current selection text; null when there is none or it cannot be read. Never throws.</summary>
     string? Get();
@@ -23,6 +31,15 @@ public sealed class InProcessPrimarySelection : IPrimarySelection
     private string? _text;
 
     public bool IsSystemSelection => false;
+    public bool SupportsCutBuffer0 => false;
+
+    public string? GetCutBuffer0() => null;
+
+    public bool SetCutBuffer0(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return false;
+    }
 
     public string? Get()
     {

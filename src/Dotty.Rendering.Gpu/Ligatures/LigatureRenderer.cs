@@ -31,6 +31,9 @@ public sealed class LigatureRenderer : IDisposable
     private readonly ushort[] _nominalScratch = new ushort[byte.MaxValue];
     private readonly StringBuilder _keyBuilder = new();
     private readonly LigatureCell[] _mappedScratch = new LigatureCell[byte.MaxValue];
+    private byte[]? _searchCoverage;
+    private int _searchRows;
+    private int _searchColumns;
 
     public LigatureRenderer(IRunShaper shaper, bool ownsShaper = false)
     {
@@ -66,6 +69,13 @@ public sealed class LigatureRenderer : IDisposable
             ConfigStamp++;
         }
     }
+    /// <summary>Sets cell foreground groups for search shaping; null restores ordinary shaping.</summary>
+    public void SetSearchCoverage(byte[]? coverage, int rows, int columns)
+    {
+        _searchCoverage = coverage;
+        _searchRows = rows;
+        _searchColumns = columns;
+    }
 
     /// <summary>
     /// Returns the ligature layout of <paramref name="row"/>, or null when nothing in it is shaped. The result is
@@ -89,8 +99,12 @@ public sealed class LigatureRenderer : IDisposable
             if (cell.Width == 1 && !cell.HasGrapheme && RunSegmenter.IsCandidate(cell.Rune))
             {
                 ref readonly var style = ref source.GetStyle(cell.StyleId);
+                byte paintGroup = _searchCoverage != null && row < _searchRows
+                    && i < _searchColumns && row * _searchColumns + i < _searchCoverage.Length
+                    ? _searchCoverage[row * _searchColumns + i]
+                    : (byte)0;
                 cells[i] = style.Invisible ? SegmentCell.None
-                    : new SegmentCell((char)cell.Rune, (int)GlyphStyles.From(style.Bold, style.Italic));
+                    : new SegmentCell((char)cell.Rune, (int)GlyphStyles.From(style.Bold, style.Italic), paintGroup);
             }
             else
             {

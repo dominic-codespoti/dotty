@@ -57,6 +57,10 @@ Legacy encoding details (the full table is `LegacyKeyEncodingTableTests`):
 
 `CSI ? 67 h` makes Backspace send BS (`0x08`); `CSI ? 67 l` (the default) makes it send DEL (`0x7F`). Alt+Backspace sends the same byte prefixed with ESC (`ESC 0x08` or `ESC 0x7F`). Ctrl+Backspace (`0x17`) and Ctrl+Alt+Backspace (`ESC 0x17`) do not depend on the mode. The mode only affects legacy encoding: when Kitty flags select Backspace for CSI-u reporting (report-all-keys, or disambiguate with a modifier held), the key is sent as `CSI 127 u` regardless of DECBKM. DECRQM `CSI ? 67 $ p` reports the live state. RIS resets it to DEL; DECSTR leaves it unchanged. The key dispatcher passes `adapter.BackarrowSendsBackspace` to the encoder on each key press.
 
+## LNM (new line mode, 20)
+
+ANSI `CSI 20 h` enables LNM; `CSI 20 l` disables it. In legacy encoding, unmodified Return and normal (non-application) keypad Return send CR LF when enabled, or CR when disabled. Application-keypad Return, modified Return chords and negotiated Kitty escape-code events retain their existing encodings. The real keyboard dispatcher and the encoder both honor the mode; paste handling is unchanged. Received LF/VT/FF also perform an index followed by carriage return, while IND remains column-preserving and NEL always performs both. ANSI DECRQM `CSI 20 $ p` reports live state, and DECSTR/RIS reset LNM. See the [VT220 newline-mode description](https://vt100.net/docs/vt220-rm/chapter4.html).
+
 ## Mode queries and modifyOtherKeys
 
 DECRQM (`CSI ? Ps $ p` private, `CSI Ps $ p` ANSI) answers every mode in a complete status table (`1` set, `2` reset, `3` permanently set, `4` permanently reset, `0` not recognized). Keyboard-related entries: DECCKM 1, DECNKM 66 and DECBKM 67 report their live state, and `CSI ? 2 $ p` (DECANM) reports `3`. The full table is in [Parsing](Parsing.md#decrqm-status-table). DA3 (`CSI = c`) stays intentionally silent.

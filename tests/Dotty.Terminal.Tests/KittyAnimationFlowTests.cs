@@ -136,7 +136,7 @@ public sealed class KittyAnimationFlowTests
         parser.Feed(Encoding.ASCII.GetBytes("\u001b[?1049l"));
 
         Assert.Equal(new[] { Ok("i=1") }, replies);
-        Assert.Equal(1, adapter.Buffer.MainImageStore!.FindByClientId(1)!.Frames.Count);
+        Assert.Single(adapter.Buffer.MainImageStore!.FindByClientId(1)!.Frames);
     }
 
     [Fact]
@@ -157,7 +157,7 @@ public sealed class KittyAnimationFlowTests
             Err("i=2147483648,I=7", "EINVAL:Unknown image format"),
             Err("i=2147483648,I=7", "EINVAL:Invalid base64 data"),
         }, rig.Replies);
-        Assert.Equal(1, rig.Store.FindByNumber(7)!.Frames.Count);
+        Assert.Single(rig.Store.FindByNumber(7)!.Frames);
     }
 
     [Theory]
@@ -178,7 +178,7 @@ public sealed class KittyAnimationFlowTests
 
             rig.Apc("m=0", B64(4, 5, 6));                      // the rest of the refused load
             Assert.Single(rig.Replies);
-            Assert.Equal(1, AnimKit.Img(rig, 1).Frames.Count);
+            Assert.Single(AnimKit.Img(rig, 1).Frames);
             rig.Store.ValidateInvariants();
         }
         baseline.AssertRestored();
@@ -287,7 +287,7 @@ public sealed class KittyAnimationFlowTests
             rig =>
             {
                 Assert.Empty(rig.Replies);
-                Assert.Equal(1, rig.Store.FindByClientId(1)!.Frames.Count);
+                Assert.Single(rig.Store.FindByClientId(1)!.Frames);
             });
 
     [Fact]
@@ -311,7 +311,7 @@ public sealed class KittyAnimationFlowTests
             rig =>
             {
                 Assert.Equal(new[] { Err("i=1", "EINVAL:Rectangle out of bounds") }, rig.Replies);
-                Assert.Equal(1, rig.Store.FindByClientId(1)!.Frames.Count);
+                Assert.Single(rig.Store.FindByClientId(1)!.Frames);
                 rig.Store.ValidateInvariants();
             });
 
@@ -323,7 +323,7 @@ public sealed class KittyAnimationFlowTests
             {
                 Assert.Equal(new[] { Err("i=1", "ENOSPC:Storage quota exceeded") }, rig.Replies);
                 var image = rig.Store.FindByClientId(1)!;
-                Assert.Equal(1, image.Frames.Count);
+                Assert.Single(image.Frames);
                 Assert.Equal(256 * 256 * 4, rig.Store.UsedBytes);
                 rig.Store.ValidateInvariants();
             });

@@ -150,6 +150,9 @@ public sealed class InstanceDelta
         && left.GlyphH == right.GlyphH
         && left.OffX == right.OffX
         && left.OffY == right.OffY
+        && left.PixelOffsetY == right.PixelOffsetY
+        && left.ClipTop == right.ClipTop
+        && left.ClipBottom == right.ClipBottom
         && left.FgR == right.FgR
         && left.FgG == right.FgG
         && left.FgB == right.FgB

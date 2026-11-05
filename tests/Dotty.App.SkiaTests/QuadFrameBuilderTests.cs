@@ -344,6 +344,7 @@ public sealed class QuadFrameBuilderTests
     [Fact]
     public void Conceal_DropsTheGlyphButKeepsBackgroundAndDecorations()
     {
+
         var buffer = new TerminalBuffer(rows: 1, columns: 5);
         var attrs = new CellAttributes
         {
@@ -369,6 +370,111 @@ public sealed class QuadFrameBuilderTests
             Assert.Equal(background.Col, underline.Col);
         }
         Assert.False(atlas.TryGetGlyph(new GlyphKey("A", SKTypeface.Default, TextSize, GlyphStyle.Regular), out _));
+    }
+    [Fact]
+    public void SpecialAttributeColors_RenderEachEnabledAttributeAndRespectExplicitColors()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 5);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("A".AsSpan(), new CellAttributes { Bold = true });
+        buffer.SetCursor(0, 1);
+        buffer.WriteText("B".AsSpan(), new CellAttributes { UnderlineStyle = UnderlineStyle.Single });
+        buffer.SetCursor(0, 2);
+        buffer.WriteText("C".AsSpan(), new CellAttributes { SlowBlink = true });
+        buffer.SetCursor(0, 3);
+        buffer.WriteText("D".AsSpan(), new CellAttributes { Inverse = true });
+        buffer.SetCursor(0, 4);
+        buffer.WriteText("E".AsSpan(), new CellAttributes { Italic = true });
+
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var options = new TextAttributeOptions(0.5f, BlinkVisible: true)
+        {
+            SpecialColors = new SpecialColorSettings(
+                0xFF110001, 0xFF220002, 0xFF330003, 0xFF440004, 0xFF550005, 0b011111),
+        };
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize,
+            new FrameGeometry(CellW, CellH, 1, 5), textOptions: options);
+        for (int i = 0; i < 5; i++)
+            Assert.Equal((byte)(0x11 + 0x11 * i), result.Instances[i].FgR);
+
+        options = options with { SpecialColors = options.SpecialColors with { Modes = 0 } };
+        var disabled = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize,
+            new FrameGeometry(CellW, CellH, 1, 5), textOptions: options);
+        Assert.Equal((byte)255, disabled.Instances[0].FgR);
+        Assert.NotEqual(result.Instances[0].FgR, disabled.Instances[0].FgR);
+    }
+
+    [Fact]
+    public void SpecialAttributeColors_OverrideExplicitForegroundButKeepSgr58Decoration()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 4);
+        var attrs = new CellAttributes
+        {
+            Bold = true,
+            Foreground = SgrColorArgb.FromRgb(1, 2, 3),
+            UnderlineColor = SgrColorArgb.FromRgb(7, 8, 9),
+            UnderlineStyle = UnderlineStyle.Single,
+        };
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("X".AsSpan(), attrs);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var options = SpriteOptions with
+        {
+            SpecialColors = new SpecialColorSettings(0xFF112233, 0, 0, 0, 0, 0b100001),
+        };
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize,
+            new FrameGeometry(CellW, CellH, 1, 4), textOptions: options);
+
+        Assert.Equal(2, result.InstanceCount);
+        Assert.Equal(((byte)0x11, (byte)0x22, (byte)0x33),
+            (result.Instances[0].FgR, result.Instances[0].FgG, result.Instances[0].FgB));
+        Assert.Equal(((byte)7, (byte)8, (byte)9),
+            (result.Instances[1].FgR, result.Instances[1].FgG, result.Instances[1].FgB));
+    }
+
+    [Fact]
+    public void SpecialAttributeColors_UseXtermForegroundPrecedenceAndReverseBackground()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 4);
+        buffer.SetCursor(0, 0);
+        buffer.WriteText("X".AsSpan(), new CellAttributes { Bold = true, SlowBlink = true });
+        buffer.SetCursor(0, 1);
+        buffer.WriteText("Y".AsSpan(), new CellAttributes { Inverse = true });
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var options = new TextAttributeOptions(0.5f, BlinkVisible: true)
+        {
+            SpecialColors = new SpecialColorSettings(
+                0xFF110000, 0xFF220000, 0xFF330000, 0xFF440000, 0xFF550000, 0b011101),
+        };
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize,
+            new FrameGeometry(CellW, CellH, 1, 4), textOptions: options);
+
+        Assert.Equal((byte)0x33, result.Instances[0].FgR); // Blink wins over bold.
+        Assert.Equal((byte)0x44, result.Instances[1].FgR); // Reverse color is selected as background, then swapped.
+    }
+
+    [Fact]
+    public void SpecialAttributeColors_BlankBoldInverseCellUsesReverseBackgroundThenSwaps()
+    {
+        var buffer = new TerminalBuffer(rows: 1, columns: 1);
+        buffer.WriteText("X".AsSpan(), new CellAttributes { Bold = true, Inverse = true });
+        ref var blank = ref buffer.ActiveBuffer.GetCellRef(0, 0);
+        blank.Rune = 0;
+        using var atlas = new GlyphAtlas(SKTypeface.Default, TextSize);
+        var options = new TextAttributeOptions(0.5f, BlinkVisible: true)
+        {
+            SpecialColors = new SpecialColorSettings(0xFF112233, 0, 0, 0xFF445566, 0, 0b001001),
+        };
+
+        var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize,
+            new FrameGeometry(CellW, CellH, 1, 1), textOptions: options);
+
+        var cell = Assert.Single(result.Instances.AsSpan(0, result.InstanceCount).ToArray());
+        Assert.Equal(((byte)0x44, (byte)0x55, (byte)0x66), (cell.FgR, cell.FgG, cell.FgB));
+        Assert.Equal(((byte)0x11, (byte)0x22, (byte)0x33), (cell.BgR, cell.BgG, cell.BgB));
+        Assert.Equal((byte)255, cell.BgA);
     }
 
     [Theory]

@@ -157,11 +157,13 @@ no network reporting. An entry is written for:
   exception that ends `Main`, after which Dotty prints
   `dotty: ... crash report written to <path>` to standard error;
 - an unobserved faulted task (`TaskScheduler.UnobservedTaskException`), which does
-  not end the process;
-- a GLFW error reported through GLFW's error callback, at most 16 per process
-  (the 16th entry says later ones are dropped). Dotty installs this callback
-  after window creation in place of Silk.NET's default, which throws on Windows
-  and collects every error in memory elsewhere.
+  not end the process.
+
+GLFW callback diagnostics are printed to standard error, at most 16 per process,
+and do not by themselves create a crash report. Some GLFW/Silk backend probes
+report unsupported operations even though the application continues normally.
+A fatal startup exception still writes a crash report through the `Main` error
+handler. Existing crash logs are not erased or rewritten by this distinction.
 
 Each entry has a UTC timestamp, the source, the Dotty version, the .NET runtime
 and identifier, the OS description and architecture, then the exception text
@@ -291,11 +293,11 @@ Notes:
 - Shell-integration auto-injection on Windows supports PowerShell and bash only; zsh and fish are not injected there (see [Shell Integration](ShellIntegration.md#automatic-injection)).
 
 ## Kitty graphics and pixel sizes by platform
-
 The [Kitty graphics protocol](KittyGraphics.md) is off by default
-(`graphics.kittyProtocol`). Nothing below has been run on any platform; it is what
-the code does, and every cell `needs runtime verification`.
-
+(`graphics.kittyProtocol`). Linux smoke checks cover basic image display,
+scrolling, deletion, and Unicode placeholders on X11 and native Wayland; they
+do not establish full protocol coverage. Animation and remaining checklist
+cases, plus macOS and Windows, still need runtime verification.
 | Behavior | Linux | macOS | Windows |
 |---|---|---|---|
 | Direct transmission (`t=d`) | yes | yes | yes, if the APC reaches Dotty (see below) |

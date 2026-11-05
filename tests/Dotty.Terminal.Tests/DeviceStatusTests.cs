@@ -67,15 +67,72 @@ public sealed class DeviceStatusTests
     [InlineData("\u001b[0n")]
     [InlineData("\u001b[7n")]
     [InlineData("\u001b[n")]
-    [InlineData("\u001b[?15n")]
-    [InlineData("\u001b[?25n")]
-    [InlineData("\u001b[?26n")]
     [InlineData("\u001b[>6n")]
     public void UnknownOrPrivateStatusCodes_AreSilent(string sequence)
     {
         var (_, parser, replies) = Setup();
         Feed(parser, sequence);
         Assert.Empty(replies);
+    }
+
+    [Fact]
+    public void Decid_AndPrimaryDaAliasesReplyWithoutPrintingAndPreserveCprOrder()
+    {
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, "\u001b[2;3H\u001b[31mA\u001bZ");
+        Assert.Single(replies);
+
+        Feed(parser, "\u001b[6nB\u001b[c");
+
+        Assert.Equal("\u001b[2;4R", replies[1]);
+        Assert.Equal(replies[0], replies[2]);
+        Assert.Equal('A', (char)adapter.Buffer.GetCell(1, 2).Rune);
+        Assert.Equal('B', (char)adapter.Buffer.GetCell(1, 3).Rune);
+        Assert.True(adapter.Buffer.GetCell(1, 2).StyleId != 0);
+        Assert.Equal(adapter.Buffer.GetCell(1, 2).StyleId, adapter.Buffer.GetCell(1, 3).StyleId);
+        Assert.Equal((1, 4), (adapter.Buffer.CursorRow, adapter.Buffer.CursorCol));
+    }
+
+    [Fact]
+    public void Decid_SplitAcrossFeedsIsConsumedAsARequest()
+    {
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, "\u001b");
+        Assert.Empty(replies);
+        Feed(parser, "Z\u001b[6n");
+        Assert.Equal(2, replies.Count);
+        Assert.Equal("\u001b[1;1R", replies[1]);
+        Assert.True(adapter.Buffer.GetCell(0, 0).IsEmpty);
+        Assert.Equal((0, 0), (adapter.Buffer.CursorRow, adapter.Buffer.CursorCol));
+    }
+
+    [Theory]
+    [InlineData("\u001b[?1;0c")]
+    [InlineData("\u001b[>1;999;0c")]
+    [InlineData("\u001b[1c")]
+    [InlineData("\u001b[>7c")]
+    [InlineData("\u001b[0;0c")]
+    [InlineData("\u001b[0:0c")]
+    [InlineData("\u001b[0$c")]
+    public void DeviceAttributeResponsesAndMalformedRequestsAreSilent(string sequence)
+    {
+        var (adapter, parser, replies) = Setup();
+        Feed(parser, sequence + "\u001b[6nX");
+
+        Assert.Equal(new[] { "\u001b[1;1R" }, replies);
+        Assert.Equal('X', (char)adapter.Buffer.GetCell(0, 0).Rune);
+        Assert.Equal((0, 1), (adapter.Buffer.CursorRow, adapter.Buffer.CursorCol));
+    }
+
+    [Fact]
+    public void Da2AcceptsOmittedAndLeadingZeroParameters()
+    {
+        var (_, parser, replies) = Setup();
+        Feed(parser, "\u001b[>c\u001b[>0c\u001b[>000c");
+
+        Assert.Equal(3, replies.Count);
+        Assert.Equal(replies[0], replies[1]);
+        Assert.Equal(replies[1], replies[2]);
     }
 
     [Fact]

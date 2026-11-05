@@ -67,6 +67,43 @@ public sealed class TerminalSceneComposerTests
     }
 
     [Fact]
+    public void Compose_RefreshesCachedRowsWhenPaneSpecialColorsChange()
+    {
+        using var tab = new TerminalTab(rows: 2, columns: 8);
+        var pane = tab.ActivePane;
+        pane.Session.Parser.Feed("\x1b[1mX\x1b[0m"u8);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var noSearch = new SearchOverlayRenderState(false, string.Empty, -1, 0, null);
+
+        CellInstance[] Render()
+        {
+            var frame = composer.Compose(
+                tab, manager, theme, new SgrColorArgb(theme.Foreground), new SgrColorArgb(0x803385DB),
+                80, 40, 10, 20, 1, 2, 8, NoPadding(), showTabBar: false, cursorVisible: false,
+                scrollbarHovered: false, scrollbarDragging: false, searchOverlay: noSearch, activeContextMenu: null);
+            return frame.AsSpan().ToArray();
+        }
+
+        CellInstance FindText(CellInstance[] instances)
+        {
+            foreach (var instance in instances)
+                if (instance.Row == 0 && instance.Col == 0 && instance.GlyphW > 0)
+                    return instance;
+            throw new Xunit.Sdk.XunitException("Text cell was not rendered.");
+        }
+
+        var before = FindText(Render());
+        pane.Session.Parser.Feed("\x1b]4;256;#ff0000\x1b\\\x1b]6;0;1\x1b\\"u8);
+        var after = FindText(Render());
+
+        Assert.NotEqual((before.FgR, before.FgG, before.FgB), (after.FgR, after.FgG, after.FgB));
+        Assert.Equal(((byte)255, (byte)0, (byte)0), (after.FgR, after.FgG, after.FgB));
+    }
+
+    [Fact]
     public void Compose_CachedRowsMatchFullRebuildAcrossWritesScrollsAndOverlays()
     {
         const int rows = 8;
@@ -565,6 +602,41 @@ public sealed class TerminalSceneComposerTests
 
         Assert.Equal(1, highlightCount);
     }
+    [Fact]
+    public void Compose_SearchHighlightRecoloursMatchedGlyphsWithoutStainingCachedRows()
+    {
+        using var tab = new TerminalTab(rows: 2, columns: 80);
+        tab.Session.Adapter.Buffer.SetCursor(0, 0);
+        tab.Session.Adapter.Buffer.WriteText("alphaX".AsSpan(), CellAttributes.Default);
+        using var manager = new TerminalTabManager(SilentPty.Create);
+        using var atlas = new GlyphAtlas(SKTypeface.Default, 14f, initialSize: 256);
+        var composer = new TerminalSceneComposer(atlas, SKTypeface.Default, 14f);
+        var theme = BuiltInThemes.DarkPlus;
+        var matches = new[] { new RuntimeSearchMatch(0, 0, 5, IsActive: true) };
+
+        TerminalSceneFrame Compose(IReadOnlyList<RuntimeSearchMatch>? searchMatches) => composer.Compose(
+            tab, manager, theme, new SgrColorArgb(theme.Foreground), new SgrColorArgb(0x803385DB),
+            800, 40, 10, 20, 1, 2, 80, NoPadding(), false, false, false, false,
+            new SearchOverlayRenderState(searchMatches != null, "alpha", 0, searchMatches?.Count ?? 0, searchMatches),
+            null);
+
+        CellInstance GlyphAt(TerminalSceneFrame frame, int column) => Assert.Single(
+            frame.AsSpan().ToArray(),
+            instance => instance.Row == 0 && instance.Col == column && instance.GlyphW > 0 && instance.GlyphH > 0);
+
+        var highlighted = Compose(matches);
+        var matched = GlyphAt(highlighted, 0);
+        var adjacent = GlyphAt(highlighted, 5);
+        var normalForeground = new SgrColorArgb(theme.Foreground);
+        var normalRgb = (normalForeground.R, normalForeground.G, normalForeground.B);
+
+        Assert.Equal(((byte)0, (byte)0, (byte)0), (matched.FgR, matched.FgG, matched.FgB));
+        Assert.Equal(normalRgb, (adjacent.FgR, adjacent.FgG, adjacent.FgB));
+
+        var restoredMatch = GlyphAt(Compose(null), 0);
+        Assert.Equal(normalRgb, (restoredMatch.FgR, restoredMatch.FgG, restoredMatch.FgB));
+    }
+
 
     [Fact]
     public void Compose_SelectionOverlayUsesProvidedTranslucentColor()

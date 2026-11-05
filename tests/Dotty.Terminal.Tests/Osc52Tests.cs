@@ -46,11 +46,23 @@ public class Osc52Tests
     }
 
     [Fact]
-    public void Write_EmptySelector_IsClipboard()
+    public void Write_EmptySelector_IsSelectAndCutBuffer0()
     {
         var r = new Rig();
         r.Feed($"\u001b]52;;{B64("x")}\u0007");
-        Assert.Equal(ClipboardSelection.Clipboard, Assert.Single(r.Writes).Selection);
+        Assert.Equal(ClipboardSelection.Select | ClipboardSelection.CutBuffer0, Assert.Single(r.Writes).Selection);
+    }
+    [Theory]
+    [InlineData("dGVzdGluZyAxMjM='", "testing 123")]
+    [InlineData("dGVz!dGluZyAxMjM=", "testing 123")]
+    [InlineData("dGVzdGluZyAxMjM", "testing 123")]
+    [InlineData("YWJjZ", "abc")]
+    public void Write_XtermPaste64IgnoresNoiseAndDropsIncompleteTail(string payload, string expected)
+    {
+        var r = new Rig();
+        r.Feed($"\u001b]52;;{payload}\u001b\\");
+
+        Assert.Equal(expected, Assert.Single(r.Writes).Text);
     }
 
     [Fact]
@@ -70,7 +82,7 @@ public class Osc52Tests
     }
 
     [Theory]
-    [InlineData("0")]
+
     [InlineData("q")]
     [InlineData("xyz")]
     public void Write_UnknownSelectorOnly_Ignored(string sel)
@@ -90,11 +102,11 @@ public class Osc52Tests
     }
 
     [Fact]
-    public void Write_InvalidBase64_DroppedWithoutThrowing()
+    public void Write_NonAlphabetOnlyClearsSelection()
     {
         var r = new Rig();
-        r.Feed("\u001b]52;c;!!!notbase64\u0007");
-        Assert.Empty(r.Writes);
+        r.Feed("\u001b]52;c;!!!\u0007");
+        Assert.Equal(new ClipboardWriteRequest(ClipboardSelection.Clipboard, ""), Assert.Single(r.Writes));
     }
 
     [Fact]
@@ -141,21 +153,13 @@ public class Osc52Tests
     }
 
     [Fact]
-    public void Write_OverCap_DiscardedAndFollowingWriteRecovers()
+    public void Write_OverCapWithNoise_DiscardedAndFollowingWriteRecovers()
     {
         var r = new Rig();
-        r.Feed($"\u001b]52;c;{new string('A', 1_048_577)}\u0007\u001b]52;c;{B64("ok")}\u0007");
+        r.Feed($"\u001b]52;c;!{new string('A', 1_048_581)}\u0007\u001b]52;c;{B64("ok")}\u0007");
         Assert.Equal("ok", Assert.Single(r.Writes).Text);
     }
 
-    [Fact]
-    public void Read_Clipboard_RaisesRequest()
-    {
-        var r = new Rig();
-        r.Feed("\u001b]52;c;?\u0007");
-        Assert.Equal(new ClipboardReadRequest(ClipboardSelection.Clipboard), Assert.Single(r.Reads));
-        Assert.Empty(r.Writes);
-    }
 
     [Fact]
     public void Read_Primary_RaisesRequest()
@@ -163,6 +167,15 @@ public class Osc52Tests
         var r = new Rig();
         r.Feed("\u001b]52;p;?\u0007");
         Assert.Equal(ClipboardSelection.Primary, Assert.Single(r.Reads).Selection);
+    }
+
+    [Fact]
+    public void Read_EmptySelector_PreservesS0ReplySelector()
+    {
+        var r = new Rig();
+        r.Feed("\u001b]52;;?\u0007");
+        Assert.Equal(ClipboardSelection.Select | ClipboardSelection.CutBuffer0, Assert.Single(r.Reads).Selection);
+        Assert.Equal("s0", Assert.Single(r.Reads).ReplySelector);
     }
 
     [Fact]
@@ -174,11 +187,11 @@ public class Osc52Tests
     }
 
     [Fact]
-    public void Read_QuestionMixedWithData_IsInvalidWrite()
+    public void Read_QuestionFollowedByBase64Data_IsWriteNotQuery()
     {
         var r = new Rig();
-        r.Feed("\u001b]52;c;?abc\u0007");
+        r.Feed("\u001b]52;c;?QUJD\u0007");
         Assert.Empty(r.Reads);
-        Assert.Empty(r.Writes);
+        Assert.Equal("ABC", Assert.Single(r.Writes).Text);
     }
 }

@@ -155,6 +155,7 @@ public sealed class ConfigCatalogTests
     {
         Assert.Equal("false", ConfigOptionCatalog.Find("vt.windowResizeAllowed")!.Default());
         Assert.Equal("false", ConfigOptionCatalog.Find("vt.checksumReportEnabled")!.Default());
+        Assert.Equal("false", ConfigOptionCatalog.Find("vt.titleReportEnabled")!.Default());
         Assert.Equal("\"none\"", ConfigOptionCatalog.Find("shellIntegration")!.Default());
         Assert.Equal("\"none\"", ConfigOptionCatalog.Find("mouse.copyOnSelect")!.Default());
         Assert.Equal("\"clipboard-paste\"", ConfigOptionCatalog.Find("mouse.middleClickAction")!.Default());

@@ -75,7 +75,9 @@ internal static partial class DottyWindowHost
         _cols = _startOptions.Columns;
         _rows = _startOptions.Rows;
         _window.Title = _startOptions.Title;
-        _window.TopMost = _startOptions.Floating;
+        // Wayland leaves stacking policy to the compositor; GLFW cannot set floating there.
+        if (_displayPlatform != DisplayPlatform.Wayland)
+            _window.TopMost = _startOptions.Floating;
         if (WindowStartOptions.SupportsWindowIcon(_displayPlatform))
             SetWindowIcon();
     }
@@ -88,7 +90,7 @@ internal static partial class DottyWindowHost
             : (byte)255;
         _renderer.BackgroundAlpha = alpha;
         _sceneComposer.BackgroundAlpha = alpha;
-        if (_window.TopMost != config.Window.Floating)
+        if (_displayPlatform != DisplayPlatform.Wayland && _window.TopMost != config.Window.Floating)
             _window.TopMost = config.Window.Floating;
     }
 

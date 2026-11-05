@@ -42,37 +42,25 @@ public partial class TerminalBuffer
         var alternateMapping = _screens.AlternateMapping;
         var activeMapping = _isAlternate ? alternateMapping : mainMapping;
         int markAnchors = _promptMarks.Count;
-        mainMapping.BeginAnchors(_isAlternate ? 1 : 2 + markAnchors);
-        alternateMapping.BeginAnchors(_isAlternate ? 2 + markAnchors : 0);
+        mainMapping.BeginAnchors((!_isAlternate ? 1 : 0) + (_hasMainSavedCursor ? 1 : 0) + (!_isAlternate ? markAnchors : 0));
+        alternateMapping.BeginAnchors((_isAlternate ? 1 : 0) + (_hasAlternateSavedCursor ? 1 : 0) + (_isAlternate ? markAnchors : 0));
 
         int cursorSlot = activeMapping.AddAnchor(oldActiveScreen.GetReflowAnchor(
-            cursorState.Row,
-            cursorState.Column,
-            cursorState.WrapPending,
-            oldActiveScrollback,
-            activeLayout));
+            cursorState.Row, cursorState.Column, cursorState.WrapPending, oldActiveScrollback, activeLayout));
 
-        int savedSlot = -1;
-        if (_hasSavedCursor)
+        int mainSavedSlot = -1;
+        if (_hasMainSavedCursor)
         {
-            savedSlot = activeMapping.AddAnchor(oldActiveScreen.GetReflowAnchor(
-                _savedCursorState.Row,
-                _savedCursorState.Column,
-                _savedCursorState.WrapPending,
-                oldActiveScrollback,
-                activeLayout));
+            var saved = _mainSavedCursor.Cursor;
+            mainSavedSlot = mainMapping.AddAnchor(oldMainScreen.GetReflowAnchor(
+                saved.Row, saved.Column, saved.WrapPending, oldMainScrollback, mainLayout));
         }
-
-        // While the alternate screen is active the cursor saved on entry belongs to the hidden main screen.
         int alternateSavedSlot = -1;
-        if (_isAlternate && _hasAlternateSavedCursor)
+        if (_hasAlternateSavedCursor && alternateLayout is not null)
         {
-            alternateSavedSlot = mainMapping.AddAnchor(oldMainScreen.GetReflowAnchor(
-                _alternateSavedCursorState.Row,
-                _alternateSavedCursorState.Column,
-                _alternateSavedCursorState.WrapPending,
-                oldMainScrollback,
-                mainLayout));
+            var saved = _alternateSavedCursor.Cursor;
+            alternateSavedSlot = alternateMapping.AddAnchor(alternateScreen!.GetReflowAnchor(
+                saved.Row, saved.Column, saved.WrapPending, 0, alternateLayout));
         }
 
         var promptAnchors = CapturePromptAnchors(
@@ -114,24 +102,15 @@ public partial class TerminalBuffer
         var mappedCursor = MapCursorState(cursorState, activeMapping, cursorSlot, rows, columns);
         _cursor.RestoreState(mappedCursor, rows, columns);
 
-        if (_hasSavedCursor)
+        if (_hasMainSavedCursor && mainSavedSlot >= 0)
         {
-            _savedCursorState = MapCursorState(
-                _savedCursorState,
-                activeMapping,
-                savedSlot,
-                rows,
-                columns);
+            var saved = _mainSavedCursor;
+            _mainSavedCursor = saved with { Cursor = MapCursorState(saved.Cursor, mainMapping, mainSavedSlot, rows, columns) };
         }
-
-        if (alternateSavedSlot >= 0)
+        if (_hasAlternateSavedCursor && alternateSavedSlot >= 0)
         {
-            _alternateSavedCursorState = MapCursorState(
-                _alternateSavedCursorState,
-                mainMapping,
-                alternateSavedSlot,
-                rows,
-                columns);
+            var saved = _alternateSavedCursor;
+            _alternateSavedCursor = saved with { Cursor = MapCursorState(saved.Cursor, alternateMapping, alternateSavedSlot, rows, columns) };
         }
 
         int newMainScrollback = mainMapping.NewScrollbackRows;
@@ -173,11 +152,25 @@ public partial class TerminalBuffer
             _scrollTop = Math.Clamp(oldScrollTop, 0, rows - 1);
             _scrollBottom = Math.Clamp(oldScrollBottom, _scrollTop, rows - 1);
         }
+
+        _leftMargin = Math.Clamp(_leftMargin, 0, columns - 1);
+        _rightMargin = _leftMargin == 0 && _rightMargin == oldColumns - 1
+            ? columns - 1
+            : Math.Clamp(_rightMargin, _leftMargin, columns - 1);
+        if (_leftMargin >= _rightMargin)
+        {
+            _leftMargin = 0;
+            _rightMargin = columns - 1;
+        }
         if (_originMode)
         {
             var state = _cursor.CaptureState();
             _cursor.RestoreState(
-                state with { Row = Math.Clamp(state.Row, _scrollTop, _scrollBottom) },
+                state with
+                {
+                    Row = Math.Clamp(state.Row, _scrollTop, _scrollBottom),
+                    Column = Math.Clamp(state.Column, EffectiveLeftMargin, EffectiveRightMargin)
+                },
                 rows,
                 columns);
         }

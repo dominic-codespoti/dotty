@@ -78,7 +78,7 @@ public sealed class ClipboardPasteRouter
     }
 
     private static void Send(LeafPane pane, string text) =>
-        pane.Session.WriteInput(Encode(text, pane.Session.Adapter));
+        pane.Session.WriteUserInput(Encode(text, pane.Session.Adapter));
 
     public static byte[] Encode(string text, TerminalAdapter adapter) =>
         PasteEncoder.Encode(text, adapter.Buffer.BracketedPasteMode);

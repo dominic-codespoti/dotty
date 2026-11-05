@@ -8,14 +8,26 @@ namespace Dotty.App.SkiaTests;
 
 public sealed class GraphemeShaperTests
 {
-    private const string DejaVuSans = "/usr/share/fonts/dejavu/DejaVuSans.ttf";
-    private const string DejaVuSansBold = "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf";
-    private const string DejaVuSansOblique = "/usr/share/fonts/dejavu/DejaVuSans-Oblique.ttf";
-
-    private static SKTypeface Load(string path)
+    private const string DejaVuSans = "DejaVuSans.ttf";
+    private const string DejaVuSansBold = "DejaVuSans-Bold.ttf";
+    private const string DejaVuSansOblique = "DejaVuSans-Oblique.ttf";
+    private static readonly string[] DejaVuDirectories =
     {
-        if (!File.Exists(path)) Assert.Skip($"requires {path}");
-        return SKTypeface.FromFile(path)!;
+        "/usr/share/fonts/dejavu",
+        "/usr/share/fonts/truetype/dejavu",
+        "/usr/share/fonts/TTF"
+    };
+
+    private static SKTypeface Load(string fileName)
+    {
+        foreach (string directory in DejaVuDirectories)
+        {
+            string path = Path.Combine(directory, fileName);
+            if (File.Exists(path)) return SKTypeface.FromFile(path)!;
+        }
+
+        Assert.Skip($"requires {fileName} in a known DejaVu font directory");
+        throw new InvalidOperationException();
     }
 
     [Theory]
@@ -76,12 +88,12 @@ public sealed class GraphemeShaperTests
     public void EmojiSequencesWithoutColourFontReportNotdef(string text)
     {
         using var typeface = Load(DejaVuSans);
-        if (typeface.ContainsGlyphs(text)) Assert.Skip("DejaVu unexpectedly covers the sequence");
+        using var font = new SKFont(typeface, 20f);
+        if (font.ContainsGlyphs(text)) Assert.Skip("DejaVu unexpectedly covers the sequence");
         using var shaper = new GraphemeShaper();
         Span<ushort> glyphs = stackalloc ushort[GraphemeShaper.MaxGlyphs];
         Span<SKPoint> positions = stackalloc SKPoint[GraphemeShaper.MaxGlyphs];
         Assert.Equal(0, shaper.Shape(text, typeface, 20f, glyphs, positions, out _));
-        using var font = new SKFont(typeface, 20f);
         Assert.Null(shaper.CreateBlob(text, font));
     }
 

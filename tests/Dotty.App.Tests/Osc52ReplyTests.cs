@@ -39,6 +39,14 @@ public sealed class Osc52ReplyTests
     }
 
     [Fact]
+    public void SelectCutBufferReply_PreservesS0Selector()
+    {
+        Assert.True(Osc52Reply.TryEncode("s0", "hi"u8, out byte[] reply));
+
+        Assert.Equal(Esc + "]52;s0;aGk=" + St, AsText(reply));
+    }
+
+    [Fact]
     public void BothSelections_PreferClipboardLetter()
     {
         Assert.True(Osc52Reply.TryEncode(ClipboardSelection.Clipboard | ClipboardSelection.Primary, "hi"u8, out byte[] reply));

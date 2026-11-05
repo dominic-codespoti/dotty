@@ -12,9 +12,15 @@ public struct CellInstance
 {
     /// <summary>Column index (0-based) in the visible grid.</summary>
     public ushort Col;
-
     /// <summary>Row index (0-based) in the visible grid.</summary>
     public ushort Row;
+
+    /// <summary>Per-frame vertical translation in device pixels; zero outside active smooth-scroll composition.</summary>
+    public float PixelOffsetY;
+
+    /// <summary>Optional top-down clip interval used by moving rows; both zero disables row clipping.</summary>
+    public float ClipTop;
+    public float ClipBottom;
 
     /// <summary>Glyph top-left X in atlas pixels.</summary>
     public short GlyphX;

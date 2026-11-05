@@ -417,6 +417,30 @@ public class TerminalInputEncoderTests
         if (bytes is not null)
             Assert.DoesNotContain(bytes, value => value >= 0x80);
     }
+    [Fact]
+    public void NewLineMode_EncodesLegacyReturnsWithoutOverridingProtocolsOrModifiers()
+    {
+        var encoder = new TerminalInputEncoder();
+        Span<byte> bytes = stackalloc byte[64];
+
+        int length = encoder.Encode(TerminalKey.Enter, TerminalKeyModifiers.None, bytes, newLineMode: true);
+        Assert.Equal("\r\n", Encoding.ASCII.GetString(bytes[..length]));
+
+        length = encoder.Encode(TerminalKey.Enter, TerminalKeyModifiers.Control, bytes, newLineMode: true);
+        Assert.Equal("\r", Encoding.ASCII.GetString(bytes[..length]));
+
+        length = encoder.Encode(TerminalKey.KeypadEnter, TerminalKeyModifiers.None, bytes, newLineMode: true);
+        Assert.Equal("\r\n", Encoding.ASCII.GetString(bytes[..length]));
+        length = encoder.Encode(TerminalKey.KeypadEnter, TerminalKeyModifiers.None, bytes,
+            keypadApplicationMode: true, newLineMode: true);
+        Assert.Equal("\u001bOM", Encoding.ASCII.GetString(bytes[..length]));
+
+        length = encoder.EncodeKeyEvent(TerminalKey.Enter, TerminalKeyModifiers.Control, 0,
+            TerminalKeyEventType.Press, ReadOnlySpan<char>.Empty, bytes, kittyFlags: 1,
+            newLineMode: true);
+        Assert.Equal("\u001b[13;5u", Encoding.ASCII.GetString(bytes[..length]));
+    }
+
 }
 
 internal static class TerminalInputEncoderTestExtensions

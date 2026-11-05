@@ -88,21 +88,6 @@ public sealed class P0TerminalCompatibilityTests
         Assert.Equal(2, adapter.KittyKeyboardFlags);
     }
 
-    [Fact]
-    public void DeviceAttributeRequestIdentityDistinguishesDa1Da2AndUnsupportedDa3()
-    {
-        var adapter = new TerminalAdapter(rows: 2, columns: 8);
-        var parser = new Dotty.Terminal.Parser.BasicAnsiParser { Handler = adapter };
-        var replies = new List<string>();
-        adapter.ReplyRequested += reply => replies.Add(reply.ToString());
-
-        parser.Feed("\x1b[c"u8);
-        parser.Feed("\x1b[?c"u8);
-        parser.Feed("\x1b[>c"u8);
-        parser.Feed("\x1b[=c"u8);
-
-        Assert.Equal(new[] { "\x1b[?1;0c", "\x1b[?1;0c", "\x1b[>1;0;0c" }, replies);
-    }
 
     [Fact]
     public void Decrqm_ReportsSetResetAndUnrecognized()

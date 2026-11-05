@@ -22,6 +22,20 @@ Test projects intentionally do not set a fixed `RuntimeIdentifier`. Native
 assets and conditional PTY tests must resolve for the runner that executes the
 tests.
 
+### Compiler and analyzer checks
+
+Use a non-incremental build with warnings treated as errors to check all projects,
+including the test analyzers:
+
+```bash
+dotnet build Dotty.slnx -c Release --no-incremental -warnaserror
+```
+
+The grapheme-shaping tests use the exact DejaVu Sans regular, bold and oblique
+font files. Their loader checks `/usr/share/fonts/dejavu`,
+`/usr/share/fonts/truetype/dejavu` and `/usr/share/fonts/TTF`; it skips only when
+the required file is absent from those locations.
+
 ### Scrollback, storage, reflow, and text-extraction tests (wave 3)
 
 `Dotty.App.Tests` (Terminal-internal members are visible to both `Dotty.App.Tests`
@@ -41,16 +55,16 @@ and `Dotty.Terminal.Tests` through `Dotty.Terminal`'s `InternalsVisibleTo`):
 `ColdCellTests`, `OscFastPathTests` and `OscAllocationTests` (bulk OSC scan,
 bytes-native OSC 52), and `TerminalCoreAllocationTests` (resize with
 column-dependent capacity allocates nothing after warm-up). Python helper tests
-for the memory harness live in
-`scripts/perf/tests/test_scrollback_memory.py`. None of these has been run on a
-machine with the .NET SDK by the authors of this change set; GUI, Wayland,
-macOS, and Windows behavior is verified manually.
+for the memory harness live in `scripts/perf/tests/test_scrollback_memory.py`.
+The Linux Release .NET suites have been run; that does not establish native
+Wayland, macOS or Windows input behavior, which still needs desktop verification.
 
 ### Kitty graphics tests
 
-Written without a compiler or runtime and **never executed**; every class below
-is `needs runtime verification`. `Dotty.Terminal.Tests` and `Dotty.App.Tests` both
-see `Dotty.Terminal` internals (`InternalsVisibleTo`). The graphics classes share
+The Linux Release suites have been executed with .NET 11; platform-specific
+cases still require their corresponding OS. `Dotty.Terminal.Tests` and
+`Dotty.App.Tests` both see `Dotty.Terminal` internals (`InternalsVisibleTo`).
+The graphics classes share
 `KittyTestSupport.cs` (`TestPng`, `FakeImageDecoder`, `FakeKittyHost`, `KittyRig`, command builders) and the
 `GraphicsMemoryMetricsCollection` xUnit collection, because the
 `GraphicsMemoryMetrics` counters are process-wide and tests assert that they

@@ -478,9 +478,10 @@ public sealed unsafe class ScreenLazyCommitTests
             }
         }
 
-        /// <summary>ED 2: the screen and the ring (history included) are blanked; the history count is kept.</summary>
+        /// <summary>ED 2: the screen is blanked and history is discarded.</summary>
         public void EraseDisplay()
         {
+            Stream.RemoveRange(0, History);
             for (int i = 0; i < Stream.Count; i++) Stream[i] = string.Empty;
             CursorRow = 0;
         }
@@ -552,25 +553,6 @@ public sealed unsafe class ScreenLazyCommitTests
         }
     }
 
-    [Fact]
-    public void EraseDisplayKeepsTheScrollbackCountButBlanksTheHistory()
-    {
-        using var buffer = new TerminalBuffer(5, 20, 50);
-        for (int i = 0; i < 30; i++)
-            WriteLine(buffer, $"line-{i}");
-        Assert.Equal(26, buffer.ScrollbackCount);
-
-        buffer.EraseDisplay(2);
-
-        Assert.Equal(26, buffer.ScrollbackCount);
-        for (int i = 0; i < 26; i++)
-            Assert.Equal(string.Empty, buffer.GetScrollbackLine(i).ToString());
-        for (int r = 0; r < 5; r++)
-            Assert.Equal(string.Empty, buffer.GetRowText(r).TrimEnd());
-        Assert.Equal(0, buffer.CursorRow);
-        Assert.Equal(5, buffer.ActiveBuffer.DirtyRowCount);
-        Assert.Empty(buffer.ValidateInvariants());
-    }
 
     [Fact]
     public void ClearScrollbackDropsTheHistoryAndKeepsTheScreen()

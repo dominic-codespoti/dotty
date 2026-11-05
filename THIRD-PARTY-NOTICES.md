@@ -21,6 +21,7 @@ shipped as `licenses/GLFW-LICENSE.md` in every archive.
 | Lua 5.4 (`liblua54`/`lua54.dll`, from KeraLua) | as bundled by KeraLua 1.4.9 | Native library | MIT |
 | GLFW (Clear Code 3.6 development fork, commit `068858eece20cd6b6128f6f07a1d61f2dc2cbfaf`, **modified**: local patches listed in `vendor/glfw/SOURCE.json`) | 3.6.0 | Native `libglfw.so.3`/`libglfw.3.dylib`/`glfw3.dll`, built from `vendor/glfw/source`; replaces the GLFW 3.4.0 binary of the `Ultz.Native.GLFW` package that `Silk.NET.Windowing.Glfw` restores | zlib/libpng |
 | Unicode Character Database 16.0.0 | 16.0.0 | Data used to generate the character-width tables compiled into `dotty` | Unicode License v3 |
+| libX11 Xcms color conversion (adapted) | libX11 Xcms | Portable conversion code and fallback profile compiled into `dotty`; no runtime X11 dependency | Tektronix Color Management System terms; The Open Group terms |
 
 `libSkiaSharp` and `libHarfBuzzSharp` incorporate further third-party code. The
 SkiaSharp project lists ANGLE, HarfBuzz, Skia, etc1, gif, libpng, DNG SDK,
@@ -307,6 +308,73 @@ freely, subject to the following restrictions:
 3. This notice may not be removed or altered from any source
    distribution.
 ```
+
+### Tektronix Color Management System and The Open Group notices: adapted libX11 Xcms
+
+The portable OSC color conversion implementation in
+`src/Dotty.Terminal/Adapter/OscColorParser.cs` adapts the libX11 Xcms
+conversions and fallback profile. It has no runtime X11 dependency.
+
+```
+Code and supporting documentation (c) Copyright 1990 1991 Tektronix, Inc.
+All Rights Reserved.
+
+This file is based on an X Window System-specific implementation of Xcms
+based on the TekColor Color Management System. Permission is hereby granted
+to use, copy, modify, sell, and otherwise distribute this software and its
+documentation for any purpose and without fee, provided that this copyright,
+permission, and disclaimer notice is reproduced in all copies of this
+software and in supporting documentation. TekColor is a trademark of
+Tektronix, Inc.
+
+Tektronix makes no representation about the suitability of this software
+for any purpose. It is provided "as is" and with all faults.
+
+TEKTRONIX DISCLAIMS ALL WARRANTIES APPLICABLE TO THIS SOFTWARE,
+INCLUDING THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE. IN NO EVENT SHALL TEKTRONIX BE LIABLE FOR ANY
+SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER
+RESULTING FROM LOSS OF USE, DATA, OR PROFITS, WHETHER IN AN ACTION OF
+CONTRACT, NEGLIGENCE, OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+CONNECTION WITH THE USE OR THE PERFORMANCE OF THIS SOFTWARE.
+
+Tektronix Color Management System permission conditions for TekHVC:
+1. This copyright, permission, and disclaimer notice is reproduced in all
+   copies of this software and any modification thereof and in supporting
+   documentation;
+2. Any color-handling application which displays TekHVC color cooordinates
+   identifies these as TekHVC color coordinates in any interface that
+   displays these coordinates and in any associated documentation;
+3. The term "TekHVC" is always used, and is only used, in association with
+   the mathematical derivations of the TekHVC Color Space, including those
+   provided in this file and any equivalent pathways and mathematical
+   derivations, regardless of digital (e.g., floating point or integer)
+   representation.
+
+Copyright 1990, 1998 The Open Group
+
+Permission to use, copy, modify, distribute, and sell this software and its
+documentation for any purpose is hereby granted without fee, provided that
+the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting
+documentation.
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Except as contained in this notice, the name of The Open Group shall not be
+used in advertising or otherwise to promote the sale, use or other dealings
+in this Software without prior written authorization from The Open Group.
+```
+
 
 ### Unicode License v3: Unicode Character Database
 

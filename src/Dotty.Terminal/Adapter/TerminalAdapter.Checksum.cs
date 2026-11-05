@@ -53,7 +53,7 @@ public partial class TerminalAdapter
     /// positive, no-attributes, no-trim, drawn and byte flags: not negated, no attribute bits). An unwritten
     /// cell counts as a space, the continuation half of a wide character is skipped, and combining marks
     /// are excluded (only the base code point of a cluster counts). Omitted bounds default to the whole
-    /// screen; in origin mode (DECOM) rows are relative to the scroll region. An empty or out-of-range
+    /// screen; in origin mode (DECOM) both axes are relative to the scroll region. An empty or out-of-range
     /// rectangle, or a page other than 0/1 (Dotty has a single page), sums to 0.
     /// </summary>
     private int ComputeRectChecksum(int page, int top, int left, int bottom, int right)
@@ -64,18 +64,22 @@ public partial class TerminalAdapter
         int rows = _buffer.Rows;
         int cols = _buffer.Columns;
         int rowBase = 0;
+        int colBase = 0;
         int regionRows = rows;
+        int regionCols = cols;
         if (_buffer.OriginMode)
         {
-            _buffer.GetOriginRegionRows(out int regionTop, out int regionBottom);
+            _buffer.GetOriginRegion(out int regionTop, out int regionBottom, out int regionLeft, out int regionRight);
             rowBase = regionTop;
+            colBase = regionLeft;
             regionRows = regionBottom - regionTop + 1;
+            regionCols = regionRight - regionLeft + 1;
         }
 
         int firstRow = top <= 0 ? 1 : top;
         int firstCol = left <= 0 ? 1 : left;
         int lastRow = bottom <= 0 || bottom > regionRows ? regionRows : bottom;
-        int lastCol = right <= 0 || right > cols ? cols : right;
+        int lastCol = right <= 0 || right > regionCols ? regionCols : right;
         if (firstRow > lastRow || firstCol > lastCol)
             return 0;
 
@@ -83,8 +87,8 @@ public partial class TerminalAdapter
         for (int row = rowBase + firstRow - 1; row <= rowBase + lastRow - 1; row++)
         {
             ReadOnlySpan<CellHot> cells = _buffer.GetRowCells(row);
-            int end = Math.Min(lastCol, cells.Length);
-            for (int col = firstCol - 1; col < end; col++)
+            int end = Math.Min(colBase + lastCol, cells.Length);
+            for (int col = colBase + firstCol - 1; col < end; col++)
             {
                 CellHot cell = cells[col];
                 if (cell.IsContinuation)

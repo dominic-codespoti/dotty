@@ -9,7 +9,10 @@ public partial class TerminalAdapter
 {
     public void OnRequestMode(int mode, bool isPrivate)
     {
-        // DECRQM: 1=set, 2=reset, 3=permanently set, 4=permanently reset, 0=not recognized.
+        if (_conformanceLevel < 3)
+            return;
+
+        // DECRQM: 1=set, 2=reset, 3=permanently set, 4=permanently reset.
         // The status table lives in TerminalAdapter.ModeReports.cs.
         int state = GetModeStatus(mode, isPrivate);
         var handler = ReplyRequested;

@@ -82,6 +82,10 @@ public sealed class DottyUserConfig
     [JsonPropertyName("clipboard")]
     public ClipboardUserConfig Clipboard { get; set; } = new();
 
+    /// <summary>Opt-in text printer output; no file is opened unless a path is configured.</summary>
+    [JsonPropertyName("printing")]
+    public PrintingUserConfig Printing { get; set; } = new();
+
     [JsonPropertyName("vt")]
     public VtUserConfig Vt { get; set; } = new();
 
@@ -489,6 +493,7 @@ public static class UserConfigService
         if (config is not null)
         {
             config.Clipboard ??= new ClipboardUserConfig();
+            config.Printing ??= new PrintingUserConfig();
             config.Hyperlinks ??= new HyperlinksUserConfig();
             config.Vt ??= new VtUserConfig();
             config.Mouse ??= new MouseUserConfig();

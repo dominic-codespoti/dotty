@@ -1,4 +1,5 @@
 using System;
+using Dotty.Terminal.Adapter;
 using Dotty.Rendering.Gpu;
 using SkiaSharp;
 using Xunit;
@@ -239,6 +240,22 @@ public sealed class QuadRowCacheTests
         FillAll();
         cache.ApplyTextOptions(new TextAttributeOptions(0.6f, BlinkVisible: false));
         Assert.False(cache.GetEntryRef(0).Valid || cache.GetEntryRef(1).Valid || cache.GetEntryRef(2).Valid);
+    }
+
+    [Fact]
+    public void ApplyTextOptions_special_color_change_invalidates_cached_rows()
+    {
+        var cache = new QuadRowCache();
+        cache.EnsureGeometry(rows: 1, columns: 1, cellW: 10f, cellH: 20f);
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true));
+        cache.GetEntryRef(0).Valid = true;
+
+        cache.ApplyTextOptions(new TextAttributeOptions(0.5f, BlinkVisible: true)
+        {
+            SpecialColors = new SpecialColorSettings(0xFF123456, 0, 0, 0, 0, 1),
+        });
+
+        Assert.False(cache.GetEntryRef(0).Valid);
     }
 
     [Fact]

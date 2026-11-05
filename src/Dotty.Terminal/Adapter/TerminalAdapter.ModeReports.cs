@@ -17,7 +17,7 @@ public partial class TerminalAdapter
     /// DECRQM state for <paramref name="mode"/>. Private (DEC) modes: every mode the parser
     /// dispatches reports its live state; modes Dotty deliberately ignores report permanently
     /// reset (4), always-on ones permanently set (3); everything else is 0. ANSI modes follow
-    /// xterm's table with Dotty's actual behavior (no CSI Ps h/l support at all).
+    /// the live insert/newline settings and the permanently supported or ignored ANSI modes.
     /// </summary>
     internal int GetModeStatus(int mode, bool isPrivate)
     {
@@ -30,10 +30,22 @@ public partial class TerminalAdapter
         {
             case 1: return ModeFlag(ApplicationCursorKeysEnabled); // DECCKM
             case 2: return ModePermanentlySet; // DECANM: there is no VT52 mode
+            case 3: return ModeFlag(_buffer.Columns == 132); // DECCOLM: report actual accepted geometry
+            case 4: return ModeFlag(SmoothScrollEnabled); // DECSCLM
             case 5: return ModeFlag(ReverseVideo); // DECSCNM
             case 6: return ModeFlag(_buffer.OriginMode); // DECOM
             case 7: return ModeFlag(_buffer.AutoWrap); // DECAWM
+            case 18: return ModeFlag(PrintFormFeedEnabled); // DECPFF
+            case 19: return ModeFlag(PrintExtentFullPage); // DECPEX
             case 25: return ModeFlag(_buffer.CursorVisible); // DECTCEM
+            case 35: return ModeFlag(FontShiftModeEnabled); // xterm Shift-keypad font controls
+            case 40: return ModeFlag(ColumnModeChangesAllowed);
+            case 41: return ModeFlag(MoreFixEnabled);
+            case 42: return ModeFlag(NationalReplacementEnabled); // DECNRCM
+            case 45: return ModeFlag(_buffer.ReverseWraparound); // XTREVWRAP
+            case 69: return ModeFlag(_buffer.LeftRightMarginMode); // DECLRMM
+            case 95: return _conformanceLevel >= 5 ? ModeFlag(NoClearOnColumnChange) : ModeNotRecognized;
+            case 1045: return ModeFlag(_buffer.ExtendedReverseWraparound); // XTREVWRAP2
             case 47:
             case 1047:
             case 1049:
@@ -56,18 +68,9 @@ public partial class TerminalAdapter
             case 2033: return ModeFlag(VisibilityReportsEnabled);
 
             // Recognized but ignored (SET/RESET are accepted and have no effect).
-            case 3: // DECCOLM
-            case 4: // DECSCLM
             case 8: // DECARM
             case 12: // AT&T 610 blink
-            case 18: // DECPFF
-            case 19: // DECPEX
-            case 40: // 80/132 enable
-            case 42: // DECNRCM
-            case 45: // reverse wrap
-            case 69: // DECLRMM
             case 80: // DECSDM
-            case 95: // DECNCSM
             case 1048: // save/restore cursor: an action, not a persistent mode
             // xterm "recognized, unimplemented" VT3xx/VT4xx modes:
             case 11:
@@ -86,23 +89,22 @@ public partial class TerminalAdapter
         }
     }
 
-    private static int GetAnsiModeStatus(int mode)
+    private int GetAnsiModeStatus(int mode)
     {
         switch (mode)
         {
+            case 2: return ModeFlag(KeyboardActionModeLocked); // KAM
+            case 4: return ModeFlag(_buffer.InsertMode);
+            case 12: return ModeFlag(!LocalEchoEnabled); // SRM set means send/receive, without local echo
+            case 20: return ModeFlag(_buffer.NewLineMode);
             case 1: // GATM
-            case 2: // KAM
             case 3: // CRM
-            case 4: // IRM (not implemented)
             case 5: // SRTM
             case 7: // VEM
             case 10: // HEM
             case 11: // PUM
             case >= 13 and <= 19: // FEAM..TSM family, always reset
-            case 20: // LNM (not implemented)
                 return ModePermanentlyReset;
-            case 12: // SRM: Dotty never echoes locally, i.e. "send/receive" is set
-                return ModePermanentlySet;
             default:
                 return ModeNotRecognized;
         }

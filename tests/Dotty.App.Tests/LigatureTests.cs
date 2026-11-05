@@ -160,6 +160,24 @@ public sealed class LigatureTests
         Assert.NotEqual(row.KeyAt(2), key);
         Assert.StartsWith("\u0001lig3:901", key.Grapheme);
     }
+    [Fact]
+    public void RendererSplitsRunsAtSearchPaintBoundariesAndRestoresUnsearchedShape()
+    {
+        var shaper = new FakeShaper();
+        var renderer = new LigatureRenderer(shaper);
+        renderer.Configure(LigatureMode.Always, null);
+        var buffer = Row("->");
+
+        renderer.SetSearchCoverage([0, 2], rows: 1, columns: 2);
+        var highlighted = renderer.PrepareRow(buffer, 0, 2, SKTypeface.Default, 14f);
+        Assert.Null(highlighted);
+
+        renderer.SetSearchCoverage(null, 0, 0);
+        var restored = renderer.PrepareRow(buffer, 0, 2, SKTypeface.Default, 14f);
+        Assert.Equal("SC", Kinds(restored, 2));
+        Assert.Equal(900, restored!.GlyphsAt(0)[0].GlyphId);
+    }
+
 
     [Fact]
     public void CursorModeLeavesTheCursorCellUnshaped()

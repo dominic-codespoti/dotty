@@ -196,6 +196,28 @@ public sealed class KittyRelativePlacementTests
     }
 
     [Fact]
+    public void AColumnEditCropsTheParentAndRelativeChildFollowsItsNewGeometry()
+    {
+        using var store = TwoImageStore(out var a, out var b);
+        store.Place(a, "p=1,c=2,r=2", anchorRow: 5, anchorCol: 2);
+        var child = RelOk(store, b, "p=1,P=1,Q=1,H=1,V=0");
+        int childColumnBefore = CaptureOf(store, 2).Col;
+
+        Assert.Equal(1, store.OnColumnsScrolled(2, 20, 2, 20, 1, 24));
+
+        var parent = CaptureOf(store, 1);
+        var drawnChild = CaptureOf(store, 2);
+        Assert.Equal((2, 1), (parent.Col, parent.Cols));
+        Assert.Equal(childColumnBefore, drawnChild.Col);
+        Assert.Equal(1, store.OnColumnsScrolled(2, 20, 2, 20, -1, 24));
+        Assert.Equal(3, CaptureOf(store, 1).Col);
+        Assert.Equal(childColumnBefore + 1, CaptureOf(store, 2).Col);
+        Assert.Equal(1, CaptureOf(store, 1).Cols);
+        Assert.Equal(PlacementKind.Relative, child.Kind);
+        Assert.Equal(0, child.AnchorCol);
+    }
+
+    [Fact]
     public void ACroppedParentLeavesTheChildGeometryAlone()
     {
         using var store = TwoImageStore(out var a, out var b);

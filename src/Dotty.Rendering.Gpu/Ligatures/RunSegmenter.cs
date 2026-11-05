@@ -25,9 +25,10 @@ public static class LigatureModes
 /// <summary>
 /// One cell as seen by <see cref="RunSegmenter"/>: <see cref="Char"/> is the printable ASCII character of a
 /// width-1 cell, or 0 for a cell that can never join a run (blank, wide, continuation, non-ASCII, cluster, sprite).
-/// <see cref="Face"/> identifies the face/style the cell is drawn with; a change breaks the run.
+/// <see cref="Face"/> identifies the face/style the cell is drawn with; a change breaks the run. <see cref="PaintGroup"/>
+/// keeps glyphs with different foreground paint separate without changing the actual glyph style.
 /// </summary>
-public readonly record struct SegmentCell(char Char, int Face)
+public readonly record struct SegmentCell(char Char, int Face, byte PaintGroup = 0)
 {
     public static readonly SegmentCell None = new('\0', -1);
 }
@@ -67,7 +68,8 @@ public static class RunSegmenter
             int start = i, face = cells[i].Face;
             bool pair = false;
             i++;
-            while (i < cells.Length && Joins(cells, i, mode, cursorColumn) && cells[i].Face == face)
+            while (i < cells.Length && Joins(cells, i, mode, cursorColumn)
+                && cells[i].Face == face && cells[i].PaintGroup == cells[start].PaintGroup)
             {
                 if (!pair && IsPunctuation(cells[i].Char) && IsPunctuation(cells[i - 1].Char))
                     pair = true;

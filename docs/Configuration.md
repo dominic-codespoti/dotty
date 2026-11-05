@@ -138,7 +138,12 @@ become unreadable therefore no longer prevents a new tab from opening.
   },
   "vt": {
     "windowResizeAllowed": false,
-    "checksumReportEnabled": false
+    "windowControlAllowed": false,
+    "checksumReportEnabled": false,
+    "titleReportEnabled": false
+  },
+  "printing": {
+    "outputFile": null
   },
   "graphics": {
     "kittyProtocol": false,
@@ -226,7 +231,7 @@ when a platform font reports incomplete metrics.
 | `columns` / `rows` | integer | `0` | Initial grid size in cells; `0` uses 80 × 24, values above 1000 are clamped. Read at startup. |
 | `startMaximized` | boolean | `false` | Maximize the window when it is first shown. Lua: `window.start_maximized`. |
 | `startFullscreen` | boolean | `false` | Enter fullscreen when the window is first shown; wins over `startMaximized`. Lua: `window.start_fullscreen`. |
-| `floating` | boolean | `false` | Keep the window above other windows (always on top); applies live. |
+| `floating` | boolean | `false` | Keep the window above other windows (always on top); applies live where supported. Wayland does not expose this operation, so the compositor controls stacking there. |
 | `decorations` | string | `custom` | Windows only: `custom` removes the native title bar and draws the tab-bar caption controls; `native` keeps native decorations. Other platforms retain native decorations regardless of this option. The custom caption strip remains visible when `tabBar.show` is false. |
 
 ### `tabBar`
@@ -529,22 +534,50 @@ granularity it started with, and Select All covers the whole scrollback.
 ### `vt`
 
 Opt-in VT behaviors that expose host or screen state to the program running in
-the terminal. Both default to `false`.
+the terminal. All default to `false`.
 
 | Property | Type | Default | Notes |
 |---|---|---|---|
-| `windowResizeAllowed` | boolean | `false` | Let applications resize the window with `CSI 8 ; rows ; cols t` (and `CSI Ps t` with `Ps` >= 24). Ignored even when enabled if there are several tabs, the active tab has split panes, or the window is maximized, fullscreen, or minimized. Read live, so a reload applies to the next request. |
+| `windowResizeAllowed` | boolean | `false` | Let applications resize the window with `CSI 8 ; rows ; cols t`, `CSI Ps t` with `Ps` >= 24, and DECCOLM (`CSI ? 3 h/l`) when mode 40 permits column changes. Ignored even when enabled if there are several tabs, the active tab has split panes, or the window is maximized, fullscreen, or minimized. Read live, so a reload applies to the next request. Denial keeps actual geometry unchanged; DECCOLM's terminal-side clear/home effects still apply when mode 40 is enabled. |
+| `windowControlAllowed` | boolean | `false` | Permit `CSI 1 t` to restore, `CSI 2 t` to minimize, and `CSI 3 ; x ; y t` to move the native window. The move reports actual host geometry when available; omitted/zero axes leave that axis unchanged. Independent of resize and title-report permissions. Lua: `vt.window_control_allowed`. Read live for the next request. |
 | `checksumReportEnabled` | boolean | `false` | Answer DECRQCRA (`CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y`) rectangular-area checksum requests. When `false` no reply is sent at all. Applied to a session when it is created and on config reload. |
-
-Why they are off: a window resize changes your desktop layout on the say-so of
-whatever prints to the terminal, and a checksum reply lets a program read the
-screen contents back without any clipboard or prompt. Enable them only for a
-trusted workload, such as a conformance run. The window-report queries
-(`CSI 13/14/15/16/18/19 t`) only read geometry and are always answered; title
-reports (`CSI 20/21 t`) are never answered. See
-[Parsing](Parsing.md#window-operations-csi-ps--ps--ps-t) and
+| `titleReportEnabled` | boolean | `false` | Answer icon/window title queries (`CSI 20/21 t`) from stored title metadata. Independent of resize and checksum permissions. Applied at session creation and on config reload; revocation silences subsequent title queries without preventing title updates. Lua key: `vt.title_report_enabled`. |
+These permissions are off because window resizing changes your desktop layout,
+window controls can move or minimize the host, checksums expose screen contents,
+and title reports return application-controlled text to the input stream.
+Enable them only for trusted workloads. Title control characters are filtered,
+but that does not replace the opt-in policy. Geometry queries
+(`CSI 13/14/15/16/18/19 t`) remain unconditional. Host permissions are not
+terminal modes and are unchanged by RIS or DECSTR. See
+[Parsing](Parsing.md#window-operations-csi-ps--ps--ps-t),
+[Title modes and replies](Parsing.md#title-modes-and-replies), and
 [DECRQCRA](Parsing.md#decrqcra-rectangular-checksum).
 
+### `printing`
+
+File printing is opt-in. With `outputFile` unset, `null`, or empty, print
+requests do not write a file. Set an explicit destination to enable it:
+
+```json
+{
+  "printing": {
+    "outputFile": "/home/alice/terminal-print.txt"
+  }
+}
+```
+
+Lua uses `dotty.config.printing.output_file = "/home/alice/terminal-print.txt"`.
+`CSI 0 i` writes a snapshot of the current display: by default the scrolling
+region, or the full page when DECPEX mode 19 is set. DECPFF mode 18 controls
+whether a form feed is appended. Output is appended to the configured file;
+Dotty does not launch an external program. Configuration reload affects later
+print requests; already accepted writes finish at their original destination.
+Choose a file writable by the user running Dotty and avoid destinations exposed
+to untrusted terminal workloads.
+
+| Property | Type | Default | Notes |
+|---|---|---|---|
+| `outputFile` | string or null | `null` | Append printed terminal text to this file; null or empty disables printing. Applied to existing and new sessions on configuration reload; accepted jobs retain their original destination. Lua: `printing.output_file`. |
 ### `scrollback`
 
 How much history each terminal session keeps.
@@ -823,6 +856,12 @@ regex/case/whole-word modes from the `search` config object, and resets the
 match state. Invoking `search` again toggles the overlay closed; `Escape` also
 closes it. Closing removes the matches and active marker. Reopening starts a
 new empty query.
+
+Matches use black text on orange (active) or yellow (other matches), while
+unmatched text keeps its original colour. Intrinsic-colour glyphs such as emoji
+retain their native colours. Programming ligatures split at match boundaries
+so a match inside a shaped run can be highlighted independently; closing search
+restores the ordinary shaping and text colours.
 
 While the overlay is open it consumes the keyboard. Printable text is inserted
 at the query cursor. `Left`/`Right` move one grapheme cluster (an emoji or a

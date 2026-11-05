@@ -118,8 +118,8 @@ Whether idle wakeups really stay at frame deadlines is `needs runtime verificati
 
 ### Kitty image layers
 
-Details of the protocol are in [Kitty graphics](KittyGraphics.md). The rendering
-side works like this (written from the source, never run or measured):
+Details of the protocol and the limited Linux runtime smoke coverage are in
+[Kitty graphics](KittyGraphics.md). The rendering architecture is:
 
 - **Capture.** `RenderSnapshot.Graphics` (a pooled `KittyRenderSnapshot`) holds the
   visible placements, the virtual placements (for placeholders) and relative

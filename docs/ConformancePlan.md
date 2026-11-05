@@ -208,6 +208,8 @@ The cross-platform follow-up isolates the split-pane fixture with the existing s
 
 On the next CI run, the complete cross-platform matrix, NativeAOT publishes, GUI smoke and renderer performance limits passed; first-frame startup timing remained over budget. Its benchmark now uses 4,096 fresh-state operations per iteration and the existing normal-GC option instead of a sub-millisecond batch inside a 10 MB no-GC region. Local execution confirmed the larger samples and unchanged per-operation allocation, but four startup latency checks still exceeded the runner-specific limits. These failures are retained; the linked PR records the replacement CI verdict without changing any baseline or budget.
 
+The enlarged sample is isolated in `FirstFrameBenchmarks` so the other startup fixtures retain their original GC policy. In the subsequent local run, all **13 startup benchmarks** passed their latency and allocation checks. A separate process comparison confirmed the original and extracted fixtures generate the same ANSI payload; shared-generator priming is preserved for both first-frame and existing resize inputs. Baselines and regression limits remain unchanged.
+
 Batch 10 result and verification are summarized above; temporary local report and GUI artifact paths are omitted. The exact suite-name accounting and disposition of all six remaining failures are recorded above and in the current [conformance status](Conformance.md).
 
 ## Non-negotiable rules

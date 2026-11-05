@@ -124,8 +124,8 @@ public class Program
 
             if (string.IsNullOrEmpty(filter) || filter.Contains("startup", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("Running Startup Benchmarks...");
                 summaries.Add(BenchmarkRunner.Run<StartupBenchmarks>(benchmarkConfig));
+                summaries.Add(BenchmarkRunner.Run<FirstFrameBenchmarks>(benchmarkConfig));
             }
 
             if (string.IsNullOrEmpty(filter) || filter.Contains("throughput", StringComparison.OrdinalIgnoreCase))
@@ -470,6 +470,7 @@ public class Program
     [
         typeof(ParserBenchmarks), typeof(ParserMicroBenchmarks), typeof(MemoryBenchmarks),
         typeof(RenderingBenchmarks), typeof(SilkRenderingBenchmarks), typeof(StartupBenchmarks),
+        typeof(FirstFrameBenchmarks),
         typeof(ThroughputBenchmarks), typeof(LatencyBenchmarks), typeof(BulkOutputBenchmark),
         typeof(ParserScanBenchmarks), typeof(ParserOscBenchmarks), typeof(ReflowBenchmarks), typeof(TextFormatBenchmarks)
     ];

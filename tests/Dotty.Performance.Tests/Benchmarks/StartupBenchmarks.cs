@@ -13,18 +13,15 @@ namespace Dotty.Performance.Tests.Benchmarks;
 public class StartupBenchmarks : PerformanceTestBase
 {
     private byte[] _plainText1Kb = null!;
-    private byte[] _ansiText1Kb = null!;
     private TerminalAdapter _resizeAdapter = null!;
-
-    // First-frame batches exceed the base fixture's 10 MB no-GC budget.
-    protected override bool UseNoGcRegion => false;
 
     public override void SetupBenchmark()
     {
         base.SetupBenchmark();
 
         _plainText1Kb = TestDataGenerator.GeneratePlainText(1000);
-        _ansiText1Kb = TestDataGenerator.GenerateBasicAnsiText(1000, 0.1);
+        // Preserve the shared seeded RNG position for the existing resize fixture.
+        _ = TestDataGenerator.GenerateBasicAnsiText(1000, 0.1);
 
         var resizeText = TestDataGenerator.GeneratePlainText(10000);
         _resizeAdapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
@@ -97,18 +94,6 @@ public class StartupBenchmarks : PerformanceTestBase
         var adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
         var parser = new BasicAnsiParser { Handler = adapter };
         parser.Feed(_plainText1Kb);
-    }
-
-    [Benchmark(Description = "First Frame: Parse + Render 1KB")]
-    // Each invocation still constructs fresh state. The quick job's 12 calls form
-    // a sub-millisecond sample; this batch allows JIT warmup and meaningful timing.
-    [InvocationCount(4096)]
-    public void FirstFrame_ParseAndRender()
-    {
-        var adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
-        var parser = new BasicAnsiParser { Handler = adapter };
-        parser.Feed(_ansiText1Kb);
-        adapter.RequestRenderExtern();
     }
 
     #endregion

@@ -588,7 +588,7 @@ public sealed class QuadFrameBuilderTests
     [InlineData(1, 1)]
     [InlineData(3, 7)]
     [InlineData(5, 40)]
-    public void FullyDecoratedGrid_FitsTheInstanceBudgetExactly(int rows, int columns)
+    public void FullyDecoratedGrid_EmitsAllInstancesIntoItsResultArray(int rows, int columns)
     {
         var buffer = new TerminalBuffer(rows, columns);
         var attrs = new CellAttributes
@@ -608,8 +608,14 @@ public sealed class QuadFrameBuilderTests
         var result = QuadFrameBuilder.Build(buffer, atlas, SKTypeface.Default, TextSize,
             new FrameGeometry(CellW, CellH, rows, columns), textOptions: SpriteOptions);
 
-        Assert.Equal(QuadFrameBuilder.InstanceBudget(rows, columns), result.Instances.Length);
-        Assert.Equal(result.Instances.Length, result.InstanceCount);
+        Assert.Equal(rows * columns * 3, result.InstanceCount);
+        Assert.Equal(result.InstanceCount, result.Instances.Length);
+        for (int i = 0; i < result.InstanceCount; i += 3)
+        {
+            Assert.True(result.Instances[i].GlyphW > 0);
+            Assert.Equal(CellFlags.Decoration, result.Instances[i + 1].Flags);
+            Assert.Equal(CellFlags.Decoration, result.Instances[i + 2].Flags);
+        }
     }
 
     [Fact]

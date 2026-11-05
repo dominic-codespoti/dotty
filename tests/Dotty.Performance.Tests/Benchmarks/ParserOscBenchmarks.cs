@@ -38,9 +38,9 @@ public class ParserOscBenchmarks : PerformanceTestBase
     private byte[] _hyperlink = null!;
     private int _titleCursor;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
 
         _adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
         _adapter.ClipboardWriteRequested += static _ => { };

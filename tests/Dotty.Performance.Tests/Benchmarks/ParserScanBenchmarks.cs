@@ -43,9 +43,9 @@ public class ParserScanBenchmarks : PerformanceTestBase
     private byte[] _regionReverseIndexes = null!;
     private byte[] _regionDeleteLines = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
 
         _ascii8 = BenchmarkContent.AsciiRuns(8, crlf: true);
         _ascii22 = BenchmarkContent.AsciiRuns(22, crlf: true);

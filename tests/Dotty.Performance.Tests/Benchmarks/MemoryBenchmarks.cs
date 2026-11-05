@@ -28,9 +28,9 @@ public class MemoryBenchmarks : PerformanceTestBase
     private string _text1Kb = null!;
     private readonly string[] _scrollbackLines = new string[100];
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _resizeBuffer = new TerminalBuffer(24, 80, scrollbackCapacity: 0);
         _buffer = new TerminalBuffer(24, 80, scrollbackCapacity: 0);
         _scrollbackBuffer = new TerminalBuffer(24, 80, scrollbackCapacity: 1000);

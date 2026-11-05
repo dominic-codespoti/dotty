@@ -55,6 +55,16 @@ The renderer never reads live cells while the PTY consumer is mutating them.
 Snapshot capture and the row cache preserve correctness under sustained PTY
 output while avoiding a full scrollback copy for each frame.
 
+Smooth-scroll animation does not mutate cached cell instances. `CellInstance`
+remains the stable 25-byte cached representation; the composer emits a reused,
+per-frame array of sorted, non-overlapping `CellTransformRange` runs aligned
+with the composed instances. Each run carries a pixel offset and clip bounds
+for one contiguous region, keeping outgoing snapshot rows and incoming cached
+rows independently transformable without adding transient floats to every cell.
+Rows outside the incoming animation region, plus cursor and UI instances, are
+left unshifted and unclipped. The renderer consumes these runs alongside the
+instance span.
+
 ### Idle and wake behavior
 
 The host does not poll. When a frame iteration has nothing to do it blocks in
@@ -386,10 +396,11 @@ without a phase step. Strikethrough and overline share one sprite. `QuadFrameBui
 an ordinary glyph-pass instance after the cell's glyph or background instance, flagged
 `CellFlags.Decoration` so selection and cursor recolouring skip it; the shader has no decoration path and
 no decoration flag bits. A cell emits at most `QuadFrameBuilder.MaxInstancesPerCell` = 3 instances (main,
-underline in its SGR 58 colour, strikethrough/overline in the text colour), so frame, row-cache and
-composer buffers are sized by `QuadFrameBuilder.InstanceBudget(rows, cols)` = 3 × rows × cols and never
-drop a decoration. Sprites live in the A8 atlas page keyed by `SpriteKey` (code, span width, metrics) and
-are cleared by atlas rebuilds.
+underline in its SGR 58 colour, strikethrough/overline in the text colour). The allocating
+`QuadFrameBuilder.Build` overload sizes its owned result array from a visible-cell prepass, including up to two
+decoration instances per decorated cell; caller-span builds are unchanged. `InstanceBudget(rows, cols)` remains
+the safe 3 × rows × cols bound used for row-cache and composer scratch storage, so decorations are never dropped.
+Sprites live in the A8 atlas page keyed by `SpriteKey` (code, span width, metrics) and are cleared by atlas rebuilds.
 
 ### Built-in glyph sprites
 

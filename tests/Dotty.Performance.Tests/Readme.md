@@ -317,7 +317,7 @@ The visible-row search benchmarks run over scrollback-capacity-0 buffers, so the
 
 A/B of printable-ASCII run scanners: the parser's current `SearchValues<byte>` set, `IndexOfAnyExceptInRange(0x20, 0x7E)`, hand-written
 `Vector128` / `Vector256` / `Vector512` scanners and an arm64 `AdvSimd.Arm64.MaxAcross` variant, at run lengths 4/8/16/22/55/80/256/4096.
-`GlobalSetup` checks every variant against a scalar reference and throws on any disagreement. It runs **only** with an explicit experiment filter:
+`SetupBenchmark` checks every variant against a scalar reference and throws on any disagreement. It runs **only** with an explicit experiment filter:
 
 ```bash
 dotnet run -c Release -- --mode detailed --filter experiment
@@ -338,7 +338,7 @@ Six classes in `Benchmarks/KittyGraphicsBenchmarks.cs`, all run **only** with `-
 | `KittySnapshotBenchmarks` | render-snapshot capture with 1,000 visible placements and a no-placement control |
 | `KittyLockHoldProbe` | `SyncRoot` hold time sampled while a 64 MiB PNG payload (fake decoder) is processed, and a plain-text control |
 
-They use only public API (`TerminalAdapter.ConfigureGraphics`, the parser, the buffer, `GraphicsMemoryMetrics`; the project has no `InternalsVisibleTo`). Every `GlobalSetup` checks through the public counters that the stream was accepted and throws otherwise, and every fixture disposes its adapters and reports counter drift on stderr. The expectations are hypotheses (see [Performance](../../docs/Performance.md#new-benchmark-classes-and-gating-rules)); nothing here was measured. The existing parser benchmarks are the regression guard for non-graphics parsing and are unchanged.
+They use only public API (`TerminalAdapter.ConfigureGraphics`, the parser, the buffer, `GraphicsMemoryMetrics`; the project has no `InternalsVisibleTo`). Every `SetupBenchmark` checks through the public counters that the stream was accepted and throws otherwise, and every fixture disposes its adapters and reports counter drift on stderr. The expectations are hypotheses (see [Performance](../../docs/Performance.md#new-benchmark-classes-and-gating-rules)); nothing here was measured. The existing parser benchmarks are the regression guard for non-graphics parsing and are unchanged.
 
 ## Output and Reports
 
@@ -371,6 +371,8 @@ An executed benchmark without a baseline is reported as `NEW` and informational,
 In quick/CI modes, first-pass failures get up to two remeasures; a second remeasure runs only for benchmarks still failing the first. A failure is confirmed only if both remeasures fail, and a missing remeasure result counts as a failure. Any successful remeasure makes the result transient; the gate prints the pass index and median from every pass attempt.
 
 Latency compares the median against `baselineMs * (1 + relativeTolerance) + 0.000075`, with the single default relative tolerance of 100% and a 75 ns absolute floor. Effective limits are 1.275 us for a 0.6 us baseline (2.125x), 2.075 us for 1 us (2.075x), 4.000075 ms for 2 ms (2x), and 20.000075 ms for 10 ms (2x). Because shared runners vary by roughly 1.5–2x, this is a coarse tripwire for regressions around 2–3x or larger, not a precise microbenchmark. Allocation limits remain the tighter guard; use a dedicated machine or local harness for precise latency comparisons. Parser microbenchmarks batch repeated operations with `OperationsPerInvoke` so each timed invocation covers at least roughly 100 us; reported allocation values are normalized per operation.
+
+The parser-construction startup benchmark uses 1,024 constructor invocations per iteration rather than the quick job's 12. This gives the sub-microsecond operation a longer timing sample without changing the measured operation, its per-operation allocation accounting, or either regression limit.
 
 Allocation limits compare bytes per operation from BenchmarkDotNet's `GcStats.GetBytesAllocatedPerOperation(BenchmarkCase)` and allow `allowedBytes = ceilingBytes + max(64, ceilingBytes * 0.10)` to absorb small counter variation from pooling and tiering (64 B allows 128 B; 1,000,000 B allows 1,100,000 B). Null BDN allocation data is treated as 0 bytes/op; recalibration continues to store `ceil(measuredBytesPerOp) + 64`.
 
@@ -435,21 +437,23 @@ The `TestDataGenerator` creates realistic test content:
   (The ungated `ParserScanExperiments` class is the only one that groups methods, via `[GroupBenchmarksBy(ByCategory)]`, for per-length baselines.)
 - **Register every gated class twice in `Program.cs`**: in the matching `--filter` block (so it runs) and in `BenchmarkTypes` (so its names count for
   baseline coverage, orphan detection and `--mode update-baselines`).
-- **Large-state classes opt out of the no-GC region.** `PerformanceTestBase.GlobalSetup` starts a 10 MB `GC.TryStartNoGCRegion`. A class whose setup or
+- **Large-state classes opt out of the no-GC region.** `PerformanceTestBase.SetupBenchmark` starts a 10 MB `GC.TryStartNoGCRegion`. A class whose setup or
   measured body allocates far more managed memory than that (10k-line scrollback fixtures, reflow) must override
   `protected override bool UseNoGcRegion => false;`, otherwise the region silently ends mid-run and a GC lands inside a measured iteration.
 - **Build per-variant fixtures lazily** when a class has several large, mutually exclusive fixtures: BenchmarkDotNet runs each benchmark in its own process but
-  runs `GlobalSetup` (all of it) once per benchmark, so building every fixture there multiplies setup time and memory.
+  runs `SetupBenchmark` (all of it) once per benchmark, so building every fixture there multiplies setup time and memory.
 - **Experiment classes** (A/B tools that must never be gated) run only for `--filter experiment`; run their `Run<T>` call outside the `summaries` list.
 - Latency gate: `baselineMs * 2 + 75 ns` (2x tolerance, up to two re-measures). It cannot prove or disprove a 20% change; prove wins with local
   A/B runs (alternating before/after, same machine, at least 3 rounds), not CI.
 
 ## Adding New Benchmarks
 
+The public hook names deliberately differ from BenchmarkDotNet's generated `Runnable` lifecycle methods to avoid hiding warnings; keep the attributes and override chain intact.
+
 1. Create a new class in `Benchmarks/` folder
 2. Inherit from `PerformanceTestBase`
 3. Add `[BenchmarkCategory("YourCategory")]` attribute
-4. Implement `[GlobalSetup]` for initialization
+4. Implement the `[GlobalSetup]`-attributed `SetupBenchmark` override for initialization
 5. Add `[Benchmark]` methods
 
 Example:
@@ -460,10 +464,9 @@ public class MyBenchmarks : PerformanceTestBase
 {
     private MyComponent _component = null!;
 
-    [GlobalSetup]
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _component = new MyComponent();
         Warmup(() => _component.DoWork(), 5);
     }

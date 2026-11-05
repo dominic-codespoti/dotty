@@ -39,6 +39,8 @@ public sealed class TerminalSceneFrame
 {
     public CellInstance[] Instances { get; private set; } = null!;
     public int InstanceCount { get; private set; }
+    public CellTransformRange[] Transforms { get; private set; } = null!;
+    public int TransformCount { get; private set; }
     public HashSet<int> DirtyAtlasRows { get; private set; } = null!;
     public ChromeQuadInstance[] ChromeQuads { get; private set; } = null!;
     public int ChromeQuadCount { get; private set; }
@@ -68,12 +70,14 @@ public sealed class TerminalSceneFrame
         SKRect imeCaretBounds = default,
         bool imeCaretBoundsValid = false,
         ImageDrawList? imageDraws = null,
-        int underlayChromeCount = 0)
+        int underlayChromeCount = 0,
+        CellTransformRange[]? transforms = null,
+        int transformCount = 0)
     {
         ImageDraws = imageDraws ?? new ImageDrawList();
         Update(instances, instanceCount, dirtyAtlasRows, chromeQuads, chromeQuadCount,
             menuInstanceStart, menuChromeStart, scrollbarChromeStart, isIncomplete,
-            imeCaretBounds, imeCaretBoundsValid, underlayChromeCount);
+            imeCaretBounds, imeCaretBoundsValid, underlayChromeCount, transforms, transformCount);
     }
 
     internal void Update(
@@ -88,7 +92,9 @@ public sealed class TerminalSceneFrame
         bool isIncomplete,
         SKRect imeCaretBounds,
         bool imeCaretBoundsValid,
-        int underlayChromeCount)
+        int underlayChromeCount,
+        CellTransformRange[]? transforms,
+        int transformCount)
     {
         Instances = instances;
         InstanceCount = instanceCount;
@@ -102,11 +108,14 @@ public sealed class TerminalSceneFrame
         IsIncomplete = isIncomplete;
         ImeCaretBounds = imeCaretBounds;
         ImeCaretBoundsValid = imeCaretBoundsValid;
+        Transforms = transforms ?? Array.Empty<CellTransformRange>();
+        TransformCount = transformCount;
     }
 
 
     public ReadOnlySpan<CellInstance> AsSpan() => new(Instances, 0, InstanceCount);
     public ReadOnlySpan<ChromeQuadInstance> AsChromeSpan() => new(ChromeQuads, 0, ChromeQuadCount);
+    public ReadOnlySpan<CellTransformRange> AsTransformSpan() => new(Transforms, 0, TransformCount);
 
     /// <summary>
     /// Image quads of the composed frame, grouped by layer. The draw list is reused frame to frame and every draw
@@ -135,6 +144,7 @@ public sealed class TerminalSceneComposer : IDisposable
     private float _fontSize;
     private CellInstance[] _frameScratch = Array.Empty<CellInstance>();
     private ChromeQuadInstance[] _chromeScratch = Array.Empty<ChromeQuadInstance>();
+    private CellTransformRange[] _transformScratch = Array.Empty<CellTransformRange>();
     private ChromeQuadInstance[] _scrollbarScratch = Array.Empty<ChromeQuadInstance>();
     private readonly HashSet<int> _dirtyAtlasRows = new();
     private TerminalSceneFrame? _cachedFrame;
@@ -327,8 +337,10 @@ public sealed class TerminalSceneComposer : IDisposable
         int maxInstances = checked(Math.Max(1024, QuadFrameBuilder.InstanceBudget(rows, columns) + 1024));
         EnsureScratchCapacity(maxInstances);
         EnsureScrollbarScratchCapacity(checked(Math.Max(2, leaves.Count * 2)));
+        EnsureTransformScratchCapacity(leaves.Count * 2);
         int instanceCount = 0;
         int chromeQuadCount = 0;
+        int transformCount = 0;
         int scrollbarChromeCount = 0;
         int scrollbarChromeStart = -1;
         int menuInstanceStart = -1;
@@ -570,18 +582,18 @@ public sealed class TerminalSceneComposer : IDisposable
                                         _frameScratch.AsSpan(instanceCount + smoothOutgoingCount),
                                         _dirtyAtlasRows, paneColumns, leafForeground, leafBackground,
                                         in smoothTextOptions, out _);
-                                    float offsetY = smoothDirection * smoothProgress * travel;
                                     for (int i = 0; i < count; i++)
                                     {
                                         ref var instance = ref _frameScratch[instanceCount + smoothOutgoingCount + i];
                                         instance.Col += (ushort)startColumnOffset;
-                                        instance.Row += (ushort)(row + startRowOffset);
-                                        instance.PixelOffsetY = offsetY;
-                                        instance.ClipTop = outgoingClipTop;
-                                        instance.ClipBottom = outgoingClipBottom;
+                                        instance.Row += (ushort)startRowOffset;
                                     }
                                     smoothOutgoingCount += count;
                                 }
+                                if (smoothOutgoingCount > 0)
+                                    _transformScratch[transformCount++] = new CellTransformRange(
+                                        instanceCount, smoothOutgoingCount, smoothDirection * smoothProgress * travel,
+                                        outgoingClipTop, outgoingClipBottom);
                             }
                         }
                         else
@@ -609,30 +621,24 @@ public sealed class TerminalSceneComposer : IDisposable
                     smoothClipTop = smoothDirection < 0 ? regionTop + remaining : regionTop;
                     smoothClipBottom = smoothDirection < 0 ? regionBottom : regionBottom - remaining;
                 }
-                if (!smoothTransition)
+                int incomingStart = -1;
+                int incomingCount = 0;
+                for (int i = 0; i < written; i++)
                 {
-                    for (int i = 0; i < written; i++)
+                    ref var instance = ref _frameScratch[currentInstanceStartIndex + i];
+                    instance.Col += (ushort)startColumnOffset;
+                    instance.Row += (ushort)startRowOffset;
+                    if (smoothTransition && instance.Row >= startRowOffset + smoothTop
+                        && instance.Row <= startRowOffset + smoothBottom)
                     {
-                        ref var instance = ref _frameScratch[currentInstanceStartIndex + i];
-                        instance.Col += (ushort)startColumnOffset;
-                        instance.Row += (ushort)startRowOffset;
+                        if (incomingStart < 0)
+                            incomingStart = currentInstanceStartIndex + i;
+                        incomingCount++;
                     }
                 }
-                else
-                {
-                    for (int i = 0; i < written; i++)
-                    {
-                        ref var instance = ref _frameScratch[currentInstanceStartIndex + i];
-                        instance.Col += (ushort)startColumnOffset;
-                        instance.Row += (ushort)startRowOffset;
-                        if (instance.Row >= startRowOffset + smoothTop && instance.Row <= startRowOffset + smoothBottom)
-                        {
-                            instance.PixelOffsetY = smoothIncomingOffset;
-                            instance.ClipTop = smoothClipTop;
-                            instance.ClipBottom = smoothClipBottom;
-                        }
-                    }
-                }
+                if (incomingCount > 0)
+                    _transformScratch[transformCount++] = new CellTransformRange(
+                        incomingStart, incomingCount, smoothIncomingOffset, smoothClipTop, smoothClipBottom);
                 instanceCount += smoothOutgoingCount + written;
                 if (!smoothTransition && smoothAdapter.SmoothScrollEnabled
                     && !smoothAdapter.SmoothScrollActive
@@ -1058,14 +1064,15 @@ public sealed class TerminalSceneComposer : IDisposable
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
                 scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, _imageDraws,
-                underlayChromeCount);
+                underlayChromeCount, _transformScratch, transformCount);
         }
         else
         {
             _cachedFrame.Update(
                 _frameScratch, instanceCount, _dirtyAtlasRows, _chromeScratch,
                 chromeQuadCount, menuInstanceStart, menuChromeStart,
-                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, underlayChromeCount);
+                scrollbarChromeStart, skippedLeaf, imeCaretBounds, imeCaretBoundsValid, underlayChromeCount,
+                _transformScratch, transformCount);
         }
         return _cachedFrame;
     }
@@ -1405,6 +1412,13 @@ public sealed class TerminalSceneComposer : IDisposable
         Array.Resize(ref _scrollbarScratch, capacity);
     }
 
+    private void EnsureTransformScratchCapacity(int required)
+    {
+        if (required <= _transformScratch.Length)
+            return;
+        int capacity = Math.Max(required, _transformScratch.Length == 0 ? 8 : _transformScratch.Length * 2);
+        Array.Resize(ref _transformScratch, capacity);
+    }
     private void EnsureScratchCapacity(int required)
     {
         if (required <= _frameScratch.Length)

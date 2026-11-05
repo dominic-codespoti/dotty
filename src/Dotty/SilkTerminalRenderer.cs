@@ -309,7 +309,8 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
         int menuInstanceStart = -1,
         int menuChromeStart = -1,
         ImageDrawList? images = null,
-        int underlayChromeCount = 0)
+        int underlayChromeCount = 0,
+        ReadOnlySpan<CellTransformRange> transforms = default)
     {
         EnsureNotDisposed();
         SilkImageRenderer? imageRenderer = BeginImageFrame(images);
@@ -321,7 +322,7 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
             && barRows == _stagedBarRows
             && menuInstanceStart == _stagedMenuInstanceStart;
         if (frameCaptured)
-            _instanceDelta.Capture(instances, stagingCompatible);
+            _instanceDelta.Capture(instances, stagingCompatible, transforms);
         if (!stagingCompatible)
             _instanceDelta.Invalidate();
 
@@ -394,29 +395,35 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
                 delta.ForceFullUpload();
             bool fullUpload = delta.FullUpload;
             ReadOnlySpan<CellInstance> staged = delta.Instances;
+            ReadOnlySpan<CellTransformRange> transforms = delta.Transforms;
 
             float[] stagingArr = _staging;
             if (fullUpload)
             {
+                int transformCursor = 0;
                 for (int i = 0; i < instanceCount; i++)
                 {
+                    ref readonly var transform = ref GetEffectiveTransform(transforms, ref transformCursor, i);
                     WriteCellInstance(stagingArr, i, staged[i],
-                        cellW, cellH, paddingLeft, paddingTop, barRows);
+                        cellW, cellH, paddingLeft, paddingTop, barRows, transform);
                 }
             }
             else
             {
+                int transformCursor = 0;
                 for (int range = 0; range < delta.RangeCount; range++)
                 {
                     (int start, int end) = delta.GetRange(range);
+                    // Dirty ranges are ordered, so the transform cursor also advances only forward.
                     for (int i = start; i < end; i++)
                     {
+                        ref readonly var transform = ref GetEffectiveTransform(transforms, ref transformCursor, i);
                         WriteCellInstance(stagingArr, i, staged[i],
-                            cellW, cellH, paddingLeft, paddingTop, barRows);
+                            cellW, cellH, paddingLeft, paddingTop, barRows, transform);
                     }
                 }
-            }
 
+            }
             int menuStart = menuInstanceStart < 0
                 ? -1
                 : Math.Clamp(menuInstanceStart, 0, instanceCount);
@@ -556,10 +563,11 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
         float cellH,
         float paddingLeft,
         float paddingTop,
-        int barRows)
+        int barRows,
+        in CellTransformRange transform)
     {
         float x = cell.Row >= barRows ? paddingLeft + cell.Col * cellW : cell.Col * cellW;
-        float y = (cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH) + cell.PixelOffsetY;
+        float y = (cell.Row >= barRows ? paddingTop + cell.Row * cellH : cell.Row * cellH) + transform.PixelOffsetY;
         int offset = outputIndex * FloatsPerInstance;
         staging[offset] = x;
         staging[offset + 1] = y;
@@ -567,10 +575,10 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
         staging[offset + 3] = cell.GlyphY;
         staging[offset + 4] = cell.GlyphW;
         staging[offset + 5] = cell.GlyphH;
-        staging[offset + 6] = cell.ClipTop;
+        staging[offset + 6] = transform.ClipTop;
         staging[offset + 7] = cell.OffY;
         staging[offset + 8] = cell.OffX;
-        staging[offset + 9] = cell.ClipBottom;
+        staging[offset + 9] = transform.ClipBottom;
         staging[offset + 10] = cell.FgR / 255f;
         staging[offset + 11] = cell.FgG / 255f;
         staging[offset + 12] = cell.FgB / 255f;
@@ -580,6 +588,18 @@ public sealed unsafe partial class SilkTerminalRenderer : IDisposable, IGlBindin
         staging[offset + 16] = cell.BgB / 255f;
         staging[offset + 17] = cell.BgA / 255f;
         staging[offset + 18] = BitConverter.UInt32BitsToSingle(cell.Flags);
+    }
+
+    private static readonly CellTransformRange NoTransform = default;
+
+    private static ref readonly CellTransformRange GetEffectiveTransform(
+        ReadOnlySpan<CellTransformRange> transforms, ref int cursor, int index)
+    {
+        while (cursor < transforms.Length && transforms[cursor].End <= index)
+            cursor++;
+        if (cursor < transforms.Length && transforms[cursor].Start <= index)
+            return ref transforms[cursor];
+        return ref NoTransform;
     }
 
     private void DrawCellRange(int firstInstance, int instanceCount, int pass, bool menuVao)

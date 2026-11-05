@@ -35,9 +35,9 @@ public class SilkRenderingBenchmarks : PerformanceTestBase
     private CellInstance[] _pooledInstances80x24 = null!;
     private HashSet<int> _pooledDirtyRows = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
 
         _typeface = SKTypeface.Default;
         _warmAtlas = new GlyphAtlas(_typeface, DefaultFontSize);
@@ -60,11 +60,11 @@ public class SilkRenderingBenchmarks : PerformanceTestBase
         PreWarmAtlas(_warmAtlas, _bufferPowerline, _geometryPowerline);
     }
 
-    public override void GlobalCleanup()
+    public override void CleanupBenchmark()
     {
         _warmAtlas?.Dispose();
 
-        base.GlobalCleanup();
+        base.CleanupBenchmark();
     }
 
     private void PreWarmAtlas(GlyphAtlas atlas, TerminalBuffer buffer, FrameGeometry geometry)

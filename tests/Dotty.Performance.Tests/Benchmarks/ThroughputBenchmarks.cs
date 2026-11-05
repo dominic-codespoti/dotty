@@ -26,9 +26,9 @@ public class ThroughputBenchmarks : PerformanceTestBase
     private byte[] _ansiMixed = null!;
     private byte[] _interactive = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
         _parser = new BasicAnsiParser { Handler = _adapter };
         _plain1Mb = TestDataGenerator.GeneratePlainText(TestDataGenerator.Sizes.XLarge);
@@ -111,9 +111,9 @@ public class LatencyBenchmarks : PerformanceTestBase
     private static readonly byte[] Tab = "\t"u8.ToArray();
     private static readonly string HundredChars = new('X', 100);
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _buffer = new TerminalBuffer(24, 80, scrollbackCapacity: 0);
         _adapter = new TerminalAdapter(24, 80, scrollbackCapacity: 0);
         _parser = new BasicAnsiParser { Handler = _adapter };

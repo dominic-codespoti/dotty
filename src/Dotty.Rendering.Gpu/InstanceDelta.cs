@@ -13,8 +13,11 @@ namespace Dotty.Rendering.Gpu;
 public sealed class InstanceDelta
 {
     private CellInstance[] _last = Array.Empty<CellInstance>();
-    private int[] _ranges = Array.Empty<int>();
+    private CellTransformRange[] _transforms = Array.Empty<CellTransformRange>();
+    private int _transformCount;
+    private static readonly CellTransformRange NoTransform = default;
 
+    private int[] _ranges = Array.Empty<int>();
     /// <summary>Number of staged instances (and GPU instances).</summary>
     public int Count { get; private set; }
 
@@ -29,6 +32,9 @@ public sealed class InstanceDelta
 
     /// <summary>Staged instances.</summary>
     public ReadOnlySpan<CellInstance> Instances => _last.AsSpan(0, Count);
+
+    /// <summary>Retained transform runs aligned with <see cref="Instances"/>.</summary>
+    public ReadOnlySpan<CellTransformRange> Transforms => _transforms.AsSpan(0, _transformCount);
 
     /// <summary>Half-open instance range <c>[Start, End)</c> of dirty range <paramref name="index"/>.</summary>
     public (int Start, int End) GetRange(int index)
@@ -52,24 +58,40 @@ public sealed class InstanceDelta
     /// Stages <paramref name="instances"/>. <paramref name="stagingCompatible"/> is false when anything the
     /// GPU encoding depends on (cell size, padding, bar rows, menu split) changed since the last upload.
     /// </summary>
-    public void Capture(ReadOnlySpan<CellInstance> instances, bool stagingCompatible)
+    public void Capture(
+        ReadOnlySpan<CellInstance> instances,
+        bool stagingCompatible,
+        ReadOnlySpan<CellTransformRange> transforms = default)
     {
         bool compatible = stagingCompatible
             && !Dirty
             && Count == instances.Length
             && _last.Length >= instances.Length;
         EnsureLastCapacity(instances.Length);
+        EnsureTransformCapacity(transforms.Length);
         if (!compatible)
         {
-            StageFull(instances);
+            StageFull(instances, transforms);
             return;
         }
 
         RangeCount = 0;
         int dirtyStart = -1;
+        int oldRun = 0;
+        int newRun = 0;
         for (int i = 0; i < instances.Length; i++)
         {
-            if (!Equal(instances[i], _last[i]))
+            while (oldRun < _transformCount && _transforms[oldRun].End <= i)
+                oldRun++;
+            while (newRun < transforms.Length && transforms[newRun].End <= i)
+                newRun++;
+            ref readonly var oldTransform = ref GetTransform(_transforms, _transformCount, oldRun, i);
+            ref readonly var newTransform = ref GetTransform(transforms, transforms.Length, newRun, i);
+            bool equal = Equal(instances[i], _last[i])
+                && oldTransform.PixelOffsetY == newTransform.PixelOffsetY
+                && oldTransform.ClipTop == newTransform.ClipTop
+                && oldTransform.ClipBottom == newTransform.ClipBottom;
+            if (!equal)
             {
                 if (dirtyStart < 0)
                     dirtyStart = i;
@@ -80,24 +102,26 @@ public sealed class InstanceDelta
                 dirtyStart = -1;
             }
         }
-
         if (dirtyStart >= 0)
             AddRange(dirtyStart, instances.Length);
 
         Count = instances.Length;
         if (RangeCount == 0)
         {
+            transforms.CopyTo(_transforms);
+            _transformCount = transforms.Length;
             Dirty = false;
             FullUpload = false;
             return;
         }
-
         for (int r = 0; r < RangeCount; r++)
         {
             int start = _ranges[r * 2];
             int end = _ranges[r * 2 + 1];
             instances.Slice(start, end - start).CopyTo(_last.AsSpan(start));
         }
+        transforms.CopyTo(_transforms);
+        _transformCount = transforms.Length;
         Dirty = true;
         FullUpload = false;
     }
@@ -110,9 +134,11 @@ public sealed class InstanceDelta
         RangeCount = 0;
     }
 
-    private void StageFull(ReadOnlySpan<CellInstance> instances)
+    private void StageFull(ReadOnlySpan<CellInstance> instances, ReadOnlySpan<CellTransformRange> transforms)
     {
         instances.CopyTo(_last);
+        transforms.CopyTo(_transforms);
+        _transformCount = transforms.Length;
         Count = instances.Length;
         RangeCount = 0;
         Dirty = true;
@@ -125,6 +151,25 @@ public sealed class InstanceDelta
             return;
         int capacity = Math.Max(required, _last.Length == 0 ? 4096 : _last.Length * 2);
         _last = new CellInstance[capacity];
+    }
+
+    private void EnsureTransformCapacity(int required)
+    {
+        if (_transforms.Length >= required)
+            return;
+        int capacity = Math.Max(required, _transforms.Length == 0 ? 8 : _transforms.Length * 2);
+        Array.Resize(ref _transforms, capacity);
+    }
+
+    private static ref readonly CellTransformRange GetTransform(
+        ReadOnlySpan<CellTransformRange> transforms,
+        int count,
+        int cursor,
+        int index)
+    {
+        if (cursor < count && transforms[cursor].Start <= index)
+            return ref transforms[cursor];
+        return ref NoTransform;
     }
 
     private void AddRange(int start, int end)
@@ -150,9 +195,6 @@ public sealed class InstanceDelta
         && left.GlyphH == right.GlyphH
         && left.OffX == right.OffX
         && left.OffY == right.OffY
-        && left.PixelOffsetY == right.PixelOffsetY
-        && left.ClipTop == right.ClipTop
-        && left.ClipBottom == right.ClipBottom
         && left.FgR == right.FgR
         && left.FgG == right.FgG
         && left.FgB == right.FgB

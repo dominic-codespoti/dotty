@@ -16,9 +16,9 @@ public class StartupBenchmarks : PerformanceTestBase
     private byte[] _ansiText1Kb = null!;
     private TerminalAdapter _resizeAdapter = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
 
         _plainText1Kb = TestDataGenerator.GeneratePlainText(1000);
         _ansiText1Kb = TestDataGenerator.GenerateBasicAnsiText(1000, 0.1);
@@ -50,6 +50,10 @@ public class StartupBenchmarks : PerformanceTestBase
     #region Parser Initialization
 
     [Benchmark(Description = "Init: BasicAnsiParser")]
+    // The default quick job's 12 invocations are too few to time a sub-microsecond
+    // constructor reliably. A longer batch improves timer granularity without changing
+    // the operation being measured or its per-operation allocation accounting.
+    [InvocationCount(1024)]
     public BasicAnsiParser Init_Parser()
     {
         return new BasicAnsiParser();

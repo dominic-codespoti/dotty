@@ -19,7 +19,7 @@ public abstract class PerformanceTestBase
     /// Global setup executed once per benchmark run
     /// </summary>
     [GlobalSetup]
-    public virtual void GlobalSetup()
+    public virtual void SetupBenchmark()
     {
         // Force GC to get clean state
         GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
@@ -38,7 +38,7 @@ public abstract class PerformanceTestBase
     }
 
     /// <summary>
-    /// Whether <see cref="GlobalSetup"/> starts a 10 MB no-GC region. Classes whose setup or
+    /// Whether <see cref="SetupBenchmark"/> starts a 10 MB no-GC region. Classes whose setup or
     /// measured body allocates far more managed memory than that (for example a 10k-line
     /// scrollback reflow, whose first resize grows pooled lists by tens of MB) MUST override
     /// this to <c>false</c>: otherwise the region silently ends mid-run and the first GC lands
@@ -50,7 +50,7 @@ public abstract class PerformanceTestBase
     /// Global cleanup executed once per benchmark run
     /// </summary>
     [GlobalCleanup]
-    public virtual void GlobalCleanup()
+    public virtual void CleanupBenchmark()
     {
         try
         {
@@ -70,7 +70,7 @@ public abstract class PerformanceTestBase
     /// Per-iteration setup
     /// </summary>
     [IterationSetup]
-    public virtual void IterationSetup()
+    public virtual void PrepareIteration()
     {
         _stopwatch.Restart();
     }
@@ -79,7 +79,7 @@ public abstract class PerformanceTestBase
     /// Per-iteration cleanup
     /// </summary>
     [IterationCleanup]
-    public virtual void IterationCleanup()
+    public virtual void FinishIteration()
     {
         _stopwatch.Stop();
     }

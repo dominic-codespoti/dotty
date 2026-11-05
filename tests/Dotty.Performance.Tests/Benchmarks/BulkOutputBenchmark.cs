@@ -20,9 +20,9 @@ public class BulkOutputBenchmark : PerformanceTestBase
     private const int _rows = 30;
     private const int _cols = 80;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _adapter = new TerminalAdapter(_rows, _cols, scrollbackCapacity: 0);
         _parser = new BasicAnsiParser { Handler = _adapter };
         _writeBuffer = new TerminalBuffer(_rows, _cols, scrollbackCapacity: 0);

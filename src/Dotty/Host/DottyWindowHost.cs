@@ -2175,6 +2175,7 @@ internal static partial class DottyWindowHost
                 frame.MenuInstanceStart,
                 frame.MenuChromeStart,
                 frame.ImageDraws,
+                transforms: frame.AsTransformSpan(),
                 underlayChromeCount: frame.UnderlayChromeCount);
             _frameTimings.RecordRender(renderStart, FrameTimestamp());
             CheckGlErrorsIfDebugging("render");

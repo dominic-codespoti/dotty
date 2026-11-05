@@ -50,31 +50,76 @@ public sealed class InstanceDeltaTests
     }
 
     [Fact]
-    public void SmoothScrollAnimationChangesUploadEvenWhenCellContentIsUnchanged()
+    public void TransformRunsDirtyOnlyChangedCellsAndTrackBoundaries()
     {
         var delta = new InstanceDelta();
-        delta.Capture(Row(4), true);
+        var cells = Row(10);
+        var runs = new[]
+        {
+            new CellTransformRange(1, 3, -4.25f, 2f, 7f),
+            new CellTransformRange(6, 2, 4.5f, 0f, 3f)
+        };
+        delta.Capture(cells, true, runs);
         delta.MarkUploaded();
 
-        var translated = Row(4);
-        translated[2].PixelOffsetY = 7.5f;
-        delta.Capture(translated, true);
+        var moved = new[]
+        {
+            new CellTransformRange(2, 2, -4.25f, 2f, 7f),
+            new CellTransformRange(6, 2, 4.5f, 0f, 3f)
+        };
+        delta.Capture(cells, true, moved);
+        Assert.Equal(new[] { (1, 2) }, Ranges(delta));
         Assert.True(delta.Dirty);
-        Assert.Equal(new[] { (2, 3) }, Ranges(delta));
         delta.MarkUploaded();
 
-        translated = Row(4);
-        translated[2].ClipTop = 12f;
-        delta.Capture(translated, true);
-        Assert.True(delta.Dirty);
-        Assert.Equal(new[] { (2, 3) }, Ranges(delta));
+        var remaining = new[] { moved[1] };
+        delta.Capture(cells, true, remaining);
+        Assert.Equal(new[] { (2, 4) }, Ranges(delta));
         delta.MarkUploaded();
 
-        translated = Row(4);
-        translated[2].ClipBottom = 28f;
-        delta.Capture(translated, true);
-        Assert.True(delta.Dirty);
-        Assert.Equal(new[] { (2, 3) }, Ranges(delta));
+        // The composer reuses its range array; capture must retain the previous values independently.
+        remaining[0] = remaining[0] with { PixelOffsetY = 4.75f };
+        delta.Capture(cells, true, remaining);
+        Assert.Equal(new[] { (6, 8) }, Ranges(delta));
+        delta.MarkUploaded();
+        delta.Capture(cells, true, remaining);
+        Assert.False(delta.Dirty);
+        Assert.Empty(Ranges(delta));
+
+        remaining[0] = remaining[0] with { ClipTop = 0.25f };
+        delta.Capture(cells, true, remaining);
+        Assert.Equal(new[] { (6, 8) }, Ranges(delta));
+        delta.MarkUploaded();
+        remaining[0] = remaining[0] with { ClipBottom = 2.75f };
+        delta.Capture(cells, true, remaining);
+        Assert.Equal(new[] { (6, 8) }, Ranges(delta));
+        delta.MarkUploaded();
+
+        delta.Capture(cells, true);
+        Assert.Equal(new[] { (6, 8) }, Ranges(delta));
+        Assert.True(delta.Transforms.IsEmpty);
+        Assert.False(delta.FullUpload);
+    }
+
+    [Fact]
+    public void AddingMoreAnimatedRunsStillClearsTheRemovedRun()
+    {
+        var delta = new InstanceDelta();
+        var cells = Row(24);
+        delta.Capture(cells, true, new[] { new CellTransformRange(1, 1, -2.5f, 0f, 3f) });
+        delta.MarkUploaded();
+
+        var next = new CellTransformRange[9];
+        for (int i = 0; i < next.Length; i++)
+            next[i] = new CellTransformRange(4 + 2 * i, 1, 1.25f, 0f, 5f);
+        delta.Capture(cells, true, next);
+
+        Assert.False(delta.FullUpload);
+        Assert.Equal(new[]
+        {
+            (1, 2), (4, 5), (6, 7), (8, 9), (10, 11),
+            (12, 13), (14, 15), (16, 17), (18, 19), (20, 21)
+        }, Ranges(delta));
     }
 
     public static TheoryData<string, int[], (int, int)[]> ChangedCells => new()

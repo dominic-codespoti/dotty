@@ -18,7 +18,7 @@ namespace Dotty.Performance.Tests.Benchmarks;
 /// Every scanner answers "index of the first byte of the run that ends a printable run, or the span length".
 /// The inputs are <c>N</c> printable ASCII bytes followed by one CR, so the current parser predicate
 /// (ESC, 0x07-0x0D, 0x7F and every byte &gt;= 0x80) and the "outside 0x20..0x7E" predicate agree and
-/// <c>GlobalSetup</c> verifies every variant against a scalar reference on every buffer (it throws on any
+/// <c>SetupBenchmark</c> verifies every variant against a scalar reference on every buffer (it throws on any
 /// disagreement). Stray C0 bytes (0x00-0x06, 0x0E-0x1A, 0x1C-0x1F) are the one place the two predicates
 /// differ and are deliberately absent from the buffers (plan 08, WI-P1 behavior-change note).
 ///
@@ -46,9 +46,9 @@ public class ParserScanExperiments : PerformanceTestBase
     private byte[] _len256 = null!;
     private byte[] _len4096 = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _len4 = BuildBuffer(4);
         _len8 = BuildBuffer(8);
         _len16 = BuildBuffer(16);

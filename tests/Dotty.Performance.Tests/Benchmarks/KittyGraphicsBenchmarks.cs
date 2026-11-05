@@ -17,9 +17,9 @@ namespace Dotty.Performance.Tests.Benchmarks;
 // Nothing below states a measured number; every expectation is a hypothesis to be checked on a machine with dotnet.
 //
 // Only public API is used (this assembly has no InternalsVisibleTo): TerminalAdapter.ConfigureGraphics, the parser and
-// the adapter's buffer. Each fixture's GlobalSetup checks the effect of its stream through the public
+// the adapter's buffer. Each fixture's SetupBenchmark checks the effect of its stream through the public
 // GraphicsMemoryMetrics counters and throws when a payload was rejected (a rejected payload would otherwise look like
-// a very fast benchmark). Every fixture disposes its adapters in GlobalCleanup and reports, on stderr, any drift of the
+// a very fast benchmark). Every fixture disposes its adapters in CleanupBenchmark and reports, on stderr, any drift of the
 // process-wide GraphicsMemoryMetrics from the value captured before its setup.
 //
 // The existing parser benchmarks (ParserBenchmarks, ParserScanBenchmarks, ParserOscBenchmarks, BulkOutputBenchmark)
@@ -249,9 +249,9 @@ public class KittyApcDecodeBenchmarks : PerformanceTestBase
     private byte[] _chunked = null!;
     private byte[] _single = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _metricsBefore = GraphicsMemoryMetrics.GetSnapshot();
 
         string keys = $"a=t,f=24,s={Width},v={Height},i=1,q=2";
@@ -279,12 +279,12 @@ public class KittyApcDecodeBenchmarks : PerformanceTestBase
             "the 64 MiB f=24 transmit must store exactly one RGB8 image of Width*Height*3 bytes");
     }
 
-    public override void GlobalCleanup()
+    public override void CleanupBenchmark()
     {
         _graphicsAdapter.Dispose();
         _discardAdapter.Dispose();
         KittyBenchSupport.WarnIfNotRestored(nameof(KittyApcDecodeBenchmarks), _metricsBefore);
-        base.GlobalCleanup();
+        base.CleanupBenchmark();
     }
 
     [Benchmark(Description = "Kitty APC: 64 MiB f=24, 4 KiB chunks, graphics disabled (scan + discard)")]
@@ -317,9 +317,9 @@ public class KittyRgbaTransmitBenchmarks : PerformanceTestBase
     private BasicAnsiParser _parser = null!;
     private byte[] _stream = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _metricsBefore = GraphicsMemoryMetrics.GetSnapshot();
         _stream = KittyBenchSupport.BuildChunked(
             $"a=t,f=32,s={Side},v={Side},i=1,q=2", KittyBenchSupport.RandomBytes(Side * Side * 4));
@@ -334,11 +334,11 @@ public class KittyRgbaTransmitBenchmarks : PerformanceTestBase
             "the f=32 4096x4096 transmit must store exactly one RGBA image");
     }
 
-    public override void GlobalCleanup()
+    public override void CleanupBenchmark()
     {
         _adapter.Dispose();
         KittyBenchSupport.WarnIfNotRestored(nameof(KittyRgbaTransmitBenchmarks), _metricsBefore);
-        base.GlobalCleanup();
+        base.CleanupBenchmark();
     }
 
     [Benchmark(Description = "Kitty APC: f=32 4096x4096 transmit incl. premultiply")]
@@ -363,9 +363,9 @@ public class KittyInflateBenchmarks : PerformanceTestBase
     private BasicAnsiParser _parser = null!;
     private byte[] _stream = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _metricsBefore = GraphicsMemoryMetrics.GetSnapshot();
         byte[] compressed = KittyBenchSupport.ZlibCompress(KittyBenchSupport.GradientRgba(Side, Side));
         _stream = KittyBenchSupport.BuildChunked($"a=t,f=32,o=z,s={Side},v={Side},i=1,q=2", compressed);
@@ -380,11 +380,11 @@ public class KittyInflateBenchmarks : PerformanceTestBase
             "the o=z transmit must inflate to exactly one 4096x4096 RGBA image");
     }
 
-    public override void GlobalCleanup()
+    public override void CleanupBenchmark()
     {
         _adapter.Dispose();
         KittyBenchSupport.WarnIfNotRestored(nameof(KittyInflateBenchmarks), _metricsBefore);
-        base.GlobalCleanup();
+        base.CleanupBenchmark();
     }
 
     [Benchmark(Description = "Kitty APC: o=z f=32 4096x4096 transmit (inflate + premultiply)")]
@@ -430,9 +430,9 @@ public class KittyPlacementScrollBenchmarks : PerformanceTestBase
     private byte[] _regionPlaceOnly = null!;
     private byte[] _regionPlaceAndScroll = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _metricsBefore = GraphicsMemoryMetrics.GetSnapshot();
         _adapter = KittyBenchSupport.CreateAdapter(Scrollback, graphics: true);
         _parser = new BasicAnsiParser { Handler = _adapter };
@@ -502,11 +502,11 @@ public class KittyPlacementScrollBenchmarks : PerformanceTestBase
         KittyBenchSupport.Require(KittyBenchSupport.LivePlacements == baseline, "ED 3 + ED 2 must delete every placement");
     }
 
-    public override void GlobalCleanup()
+    public override void CleanupBenchmark()
     {
         _adapter.Dispose();
         KittyBenchSupport.WarnIfNotRestored(nameof(KittyPlacementScrollBenchmarks), _metricsBefore);
-        base.GlobalCleanup();
+        base.CleanupBenchmark();
     }
 
     [Benchmark(Description = "Kitty scroll: full-screen x20,000, no placements (control)")]
@@ -540,9 +540,9 @@ public class KittySnapshotBenchmarks : PerformanceTestBase
     private TerminalAdapter _withPlacements = null!;
     private TerminalAdapter _withoutPlacements = null!;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _metricsBefore = GraphicsMemoryMetrics.GetSnapshot();
         _withPlacements = KittyBenchSupport.CreateAdapter(scrollback: 100, graphics: true);
         _withoutPlacements = KittyBenchSupport.CreateAdapter(scrollback: 100, graphics: true);
@@ -565,12 +565,12 @@ public class KittySnapshotBenchmarks : PerformanceTestBase
             KittyBenchSupport.Require(snapshot.Graphics is null, "the control adapter must have no graphics in its capture");
     }
 
-    public override void GlobalCleanup()
+    public override void CleanupBenchmark()
     {
         _withPlacements.Dispose();
         _withoutPlacements.Dispose();
         KittyBenchSupport.WarnIfNotRestored(nameof(KittySnapshotBenchmarks), _metricsBefore);
-        base.GlobalCleanup();
+        base.CleanupBenchmark();
     }
 
     [Benchmark(Description = "Kitty snapshot: capture, 1,000 visible placements")]
@@ -602,7 +602,7 @@ public class KittySnapshotBenchmarks : PerformanceTestBase
 /// slice, exactly like <c>TerminalSession.ConsumePtyOutput</c>, while a probing thread samples the lock. The control feeds
 /// the same number of plain-text bytes the same way. The probe loops <c>Monitor.TryEnter(SyncRoot, 0)</c>; when that
 /// fails it raises <see cref="TerminalBuffer.ReaderWaiting"/> (as the renderer does), blocks in <c>Monitor.Enter</c> and
-/// records how long it waited. Two maxima are written to the console in GlobalCleanup: the longest wait of a blocked
+/// records how long it waited. Two maxima are written to the console in CleanupBenchmark: the longest wait of a blocked
 /// probe, and the longest interval between two successful zero-wait acquisitions. Both overestimate the true hold
 /// (scheduling, monitor unfairness) and neither is a pass/fail number.
 /// Hypothesis (plan D2-c): decode runs with SyncRoot released, so the PNG variant's maxima are of the same order as the
@@ -634,9 +634,9 @@ public class KittyLockHoldProbe : PerformanceTestBase
     private bool _pngRan;
     private bool _textRan;
 
-    public override void GlobalSetup()
+    public override void SetupBenchmark()
     {
-        base.GlobalSetup();
+        base.SetupBenchmark();
         _metricsBefore = GraphicsMemoryMetrics.GetSnapshot();
         _adapter = KittyBenchSupport.CreateAdapter(scrollback: 1000, graphics: true, new FillingImageDecoder());
         _parser = new BasicAnsiParser { Handler = _adapter };
@@ -669,13 +669,13 @@ public class KittyLockHoldProbe : PerformanceTestBase
         KittyBenchSupport.FeedLocked(_adapter, _parser, _text.AsSpan(0, 1 << 20));
     }
 
-    public override void GlobalCleanup()
+    public override void CleanupBenchmark()
     {
         Report("PNG f=100 64 MiB payload", _pngRan, _pngMax);
         Report("plain text 64 MiB (control)", _textRan, _textMax);
         _adapter.Dispose();
         KittyBenchSupport.WarnIfNotRestored(nameof(KittyLockHoldProbe), _metricsBefore);
-        base.GlobalCleanup();
+        base.CleanupBenchmark();
     }
 
     private static void Report(string label, bool ran, ProbeResult result)

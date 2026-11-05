@@ -62,7 +62,8 @@ public static class QuadFrameBuilder
         (short)Math.Clamp(MathF.Round(offset, MidpointRounding.AwayFromZero), short.MinValue, short.MaxValue);
 
     /// <summary>
-    /// Builds cell instances from the given render source into a newly allocated array or destination buffer.
+    /// Builds cell instances into an owned array sized by a visible-cell capacity pass. The source must remain
+    /// stable for both passes; synchronize live sources or provide an immutable snapshot.
     /// </summary>
     public static QuadFrameBuildResult Build(
         IRenderSource source,
@@ -82,12 +83,57 @@ public static class QuadFrameBuilder
         int cols = Math.Min(source.Columns, geometry.Columns);
         if (rows <= 0 || cols <= 0)
             return new QuadFrameBuildResult(Array.Empty<CellInstance>(), 0, new HashSet<int>());
-
-        var instances = new CellInstance[InstanceBudget(rows, cols)];
+        int capacity = InstanceCapacity(source, rows, cols, textOptions ?? TextAttributeOptions.Default);
+        var instances = capacity == 0 ? Array.Empty<CellInstance>() : new CellInstance[capacity];
         var dirtyRows = new HashSet<int>();
         int count = Build(source, atlas, typeface, textSize, instances.AsSpan(), dirtyRows,
             rows, cols, defaultFg ?? DefaultForeground, defaultBg ?? DefaultBackground, textOptions);
         return new QuadFrameBuildResult(instances, count, dirtyRows);
+    }
+
+    private static int InstanceCapacity(IRenderSource source, int rows, int cols, in TextAttributeOptions textOptions)
+    {
+        int capacity = 0;
+        bool spritesValid = textOptions.Sprites.IsValid;
+        for (int row = 0; row < rows; row++)
+        {
+            var cells = source.GetRowCells(row);
+            var coldCells = source.GetRowColdCells(row);
+            int length = Math.Min(cols, cells.Length);
+            for (int column = 0; column < length; column++)
+            {
+                ref readonly var cell = ref cells[column];
+                if (cell.IsContinuation)
+                    continue;
+                ref readonly var style = ref source.GetStyle(cell.StyleId);
+                bool hasBackground = !style.Background.IsEmpty || style.Inverse;
+                short graphemeIndex = column < coldCells.Length ? coldCells[column].GraphemeIndex : (short)-1;
+                bool emitsMain = cell.Rune == 0
+                    ? hasBackground
+                    : EmitsGlyphOrBackground(cell.Rune, graphemeIndex, style, in textOptions, hasBackground);
+                if (emitsMain)
+                    capacity++;
+                if (spritesValid && HasDecoration(in style))
+                    capacity = checked(capacity + 2);
+            }
+        }
+        return capacity;
+    }
+
+    private static bool EmitsGlyphOrBackground(
+        uint rune,
+        short graphemeIndex,
+        in CellAttributes style,
+        in TextAttributeOptions textOptions,
+        bool hasBackground)
+    {
+        bool glyphVisible = rune != 0 && rune != PlaceholderTable.PlaceholderRune
+            && !style.Invisible && !(style.SlowBlink && !textOptions.BlinkVisible);
+        if (glyphVisible && graphemeIndex <= 0 && rune <= char.MaxValue)
+            glyphVisible = !char.IsWhiteSpace((char)rune);
+        // Positive grapheme indices may resolve to multi-codepoint text (including a singleton space); reserve
+        // the glyph slot conservatively rather than resolving/allocating a grapheme during this capacity pass.
+        return glyphVisible || hasBackground;
     }
 
     /// <summary>

@@ -15,13 +15,6 @@ public struct CellInstance
     /// <summary>Row index (0-based) in the visible grid.</summary>
     public ushort Row;
 
-    /// <summary>Per-frame vertical translation in device pixels; zero outside active smooth-scroll composition.</summary>
-    public float PixelOffsetY;
-
-    /// <summary>Optional top-down clip interval used by moving rows; both zero disables row clipping.</summary>
-    public float ClipTop;
-    public float ClipBottom;
-
     /// <summary>Glyph top-left X in atlas pixels.</summary>
     public short GlyphX;
 
@@ -65,6 +58,20 @@ public struct CellInstance
 
     /// <summary>Background alpha (255 for opaque, 0 for default/transparent).</summary>
     public byte BgA;
+}
+
+/// <summary>
+/// Per-frame placement of a contiguous instance run. Runs are sorted, non-overlapping, and have positive counts;
+/// instances outside every run have zero translation and no row clip. Cached cell content stays independent of animation.
+/// </summary>
+public readonly record struct CellTransformRange(
+    int Start,
+    int Count,
+    float PixelOffsetY,
+    float ClipTop,
+    float ClipBottom)
+{
+    public int End => Start + Count;
 }
 
 /// <summary>Flag bits for <see cref="CellInstance.Flags"/>.</summary>
